@@ -34,7 +34,7 @@ data class Distro(
     val images: List<ImageSource>,
     /**
      * "iso" (written as-is), "raw-bz2" or "raw-gz" (a compressed disk image, decompressed
-     * while writing).
+     * while writing), or "zip" (one image inside a zip, unpacked while writing).
      */
     val format: String = "iso",
     /** What to do after booting the drive, shown on the "Ready to boot" screen. */
@@ -43,6 +43,14 @@ data class Distro(
     val warning: String? = null,
     /** Only listed once experimental options are unlocked (tap the version number). */
     val hidden: Boolean = false,
+    /** Which "Useful ISOs" folder lists it: "gaming" (the default, for older catalogs), "desktop" or "tools". */
+    val category: String = "gaming",
+    /** One plain line about what it is, shown under its name. */
+    val about: String = "",
+    /** Download size as people read it, e.g. "3.1 GB"; null when not known. */
+    val size: String? = null,
+    /** Whether it can be added to a Ventoy drive as well as written to a whole drive. */
+    val ventoy: Boolean = false,
 ) {
     val minDriveBytes: Long get() = (minDriveGb * 1_000_000_000L * 0.93).toLong()
 }
@@ -50,7 +58,8 @@ data class Distro(
 class CatalogException(msg: String) : Exception(msg)
 
 object Catalog {
-    val FORMATS = setOf("iso", "raw-bz2", "raw-gz")
+    val FORMATS = setOf("iso", "raw-bz2", "raw-gz", "zip")
+    val CATEGORIES = setOf("gaming", "desktop", "tools")
 
     @Suppress("UNCHECKED_CAST")
     private fun root(text: String): Map<String, Any?> {
@@ -95,6 +104,8 @@ object Catalog {
             val format = raw["format"] as? String ?: "iso"
             if (format !in FORMATS) throw CatalogException("$id: unknown format $format")
             if (enabled && images.isEmpty()) throw CatalogException("$id: enabled but has no images")
+            val category = raw["category"] as? String ?: "gaming"
+            if (category !in CATEGORIES) throw CatalogException("$id: unknown category $category")
             Distro(
                 id = id,
                 name = raw["name"] as String,
@@ -107,6 +118,11 @@ object Catalog {
                 installSteps = raw["install_steps"] as? List<String> ?: emptyList(),
                 warning = raw["warning"] as String?,
                 hidden = raw["hidden"] == true,
+                category = category,
+                about = raw["about"] as? String ?: "",
+                size = raw["size"] as? String,
+                // ISOs boot from Ventoy; whole-disk images usually don't, so they opt in.
+                ventoy = raw["ventoy"] as? Boolean ?: (format == "iso" || format == "zip"),
             )
         }
     }

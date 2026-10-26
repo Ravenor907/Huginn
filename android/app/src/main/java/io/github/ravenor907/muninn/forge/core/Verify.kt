@@ -16,10 +16,15 @@ class VerificationException(msg: String) : Exception(msg)
  */
 object Verify {
     private val HEX64 = Regex("^[0-9a-fA-F]{64}$")
+    private val BSD = Regex("^SHA256 \\((.+)\\) = ([0-9a-fA-F]{64})$")
 
     fun parseChecksum(text: String, filename: String): String {
         val lines = text.trim().lines().map { it.trim() }.filter { it.isNotEmpty() }
         for (ln in lines) {
+            // BSD style, as Fedora publishes it: "SHA256 (name) = hex".
+            BSD.matchEntire(ln)?.let { m ->
+                if (m.groupValues[1].substringAfterLast('/') == filename) return m.groupValues[2].lowercase()
+            }
             val parts = ln.split(Regex("\\s+"))
             if (parts.size >= 2 && HEX64.matches(parts[0])) {
                 val name = parts[1].removePrefix("*").substringAfterLast('/')

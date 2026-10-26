@@ -64,7 +64,7 @@ class ForgeService : Service() {
                 distroId == TEST_ID -> runTest(stickKey)
                 distroId == CHECK_ID -> runCheck(intent.getStringExtra(EXTRA_CHECK_DISTRO), file, stickKey)
                 file != null -> runFile(file, stickKey)
-                else -> run(distroId, stickKey)
+                else -> run(distroId, stickKey, intent.getBooleanExtra(EXTRA_TO_VENTOY, false))
             }
         }, "forge").also { it.start() }
         return START_NOT_STICKY
@@ -250,7 +250,8 @@ class ForgeService : Service() {
         }
     }
 
-    private fun run(distroId: String, stickKey: String) {
+    /** Downloads a catalog system, then writes it over the whole drive, or adds it to Ventoy when [toVentoy]. */
+    private fun run(distroId: String, stickKey: String, toVentoy: Boolean = false) {
         val wake = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Muninn:write")
         wake.acquire(4 * 60 * 60 * 1000L)
@@ -278,7 +279,9 @@ class ForgeService : Service() {
             sticks.open(device).use { s ->
                 s.disk.onNote = { Jobs.log(it) }
                 logDrive(s)
-                if (s.disk.sizeBytes < distro.minDriveBytes) {
+                if (toVentoy) {
+                    if (VentoyDrive.detect(s.disk) == null) throw IOException("This drive doesn't have Ventoy on it. Install Ventoy first.")
+                } else if (s.disk.sizeBytes < distro.minDriveBytes) {
                     throw IOException("This drive is too small. ${distro.name} needs ${distro.minDriveGb} GB or more.")
                 }
             }
@@ -288,8 +291,13 @@ class ForgeService : Service() {
                 readKey = { path -> assets.open(path).bufferedReader().use { it.readText() } },
                 userAgent = "Muninn/${BuildConfigCompat.versionName(this)}",
             )
-            val img = downloader.prepare(distro, stage, Jobs::log, cancel, stream = Labs.streamWrite(this))
+            // Ventoy gets a finished, checked file, so it's never written while downloading.
+            val img = downloader.prepare(distro, stage, Jobs::log, cancel, stream = !toVentoy && Labs.streamWrite(this))
             if (cancel()) throw CancelledException()
+            if (toVentoy) {
+                addToVentoy(distro, img.file, stickKey, stage, cancel)
+                return
+            }
             val live = img.live
 
             val again = sticks.device(stickKey)
@@ -325,7 +333,9 @@ class ForgeService : Service() {
                 Outcome.CANCELLED,
                 listOfNotNull(
                     Jobs.cancelReason,
-                    if (wasWriting) {
+                    if (wasWriting && toVentoy) {
+                        "It wasn't added to the Ventoy drive. Everything else on the drive is as it was."
+                    } else if (wasWriting) {
                         "The drive is unfinished, so create it again before booting from it."
                     } else {
                         "Download paused. It picks up where it left off next time."
@@ -348,6 +358,25 @@ class ForgeService : Service() {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             stopSelf()
         }
+    }
+
+    /** Copies a downloaded catalog image onto a Ventoy drive (zips unpacked on the way); nothing else on it changes. */
+    private fun addToVentoy(distro: Distro, file: File, stickKey: String, stage: (Stage, Long, Long) -> Unit, cancel: () -> Boolean) {
+        val plan = VentoyImport.plan(VentoyImport.Source(file.name, file.length()) { file.inputStream() })
+        if (!plan.bootable) Jobs.log("Note: Ventoy won't list ${plan.targetName} in its menu")
+        val sticks = UsbSticks(this)
+        val device = sticks.device(stickKey)
+            ?: throw IOException("The USB drive was unplugged during the download. Plug it back in and try again.")
+        val added = sticks.open(device).use { s ->
+            s.disk.onNote = { Jobs.log(it) }
+            logDrive(s)
+            val vd = VentoyDrive.detect(s.disk) ?: throw IOException("This drive doesn't have Ventoy on it any more.")
+            val vol = vd.openData(s.disk)
+            Jobs.log("Ventoy partition: %.1f GB free".format(vol.freeBytes / 1e9))
+            VentoyImport.run(vol, listOf(plan), stage, Jobs::log, cancel, verify = !Labs.skipCheck(this))
+        }
+        Jobs.finish(Outcome.OK, added.joinToString("\n"), setOf(FLAG_IMPORT))
+        done("${distro.name} is on the Ventoy drive")
     }
 
     private fun ensureChannel() {
@@ -520,6 +549,7 @@ class ForgeService : Service() {
         fun decoderFor(distro: Distro): ((java.io.InputStream) -> java.io.InputStream)? = when (distro.format) {
             "raw-bz2" -> ImageKind.decoder(ImageKind.BZIP2)
             "raw-gz" -> ImageKind.decoder(ImageKind.GZIP)
+            "zip" -> ImageKind.decoder(ImageKind.ZIP)
             else -> null
         }
 
@@ -550,6 +580,7 @@ class ForgeService : Service() {
         const val IMPORT_ID = "ventoy-import"
         const val EXTRA_SECURE_BOOT = "secureBoot"
         const val EXTRA_URIS = "uris"
+        const val EXTRA_TO_VENTOY = "toVentoy"
         const val FLAG_SB_ON = "secureboot-on"
         const val FLAG_SB_OFF = "secureboot-off"
         const val FLAG_IMPORT = "import"
@@ -620,20 +651,33 @@ class ForgeService : Service() {
         private const val CHANNEL = "forge"
         private const val NOTIFY_ID = 1
 
-        fun start(context: Context, distro: Distro, stickKey: String, stickLabel: String) {
+        /** Download a catalog system and write it over the drive, or with [toVentoy] add it to a Ventoy drive. */
+        fun start(context: Context, distro: Distro, stickKey: String, stickLabel: String, toVentoy: Boolean = false) {
             Jobs.begin(distro.name, stickLabel)
             val i = Intent(context, ForgeService::class.java)
                 .putExtra(EXTRA_DISTRO, distro.id)
                 .putExtra(EXTRA_STICK, stickKey)
+                .putExtra(EXTRA_TO_VENTOY, toVentoy)
             ContextCompat.startForegroundService(context, i)
         }
 
         private fun catalogText(context: Context) = context.assets.open("distros.json").bufferedReader().use { it.readText() }
 
-        /** The regular systems, then any experimental ones (hidden until unlocked; see [Labs]). */
+        /**
+         * The app's own "Useful ISOs" (desktop systems and tools), kept out of the shared distros.json.
+         * Empty if the file is missing or can't be read, so the regular systems always load.
+         */
+        private fun usefulIsos(context: Context, taken: Set<String>): List<Distro> = try {
+            Catalog.parse(context.assets.open("isos.json").bufferedReader().use { it.readText() }).filter { it.id !in taken }
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        /** The regular systems, the useful ISOs, then any experimental ones (hidden until unlocked; see [Labs]). */
         fun catalog(context: Context): List<Distro> {
             val main = Catalog.parse(catalogText(context))
-            return main + Labs.catalog(context, main.map { it.id }.toSet())
+            val more = main + usefulIsos(context, main.map { it.id }.toSet())
+            return more + Labs.catalog(context, more.map { it.id }.toSet())
         }
 
         fun bootMenu(context: Context): List<String> = Catalog.bootMenu(catalogText(context))

@@ -5,6 +5,8 @@
       "id": "batocera",
       "name": "Batocera",
       "edition": "Emulation, runs from USB",
+      "category": "gaming",
+      "about": "Retro game emulation that runs straight from the USB drive.",
       "enabled": true,
       "min_drive_gb": 32,
       "public_key": null,
