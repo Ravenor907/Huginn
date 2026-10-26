@@ -82,6 +82,7 @@ dependencies {
     implementation("org.tukaani:xz:1.10") // .xz images
     implementation("com.google.zxing:core:3.5.3") // QR codes for Direct connect
     implementation("com.google.android.gms:play-services-nearby:19.3.0") // close by: Bluetooth and Wi-Fi Direct
+    implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
     implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background
 
