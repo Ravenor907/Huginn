@@ -27,6 +27,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -53,36 +56,64 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.isSpecified
 import io.github.ravenor907.muninn.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 
 val Corner = RoundedCornerShape(4.dp)
 
-/** Raven, name and the name in Elder Futhark, like Huginn's header. */
+/**
+ * One slim row: the raven, the MUNINN wordmark, then [trailing] (icon-only buttons). The wordmark takes
+ * only the space left beside the buttons and shrinks to fit it, so the two never collide.
+ * [onLogo]: taps on the raven (the lock screen counts them). No ripple and nothing announced.
+ */
 @Composable
-fun Brand(trailing: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(40.dp))
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text("MUNINN", style = Type.title)
-            Text("ᛗᚢᚾᛁᚾᚾ", fontFamily = Type.runic, fontSize = 11.sp, letterSpacing = 5.sp, color = Color(0xFF8E897F))
-        }
-        Spacer(Modifier.weight(1f))
+fun Brand(onLogo: (() -> Unit)? = null, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        val tap by androidx.compose.runtime.rememberUpdatedState(onLogo)
+        val logo = Modifier.size(30.dp).then(if (onLogo != null) Modifier.pointerInput(Unit) { detectTapGestures(onTap = { tap?.invoke() }) } else Modifier)
+        Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = logo)
+        Spacer(Modifier.width(10.dp))
+        FitLine("MUNINN", Type.title, Modifier.weight(1f))
         trailing()
     }
-    Divider()
 }
 
+/** A 44dp icon-only button; [label] is what TalkBack reads. */
 @Composable
-fun Divider() {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
-        Box(Modifier.padding(horizontal = 8.dp).size(7.dp).border(1.dp, Palette.accent).background(Color.Transparent))
-        Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
+fun IconAction(icon: String, label: String, tint: Color = Palette.text, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 22.dp, onClick: () -> Unit) {
+    Box(modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        contentAlignment = Alignment.Center) { MIcon(icon, tint, size) }
+}
+
+/** One line of text that shrinks (down to 60%) to fit its width instead of wrapping or running into its neighbors. */
+@Composable
+fun FitLine(text: String, style: TextStyle, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.CenterStart) {
+        val measurer = rememberTextMeasurer()
+        val maxW = constraints.maxWidth
+        val size = remember(text, style, maxW) {
+            if (!constraints.hasBoundedWidth) return@remember style.fontSize
+            var s = style.fontSize.value
+            val floor = s * 0.6f
+            while (s > floor && measurer.measure(text, scaled(style, s), softWrap = false, maxLines = 1).size.width > maxW) s -= 0.5f
+            maxOf(s, floor).sp
+        }
+        Text(text, style = scaled(style, size.value), maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
     }
 }
+
+/** [style] at font size [sp], its letter spacing shrunk to match. */
+private fun scaled(style: TextStyle, sp: Float): TextStyle {
+    val k = sp / style.fontSize.value
+    return style.copy(fontSize = sp.sp, letterSpacing = if (style.letterSpacing.isSpecified) style.letterSpacing * k else style.letterSpacing)
+}
+
+/** High contrast outlines fields and bubbles that otherwise only differ by a shade. */
+fun Modifier.hcBorder(shape: androidx.compose.ui.graphics.Shape): Modifier =
+    if (Access.contrast) this.border(1.dp, Palette.line, shape) else this
 
 @Composable
 fun Section(text: String, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {

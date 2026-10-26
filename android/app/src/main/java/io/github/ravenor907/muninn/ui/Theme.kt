@@ -48,6 +48,25 @@ object Palette {
     val danger get() = if (Access.colorBlind) Color(0xFFF2B33D) else if (hc) Color(0xFFFFB4A8) else Color(0xFFD9A79E)
     val dangerLine get() = if (Access.colorBlind) Color(0xFF7A5A1E) else Color(0xFF5A3A34)
     val dangerFill get() = if (Access.colorBlind) Color(0xFF221B0E) else Color(0xFF1E1716)
+
+    // Chat ("Quiet" look): gold marks the few things you act on (new chat, play, record, unread).
+    val gold get() = if (hc) Color(0xFFFFD27A) else Color(0xFFC9A964)
+    val goldBright get() = if (hc) Color(0xFFFFE2A0) else Color(0xFFE0C27F)
+    /** Text and icons drawn on gold. */
+    val onGold get() = if (hc) Color(0xFF000000) else Color(0xFF101112)
+    /** A person's avatar circle (their initial in goldBright on it). */
+    val goldTint get() = if (hc) Color(0xFF3D3214) else Color(0xFF3A3220)
+    /** The Nearby room's avatar circle. */
+    val coolTint get() = if (hc) Color(0xFF333333) else Color(0xFF23272C)
+    /** Search box, message box and their bubbles. */
+    val field get() = if (hc) Color(0xFF141414) else Color(0xFF1B1D20)
+    val bubbleMine get() = if (hc) Color(0xFF2A2A2A) else Color(0xFF2B2E33)
+    /** The empty part of a voice message's progress bar. */
+    val track get() = if (hc) Color(0xFF9A9A9A) else Color(0xFF44484E)
+    /** The thin line under a conversation's top bar. */
+    val hairline get() = if (hc) Color(0xFF9A9A9A) else Color(0xFF1F2125)
+    /** Online dot and the encrypted shield. Color-blind friendly: blue, so it never depends on green. */
+    val online get() = if (Access.colorBlind) Color(0xFF6FB3F0) else if (hc) Color(0xFF9BE0A8) else Color(0xFF7FB08A)
 }
 
 object Type {

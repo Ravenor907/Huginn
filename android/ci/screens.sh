@@ -12,31 +12,35 @@ adb shell mkdir -p /sdcard/Download/roms
 for f in cachyos-handheld.iso steamdeck-repair.img.bz2 notes.txt; do adb shell "echo test > /sdcard/Download/$f"; done
 adb logcat -c
 n=0
+crashed() {
+  if [ -z "$(adb shell pidof $PKG | tr -d '\r')" ]; then
+    msg=$(adb logcat -d | grep -A20 "FATAL EXCEPTION" | head -30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+    echo "::error title=Muninn crashed on '$1'::$msg"
+    exit 1
+  fi
+}
 for screen in chat send files usb settings; do
   n=$((n+1))
   adb shell am force-stop $PKG
   adb shell am start -W -n $PKG/.MainActivity --ez ci true --es screen $screen >/dev/null
   sleep 5
-  adb exec-out screencap -p > "screens/0$n-$screen.png"
-  if [ -z "$(adb shell pidof $PKG | tr -d '\r')" ]; then
-    msg=$(adb logcat -d | grep -A20 "FATAL EXCEPTION" | head -30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-    echo "::error title=Muninn crashed on '$screen'::$msg"
-    exit 1
-  fi
+  adb exec-out screencap -p > "screens/$(printf %02d $n)-$screen.png"
+  crashed "$screen"
 done
-# A conversation (the photo button and composer) and Settings › Contacts.
-for extra in "chat demo" "screen contacts"; do
-  n=$((n+1)); set -- $extra
+# A conversation (top bar, bubbles, composer), the chat list's + menu, the lock screen and Settings › Contacts.
+for extra in "conversation:--es chat demo" "new-chat-menu:--es screen chat --ez menu true" "lock:--es screen lock" "contacts:--es screen contacts"; do
+  n=$((n+1)); name=${extra%%:*}; args=${extra#*:}
   adb shell am force-stop $PKG
-  adb shell am start -W -n $PKG/.MainActivity --ez ci true --es $1 $2 >/dev/null
+  adb shell am start -W -n $PKG/.MainActivity --ez ci true $args >/dev/null
   sleep 5
-  adb exec-out screencap -p > "screens/0$n-$2.png"
+  adb exec-out screencap -p > "screens/$(printf %02d $n)-$name.png"
+  crashed "$name"
 done
 # A fresh install opens on "Protect Muninn" (a lock is required).
 adb shell am force-stop $PKG
 adb shell am start -W -n $PKG/.MainActivity >/dev/null
 sleep 5
-adb exec-out screencap -p > "screens/0$((n+1))-first-lock.png"
+adb exec-out screencap -p > "screens/$(printf %02d $((n+1)))-first-lock.png"
 if adb logcat -d | grep -q "FATAL EXCEPTION"; then
   msg=$(adb logcat -d | grep -A20 "FATAL EXCEPTION" | head -30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
   echo "::error title=Crash in logcat::$msg"

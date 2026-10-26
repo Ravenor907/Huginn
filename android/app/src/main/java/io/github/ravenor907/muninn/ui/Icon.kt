@@ -64,17 +64,20 @@ object Icons {
         "mic" to "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3",
         "play" to "M7 4l13 8-13 8z",
         "pause" to "M7 4v16 M17 4v16",
+        "pausefill" to "M6 4h4v16H6z M14 4h4v16h-4z",
+        "shield" to "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
     )
 }
 
 @Composable
-fun MIcon(name: String, color: Color = Palette.textMuted, size: Dp = 24.dp, modifier: Modifier = Modifier, weight: Float = 1.6f) {
+fun MIcon(name: String, color: Color = Palette.textMuted, size: Dp = 24.dp, modifier: Modifier = Modifier, weight: Float = 1.6f, filled: Boolean = false) {
     val path = remember(name) { PathParser().parsePathString(Icons.paths[name] ?: Icons.paths.getValue("file")).toPath() }
     val boldness = weight * maxOf(1f, size.value / 28f)
     Canvas(modifier.size(size)) {
         val k = this.size.width / 24f
         scale(k, k, pivot = Offset.Zero) {
-            drawPath(path, color, style = Stroke(width = boldness, cap = StrokeCap.Square, join = StrokeJoin.Miter))
+            if (filled) drawPath(path, color)
+            else drawPath(path, color, style = Stroke(width = boldness, cap = StrokeCap.Square, join = StrokeJoin.Miter))
         }
     }
 }

@@ -73,8 +73,17 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             }
         }
     }
+    // Erasing is out of sight: tap the raven 10 times within 5 seconds to show it. A stray hand
+    // (or a curious kid) can't find it, and it still needs the hold-to-confirm.
+    var showErase by remember { mutableStateOf(false) }
+    val taps = remember { ArrayDeque<Long>() }
     Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()) {
-        Brand {}
+        Brand(onLogo = {
+            val t = android.os.SystemClock.elapsedRealtime()
+            taps.addLast(t)
+            while (taps.isNotEmpty() && t - taps.first() > 5_000) taps.removeFirst()
+            if (taps.size >= 10) { taps.clear(); showErase = true }
+        })
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
@@ -95,10 +104,12 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                 }
                 if (!pattern) MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
             }
-            Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
-            MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {
-                Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
-                    "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+            if (showErase) {
+                Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
+                MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {
+                    Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
+                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                }
             }
         }
     }
