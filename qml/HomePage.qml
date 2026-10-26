@@ -365,7 +365,8 @@ Rectangle {
             compact: true
             icon: "network"
             title: "Chat"
-            detail: Chat.requests.length > 0 ? Chat.requests.length + " want to chat" : Chat.nearbyOn ? Chat.nearbyCount + " nearby · " + Chat.username : "Nearby chat is off"
+            detail: !Vault.exists ? "Set a lock to start" : Vault.screenLocked ? "Locked" : Chat.unreadCount > 0 ? Chat.unreadCount + " unread"
+                  : Chat.requests.length > 0 ? Chat.requests.length + " want to chat" : Chat.nearbyOn ? Chat.nearbyCount + " nearby · " + Chat.username : "Nearby chat is off"
         }
         Tile {
             index: 5

@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
     private var netStarted = false
 
     private val closePermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) { app.close.start { app.chat.hello() }; return@registerForActivityResult }
+        if (granted.values.all { it }) { app.close.start { app.chat.hello() }; app.ble.start(); return@registerForActivityResult }
         // Android stops showing the prompt after it's been refused (twice on newer versions). Then the
         // only way to allow it is Muninn's app settings, so the message on Chat says to tap for that.
         val refused = granted.filterValues { !it }.keys
@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity() {
     fun askClose() {
         val need = closePerms().distinct().filterNot { granted(it) }
         when {
-            need.isEmpty() -> app.close.start { app.chat.hello() }
+            need.isEmpty() -> { app.close.start { app.chat.hello() }; app.ble.start() }
             closeBlocked -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             else -> closePermission.launch(need.toTypedArray())
         }
@@ -188,6 +188,7 @@ class MainActivity : ComponentActivity() {
         if (netStarted && !app.close.running && app.close.error.value != null && closePerms().all { granted(it) }) {
             closeBlocked = false
             app.close.start { app.chat.hello() }
+            app.ble.start()
         }
     }
 

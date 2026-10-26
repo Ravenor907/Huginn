@@ -39,6 +39,7 @@ class Muninn : Application() {
     lateinit var nostr: Nostr
     lateinit var net: LocalSend
     lateinit var close: Close
+    lateinit var ble: io.github.ravenor907.muninn.net.Ble
     lateinit var closeFiles: CloseFiles
     lateinit var contacts: Contacts
     lateinit var chat: Chat
@@ -94,8 +95,9 @@ class Muninn : Application() {
         net = LocalSend(this, identity)
         net.mailbox = nostr.publicKey
         close = Close(this, identity)
+        ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
         contacts = Contacts(this, vault)
-        chat = Chat(this, net, close, nostr, contacts, vault)
+        chat = Chat(this, net, close, ble, nostr, contacts, vault)
         closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key) buzz() else notify(name, text, key) } }

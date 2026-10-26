@@ -18,7 +18,11 @@
         "--talk-name=org.kde.kpasswdserver6",
         "--talk-name=org.kde.kded6",
         "--talk-name=org.freedesktop.secrets",
-        "--talk-name=org.freedesktop.ScreenSaver"
+        "--talk-name=org.freedesktop.ScreenSaver",
+        "--talk-name=org.freedesktop.Notifications",
+        "--socket=pulseaudio",
+        "--system-talk-name=org.bluez",
+        "--env=BLUETOOTH_FORCE_DBUS_LE_VERSION=5.64.0"
     ],
     "cleanup": [
         "/include",

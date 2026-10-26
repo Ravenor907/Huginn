@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus Concurrent)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus Concurrent WebSockets Bluetooth Multimedia)
 find_package(KF6CoreAddons REQUIRED)
 find_package(KF6KIO REQUIRED)
 find_package(KF6Archive REQUIRED)
@@ -38,6 +38,13 @@ qt_add_executable(huginn
     src/chat.cpp src/chat.h
     src/direct.cpp src/direct.h
     src/chatcrypto.cpp src/chatcrypto.h
+    src/vault.cpp src/vault.h
+    src/photos.cpp src/photos.h
+    src/voice.cpp src/voice.h
+    src/schnorr.cpp src/schnorr.h
+    src/nostr.cpp src/nostr.h
+    src/ble.cpp src/ble.h
+    src/bleframes.cpp src/bleframes.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
@@ -81,18 +88,24 @@ qt_add_qml_module(huginn
         qml/HomePage.qml
         qml/RecentPage.qml
         qml/ChatPage.qml
+        qml/ContactsPage.qml
+        qml/LockPanel.qml
+        qml/PatternPad.qml
     RESOURCES
         qml/assets/raven-gold.png
+        qml/assets/raven_message.wav
         ${HUGINN_FONTS}
 )
 
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon Divider PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented FileRow FilePane
                    ActionWheel TextPrompt ConfirmDialog Toast BrowserPage GamesPage UsbPage TransferPage NetworkPage
-                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage ChatPage)
+                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage ChatPage
+                   ContactsPage LockPanel PatternPad)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
+set_source_files_properties(qml/assets/raven_message.wav PROPERTIES QT_RESOURCE_ALIAS assets/raven_message.wav)
 foreach(font IN LISTS HUGINN_FONTS)
     get_filename_component(name ${font} NAME)
     set_source_files_properties(${font} PROPERTIES QT_RESOURCE_ALIAS fonts/${name})
@@ -100,6 +113,7 @@ endforeach()
 
 target_link_libraries(huginn PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::DBus Qt6::Concurrent
+    Qt6::WebSockets Qt6::Bluetooth Qt6::Multimedia
     KF6::CoreAddons KF6::KIOCore KF6::KIOWidgets KF6::Archive KF6::Prison
     PkgConfig::SDL2
     OpenSSL::Crypto

@@ -1,80 +1,180 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonObject>
+#include <functional>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QSet>
 #include <QSettings>
+#include <QTimer>
 #include <QVariantList>
 
+class Ble;
 class LocalSend;
+class Nostr;
+class Vault;
 
-// Texting between Huginn and Muninn, on the LocalSend port (POST /api/huginn/v1/message).
-//  - Nearby: a public room for everyone on the same network with either app. Usernames only,
-//    no codes. Each copy is sealed for its recipient, so other devices on the Wi-Fi can't read it,
-//    but everyone in the room can.
-//  - Private: one person to another, verified once by both screens showing the same 6-digit code.
+// Huginn's messaging, the same as Muninn's (net/Chat.kt) so the two work together:
+//  - Three ways to reach someone, all tried at once: Bluetooth (a Muninn phone close by),
+//    the same Wi-Fi (the LocalSend port), and the internet (Nostr relays, for contacts).
+//    The other side keeps the first copy; anything not "delivered" is sent again for a day.
+//  - Rooms: Nearby (public, everyone close by or on the Wi-Fi) and Private (one person).
+//    Every message is sealed end to end with the chat keys whichever way it travels.
+//  - People close by can message straight away. After 10 messages, or once they're out of
+//    range, both get "Keep in touch?"; when both say yes they become contacts (internet too).
+//  - Receipts (Sending, Sent, Delivered, Read), unsend, photos and voice messages in pieces.
+//  - Everything kept is encrypted in the Vault.
 class Chat : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(bool ready READ ready NOTIFY changed)
     Q_PROPERTY(QVariantList nearby READ nearby NOTIFY changed)
-    Q_PROPERTY(QVariantList conversations READ conversations NOTIFY changed)
+    Q_PROPERTY(QVariantList chats READ chats NOTIFY changed)
     Q_PROPERTY(QVariantList requests READ requests NOTIFY changed)
+    Q_PROPERTY(QVariantList around READ around NOTIFY changed)
     Q_PROPERTY(QVariantList people READ people NOTIFY changed)
     Q_PROPERTY(int nearbyCount READ nearbyCount NOTIFY changed)
+    Q_PROPERTY(int unreadCount READ unreadCount NOTIFY changed)
     Q_PROPERTY(QString username READ username WRITE setUsername NOTIFY changed)
     Q_PROPERTY(bool nearbyOn READ nearbyOn WRITE setNearbyOn NOTIFY changed)
     Q_PROPERTY(bool keepNearby READ keepNearby WRITE setKeepNearby NOTIFY changed)
+    Q_PROPERTY(bool readReceipts READ readReceipts WRITE setReadReceipts NOTIFY changed)
+    Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY changed)
+    Q_PROPERTY(qint64 deleteAfter READ deleteAfter WRITE setDeleteAfter NOTIFY changed)
+    Q_PROPERTY(int internet READ internet NOTIFY changed)
+    Q_PROPERTY(QString myCode READ myCode NOTIFY changed)
+    Q_PROPERTY(QString myLink READ myLink NOTIFY changed)
+    Q_PROPERTY(QString openChat MEMBER m_openChat NOTIFY changed)
 
 public:
-    explicit Chat(LocalSend *net, QObject *parent = nullptr);
+    Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
 
+    bool ready() const { return m_ready; }
     QVariantList nearby() const { return m_nearby; }
-    QVariantList conversations() const;
+    QVariantList chats() const;
     QVariantList requests() const;
+    QVariantList around() const;
     QVariantList people() const;
     int nearbyCount() const;
+    int unreadCount() const { return int(m_unread.size()); }
     QString username() const;
     void setUsername(const QString &v);
     bool nearbyOn() const { return m_settings.value(QStringLiteral("chat/nearbyOn"), true).toBool(); }
     void setNearbyOn(bool v);
     bool keepNearby() const { return m_settings.value(QStringLiteral("chat/keepNearby"), false).toBool(); }
     void setKeepNearby(bool v);
+    bool readReceipts() const { return m_settings.value(QStringLiteral("chat/readReceipts"), true).toBool(); }
+    void setReadReceipts(bool v) { m_settings.setValue(QStringLiteral("chat/readReceipts"), v); Q_EMIT changed(); }
+    bool showPreview() const { return m_settings.value(QStringLiteral("chat/showPreview"), false).toBool(); }
+    void setShowPreview(bool v) { m_settings.setValue(QStringLiteral("chat/showPreview"), v); Q_EMIT changed(); }
+    qint64 deleteAfter() const { return m_settings.value(QStringLiteral("chat/deleteAfter"), 0).toLongLong(); }
+    void setDeleteAfter(qint64 v) { m_settings.setValue(QStringLiteral("chat/deleteAfter"), v); prune(); Q_EMIT changed(); }
+    int internet() const;
+    QString myCode() const;
+    QString myLink() const;
 
-    Q_INVOKABLE void sendNearby(const QString &text);
-    Q_INVOKABLE void sendPrivate(const QString &key, const QString &name, const QString &text);
+    // Messages
     Q_INVOKABLE QVariantList messagesWith(const QString &key) const { return m_private.value(key); }
+    Q_INVOKABLE void sendNearby(const QString &text);
+    Q_INVOKABLE void sendPrivate(const QString &key, const QString &text);
+    Q_INVOKABLE void markRead(const QString &key);
+    Q_INVOKABLE void deleteMessage(const QString &key, const QString &id);
+    Q_INVOKABLE void deleteNearbyMessage(const QString &id);
+    Q_INVOKABLE void unsend(const QString &key, const QString &id);
+    Q_INVOKABLE void retry(const QString &key, const QString &id);
+    Q_INVOKABLE void deleteAll();
+    // Photos (any picture file: shrunk, metadata removed) and voice messages
+    Q_INVOKABLE bool sendPhoto(const QString &key, const QString &path, bool hd);
+    Q_INVOKABLE void sendVoice(const QString &key, const QByteArray &aac, int ms);
+    Q_INVOKABLE QByteArray blob(const QString &id) const;
+    Q_INVOKABLE QString photoUrl(const QString &id);
+    Q_INVOKABLE bool savePhoto(const QString &id);
+    Q_INVOKABLE QVariantList recentPictures() const;   // Steam screenshots and Pictures, newest first
+    Q_INVOKABLE void copyLink() const;
+
+    // People
+    Q_INVOKABLE QString nameOf(const QString &key) const;
+    Q_INVOKABLE QString route(const QString &key) const;
+    Q_INVOKABLE bool isContact(const QString &key) const { return m_contacts.contains(key); }
+    Q_INVOKABLE bool isVerified(const QString &key) const;
     Q_INVOKABLE QString codeWith(const QString &key) const;
-    Q_INVOKABLE bool isTrusted(const QString &key) const;
-    Q_INVOKABLE void acceptPair(const QString &key);
-    Q_INVOKABLE void declinePair(const QString &key);
-    Q_INVOKABLE void mute(const QString &key);
-    Q_INVOKABLE void unmuteAll();
-    Q_INVOKABLE int mutedCount() const;
+    Q_INVOKABLE void verify(const QString &key);
+    Q_INVOKABLE void meet(const QString &key, const QString &name);
+    Q_INVOKABLE bool shouldAskKeep(const QString &key) const;
+    Q_INVOKABLE bool saidKeep(const QString &key) const;
+    Q_INVOKABLE bool theySaidKeep(const QString &key) const;
+    Q_INVOKABLE void keepInTouch(const QString &key);
+    Q_INVOKABLE void notNow(const QString &key);
+    Q_INVOKABLE QVariantMap parseCode(const QString &text) const;   // {name, key} or empty
+    Q_INVOKABLE void addContact(const QString &text);
+    Q_INVOKABLE void acceptRequest(const QString &key);
+    Q_INVOKABLE void declineRequest(const QString &key);
+    Q_INVOKABLE void block(const QString &key, bool on = true);
+    Q_INVOKABLE bool isBlocked(const QString &key) const;
+    Q_INVOKABLE void removeContact(const QString &key);
 
     static const int kMax = 2000;
+    static QString code(const QString &name, const QString &chatKey, const QString &mailbox);
 
 Q_SIGNALS:
     void changed();
     void notice(const QString &text);
+    // A private message arrived: for the toast, sound and desktop notification.
+    void arrived(const QString &name, const QString &text, const QString &key);
 
 private:
-    int receive(const QByteArray &body, const QString &ip);
-    void deliver(const QString &base, const QString &theirKey, const QString &room, const QString &text, const QString &peerKey, const QString &msgId);
-    QVariantMap message(const QString &peer, const QString &name, const QString &text, bool mine) const;
+    void start();
+    int receive(const QByteArray &body, const QString &via);
+    int receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via);
+    QJsonObject envelope(const QString &room, const QString &theirKey, const QByteArray &plain, const QString &msgId) const;
+    QString deliver(const QString &key, const QJsonObject &body, const QString &mailbox);
+    void post(const QString &base, const QJsonObject &body, std::function<void(int)> done = nullptr);
+    void attempt(const QString &key, const QString &id);
+    void attemptUnsend(const QString &key, const QString &id);
+    void retryLoop();
+    void receipt(const QString &key, const QStringList &ids, const QString &state, const QString &mailbox);
+    QString backupMailbox(const QVariantMap &m) const;
+    QVariantMap message(const QString &id, const QString &peer, const QString &name, const QString &text, bool mine, const QString &via) const;
+    bool addPrivate(const QString &peer, const QVariantMap &m);
+    void update(const QString &peer, const QString &id, const std::function<void(QVariantMap &)> &f);
+    bool known(const QString &key, const QString &id) const;
+    void forget(const QStringList &ids);
     void addNearby(const QVariantMap &m);
-    void addPrivate(const QString &peer, const QVariantMap &m);
-    void markFailed(const QString &peer, const QString &id);
-    void save() const;
+    void becomeContacts(const QString &key);
+    void putMet(const QString &key, const QVariantMap &m);
+    QString sendBlob(const QString &key, const QByteArray &bytes, int voiceMs);
+    QList<QJsonObject> pieces(const QVariantMap &m) const;
+    void prune();
+    void save();
+    void saveMet();
+    void saveContacts();
     void load();
     QByteArray keyWith(const QString &theirKey) const;
+    QString myKey() const { return QString::fromLatin1(m_pub.toBase64()); }
+    QString mailboxOf(const QString &key) const;
 
     LocalSend *m_net;
+    Vault *m_vault;
+    Nostr *m_nostr;
+    Ble *m_ble;
     QSettings m_settings;
     QNetworkAccessManager m_http;
+    QTimer m_retry, m_prune;
+    bool m_ready = false;
+    QString m_openChat;
     QByteArray m_priv, m_pub;
     QVariantList m_nearby;
     QHash<QString, QVariantList> m_private;
-    QHash<QString, QVariantList> m_held;               // private messages waiting on a code
-    QHash<QString, QVariantMap> m_requests;            // key -> {key, name, code}
-    QHash<QString, QList<qint64>> m_recent;            // rate limit per sender
+    QHash<QString, QVariantMap> m_contacts;            // key -> {key, name, mailbox, verified}
+    QHash<QString, QVariantMap> m_met;                 // key -> {name, mailbox, iSaid, theySaid, dismissed, verified}
+    QHash<QString, QVariantMap> m_held;                // key -> {id -> message}, waiting on a request
+    QHash<QString, QVariantMap> m_requests;            // key -> {key, name, code, mailbox}
+    QHash<QString, qint64> m_deleted;                  // ids deleted here (two days): late copies stay gone
+    QSet<QString> m_unread, m_unsentKeeps;
+    QHash<QString, QList<qint64>> m_recent, m_pieceTimes;
+    struct Tries { int count = 0; qint64 next = 0; };
+    QHash<QString, Tries> m_tries;
+    struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; };
+    QHash<QString, Incoming> m_incoming;
 };

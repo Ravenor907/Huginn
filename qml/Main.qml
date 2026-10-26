@@ -68,6 +68,7 @@ Window {
             case "start": return "HomePage.qml"
             case "recent": return "RecentPage.qml"
             case "chat": return "ChatPage.qml"
+            case "contacts": return "ContactsPage.qml"
             case "games": return "GamesPage.qml"
             case "storage": return "StoragePage.qml"
             case "usb": return "UsbPage.qml"
@@ -153,6 +154,15 @@ Window {
                      "Accept", () => LocalSend.accept(), false, false, () => LocalSend.decline(), "localsend")
         confirm.cancelText = "Decline"
     }
+    // Chat: notices, and a toast for a message unless that chat is on screen (main.cpp plays the sound).
+    Connections {
+        target: Chat
+        function onNotice(text) { Ui.say(text) }
+        function onArrived(name, text, key) {
+            if (Chat.openChat === key && pageLoader.source.toString().indexOf("ChatPage") >= 0) return
+            Ui.say(Chat.showPreview ? name + ": " + text : "New message. Open Chat to read it.")
+        }
+    }
     Connections {
         target: LocalSend
         function onRequestChanged() { app.showSendRequest() }
@@ -237,7 +247,8 @@ Window {
             { page: "storage", file: "12-storage" },
             { page: "", picker: true, file: "13-move-to" },
             { page: "preview", text: true, file: "14-text" },
-            { page: "settings", section: 1, file: "15-settings-browser" },
+            { page: "settings", section: 2, file: "15-settings-browser" },
+            { page: "settings", section: 1, file: "15-settings-chat" },
             { page: "chat", file: "16-chat" }
         ]
         interval: 1500

@@ -27,7 +27,7 @@ import java.util.concurrent.Executors
  *    message from anywhere (the internet route is only for contacts).
  * One message format everywhere: { room, fromKey, fromName, mailbox, nonce, data }.
  */
-class Chat(private val context: Context, private val net: LocalSend, private val close: Close, private val nostr: Nostr, val contacts: Contacts,
+class Chat(private val context: Context, private val net: LocalSend, private val close: Close, private val ble: Ble, private val nostr: Nostr, val contacts: Contacts,
            private val vault: Vault) {
     private val id get() = net.identity
 
@@ -87,6 +87,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         id.trusted().forEach { (k, n) -> if (contacts.get(k) == null) contacts.put(Contacts.Contact(k, n, null, true)) }
         net.extraRoute = { method, path, body, _ -> if (method == "POST" && path == PATH) receive(body, "wifi") else null }
         close.onMessage = { _, o -> if (o.optString("t") == "msg") receive(o.toString(), "close") }
+        // Huginn close by, over Bluetooth LE (it can't use Nearby): the same envelopes.
+        ble.onMessage = { _, json -> receive(json, "close") }
         // Someone said yes while out of range: say it again when they're back.
         bg { while (true) { Thread.sleep(30_000); try { resendKeeps() } catch (_: Exception) {} } }
         retrier.execute { while (true) { Thread.sleep(1_000); try { retryLoop() } catch (_: Exception) {} } }
@@ -110,12 +112,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun nameOf(peerKey: String): String = contacts.get(peerKey)?.name ?: _met.value[peerKey]?.name
         ?: close.list.value.firstOrNull { it.chatKey == peerKey }?.name
+        ?: ble.peers.value.firstOrNull { it.chatKey == peerKey }?.name
         ?: net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { it.chatName ?: it.alias } ?: "Someone"
 
     /** Opening a chat with someone close by: no asking, just start. */
     fun meet(peerKey: String, name: String) {
         if (isContact(peerKey) || _met.value.containsKey(peerKey)) return
-        putMet(peerKey, Met(name, close.list.value.firstOrNull { it.chatKey == peerKey }?.mailbox))
+        putMet(peerKey, Met(name, close.list.value.firstOrNull { it.chatKey == peerKey }?.mailbox
+            ?: ble.peers.value.firstOrNull { it.chatKey == peerKey }?.mailbox))
     }
 
     /** "Keep in touch?" should show: 10 messages in, or they've gone out of range. */
@@ -197,6 +201,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
         val body = envelope("unsend", m.peerKey, m.id, UUID.randomUUID().toString()).toString()
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
+        ble.send(m.peerKey, body)
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d -> bg { net.post(d, PATH, body) } }
         (contacts.get(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox)?.let { nostr.publish(it, Base64.getEncoder().encodeToString(body.toByteArray())) }
     }
@@ -228,7 +233,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** How a contact can be reached right now: "close", "wifi", "internet" or "". */
     fun route(peerKey: String): String = when {
-        close.endpointFor(peerKey) != null -> "close"
+        close.endpointFor(peerKey) != null || ble.peers.value.any { it.chatKey == peerKey } -> "close"
         net.devices.value.any { it.chatKey == peerKey } -> "wifi"
         contacts.get(peerKey)?.mailbox != null -> "internet"
         else -> ""
@@ -506,6 +511,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (!p.connected || k in muted || !done.add(k)) continue
                 close.send(p.endpoint, envelope("nearby", k, t, mine.id).put("t", "msg")); reached++
             }
+            for (p in ble.peers.value) {
+                val k = p.chatKey ?: continue
+                if (k in muted || !done.add(k)) continue
+                if (ble.send(k, envelope("nearby", k, t, mine.id).toString())) reached++
+            }
             for (d in net.devices.value) {
                 val k = d.chatKey ?: continue
                 if (d.chatName == null || k in muted || !done.add(k)) continue
@@ -553,6 +563,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val body = envelope("private", m.peerKey, m.text, m.id).toString()
         var any = false
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")); any = true; markSent(m, "close") }
+        if (ble.send(m.peerKey, body)) { any = true; markSent(m, "close") }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
             any = true
             bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 3) it.copy(state = "delivered", via = "wifi", failed = false) else it } }
@@ -569,6 +580,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         t.next = maxOf(t.next, System.currentTimeMillis() + parts.size * 200L)
         var any = false
         close.endpointFor(m.peerKey)?.let { ep -> parts.forEach { close.send(ep, JSONObject(it.toString()).put("t", "msg")) }; any = true; markSent(m, "close") }
+        // Bluetooth LE is slow (about 22 KB a piece): give it time before trying again.
+        if (ble.peers.value.any { it.chatKey == m.peerKey } && parts.all { ble.send(m.peerKey, it.toString()) }) {
+            any = true; markSent(m, "close"); t.next = maxOf(t.next, System.currentTimeMillis() + parts.size * 3000L)
+        }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
             any = true
             bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
@@ -617,6 +632,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Returns the route that took it ("close", "wifi", "internet"), or "" if none could. */
     private fun deliverVia(peerKey: String, body: JSONObject, mailbox: String?): String {
         close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); return "close" }
+        if (ble.send(peerKey, body.toString())) return "close"
         net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { if (net.post(it, PATH, body.toString()) == 200) return "wifi" }
         if (mailbox != null) { nostr.publish(mailbox, Base64.getEncoder().encodeToString(body.toString().toByteArray())); return "internet" }
         return ""

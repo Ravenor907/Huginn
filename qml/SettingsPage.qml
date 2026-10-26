@@ -9,7 +9,7 @@ Rectangle {
     property bool inSection: false
     function setArgs(a) { if (a.section) { section = a.section; inSection = true; row = 1 } }
 
-    readonly property var sections: ["General", "Browser", "Safety", "Updates", "About"]
+    readonly property var sections: ["General", "Chat", "Browser", "Safety", "Updates", "About"]
 
     // Each row: { kind: "segmented"|"toggle"|"accent"|"button", title, note, ... }
     readonly property var rows: {
@@ -20,13 +20,23 @@ Rectangle {
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
               options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
             { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
-            { kind: "toggle", key: "nearbyOn", chat: true, title: "Nearby chat", note: "Everyone on the same Wi-Fi with Huginn or Muninn can see and message you" },
-            { kind: "button", key: "chatName", title: "Nearby chat name: " + Chat.username, note: "What people see instead of your name", label: "Change" },
-            { kind: "toggle", key: "keepNearby", chat: true, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes" },
             { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Phones and PCs with the free LocalSend app can find this handheld. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
         case 1: return [
+            { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
+            { kind: "button", key: "chatName", title: "Your name: " + Chat.username, note: "What people see instead of your real name", label: "Change" },
+            { kind: "toggle", key: "nearbyOn", chat: true, title: "Nearby chat", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
+            { kind: "toggle", key: "keepNearby", chat: true, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
+            { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
+              options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
+            { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
+            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
+            { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },
+            { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Every conversation on this computer. Contacts stay", label: "Delete" },
+            { kind: "button", key: "eraseChat", title: "Erase everything in Chat", note: "Messages, photos, voice, contacts, keys and the lock. Huginn closes", label: "Erase" }
+        ]
+        case 2: return [
             { kind: "segmented", key: "sortMode", title: "Sort folders by", note: "Each pane can also switch with the left stick click",
               options: [{ value: "name", label: "Name" }, { value: "newest", label: "Newest" }, { value: "size", label: "Size" }] },
             { kind: "toggle", key: "showSize", title: "File size", note: "How big each file is" },
@@ -34,14 +44,14 @@ Rectangle {
             { kind: "toggle", key: "showModified", title: "Last modified", note: "Today, Yesterday, or the date" },
             { kind: "toggle", key: "showType", title: "File type", note: "Like PNG image or Zip archive" }
         ]
-        case 2: return [
+        case 3: return [
             { kind: "toggle", key: "protectLibrary", title: "Protect game library", note: "Blocks deleting, moving or renaming game installs from the browser" },
             { kind: "toggle", key: "confirmDelete", title: "Ask before moving to trash", note: "Trash can be undone either way" },
             { kind: "toggle", key: "ventoySecureBoot", title: "Ventoy with Secure Boot support", note: "On: the first boot asks you to enroll Ventoy's key once" },
             { kind: "button", key: "removeRule", title: "USB access rule", note: Usb.rawReady ? "Installed: Huginn can open USB drives without a password" : "Not installed: set it up from USB Tools in Desktop Mode",
               label: "Remove", enabled: Usb.rawReady && !System.gameMode }
         ]
-        case 3: return [
+        case 4: return [
             { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts.",
               label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy }
         ]
@@ -133,8 +143,8 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         visible: modelData.kind === "segmented"
                         options: modelData.options || []
-                        value: modelData.kind === "segmented" ? Settings[modelData.key] : ""
-                        onPicked: v => Settings[modelData.key] = v
+                        value: modelData.kind === "segmented" ? (modelData.chat ? String(Chat[modelData.key]) : Settings[modelData.key]) : ""
+                        onPicked: v => { if (modelData.chat) Chat[modelData.key] = Number(v); else Settings[modelData.key] = v }
                     }
                     ToggleSwitch {
                         id: toggleCtl
@@ -195,7 +205,12 @@ Rectangle {
     function press(key) {
         const job = running()
         if (key === "exit") Ui.main.requestExit()
-        else if (key === "chatName") Ui.ask("Nearby chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
+        else if (key === "chatName") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
+        else if (key === "contacts") Ui.openPage("contacts", {})
+        else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
+        else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Every conversation on this computer is deleted. Contacts stay.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
+        else if (key === "eraseChat") Ui.sure("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes. Your files and other settings stay.",
+                                              "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
         else if (key === "removeRule") Usb.removeRule()
         else if (key === "check") {
             if (!Updater.available) Updater.check()
@@ -210,9 +225,9 @@ Rectangle {
         if (r.kind === "toggle") { const o = r.chat ? Chat : Settings; o[r.key] = !o[r.key] }
         else if (r.kind === "segmented") {
             const opts = r.options
-            let i = opts.findIndex(o => o.value === Settings[r.key])
+            let i = opts.findIndex(o => o.value === (r.chat ? String(Chat[r.key]) : Settings[r.key]))
             i = dir === 0 ? (i + 1) % opts.length : Math.max(0, Math.min(opts.length - 1, i + dir))
-            Settings[r.key] = opts[i].value
+            if (r.chat) Chat[r.key] = Number(opts[i].value); else Settings[r.key] = opts[i].value
         } else if (r.kind === "accent") {
             const order = ["gold", "iron", "copper"]
             let i = order.indexOf(Settings.accent)
