@@ -18,7 +18,9 @@ Item {
     visible: false
     anchors.fill: parent
 
-    function open(t, ctx, initial, confirm, callback, isPassword) {
+    property bool raw: false   // keep spaces as typed (config file lines)
+    function open(t, ctx, initial, confirm, callback, isPassword, keepSpaces) {
+        raw = !!keepSpaces
         title = t
         context = ctx || ""
         confirmText = confirm || "Done"
@@ -33,8 +35,8 @@ Item {
         System.showSteamKeyboard()
     }
     function accept() {
-        const t = field.text.trim()
-        if (t.length === 0) return
+        const t = raw ? field.text : field.text.trim()
+        if (!raw && t.length === 0) return
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()

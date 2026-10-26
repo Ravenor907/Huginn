@@ -18,25 +18,27 @@ Odin's raven Huginn flies out, looks around and comes back with what you were af
 
 | | |
 |---|---|
-| **Two panes, one thumb** | Browse with the d-pad, select with X, hold Y for the action wheel: copy, move, rename, extract, delete, zip, new folder, send to phone, undo. |
+| **Two panes, one thumb** | Browse with the d-pad, select with X, hold Y for the action wheel: copy to, move to, rename, extract to, delete, zip, new folder, send to phone, undo. |
+| **Move to…** | Send files straight to a ROM folder, a game's folder (for mods), the SD card or a recent spot, without setting up the other pane. |
+| **Storage** | What's using space on each drive, biggest first. Clear shader caches or empty the trash in one press. |
 | **Steam folders by name** | `compatdata/1245620` becomes Elden Ring, with its saves, Proton prefix and shader cache side by side. Back up saves, clear shader cache, reset a broken prefix. |
 | **Phone transfer** | Scan the QR code, type the PIN, drop files from your phone. Pick files on the handheld and they show up on the phone. |
 | **USB tools** | Install or update Ventoy, copy ISOs onto it, write one image, format a stick. The drive code comes from [Handheld Forge](https://github.com/Ravenor907/Handheld-Forge). |
 | **Look inside archives** | zip, 7z and tar, browsed before extracting. Pick what you want or take it all. |
-| **Previews** | Screenshots full screen with a filmstrip. Config files and logs as text. |
+| **Previews and quick edits** | Screenshots full screen with a filmstrip. Config files and logs as text, with one-line edits through Steam's keyboard (a .bak copy is kept). |
 | **Network shares** | SFTP shares through the same plumbing Dolphin uses. Windows shares arrive in 0.2. |
 | **Steam's keyboard** | Renaming or searching opens Steam's own keyboard. No new keyboard to learn. |
 | **TV mode** | Docked to a big screen, everything grows to couch size on its own. |
 
 ## Install
 
-Grab `Huginn.flatpak` from the [latest release](https://github.com/Ravenor907/Huginn/releases), then in Desktop Mode:
+One file, and it never goes stale: Huginn checks for updates every time it starts and updates itself, so whenever you install it you end up on the newest version. In Desktop Mode, open Konsole and run:
 
 ```
-flatpak install --user Huginn.flatpak
+cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
-Add it to Steam (right click › Add to Steam) to launch it from Game Mode. After that it updates itself from Settings.
+Add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
 ### The one-time USB setup
 
@@ -57,6 +59,7 @@ Copying ISOs, formatting and ejecting never need the setup.
 | LB / RB | Switch pane |
 | LT / RT | Page up / down |
 | View | Search this folder |
+| Left stick click | Sort by name, newest or size |
 | Menu | Settings |
 
 A keyboard works too in Desktop Mode: arrows, Enter, Escape, Space, Tab and F10.

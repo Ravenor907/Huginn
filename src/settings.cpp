@@ -36,3 +36,13 @@ void Settings::setShares(const QVariantList &list)
     m_settings.sync();
     Q_EMIT changed();
 }
+
+void Settings::rememberDestination(const QString &url)
+{
+    QStringList list = recentDestinations();
+    list.removeAll(url);
+    list.prepend(url);
+    while (list.size() > 6)
+        list.removeLast();
+    set("recentDestinations", list);
+}

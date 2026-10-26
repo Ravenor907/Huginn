@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
@@ -215,6 +216,45 @@ QString System::readText(const QUrl &url, int maxBytes) const
     return text;
 }
 
+QVariantMap System::readLines(const QUrl &url) const
+{
+    // Up to 1 MB of UTF-8 text can be edited; anything bigger or binary-looking is view only.
+    QFile f(url.toLocalFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return {{QStringLiteral("lines"), QStringList{QStringLiteral("Huginn couldn't open this file.")}}, {QStringLiteral("editable"), false}};
+    const qint64 size = f.size();
+    const QByteArray data = f.read(qMin<qint64>(size, 1024 * 1024));
+    const bool binary = data.contains('\0');
+    QString text = QString::fromUtf8(data);
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    QStringList lines = text.split(QLatin1Char('\n'));
+    if (lines.size() > 1 && lines.last().isEmpty())
+        lines.removeLast();
+    const bool editable = !binary && size <= 1024 * 1024 && QFileInfo(f).isWritable();
+    if (size > 1024 * 1024)
+        lines << QStringLiteral("… (only the first 1 MB is shown)");
+    return {{QStringLiteral("lines"), lines}, {QStringLiteral("editable"), editable}};
+}
+
+QString System::writeLines(const QUrl &url, const QStringList &lines) const
+{
+    const QString path = url.toLocalFile();
+    const QString backup = path + QStringLiteral(".bak");
+    if (!QFile::exists(backup) && !QFile::copy(path, backup))
+        return QStringLiteral("Couldn't make a backup copy first, so nothing was changed.");
+    QFile probe(path);
+    bool crlf = false;
+    if (probe.open(QIODevice::ReadOnly))
+        crlf = probe.read(64 * 1024).contains("\r\n");
+    probe.close();
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly))
+        return QStringLiteral("Huginn isn't allowed to change this file.");
+    const QString eol = crlf ? QStringLiteral("\r\n") : QStringLiteral("\n");
+    out.write((lines.join(eol) + eol).toUtf8());
+    return out.commit() ? QString() : QStringLiteral("Saving failed. Is the drive full?");
+}
+
 QVariantList System::imagesBeside(const QUrl &url) const
 {
     QVariantList out;
@@ -257,6 +297,17 @@ QVariantList System::sampleImages()
         out << QUrl::fromLocalFile(path).toString();
     }
     return out;
+}
+
+QString System::sampleText()
+{
+    const QString dir = (m_tourDir.isEmpty() ? QDir::tempPath() : m_tourDir) + QStringLiteral("/samples");
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/mod-settings.ini");
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly))
+        f.write("[Graphics]\nTextureQuality=High\nShadows=Medium\nFrameLimit=60\n\n[Controls]\nInvertY=false\nDeadzone=0.15\n");
+    return QUrl::fromLocalFile(path).toString();
 }
 
 QUrl System::homeUrl() const { return QUrl::fromLocalFile(QDir::homePath()); }

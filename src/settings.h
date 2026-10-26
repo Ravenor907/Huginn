@@ -19,6 +19,12 @@ class Settings : public QObject
     Q_PROPERTY(bool confirmDelete READ confirmDelete WRITE setConfirmDelete NOTIFY changed)
     Q_PROPERTY(bool ventoySecureBoot READ ventoySecureBoot WRITE setVentoySecureBoot NOTIFY changed)
     Q_PROPERTY(QString transferFolder READ transferFolder WRITE setTransferFolder NOTIFY changed)
+    Q_PROPERTY(bool showSize READ showSize WRITE setShowSize NOTIFY changed)
+    Q_PROPERTY(bool showModified READ showModified WRITE setShowModified NOTIFY changed)
+    Q_PROPERTY(bool showCount READ showCount WRITE setShowCount NOTIFY changed)
+    Q_PROPERTY(bool showType READ showType WRITE setShowType NOTIFY changed)
+    Q_PROPERTY(QString sortMode READ sortMode WRITE setSortMode NOTIFY changed)
+    Q_PROPERTY(QStringList recentDestinations READ recentDestinations NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -33,6 +39,13 @@ public:
     bool confirmDelete() const { return value("confirmDelete", false).toBool(); }
     bool ventoySecureBoot() const { return value("ventoySecureBoot", true).toBool(); }
     QString transferFolder() const;
+    bool showSize() const { return value("showSize", true).toBool(); }
+    bool showModified() const { return value("showModified", false).toBool(); }
+    bool showCount() const { return value("showCount", true).toBool(); }
+    bool showType() const { return value("showType", false).toBool(); }
+    QString sortMode() const { return value("sortMode", "name").toString(); }
+    QStringList recentDestinations() const { return value("recentDestinations", QStringList()).toStringList(); }
+    Q_INVOKABLE void rememberDestination(const QString &url);
 
     void setLayout(const QString &v) { set("layout", v); }
     void setUiSize(const QString &v) { set("uiSize", v); }
@@ -44,6 +57,11 @@ public:
     void setConfirmDelete(bool v) { set("confirmDelete", v); }
     void setVentoySecureBoot(bool v) { set("ventoySecureBoot", v); }
     void setTransferFolder(const QString &v) { set("transferFolder", v); }
+    void setShowSize(bool v) { set("showSize", v); }
+    void setShowModified(bool v) { set("showModified", v); }
+    void setShowCount(bool v) { set("showCount", v); }
+    void setShowType(bool v) { set("showType", v); }
+    void setSortMode(const QString &v) { set("sortMode", v); }
 
     QVariantList shares() const;
     void setShares(const QVariantList &list);

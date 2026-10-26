@@ -1,19 +1,170 @@
 #include "foldermodel.h"
+#include "settings.h"
 #include "system.h"
 
 #include <KIO/Global>
 #include <KIO/ListJob>
 
 #include <QCollator>
+#include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 #include <QLocale>
+#include <QFileInfo>
 #include <QMimeDatabase>
 #include <QSet>
 #include <algorithm>
 
+Settings *FolderModel::s_settings = nullptr;
+
 FolderModel::FolderModel(QObject *parent)
     : QAbstractListModel(parent)
 {
+    if (s_settings) {
+        m_sort = s_settings->sortMode();
+        connect(s_settings, &Settings::changed, this, [this] {
+            if (!m_visible.isEmpty())
+                Q_EMIT dataChanged(index(0), index(int(m_visible.size()) - 1), {MetaRole});
+            countFolders();
+        });
+    }
+}
+
+QString FolderModel::friendlyError(int code, const QString &fallback)
+{
+    switch (code) {
+    case KIO::ERR_DOES_NOT_EXIST:
+        return QStringLiteral("This folder isn't there anymore. It may have been moved, or the card or drive was removed.");
+    case KIO::ERR_ACCESS_DENIED:
+    case KIO::ERR_CANNOT_ENTER_DIRECTORY:
+    case KIO::ERR_CANNOT_OPEN_FOR_READING:
+        return QStringLiteral("Huginn isn't allowed to open this folder.");
+    case KIO::ERR_UNKNOWN_HOST:
+    case KIO::ERR_CANNOT_CONNECT:
+    case KIO::ERR_SERVER_TIMEOUT:
+    case KIO::ERR_CONNECTION_BROKEN:
+        return QStringLiteral("Couldn't reach that computer. Check the address and that it's turned on.");
+    case KIO::ERR_CANNOT_AUTHENTICATE:
+        return QStringLiteral("The user name or password didn't work.");
+    case KIO::ERR_UNSUPPORTED_PROTOCOL:
+        return QStringLiteral("Huginn can't open this kind of location yet.");
+    case KIO::ERR_DISK_FULL:
+        return QStringLiteral("There isn't enough free space.");
+    case KIO::ERR_WRITE_ACCESS_DENIED:
+        return QStringLiteral("Huginn isn't allowed to change files here.");
+    case KIO::ERR_FILE_ALREADY_EXIST:
+    case KIO::ERR_DIR_ALREADY_EXIST:
+        return QStringLiteral("Something with that name is already there.");
+    case KIO::ERR_IS_FILE:
+        return QStringLiteral("That's a file, not a folder.");
+    }
+    return fallback;
+}
+
+QString FolderModel::metaFor(const Item &it) const
+{
+    QStringList parts;
+    const bool size = !s_settings || s_settings->showSize();
+    const bool modified = s_settings && s_settings->showModified();
+    const bool count = !s_settings || s_settings->showCount();
+    const bool type = s_settings && s_settings->showType();
+    if (it.isDir) {
+        if (count && it.count >= 0)
+            parts << (it.count == 1 ? QStringLiteral("1 item") : QStringLiteral("%1 items").arg(it.count));
+        else if (!modified)
+            parts << QStringLiteral("folder");
+    } else {
+        if (type) {
+            QString t = QMimeDatabase().mimeTypeForName(it.mime).comment();
+            if (t.isEmpty())
+                t = QFileInfo(it.name).suffix().toUpper();
+            if (!t.isEmpty())
+                parts << t;
+        }
+        if (size && it.size >= 0)
+            parts << System::formatSize(it.size);
+    }
+    if (modified && it.mtime > 0) {
+        const QDateTime when = QDateTime::fromSecsSinceEpoch(it.mtime);
+        const QDate today = QDate::currentDate();
+        const QLocale en(QLocale::English);
+        if (when.date() == today)
+            parts << QStringLiteral("Today ") + en.toString(when.time(), QStringLiteral("h:mm AP"));
+        else if (when.date() == today.addDays(-1))
+            parts << QStringLiteral("Yesterday");
+        else if (when.date().year() == today.year())
+            parts << en.toString(when.date(), QStringLiteral("MMM d"));
+        else
+            parts << en.toString(when.date(), QStringLiteral("MMM d, yyyy"));
+    }
+    return parts.join(QStringLiteral(" · "));
+}
+
+void FolderModel::setSortMode(const QString &mode)
+{
+    if (mode == m_sort)
+        return;
+    m_sort = mode;
+    Q_EMIT sortModeChanged();
+    sortAll();
+    rebuild();
+}
+
+void FolderModel::sortAll()
+{
+    QCollator coll;
+    coll.setNumericMode(true);
+    coll.setCaseSensitivity(Qt::CaseInsensitive);
+    const QString mode = m_sort;
+    std::sort(m_all.begin(), m_all.end(), [&](const Item &a, const Item &b) {
+        if (a.isDir != b.isDir)
+            return a.isDir;
+        if (mode == QLatin1String("newest") && a.mtime != b.mtime)
+            return a.mtime > b.mtime;
+        if (mode == QLatin1String("size") && !a.isDir && a.size != b.size)
+            return a.size > b.size;
+        return coll.compare(a.name, b.name) < 0;
+    });
+}
+
+void FolderModel::countFolders()
+{
+    if (s_settings && !s_settings->showCount())
+        return;
+    if (!m_url.isLocalFile())
+        return;   // counting over a network would be slow
+    const int gen = ++m_generation;
+    QStringList paths;
+    for (const Item &it : std::as_const(m_all))
+        paths << (it.isDir && it.url.isLocalFile() ? it.url.toLocalFile() : QString());
+    const bool hidden = m_showHidden;
+    auto *watcher = new QFutureWatcher<QList<int>>(this);
+    connect(watcher, &QFutureWatcher<QList<int>>::finished, this, [this, watcher, gen] {
+        watcher->deleteLater();
+        if (gen != m_generation)
+            return;
+        const QList<int> counts = watcher->result();
+        for (int i = 0; i < m_all.size() && i < counts.size(); ++i)
+            m_all[i].count = counts.at(i);
+        if (!m_visible.isEmpty())
+            Q_EMIT dataChanged(index(0), index(int(m_visible.size()) - 1), {MetaRole});
+    });
+    watcher->setFuture(QtConcurrent::run([paths, hidden]() {
+        QList<int> out;
+        for (const QString &p : paths) {
+            if (p.isEmpty()) {
+                out << -1;
+                continue;
+            }
+            QDir::Filters f = QDir::AllEntries | QDir::NoDotAndDotDot;
+            if (hidden)
+                f |= QDir::Hidden;
+            out << int(QDir(p).entryList(f).size());
+        }
+        return out;
+    }));
 }
 
 int FolderModel::rowCount(const QModelIndex &parent) const
@@ -40,9 +191,7 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     case SelectedRole: return it.selected;
     case HiddenRole: return it.hidden;
     case MetaRole:
-        if (it.isDir)
-            return QStringLiteral("folder");
-        return it.size >= 0 ? System::formatSize(it.size) : QString();
+        return metaFor(it);
     }
     return {};
 }
@@ -187,19 +336,11 @@ void FolderModel::onResult(KJob *job)
     if (job != m_job)
         return;
     if (job->error()) {
-        m_error = job->errorString();
+        m_error = friendlyError(job->error(), job->errorString());
         m_incoming.clear();
     }
     m_job.clear();
 
-    QCollator coll;
-    coll.setNumericMode(true);
-    coll.setCaseSensitivity(Qt::CaseInsensitive);
-    std::sort(m_incoming.begin(), m_incoming.end(), [&](const Item &a, const Item &b) {
-        if (a.isDir != b.isDir)
-            return a.isDir;
-        return coll.compare(a.name, b.name) < 0;
-    });
     // Keep selections when the same folder is refreshed.
     QSet<QString> keep;
     for (const Item &it : std::as_const(m_all))
@@ -209,8 +350,10 @@ void FolderModel::onResult(KJob *job)
     m_incoming.clear();
     for (Item &it : m_all)
         it.selected = keep.contains(it.url.toString());
+    sortAll();
 
     rebuild(m_cameFrom);
+    countFolders();
     m_cameFrom.clear();
     Q_EMIT loadingChanged();
     Q_EMIT selectionChanged();

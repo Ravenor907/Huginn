@@ -43,6 +43,7 @@ Window {
         source: {
             switch (app.pageName) {
             case "games": return "GamesPage.qml"
+            case "storage": return "StoragePage.qml"
             case "usb": return "UsbPage.qml"
             case "transfer": return "TransferPage.qml"
             case "network": return "NetworkPage.qml"
@@ -57,9 +58,46 @@ Window {
 
     // ------------------------------------------------------------- overlays
     ActionWheel { id: wheel; z: 20 }
+    DestinationPicker { id: picker; z: 25 }
     TextPrompt { id: prompt; z: 30 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
+
+    // Shown while Huginn updates itself at launch; it restarts on the new version after.
+    Rectangle {
+        id: updating
+        anchors.fill: parent
+        z: 100
+        visible: Updater.autoUpdating
+        color: Theme.ground
+        MouseArea { anchors.fill: parent }
+        Column {
+            anchors.centerIn: parent
+            spacing: Theme.px(16)
+            Image {
+                anchors.horizontalCenter: parent.horizontalCenter
+                source: "assets/raven-gold.png"
+                width: Theme.px(96); height: width
+                sourceSize.width: 256; sourceSize.height: 256
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "UPDATING HUGINN TO " + Updater.latest.toUpperCase()
+                color: Theme.text
+                font.family: Theme.display
+                font.pixelSize: Theme.px(24)
+                font.weight: Font.Bold
+                font.letterSpacing: Theme.px(3)
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Updater.status
+                color: Theme.textMuted
+                font.family: Theme.body
+                font.pixelSize: Theme.px(18)
+            }
+        }
+    }
 
     Component.onCompleted: {
         Ui.main = app
@@ -67,13 +105,16 @@ Window {
         Ui.prompt = prompt
         Ui.confirm = confirm
         Ui.toast = toast
+        Ui.picker = picker
         if (System.tourDir.length > 0) tour.start()
     }
 
     // ------------------------------------------------------------- input
     function topHandler() {
+        if (updating.visible) return null
         if (confirm.visible) return confirm
         if (prompt.visible) return prompt
+        if (picker.visible) return picker
         if (wheel.visible) return wheel
         if (pageLoader.item && pageLoader.status === Loader.Ready) return pageLoader.item
         return browser
@@ -132,16 +173,24 @@ Window {
             { page: "settings", file: "08-settings" },
             { page: "preview", file: "09-preview" },
             { page: "archive", file: "10-archive" },
-            { page: "", hold: true, file: "11-confirm" }
+            { page: "", hold: true, file: "11-confirm" },
+            { page: "storage", file: "12-storage" },
+            { page: "", picker: true, file: "13-move-to" },
+            { page: "preview", text: true, file: "14-text" },
+            { page: "settings", section: 1, file: "15-settings-browser" }
         ]
         interval: 1500
         repeat: true
         onTriggered: {
             if (step > 0) System.grab(app, steps[step - 1].file)
-            wheel.visible = false; prompt.visible = false; confirm.visible = false
+            wheel.visible = false; prompt.visible = false; confirm.visible = false; picker.visible = false
             if (step >= steps.length) { stop(); System.tourFinished(); return }
             const s = steps[step]
-            if (s.page === "") app.closePage(); else app.openPage(s.page, { tour: true })
+            const args = { tour: true }
+            if (s.text) { args.tour = false; args.url = System.sampleText(); args.folder = "" }
+            if (s.section) args.section = s.section
+            if (s.page === "") app.closePage(); else app.openPage(s.page, args)
+            if (s.picker) picker.open("Move 2 items to…", [{ name: "Other pane", detail: "Home / Downloads", url: "file:///tmp" }], null)
             if (s.wheel) browser.openWheel(false)
             if (s.prompt) prompt.open("Rename folder", "Home", "screenshots", "Rename", null, false)
             if (s.hold) confirm.open("Erase this drive?", "Everything on the 64 GB USB drive will be replaced by Ventoy.", "Erase and install", null, true, true)

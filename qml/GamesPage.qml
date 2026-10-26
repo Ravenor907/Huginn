@@ -46,6 +46,7 @@ Rectangle {
             height: Theme.px(74)
             radius: Theme.radius
             color: focused ? Theme.focusFill : Theme.panel
+            border.width: focused && page.zone === "list" ? Theme.focusWidth : 1
             border.color: focused && page.zone === "list" ? Theme.accent : focused ? Theme.lineMuted : "transparent"
             Rectangle {
                 id: tileBox
@@ -188,6 +189,7 @@ Rectangle {
                         height: Theme.px(96)
                         radius: Theme.radius
                         color: focused ? Theme.focusFill : Theme.raised
+                        border.width: focused ? Theme.focusWidth : 1
                         border.color: focused ? Theme.accent : Theme.line
                         opacity: modelData.exists ? 1 : 0.5
                         Column {

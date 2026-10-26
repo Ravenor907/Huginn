@@ -54,7 +54,7 @@ Rectangle {
             Item { width: Theme.px(12); height: 1 }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                width: page.width - Theme.px(560)
+                width: page.width - Theme.px(760)
                 elide: Text.ElideMiddle
                 text: page.activeModel.title + (page.activeModel.filter ? "   ·   matching “" + page.activeModel.filter + "”" : "")
                 color: Theme.textMuted
@@ -62,31 +62,48 @@ Rectangle {
                 font.pixelSize: Theme.px(18)
             }
         }
-        HButton {
+        Row {
             anchors.right: parent.right
             anchors.rightMargin: Theme.px(24)
             anchors.verticalCenter: parent.verticalCenter
-            implicitHeight: Theme.px(44)
-            fontSize: 17
-            text: page.activeModel.filter ? "Clear search" : "Search"
-            onClicked: page.search()
+            spacing: Theme.px(12)
+            HButton {
+                implicitHeight: Theme.px(44)
+                fontSize: 17
+                text: "Sort: " + ({ name: "Name", newest: "Newest", size: "Size" })[page.activeModel.sortMode]
+                onClicked: page.cycleSort()
+            }
+            HButton {
+                implicitHeight: Theme.px(44)
+                fontSize: 17
+                text: page.activeModel.filter ? "Clear search" : "Search"
+                onClicked: page.search()
+            }
         }
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
 
     // ---------------------------------------------------------- places
-    Column {
-        id: side
+    // Scrolls to keep the focused place in view when the list is taller than the screen.
+    Flickable {
+        id: sideFlick
         anchors.top: divider.bottom
         anchors.topMargin: Theme.px(14)
         anchors.left: parent.left
         anchors.leftMargin: Theme.px(14)
+        anchors.bottom: bar.top
+        width: Theme.px(224)
+        contentHeight: side.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+    Column {
+        id: side
         width: Theme.px(224)
         spacing: Theme.px(2)
         Text {
             leftPadding: Theme.px(12)
             bottomPadding: Theme.px(10)
-            text: "PLACES"
+            text: page.zone === "side" ? "PLACES" : "PLACES  ◀"
             color: Theme.textMuted
             font.family: Theme.display
             font.pixelSize: Theme.px(13)
@@ -102,7 +119,7 @@ Rectangle {
                 height: Theme.px(44)
                 radius: Theme.radius
                 color: focused ? Theme.focusFill : here ? "#1D1C19" : "transparent"
-                border.width: focused ? 1 : 0
+                border.width: focused ? Theme.focusWidth : 0
                 border.color: Theme.accent
                 Row {
                     anchors.left: parent.left
@@ -130,12 +147,23 @@ Rectangle {
         }
     }
 
+    }
+    Connections {
+        target: page
+        function onPlaceIndexChanged() {
+            const rowH = Theme.px(46)
+            const y = Theme.px(36) + page.placeIndex * rowH
+            if (y < sideFlick.contentY) sideFlick.contentY = y
+            else if (y + rowH > sideFlick.contentY + sideFlick.height) sideFlick.contentY = y + rowH - sideFlick.height
+        }
+    }
+
     // ---------------------------------------------------------- panes
     Row {
         id: panes
         anchors.top: divider.bottom
         anchors.topMargin: Theme.px(14)
-        anchors.left: side.right
+        anchors.left: sideFlick.right
         anchors.leftMargin: Theme.px(4)
         anchors.right: parent.right
         anchors.rightMargin: Theme.px(20)
@@ -173,7 +201,8 @@ Rectangle {
         prompts: page.zone === "side"
             ? [{ key: "a", label: "Open" }, { key: "right", label: "Files" }, { key: "start", label: "Settings" }]
             : [{ key: "a", label: "Open" }, { key: "b", label: "Up" }, { key: "x", label: "Select" },
-               { key: "y", label: "Actions" }, { key: "lbrb", label: "Switch pane" }]
+               { key: "y", label: "Actions" }, { key: "lbrb", label: "Panes" }, { key: "back", label: "Search" },
+               { key: "start", label: "Settings" }]
         onPrompt: k => k === "lbrb" ? page.handleButton("rb") : page.handleButton(k)
     }
 
@@ -202,6 +231,10 @@ Rectangle {
         else Ui.say("Huginn can't open this kind of file yet. Use the action menu to copy or move it.")
     }
 
+    function otherChoice() {
+        return { name: "Other pane", detail: otherModel.title, url: otherModel.url.toString() }
+    }
+
     function targets() {
         const m = activeModel
         if (m.selectedCount > 0) return m.selectedUrls()
@@ -221,10 +254,10 @@ Rectangle {
         const single = has && targets().length === 1
         const isArchive = single && m.selectedCount <= 1 && activePane.currentIndex >= 0 && m.kindAt(activePane.currentIndex) === "archive"
         const acts = [
-            { id: "copy", label: "Copy", icon: "copy", enabled: has },
-            { id: "move", label: "Move", icon: "move", enabled: has },
+            { id: "copy", label: "Copy to…", icon: "copy", enabled: has },
+            { id: "move", label: "Move to…", icon: "move", enabled: has },
             { id: "rename", label: "Rename", icon: "rename", enabled: single },
-            { id: "extract", label: "Extract", icon: "extract", enabled: isArchive },
+            { id: "extract", label: "Extract to…", icon: "extract", enabled: isArchive },
             { id: "delete", label: "Delete", icon: "delete", enabled: has },
             { id: "compress", label: "Compress", icon: "compress", enabled: has },
             { id: "newfolder", label: "New folder", icon: "newfolder", enabled: true },
@@ -246,18 +279,18 @@ Rectangle {
         const m = activeModel
         switch (id) {
         case "copy":
-            FileOps.copy(urls, otherModel.url)
-            m.clearSelection()
+            Ui.pick("Copy " + targetLabel() + " to…", [otherChoice()], d => { FileOps.copy(urls, d); m.clearSelection() })
             break
         case "move":
-            FileOps.move(urls, otherModel.url)
-            m.clearSelection()
+            Ui.pick("Move " + targetLabel() + " to…", [otherChoice()], d => { FileOps.move(urls, d); m.clearSelection() })
             break
         case "rename":
             Ui.ask("Rename", m.title, m.fileName(urls[0]), "Rename", t => FileOps.rename(urls[0], t))
             break
         case "extract":
-            Ui.openPage("archive", { url: urls[0], dest: otherModel.url })
+            Ui.pick("Extract " + targetLabel() + " to…",
+                    [{ name: "Next to the archive", detail: m.title, url: m.url.toString() }, otherChoice()],
+                    d => FileOps.extract(urls[0], d))
             break
         case "delete":
             if (Settings.confirmDelete)
@@ -280,6 +313,14 @@ Rectangle {
             FileOps.undo()
             break
         }
+    }
+
+    function cycleSort() {
+        const order = ["name", "newest", "size"]
+        const m = activeModel
+        m.sortMode = order[(order.indexOf(m.sortMode) + 1) % order.length]
+        activePane.currentIndex = 0
+        Ui.say("Sorted by " + ({ name: "name", newest: "newest first", size: "size, biggest first" })[m.sortMode])
     }
 
     function search() {
@@ -327,6 +368,7 @@ Rectangle {
             return true
         case "y": openWheel(true); return true
         case "back": search(); return true
+        case "ls": cycleSort(); return true
         case "start": Ui.openPage("settings"); return true
         }
         return false

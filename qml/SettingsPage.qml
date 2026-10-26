@@ -7,9 +7,9 @@ Rectangle {
     property int section: 0
     property int row: 0
     property bool inSection: false
-    function setArgs(a) {}
+    function setArgs(a) { if (a.section) { section = a.section; inSection = true; row = 1 } }
 
-    readonly property var sections: ["General", "Safety", "Updates", "About"]
+    readonly property var sections: ["General", "Browser", "Safety", "Updates", "About"]
 
     // Each row: { kind: "segmented"|"toggle"|"accent"|"button", title, note, ... }
     readonly property var rows: {
@@ -23,13 +23,21 @@ Rectangle {
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
         case 1: return [
+            { kind: "segmented", key: "sortMode", title: "Sort folders by", note: "Each pane can also switch with the left stick click",
+              options: [{ value: "name", label: "Name" }, { value: "newest", label: "Newest" }, { value: "size", label: "Size" }] },
+            { kind: "toggle", key: "showSize", title: "File size", note: "How big each file is" },
+            { kind: "toggle", key: "showCount", title: "Items in folders", note: "How many things are inside each folder (counted on this device only)" },
+            { kind: "toggle", key: "showModified", title: "Last modified", note: "Today, Yesterday, or the date" },
+            { kind: "toggle", key: "showType", title: "File type", note: "Like PNG image or Zip archive" }
+        ]
+        case 2: return [
             { kind: "toggle", key: "protectLibrary", title: "Protect game library", note: "Blocks deleting, moving or renaming game installs from the browser" },
             { kind: "toggle", key: "confirmDelete", title: "Ask before moving to trash", note: "Trash can be undone either way" },
             { kind: "toggle", key: "ventoySecureBoot", title: "Ventoy with Secure Boot support", note: "On: the first boot asks you to enroll Ventoy's key once" },
             { kind: "button", key: "removeRule", title: "USB access rule", note: Usb.rawReady ? "Installed: Huginn can open USB drives without a password" : "Not installed: set it up from USB Tools in Desktop Mode",
               label: "Remove", enabled: Usb.rawReady && !System.gameMode }
         ]
-        case 2: return [
+        case 3: return [
             { kind: "segmented", key: "channel", title: "Update channel", note: "Testing gets new features first and can be rolled back",
               options: [{ value: "stable", label: "Stable" }, { value: "testing", label: "Testing" }] },
             { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + " · " + (Settings.channel === "testing" ? "Testing" : "Stable") + " channel",
@@ -40,7 +48,8 @@ Rectangle {
         default: return [
             { kind: "info", title: "Huginn " + System.version, note: "A controller-first file explorer for SteamOS. Made by Ravenor907." },
             { kind: "info", title: "Drive tools", note: "Ventoy install and image writing come from Handheld Forge, so both apps share one tested installer." },
-            { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." }
+            { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." },
+            { kind: "button", key: "exit", title: "Exit Huginn", note: "Closes Huginn. In Game Mode you land back in Steam.", label: "Exit" }
         ]
         }
     }
@@ -67,7 +76,7 @@ Rectangle {
                 readonly property bool on: index === page.section
                 width: nav.width; height: Theme.px(44); radius: Theme.radius
                 color: on ? (page.inSection ? "#1D1C19" : Theme.focusFill) : "transparent"
-                border.width: on && !page.inSection ? 1 : 0
+                border.width: on && !page.inSection ? Theme.focusWidth : 0
                 border.color: Theme.accent
                 Row {
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter
@@ -95,6 +104,7 @@ Rectangle {
                 height: Math.max(Theme.px(72), texts.implicitHeight + Theme.px(24))
                 radius: Theme.radius
                 color: focused ? Theme.focusFill : Theme.panel
+                border.width: focused ? Theme.focusWidth : 1
                 border.color: focused ? Theme.accent : Theme.line
                 Column {
                     id: texts
@@ -177,7 +187,8 @@ Rectangle {
     }
 
     function press(key) {
-        if (key === "removeRule") Usb.removeRule()
+        if (key === "exit") Qt.quit()
+        else if (key === "removeRule") Usb.removeRule()
         else if (key === "check") Updater.available ? Updater.install() : Updater.check()
         else if (key === "rollback") Updater.rollback()
     }

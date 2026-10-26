@@ -39,5 +39,7 @@ QtObject {
     readonly property string runic: "Noto Sans Runic"
 
     readonly property int radius: 3
+    // Controller focus: thick enough to spot at arm's length on a 7 inch screen.
+    readonly property int focusWidth: Math.max(3, px(2.5))
     readonly property int rowHeight: px(56)
 }

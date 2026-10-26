@@ -39,6 +39,7 @@ public:
     Q_INVOKABLE void mkdir(const QUrl &parent, const QString &name);
     Q_INVOKABLE void compress(const QVariantList &urls, const QUrl &destDir, const QString &zipName);
     Q_INVOKABLE void undo();
+    Q_INVOKABLE void extract(const QUrl &archive, const QUrl &destDir);
 
 Q_SIGNALS:
     void busyChanged();

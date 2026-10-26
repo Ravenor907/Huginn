@@ -23,4 +23,7 @@ Rectangle {
         Behavior on x { NumberAnimation { duration: 120 } }
     }
     TapHandler { onTapped: sw.toggled() }
+    Accessible.role: Accessible.CheckBox
+    Accessible.checked: checked
+    Accessible.onToggleAction: toggled()
 }

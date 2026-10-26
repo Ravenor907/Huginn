@@ -60,7 +60,7 @@ Rectangle {
                 height: driveCol.implicitHeight + Theme.px(32)
                 radius: Theme.radius + 1
                 color: index === page.driveIndex ? Theme.panel : Theme.panelLow
-                border.width: page.isFocused("drive", index) ? 2 : 1
+                border.width: page.isFocused("drive", index) ? Theme.focusWidth : 1
                 border.color: page.isFocused("drive", index) ? Theme.text : index === page.driveIndex ? Theme.accent : Theme.line
                 Column {
                     id: driveCol
@@ -142,7 +142,7 @@ Rectangle {
             height: setupCol.implicitHeight + Theme.px(36)
             radius: Theme.radius + 1
             color: Theme.panel
-            border.width: page.isFocused("setup") ? 2 : 1
+            border.width: page.isFocused("setup") ? Theme.focusWidth : 1
             border.color: page.isFocused("setup") ? Theme.text : Theme.accent
             Column {
                 id: setupCol
@@ -225,7 +225,7 @@ Rectangle {
                         Rectangle {
                             width: parent.width; height: Theme.px(36); radius: Theme.radius
                             color: page.isFocused("iso", index) ? Theme.focusFill : "transparent"
-                            border.width: page.isFocused("iso", index) ? 1 : 0; border.color: Theme.accent
+                            border.width: page.isFocused("iso", index) ? Theme.focusWidth : 0; border.color: Theme.accent
                             Row {
                                 anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8); spacing: Theme.px(12)
                                 Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(11); height: width; rotation: 45; color: page.picked[modelData.url] ? Theme.accent : "transparent"; border.width: page.picked[modelData.url] ? 0 : 1; border.color: Theme.lineMuted }

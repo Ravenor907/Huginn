@@ -32,6 +32,7 @@ qt_add_executable(huginn
     src/network.cpp src/network.h
     src/usb.cpp src/usb.h
     src/updater.cpp src/updater.h
+    src/storage.cpp src/storage.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
@@ -70,6 +71,8 @@ qt_add_qml_module(huginn
         qml/SettingsPage.qml
         qml/PreviewPage.qml
         qml/ArchivePage.qml
+        qml/StoragePage.qml
+        qml/DestinationPicker.qml
     RESOURCES
         qml/assets/raven-gold.png
         ${HUGINN_FONTS}
@@ -78,7 +81,7 @@ qt_add_qml_module(huginn
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon Divider PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented FileRow FilePane
                    ActionWheel TextPrompt ConfirmDialog Toast BrowserPage GamesPage UsbPage TransferPage NetworkPage
-                   SettingsPage PreviewPage ArchivePage)
+                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

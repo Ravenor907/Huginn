@@ -79,7 +79,7 @@ Rectangle {
             }
         }
         HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract next to the archive"; kind: "accent"; focused: page.zone === "buttons" && page.button === 0; onClicked: page.extract(0) }
-        HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract to the other pane"; focused: page.zone === "buttons" && page.button === 1; onClicked: page.extract(1) }
+        HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract to…"; focused: page.zone === "buttons" && page.button === 1; onClicked: page.extract(1) }
         HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract to a new folder"; focused: page.zone === "buttons" && page.button === 2; onClicked: page.extract(2) }
         Text { width: parent.width; wrapMode: Text.WordWrap; text: "Works with zip, 7z and tar files (also .tar.gz, .tar.xz and .tar.bz2)"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
     }
@@ -96,7 +96,7 @@ Rectangle {
     function enter(i) { if (arc.isDirAt(i)) { arc.enter(i); pane.currentIndex = 0 } }
     function extract(where) {
         if (where === 0) arc.extract(System.parentUrl(arc.url), "")
-        else if (where === 1) arc.extract(destination, "")
+        else if (where === 1) Ui.pick("Extract to…", [{ name: "Other pane", detail: System.prettyPath(destination), url: destination.toString() }], d => arc.extract(d, ""))
         else Ui.ask("Extract to a new folder", System.parentPath(arc.url), arc.baseName, "Extract", t => arc.extract(System.parentUrl(arc.url), t))
     }
     Connections {

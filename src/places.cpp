@@ -2,6 +2,7 @@
 #include "steam.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QStorageInfo>
@@ -56,6 +57,7 @@ void Places::rebuild()
     if (!steam.isEmpty())
         l << place(QStringLiteral("Steam Library"), QStringLiteral("folder"), QUrl::fromLocalFile(steam + QStringLiteral("/steamapps/common")));
     l << place(QStringLiteral("Games"), QStringLiteral("games"));
+    l << place(QStringLiteral("Storage"), QStringLiteral("storage"));
     l << place(QStringLiteral("Screenshots"), QStringLiteral("folder"), QUrl::fromLocalFile(SteamFiles::screenshotsDir()));
     QString emulation = home + QStringLiteral("/Emulation");
     for (const QString &m : std::as_const(m_lastMounts))
@@ -81,4 +83,51 @@ QUrl Places::startUrl(int pane) const
         if (!QFileInfo(m + QStringLiteral("/ventoy")).exists())
             return QUrl::fromLocalFile(m);
     return QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+}
+
+QVariantList Places::romFolders() const
+{
+    // EmuDeck and RetroDECK keep one folder per system under Emulation/roms.
+    QStringList roots{QDir::homePath() + QStringLiteral("/Emulation/roms")};
+    for (const QString &m : m_lastMounts)
+        roots << m + QStringLiteral("/Emulation/roms");
+    roots << QDir::homePath() + QStringLiteral("/retrodeck/roms");
+    QVariantList withFiles, empty;
+    for (const QString &root : std::as_const(roots)) {
+        QDir dir(root);
+        if (!dir.exists())
+            continue;
+        for (const QString &sys : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase)) {
+            const QString path = dir.filePath(sys);
+            const int n = int(QDir(path).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).size());
+            const QVariantMap e{{QStringLiteral("name"), sys}, {QStringLiteral("detail"), n > 0 ? QStringLiteral("%1 items").arg(n) : QStringLiteral("empty")},
+                                {QStringLiteral("url"), QUrl::fromLocalFile(path).toString()}};
+            (n > 0 ? withFiles : empty) << e;
+        }
+    }
+    return withFiles + empty;
+}
+
+QVariantList Places::gameFolders() const
+{
+    QVariantList out;
+    for (const QString &lib : SteamFiles::libraries()) {
+        QDir apps(lib + QStringLiteral("/steamapps"));
+        for (const QString &acf : apps.entryList({QStringLiteral("appmanifest_*.acf")}, QDir::Files)) {
+            QFile f(apps.filePath(acf));
+            if (!f.open(QIODevice::ReadOnly))
+                continue;
+            const QVariantMap st = SteamFiles::parseText(f.readAll()).value(QStringLiteral("AppState")).toMap();
+            const QString name = st.value(QStringLiteral("name")).toString();
+            const QString dir = apps.filePath(QStringLiteral("common/") + st.value(QStringLiteral("installdir")).toString());
+            if (name.isEmpty() || !QFileInfo(dir).isDir() || name.startsWith(QLatin1String("Proton")) || name.startsWith(QLatin1String("Steam Linux Runtime")))
+                continue;
+            out << QVariantMap{{QStringLiteral("name"), name}, {QStringLiteral("detail"), QStringLiteral("game folder")},
+                               {QStringLiteral("url"), QUrl::fromLocalFile(dir).toString()}};
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("name")).toString().compare(b.toMap().value(QStringLiteral("name")).toString(), Qt::CaseInsensitive) < 0;
+    });
+    return out;
 }

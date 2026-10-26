@@ -65,6 +65,7 @@ Rectangle {
         height: Theme.px(72)
         radius: Theme.radius
         color: focused ? Theme.focusFill : saved ? Theme.panel : Theme.panelLow
+        border.width: focused ? Theme.focusWidth : 1
         border.color: focused ? Theme.accent : Theme.line
         Row {
             anchors.left: parent.left

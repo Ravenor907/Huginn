@@ -11,6 +11,29 @@ Rectangle {
     property bool showDetails: true
     property real zoom: 1
     readonly property bool isText: System.kindOf(url) === "text"
+    property var textLines: []
+    property bool editable: false
+    property int line: 0
+    onUrlChanged: loadText()
+    function loadText() {
+        line = 0
+        if (!isText) { textLines = []; return }
+        const r = System.readLines(url)
+        textLines = r.lines
+        editable = r.editable
+    }
+    function editLine() {
+        if (!isText) return
+        if (!editable) { Ui.say("This file is too big or not plain text, so it's view only.", true); return }
+        Ui.ask("Edit line " + (line + 1), System.fileName(url), textLines[line], "Save", t => {
+            const copy = textLines.slice()
+            copy[line] = t
+            const err = System.writeLines(url, copy)
+            if (err) { Ui.say(err, true); return }
+            textLines = copy
+            Ui.say("Saved. The original is kept as " + System.fileName(url) + ".bak")
+        }, false, true)
+    }
     readonly property var info: System.fileInfo(url)
 
     function setArgs(a) {
@@ -76,21 +99,47 @@ Rectangle {
             color: Theme.panelLow
             border.color: Theme.line
             radius: Theme.radius
-            Flickable {
-                id: textFlick
+            // Text files show line by line; A edits the focused line with Steam's keyboard.
+            ListView {
+                id: lines
                 anchors.fill: parent
-                anchors.margins: Theme.px(18)
-                contentHeight: textView.implicitHeight
+                anchors.margins: Theme.px(10)
                 clip: true
-                Text {
-                    id: textView
-                    width: textFlick.width
-                    wrapMode: Text.WrapAnywhere
-                    text: page.isText ? System.readText(page.url, 262144) : ""
-                    color: Theme.text
-                    font.family: "monospace"
-                    font.pixelSize: Theme.px(16)
-                    textFormat: Text.PlainText
+                model: page.textLines
+                currentIndex: page.line
+                highlightMoveDuration: 60
+                preferredHighlightBegin: height / 3
+                preferredHighlightEnd: height * 2 / 3
+                highlightRangeMode: ListView.ApplyRange
+                delegate: Rectangle {
+                    readonly property bool on: index === page.line
+                    width: lines.width
+                    height: lineText.implicitHeight + Theme.px(8)
+                    radius: 2
+                    color: on ? Theme.focusFill : "transparent"
+                    border.width: on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Text {
+                        width: Theme.px(56)
+                        x: Theme.px(4); y: Theme.px(4)
+                        horizontalAlignment: Text.AlignRight
+                        text: index + 1
+                        color: Theme.textFaint
+                        font.family: "monospace"
+                        font.pixelSize: Theme.px(14)
+                    }
+                    Text {
+                        id: lineText
+                        x: Theme.px(72); y: Theme.px(4)
+                        width: parent.width - Theme.px(80)
+                        wrapMode: Text.WrapAnywhere
+                        text: modelData.length ? modelData : " "
+                        color: Theme.text
+                        font.family: "monospace"
+                        font.pixelSize: Theme.px(16)
+                        textFormat: Text.PlainText
+                    }
+                    TapHandler { onTapped: { if (page.line === index) page.editLine(); else page.line = index } }
                 }
             }
         }
@@ -170,7 +219,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         width: parent.width
         prompts: page.isText
-            ? [{ key: "updown", label: "Scroll" }, { key: "x", label: "Details" }, { key: "b", label: "Close" }]
+            ? [{ key: "updown", label: "Move" }, { key: "a", label: page.editable ? "Edit line" : "View only" }, { key: "x", label: "Details" }, { key: "b", label: "Close" }]
             : [{ key: "lbrb", label: "Previous / next" }, { key: "lt", label: "Zoom out" }, { key: "rt", label: "Zoom in" }, { key: "x", label: "Details" }, { key: "b", label: "Close" }]
         onPrompt: k => page.handleButton(k === "lbrb" ? "rb" : k)
     }
@@ -179,10 +228,11 @@ Rectangle {
         switch (b) {
         case "lb": case "left": go(-1); break
         case "rb": case "right": go(1); break
-        case "rt": zoom = Math.min(6, zoom * 1.4); break
-        case "lt": zoom = Math.max(1, zoom / 1.4); if (zoom === 1) { img.x = (stage.width - img.width) / 2; img.y = (stage.height - img.height) / 2 } break
-        case "up": if (isText) textFlick.contentY = Math.max(0, textFlick.contentY - Theme.px(160)); else img.y += Theme.px(80); break
-        case "down": if (isText) textFlick.contentY = Math.min(Math.max(0, textFlick.contentHeight - textFlick.height), textFlick.contentY + Theme.px(160)); else img.y -= Theme.px(80); break
+        case "rt": if (isText) { line = Math.min(textLines.length - 1, line + 12); break } zoom = Math.min(6, zoom * 1.4); break
+        case "lt": if (isText) { line = Math.max(0, line - 12); break } zoom = Math.max(1, zoom / 1.4); if (zoom === 1) { img.x = (stage.width - img.width) / 2; img.y = (stage.height - img.height) / 2 } break
+        case "up": if (isText) line = Math.max(0, line - 1); else img.y += Theme.px(80); break
+        case "down": if (isText) line = Math.min(textLines.length - 1, line + 1); else img.y -= Theme.px(80); break
+        case "a": editLine(); break
         case "x": showDetails = !showDetails; break
         case "y": Transfer.share([url]); Ui.openPage("transfer", {}); break
         case "b": Ui.closePage(); break

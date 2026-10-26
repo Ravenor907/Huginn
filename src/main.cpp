@@ -6,6 +6,7 @@
 #include "places.h"
 #include "settings.h"
 #include "steam.h"
+#include "storage.h"
 #include "system.h"
 #include "transfer.h"
 #include "updater.h"
@@ -68,6 +69,7 @@ int main(int argc, char *argv[])
     QApplication::setFont(base);
 
     auto *settings = new Settings(&app);
+    FolderModel::setSettings(settings);
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || args.isSet(tour), &app);
     auto *gamepad = new Gamepad(&app);
     auto *places = new Places(&app);
@@ -77,6 +79,7 @@ int main(int argc, char *argv[])
     auto *transfer = new TransferServer(settings, &app);
     auto *network = new Network(settings, &app);
     auto *updater = new Updater(settings, &app);
+    auto *storage = new Storage(&app);
     fileOps->setProtectedRoots(games->protectedRoots());
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
@@ -89,6 +92,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Transfer", transfer);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Network", network);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Updater", updater);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Storage", storage);
     qmlRegisterType<FolderModel>("Huginn", 1, 0, "FolderModel");
     qmlRegisterType<ArchiveModel>("Huginn", 1, 0, "ArchiveModel");
 
@@ -96,5 +100,7 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(2); }, Qt::QueuedConnection);
     engine.loadFromModule("Huginn", "Main");
+    if (!args.isSet(tour))
+        updater->startAutoUpdate();
     return app.exec();
 }

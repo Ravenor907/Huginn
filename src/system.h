@@ -40,12 +40,16 @@ public:
     Q_INVOKABLE QString kindOf(const QUrl &url) const;
     Q_INVOKABLE QVariantMap fileInfo(const QUrl &url) const;
     Q_INVOKABLE QString readText(const QUrl &url, int maxBytes) const;
+    Q_INVOKABLE QVariantMap readLines(const QUrl &url) const;
+    Q_INVOKABLE QString writeLines(const QUrl &url, const QStringList &lines) const;
     Q_INVOKABLE QVariantList imagesBeside(const QUrl &url) const;
     Q_INVOKABLE QVariantList sampleImages();
+    Q_INVOKABLE QString sampleText();
     Q_INVOKABLE QUrl homeUrl() const;
     Q_INVOKABLE QUrl parentUrl(const QUrl &url) const;
     Q_INVOKABLE QString parentPath(const QUrl &url) const;
     Q_INVOKABLE QString fileName(const QVariant &url) const;
+    Q_INVOKABLE QString prettyPath(const QVariant &url) const { return displayPath(QUrl(url.toString())); }
     Q_INVOKABLE void grab(QQuickWindow *window, const QString &name);
     Q_INVOKABLE void tourFinished();
 

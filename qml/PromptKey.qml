@@ -21,7 +21,7 @@ Item {
             width: Math.max(height, glyph.implicitWidth + Theme.px(12))
             radius: height / 2
             color: "transparent"
-            border.color: Theme.textFaint
+            border.color: Theme.textMuted
             border.width: 1
             Text {
                 id: glyph
@@ -42,4 +42,7 @@ Item {
         }
     }
     TapHandler { onTapped: root.activated() }
+    Accessible.role: Accessible.Button
+    Accessible.name: root.label
+    Accessible.onPressAction: root.activated()
 }

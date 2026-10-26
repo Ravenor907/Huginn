@@ -1,10 +1,13 @@
 #include "fileops.h"
+#include "archivemodel.h"
+#include "foldermodel.h"
 #include "settings.h"
 
 #include <KIO/CopyJob>
 #include <KIO/FileUndoManager>
 #include <KIO/MkdirJob>
 #include <KIO/SimpleJob>
+#include <KArchiveDirectory>
 #include <KZip>
 
 #include <QDateTime>
@@ -99,7 +102,7 @@ void FileOps::track(KJob *job, const QString &doing, const QString &done)
     });
     connect(job, &KJob::result, this, [this, done](KJob *j) {
         const bool ok = !j->error();
-        const QString msg = ok ? done : j->errorString();
+        const QString msg = ok ? done : FolderModel::friendlyError(j->error(), j->errorString());
         m_job.clear();
         m_progress = 0;
         Q_EMIT busyChanged();
@@ -252,4 +255,38 @@ void FileOps::undo()
     if (busy() || !canUndo())
         return;
     KIO::FileUndoManager::self()->undo();
+}
+
+void FileOps::extract(const QUrl &archive, const QUrl &destDir)
+{
+    if (busy() || !archive.isLocalFile())
+        return;
+    const QString src = archive.toLocalFile();
+    QString base = archive.fileName();
+    for (const char *ext : {".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tgz", ".txz", ".zip", ".7z", ".tar"})
+        if (base.endsWith(QLatin1String(ext), Qt::CaseInsensitive)) { base.chop(int(qstrlen(ext))); break; }
+    const QString dest = destDir.toLocalFile();
+    m_status = QStringLiteral("Extracting %1…").arg(archive.fileName());
+    m_progress = 0;
+    m_compressing = true;
+    Q_EMIT busyChanged();
+    Q_EMIT progressChanged();
+    auto *watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, base, dest] {
+        const QString err = watcher->result();
+        watcher->deleteLater();
+        m_compressing = false;
+        m_status.clear();
+        Q_EMIT busyChanged();
+        Q_EMIT progressChanged();
+        Q_EMIT finished(err.isEmpty(), err.isEmpty() ? QStringLiteral("Extracted to %1").arg(QFileInfo(dest).fileName()) : err);
+    });
+    watcher->setFuture(QtConcurrent::run([src, dest]() -> QString {
+        auto a = ArchiveModel::openArchive(src);
+        if (!a)
+            return QStringLiteral("Huginn can't read this archive. It may be damaged, or it's a rar (not supported).");
+        if (!QDir().mkpath(dest))
+            return QStringLiteral("Couldn't open the destination folder.");
+        return a->directory()->copyTo(dest, true) ? QString() : QStringLiteral("Extracting stopped partway. Is there enough free space?");
+    }));
 }

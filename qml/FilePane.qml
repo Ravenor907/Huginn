@@ -21,7 +21,7 @@ Rectangle {
         id: head
         width: parent.width
         height: Theme.px(46)
-        color: "transparent"
+        color: pane.active ? Theme.focusFill : "transparent"
         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
         Text {
             anchors.left: parent.left
@@ -31,7 +31,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             elide: Text.ElideMiddle
             text: pane.model ? pane.model.title : ""
-            color: pane.active ? Theme.text : Theme.textSoft
+            color: pane.active ? Theme.accent : Theme.textSoft
             font.family: Theme.body
             font.pixelSize: Theme.px(17)
             font.weight: Font.DemiBold

@@ -8,6 +8,7 @@
 #include <KIO/UDSEntry>
 
 class KJob;
+class Settings;
 namespace KIO { class ListJob; class Job; }
 
 // One folder's contents, read through KIO so local folders, the trash, network shares and
@@ -25,6 +26,7 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY filterChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
     Q_PROPERTY(QString selectedSize READ selectedSize NOTIFY selectionChanged)
+    Q_PROPERTY(QString sortMode READ sortMode WRITE setSortMode NOTIFY sortModeChanged)
 
 public:
     enum Roles { NameRole = Qt::UserRole + 1, UrlRole, IsDirRole, MetaRole, KindRole, SelectedRole, HiddenRole };
@@ -46,6 +48,8 @@ public:
     QString filter() const { return m_filter; }
     void setFilter(const QString &f);
     int selectedCount() const;
+    QString sortMode() const { return m_sort; }
+    void setSortMode(const QString &mode);
     QString selectedSize() const;
 
     Q_INVOKABLE void setUrl(const QUrl &url);
@@ -62,6 +66,8 @@ public:
     Q_INVOKABLE QString fileName(const QUrl &url) const { return url.fileName(); }
 
     static QString kindFor(const QString &name, const QString &mime, bool isDir);
+    static void setSettings(Settings *s) { s_settings = s; }
+    static QString friendlyError(int code, const QString &fallback);
 
 Q_SIGNALS:
     void urlChanged();
@@ -71,6 +77,7 @@ Q_SIGNALS:
     void filterChanged();
     void selectionChanged();
     void restoreIndex(int index);
+    void sortModeChanged();
 
 private:
     struct Item {
@@ -83,11 +90,15 @@ private:
         QString mime;
         QString kind;
         bool selected = false;
+        int count = -1;        // items inside a folder, counted in the background
     };
 
     void onEntries(KIO::Job *job, const KIO::UDSEntryList &list);
     void onResult(KJob *job);
     void rebuild(const QString &keepName = {});
+    void sortAll();
+    void countFolders();
+    QString metaFor(const Item &it) const;
 
     QUrl m_url;
     QString m_cameFrom;
@@ -98,4 +109,7 @@ private:
     QString m_error;
     QString m_filter;
     bool m_showHidden = false;
+    QString m_sort = QStringLiteral("name");
+    int m_generation = 0;
+    static Settings *s_settings;
 };

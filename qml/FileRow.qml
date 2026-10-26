@@ -10,8 +10,10 @@ Rectangle {
     height: Theme.rowHeight
     radius: Theme.radius
     color: focused ? Theme.focusFill : model.selected ? Theme.raised : "transparent"
-    border.width: 1
+    border.width: focused ? Theme.focusWidth : 1
     border.color: focused ? Theme.accent : "transparent"
+    Accessible.role: Accessible.ListItem
+    Accessible.name: model.name + (model.isDir ? ", folder" : "") + (model.selected ? ", selected" : "")
 
     Row {
         anchors.left: parent.left

@@ -39,7 +39,13 @@ Updater::Updater(Settings *settings, QObject *parent)
         m_latestTag.clear();
         Q_EMIT changed();
     });
-    QTimer::singleShot(8000, this, &Updater::check);
+}
+
+void Updater::startAutoUpdate()
+{
+    if (!System::inFlatpak())
+        return;   // a development build updates by rebuilding
+    fetch(m_settings->channel() != QLatin1String("testing"), false, true);
 }
 
 QString Updater::versionFromTag(const QString &tag)
@@ -65,7 +71,7 @@ void Updater::rollback()
     fetch(true, true);
 }
 
-void Updater::fetch(bool stableOnly, bool installAfter)
+void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
 {
     if (m_busy)
         return;
@@ -76,7 +82,7 @@ void Updater::fetch(bool stableOnly, bool installAfter)
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *r = m_net.get(req);
-    connect(r, &QNetworkReply::finished, this, [this, r, stableOnly, installAfter] {
+    connect(r, &QNetworkReply::finished, this, [this, r, stableOnly, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
         if (r->error() != QNetworkReply::NoError) {
@@ -119,6 +125,11 @@ void Updater::fetch(bool stableOnly, bool installAfter)
             download(bestAsset, bestTag);
             return;
         }
+        if (autoMode && available()) {
+            m_auto = true;
+            download(bestAsset, bestTag);
+            return;
+        }
         m_status = available() ? QStringLiteral("Huginn %1 is ready to install").arg(bestVer) : QStringLiteral("Huginn is up to date");
         Q_EMIT changed();
     });
@@ -144,6 +155,7 @@ void Updater::download(const QString &url, const QString &tag)
         r->deleteLater();
         if (r->error() != QNetworkReply::NoError) {
             m_busy = false;
+            m_auto = false;
             m_status = QStringLiteral("The download failed. Try again.");
             Q_EMIT changed();
             return;
@@ -154,6 +166,7 @@ void Updater::download(const QString &url, const QString &tag)
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly)) {
             m_busy = false;
+            m_auto = false;
             m_status = QStringLiteral("Couldn't save the update.");
             Q_EMIT changed();
             return;
@@ -162,17 +175,28 @@ void Updater::download(const QString &url, const QString &tag)
         f.close();
         m_status = QStringLiteral("Installing…");
         Q_EMIT changed();
-        const int code = System::runHost({QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
-                                          QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path}, nullptr, {}, 600000);
-        m_busy = false;
-        if (code != 0) {
-            m_status = QStringLiteral("Installing the update failed.");
+        auto *p = new QProcess(this);
+        QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
+                         QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};
+        QString program = QStringLiteral("flatpak-spawn");
+        if (System::inFlatpak())
+            args.prepend(QStringLiteral("--host"));
+        else
+            program = args.takeFirst();
+        connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus st) {
+            p->deleteLater();
+            m_busy = false;
+            if (st != QProcess::NormalExit || code != 0) {
+                m_auto = false;
+                m_status = QStringLiteral("Installing the update failed.");
+                Q_EMIT changed();
+                return;
+            }
+            m_status = QStringLiteral("Updated. Restarting…");
             Q_EMIT changed();
-            return;
-        }
-        m_status = QStringLiteral("Updated. Restarting…");
-        Q_EMIT changed();
-        QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
-        QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+            QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
+            QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+        });
+        p->start(program, args);
     });
 }

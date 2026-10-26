@@ -16,7 +16,10 @@ Rectangle {
     radius: Theme.radius
     opacity: enabled ? 1 : 0.45
     color: kind === "accent" ? Theme.accentFill : kind === "danger" ? Theme.dangerFill : Theme.raised
-    border.width: focused ? 2 : 1
+    border.width: focused ? Theme.focusWidth : 1
+    Accessible.role: Accessible.Button
+    Accessible.name: text
+    Accessible.onPressAction: clicked()
     border.color: focused ? Theme.text
                 : kind === "accent" ? Theme.accent
                 : kind === "danger" ? Theme.dangerLine : Theme.lineMuted
