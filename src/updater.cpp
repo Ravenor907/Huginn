@@ -16,7 +16,7 @@
 
 namespace
 {
-const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=30";
+const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=100";
 const char *kAppId = "io.github.ravenor907.Huginn";
 
 // "0.2 Test 3" -> {0, 2, 3}; a stable "0.2" ranks above any "0.2 Test n".
@@ -98,6 +98,8 @@ void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
             if (stableOnly && rel.value(QStringLiteral("prerelease")).toBool())
                 continue;
             const QString tag = rel.value(QStringLiteral("tag_name")).toString();
+            if (!tag.startsWith(QLatin1Char('v')))   // Muninn (the phone app) releases are muninn-v…
+                continue;
             const QString ver = versionFromTag(tag);
             if (ver.isEmpty())
                 continue;

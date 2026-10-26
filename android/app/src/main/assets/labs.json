@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "distros": [
+    {
+      "id": "batocera",
+      "name": "Batocera",
+      "edition": "Emulation, runs from USB",
+      "enabled": true,
+      "min_drive_gb": 32,
+      "public_key": null,
+      "images": [
+        {
+          "label": "Handheld build (x86-64-v3)",
+          "iso_url": "https://updates.batocera.org/x86-64-v3/stable/last/batocera-zen3-x86-64-v3-43.1-20260529.img.gz",
+          "checksum_url": null,
+          "signature_url": null,
+          "require_signature": false
+        },
+        {
+          "label": "Handheld build, mirror",
+          "iso_url": "https://mirrors.o2switch.fr/batocera/x86-64-v3/stable/last/batocera-zen3-x86-64-v3-43.1-20260529.img.gz",
+          "checksum_url": null,
+          "signature_url": null,
+          "require_signature": false
+        }
+      ],
+      "format": "raw-gz",
+      "warning": "Experimental. Batocera runs from this drive and keeps your games and saves on it, so nothing gets installed on the handheld. The drive is erased now, and Batocera grows its storage to fill it on the first start. A fast USB 3.2 drive or USB SSD makes a big difference.",
+      "install_steps": [
+        "Choose the USB drive in the boot menu. The first start takes a few minutes while Batocera sets up its storage.",
+        "Connect to Wi-Fi in Main Menu > Network Settings.",
+        "Add games: plug the drive into a PC and copy them into the matching folder under roms, or from a PC on the same Wi-Fi open \\\\BATOCERA\\share.",
+        "Put BIOS files in the bios folder. Main Menu > Game Settings > Missing BIOS Check lists what's missing.",
+        "To go back to the handheld's own system, turn it off and remove the USB drive."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "boot_menu": [
+    "ROG Ally, Ally X, ROG Xbox Ally and Xbox Ally X: with the handheld off and the drive plugged in, hold Volume Down and press Power. Choose the USB drive.",
+    "Steam Deck: with it off and the drive plugged in, hold Volume Down and press Power, let go at the chime, then choose the USB drive.",
+    "Legion Go, Legion Go 2 and Legion Go S: with the handheld off and the drive plugged in, hold Volume Up and press Power, then choose Boot Menu and the USB drive.",
+    "If the drive doesn't start, turn off Secure Boot in the BIOS. Bazzite starts either way."
+  ],
+  "distros": [
+    {
+      "id": "bazzite-deck",
+      "name": "Bazzite",
+      "edition": "Handheld KDE",
+      "enabled": true,
+      "min_drive_gb": 16,
+      "public_key": "keys/bazzite-cosign.pub",
+      "images": [
+        {
+          "label": "Live ISO (current installer)",
+          "iso_url": "https://download.bazzite.gg/bazzite-deck-stable-live-amd64.iso",
+          "checksum_url": "https://download.bazzite.gg/bazzite-deck-stable-live-amd64.iso-CHECKSUM",
+          "signature_url": "https://download.bazzite.gg/bazzite-deck-stable-live-amd64.iso.sig",
+          "require_signature": true
+        },
+        {
+          "label": "Legacy ISO (fallback)",
+          "iso_url": "https://download.bazzite.gg/bazzite-deck-stable-amd64.iso",
+          "checksum_url": "https://download.bazzite.gg/bazzite-deck-stable-amd64.iso-CHECKSUM",
+          "signature_url": null,
+          "require_signature": false
+        }
+      ],
+      "install_steps": [
+        "Choose the USB drive in the boot menu. Bazzite starts a live session, and the built-in controls work.",
+        "Start the installer from the live session, pick the handheld's internal drive and set up your user.",
+        "If Secure Boot is on, the first restart shows a blue screen: choose Enroll MOK and type the password universalblue.",
+        "When the installer says it's done, remove the USB drive and restart."
+      ]
+    },
+    {
+      "id": "steamos",
+      "name": "SteamOS",
+      "edition": "Valve recovery",
+      "enabled": true,
+      "min_drive_gb": 16,
+      "public_key": null,
+      "images": [
+        {
+          "label": "Steam Deck recovery image",
+          "iso_url": "https://steamdeck-images.steamos.cloud/recovery/steamdeck-repair-latest.img.bz2",
+          "checksum_url": null,
+          "signature_url": null,
+          "require_signature": false
+        }
+      ],
+      "format": "raw-bz2",
+      "install_steps": [
+        "Choose the USB drive in the boot menu. The SteamOS recovery desktop opens, and the built-in controls work.",
+        "Open Re-image Steam Deck to install SteamOS. This erases everything on the internal drive.",
+        "When it finishes, remove the USB drive and restart."
+      ]
+    },
+    {
+      "id": "cachyos-handheld",
+      "name": "CachyOS",
+      "edition": "Handheld",
+      "enabled": true,
+      "min_drive_gb": 16,
+      "public_key": null,
+      "images": [
+        {
+          "label": "Handheld ISO",
+          "iso_url": "https://iso.cachyos.org/handheld/260628/cachyos-handheld-linux-260628.iso",
+          "checksum_url": "https://iso.cachyos.org/handheld/260628/cachyos-handheld-linux-260628.iso.sha256",
+          "signature_url": null,
+          "require_signature": false,
+          "latest_page": "https://cachyos.org/download/",
+          "latest_pattern": "/handheld/(\\d{6})/cachyos-handheld-linux-\\1\\.iso"
+        }
+      ],
+      "write": "raw",
+      "warning": "The built-in controls don't work in CachyOS's installer on ROG Ally handhelds. Use the touchscreen, or plug in a keyboard and mouse.",
+      "install_steps": [
+        "Choose the USB drive in the boot menu. Use the touchscreen from here on.",
+        "Make the screen readable: System Settings > Display & Monitor > Scale, choose 150%, then Apply.",
+        "Connect to Wi-Fi from the network icon at the bottom right. The installer needs it.",
+        "In the CachyOS Hello window, tap Launch installer. If you closed it, open CachyOS Hello from the app menu at the bottom left.",
+        "Follow the installer, then remove the USB drive and restart."
+      ]
+    }
+  ]
+}
