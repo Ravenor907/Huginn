@@ -240,7 +240,7 @@ jobs:
   site:
     name: Add page (GitHub Pages)
     # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
