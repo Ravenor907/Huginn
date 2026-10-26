@@ -233,7 +233,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     elide: Text.ElideRight
-                    text: page.shaderBytes >= 0 ? "Shader caches use " + System.sizeText(page.shaderBytes) : Storage.measuring ? "Measuring shader caches…" : ""
+                    text: page.shaderBytes > 0 ? "Shader caches use " + System.sizeText(page.shaderBytes) : page.shaderBytes === 0 ? "No shader caches yet" : Storage.measuring ? "Measuring shader caches…" : ""
                     color: Theme.textSoft
                     font.family: Theme.body
                     font.pixelSize: Theme.px(15)
