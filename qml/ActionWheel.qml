@@ -23,6 +23,7 @@ Item {
         detail = det
         holdToPick = fromHold
         current = -1
+        stickOut = false
         visible = true
     }
     function close() { visible = false; closed() }
@@ -189,7 +190,7 @@ Item {
     PromptBar {
         anchors.bottom: parent.bottom
         width: parent.width
-        status: "Aim with the left stick or touch"
+        status: "Aim with the left stick or touch. Let the stick go back to the middle to pick nothing."
         prompts: wheel.holdToPick
             ? [{ key: "a", label: "Confirm" }, { key: "b", label: "Close" }, { key: "y", label: "Release to pick" }]
             : [{ key: "a", label: "Confirm" }, { key: "b", label: "Close" }]
@@ -204,8 +205,14 @@ Item {
             if (actions[c].enabled !== false) { current = c; return }
         }
     }
+    // Holding Y ties up the right thumb, so the way out has to be on the left stick: let it
+    // spring back to center and nothing is picked, then letting go of Y just closes the wheel.
+    property bool stickOut: false
     function aim(x, y) {
-        if (Math.hypot(x, y) < 0.5 || actions.length === 0) return
+        const r = Math.hypot(x, y)
+        if (r < 0.3) { if (stickOut) { stickOut = false; current = -1 } return }
+        if (r < 0.5 || actions.length === 0) return
+        stickOut = true
         let ang = Math.atan2(y, x) + Math.PI / 2
         if (ang < 0) ang += Math.PI * 2
         const c = Math.round(ang / (Math.PI * 2) * actions.length) % actions.length

@@ -47,6 +47,8 @@ public:
     Q_INVOKABLE QString sampleText();
     Q_INVOKABLE QVariantList newestDownloads(int limit) const;
     Q_INVOKABLE QVariantList driveSummary() const;
+    // { present, percent, charging } from the first battery the kernel reports.
+    Q_INVOKABLE QVariantMap battery() const;
     Q_INVOKABLE QUrl homeUrl() const;
     Q_INVOKABLE QUrl downloadsUrl() const;
     Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }

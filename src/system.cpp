@@ -323,6 +323,24 @@ QVariantList System::newestDownloads(int limit) const
     return out;
 }
 
+QVariantMap System::battery() const
+{
+    const QDir ps(QStringLiteral("/sys/class/power_supply"));
+    for (const QString &name : ps.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const auto read = [&](const char *f) {
+            QFile file(ps.filePath(name + QLatin1Char('/') + QLatin1String(f)));
+            return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()).trimmed() : QString();
+        };
+        if (read("type") != QLatin1String("Battery"))
+            continue;
+        const QString status = read("status");
+        return {{QStringLiteral("present"), true},
+                {QStringLiteral("percent"), read("capacity").toInt()},
+                {QStringLiteral("charging"), status == QLatin1String("Charging") || status == QLatin1String("Full")}};
+    }
+    return {{QStringLiteral("present"), false}};
+}
+
 QVariantList System::driveSummary() const
 {
     QVariantList out;

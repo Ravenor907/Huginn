@@ -284,20 +284,38 @@ Rectangle {
         case "move":
             Ui.pick("Move " + targetLabel() + " to…", [otherChoice()], d => { FileOps.move(urls, d); m.clearSelection() })
             break
-        case "rename":
-            Ui.ask("Rename", m.title, m.fileName(urls[0]), "Rename", t => FileOps.rename(urls[0], t))
+        case "rename": {
+            const old = m.fileName(urls[0])
+            const isDir = m.selectedCount === 0 && m.isDirAt(activePane.currentIndex)
+            Ui.ask("Rename", m.title, old, "Rename", t => {
+                // Emulators and Steam find files by their ending (.gba, .iso, .exe), so changing it is
+                // almost always a slip of the thumb.
+                const ending = n => { const i = n.lastIndexOf("."); return i > 0 ? n.slice(i).toLowerCase() : "" }
+                if (!isDir && ending(old) && ending(old) !== ending(t))
+                    Ui.sure("Change the file type?", "The name no longer ends in " + ending(old) + (ending(t) ? " (it ends in " + ending(t) + " now)" : "")
+                            + ". Games and emulators may stop finding it.", "Rename anyway", () => FileOps.rename(urls[0], t), false, false)
+                else FileOps.rename(urls[0], t)
+            })
             break
+        }
         case "extract":
             Ui.pick("Extract " + targetLabel() + " to…",
                     [{ name: "Next to the archive", detail: m.title, url: m.url.toString() }, otherChoice()],
                     d => FileOps.extract(urls[0], d))
             break
-        case "delete":
+        case "delete": {
+            const size = FileOps.deleteSize(urls)
+            if (size.big) {
+                Ui.sure("Move all of this to the trash?", targetLabel() + " holds " + size.text + ". It goes to the trash, and you can undo this right after.",
+                        "Move to trash", () => { FileOps.trash(urls); m.clearSelection() }, false, true)
+                break
+            }
             if (Settings.confirmDelete)
                 Ui.sure("Move to trash?", targetLabel() + " will go to the trash. You can undo this right after.",
                         "Move to trash", () => { FileOps.trash(urls); m.clearSelection() }, false, true)
             else { FileOps.trash(urls); m.clearSelection() }
             break
+        }
         case "compress":
             Ui.ask("Compress to zip", m.title, (urls.length === 1 ? m.fileName(urls[0]) : "archive") + ".zip", "Compress",
                    t => FileOps.compress(urls, m.url, t))
@@ -337,6 +355,8 @@ Rectangle {
         }
     }
 
+    Timer { id: clearArmed; interval: 3000 }
+
     function handleButton(b) {
         if (zone === "side") {
             switch (b) {
@@ -359,7 +379,12 @@ Rectangle {
         case "a": openItem(activePane.currentIndex); return true
         case "b":
             if (activeModel.filter) activeModel.filter = ""
-            else if (activeModel.selectedCount > 0) activeModel.clearSelection()
+            else if (activeModel.selectedCount >= 4 && !clearArmed.running) {
+                // Picking many files takes a while; one stray B shouldn't undo all of it.
+                clearArmed.start()
+                Ui.say("Press B again to unselect all " + activeModel.selectedCount)
+            }
+            else if (activeModel.selectedCount > 0) { clearArmed.stop(); activeModel.clearSelection() }
             else activeModel.up()
             return true
         case "x":

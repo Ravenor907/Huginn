@@ -116,7 +116,8 @@ Rectangle {
         case "a": if (r) Ui.main.openInBrowser(r.url); break
         case "x":
             if (!r) break
-            if (focusIndex < Network.saved.length) Network.forget(r.url)
+            if (focusIndex < Network.saved.length)
+                Ui.sure("Forget " + r.name + "?", "It comes off your saved list. You can add it again any time.", "Forget", () => Network.forget(r.url), false, false)
             else Network.save(r.url, r.name)
             break
         case "y": addByAddress(); break

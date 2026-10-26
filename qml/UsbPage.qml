@@ -289,6 +289,9 @@ Rectangle {
         if (kind === "setup") { Usb.setupRule(); return }
         if (!d) return
         const name = d.title
+        const bat = System.battery()
+        const power = bat.present && !bat.charging && bat.percent < 25
+                ? "\n\nBattery is at " + bat.percent + "%. If it dies partway, the drive won't work until you start over. Plugging in first is safer." : ""
         const needRaw = () => {
             if (Usb.rawReady) return false
             Ui.say("Do the one-time setup first (Desktop Mode).", true)
@@ -297,24 +300,24 @@ Rectangle {
         switch (kind) {
         case "update":
             if (needRaw()) return
-            Ui.sure("Update Ventoy?", "Huginn downloads the newest Ventoy and updates the boot files on " + name + ". Your ISO files stay where they are.",
+            Ui.sure("Update Ventoy?", "Huginn downloads the newest Ventoy and updates the boot files on " + name + ". Your ISO files stay where they are." + power,
                     "Update", () => Usb.updateVentoy(d.id), false, false)
             break
         case "install":
             if (needRaw()) return
-            Ui.sure("Erase this drive?", "Everything on " + name + " will be erased and replaced by Ventoy (latest release, Secure Boot support on).",
+            Ui.sure("Erase this drive?", "Everything on " + name + " will be erased and replaced by Ventoy (latest release, Secure Boot support on)." + power,
                     "Erase and install", () => Usb.installVentoy(d.id, Settings.ventoySecureBoot), true, true)
             break
         case "write": {
             if (needRaw()) return
             const img = pendingImage || Object.keys(picked)[0] || ""
             if (!img) { Ui.say("Pick an image with X first, or open one from the browser."); return }
-            Ui.sure("Erase this drive?", "Everything on " + name + " will be replaced by " + System.fileName(img) + ".",
+            Ui.sure("Erase this drive?", "Everything on " + name + " will be replaced by " + System.fileName(img) + "." + power,
                     "Erase and write", () => Usb.writeImage(d.id, img), true, true)
             break
         }
         case "format":
-            Ui.sure("Format this drive?", "Everything on " + name + " will be erased. It becomes a normal exFAT drive that works everywhere.",
+            Ui.sure("Format this drive?", "Everything on " + name + " will be erased. It becomes a normal exFAT drive that works everywhere." + power,
                     "Erase and format", () => Usb.formatDrive(d.id), true, true)
             break
         case "eject":
@@ -341,7 +344,12 @@ Rectangle {
     }
 
     function handleButton(b) {
-        if (Usb.busy) { if (b === "b") Usb.cancel(); return true }
+        if (Usb.busy) {
+            if (b === "b")
+                Ui.sure("Stop now?", "The drive is only partly written. If you stop, it won't work until you write or format it again.",
+                        "Stop anyway", () => Usb.cancel(), true, true)
+            return true
+        }
         const it = items[focusIndex]
         switch (b) {
         case "up": case "left": focusIndex = Math.max(0, focusIndex - 1); break

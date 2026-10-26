@@ -186,11 +186,26 @@ Rectangle {
         onPrompt: k => page.handleButton(k === "lbrb" ? "rb" : k)
     }
 
+    // Anything that closes or restarts Huginn checks first that it won't cut off a job.
+    function running() {
+        if (Usb.busy) return "A USB drive is being written. Closing now leaves it unusable until you start over."
+        if (FileOps.busy) return FileOps.status + " Closing now stops it partway."
+        return ""
+    }
     function press(key) {
-        if (key === "exit") Qt.quit()
-        else if (key === "removeRule") Usb.removeRule()
-        else if (key === "check") Updater.available ? Updater.install() : Updater.check()
-        else if (key === "rollback") Updater.rollback()
+        const job = running()
+        if (key === "exit") {
+            if (job) Ui.sure("Exit while this runs?", job, "Exit anyway", () => Qt.quit(), true, true)
+            else Qt.quit()
+        } else if (key === "removeRule") Usb.removeRule()
+        else if (key === "check") {
+            if (!Updater.available) Updater.check()
+            else if (job) Ui.sure("Update now?", "Huginn restarts to update. " + job, "Update anyway", () => Updater.install(), true, true)
+            else Updater.install()
+        } else if (key === "rollback") {
+            Ui.sure("Go back to the last stable version?", "Huginn installs the stable version and restarts. Your settings stay. " + job,
+                    "Roll back", () => Updater.rollback(), job.length > 0, false)
+        }
     }
 
     function change(dir) {

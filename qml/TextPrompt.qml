@@ -26,7 +26,9 @@ Item {
         confirmText = confirm || "Done"
         password = !!isPassword
         acceptCallback = callback || null
-        field.text = initial || ""
+        draftKey = t + "|" + (ctx || "") + "|" + (initial || "")
+        const draft = isPassword ? "" : (drafts[draftKey] || "")
+        field.text = draft || initial || ""
         visible = true
         field.forceActiveFocus()
         // Select the name but not the extension, like a desktop file manager.
@@ -37,13 +39,18 @@ Item {
     function accept() {
         const t = raw ? field.text : field.text.trim()
         if (!raw && t.length === 0) return
+        if (drafts[draftKey] !== undefined) { const d = Object.assign({}, drafts); delete d[draftKey]; drafts = d }
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
         if (acceptCallback) acceptCallback(t)
         accepted(t)
     }
+    // B by mistake shouldn't lose what was typed: it comes back the next time this prompt opens.
+    property var drafts: ({})
+    property string draftKey: ""
     function cancel() {
+        if (!password && field.text.length > 0) { const d = Object.assign({}, drafts); d[draftKey] = field.text; drafts = d }
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()

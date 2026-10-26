@@ -4,6 +4,8 @@
 #include <QPointer>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
+#include <functional>
 
 class KJob;
 class Settings;
@@ -40,6 +42,10 @@ public:
     Q_INVOKABLE void compress(const QVariantList &urls, const QUrl &destDir, const QString &zipName);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void extract(const QUrl &archive, const QUrl &destDir);
+    // How much a delete would remove, counted quickly (stops early): { big, text }.
+    Q_INVOKABLE QVariantMap deleteSize(const QVariantList &urls) const;
+    // A folder path that doesn't exist yet: "name", then "name (2)", "name (3)"…
+    static QString freePath(const QString &dir, const QString &name);
 
 Q_SIGNALS:
     void busyChanged();
@@ -51,6 +57,7 @@ private:
     static QList<QUrl> toUrls(const QVariantList &list);
     bool guard(const QList<QUrl> &urls, const QString &verb);
     void track(KJob *job, const QString &doing, const QString &done);
+    void checkRoomThen(const QList<QUrl> &urls, const QUrl &dest, bool move, const std::function<void()> &start);
     static bool validName(const QString &name, QString *why);
 
     Settings *m_settings;

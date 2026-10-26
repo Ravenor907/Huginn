@@ -1,4 +1,5 @@
 #include "archivemodel.h"
+#include "fileops.h"
 #include "foldermodel.h"
 #include "system.h"
 
@@ -38,7 +39,11 @@ ArchiveModel::ArchiveModel(QObject *parent)
     connect(&m_watcher, &QFutureWatcher<QString>::finished, this, [this] {
         const QString err = m_watcher.result();
         Q_EMIT busyChanged();
-        Q_EMIT finished(err.isEmpty(), err.isEmpty() ? QStringLiteral("Extracted %1").arg(fileName()) : err);
+        // "ok:" carries a note for a finished extract (it went into a new folder).
+        if (err.startsWith(QLatin1String("ok:")))
+            Q_EMIT finished(true, err.mid(3));
+        else
+            Q_EMIT finished(err.isEmpty(), err.isEmpty() ? QStringLiteral("Extracted %1").arg(fileName()) : err);
     });
 }
 
@@ -246,20 +251,40 @@ void ArchiveModel::extract(const QUrl &destDir, const QString &subfolder)
 {
     if (busy() || !m_archive)
         return;
-    QString dest = destDir.toLocalFile();
-    if (!subfolder.isEmpty())
-        dest = QDir(dest).filePath(subfolder);
+    const QString destRoot = destDir.toLocalFile();
+    // A named new folder is always new: "Saves" becomes "Saves (2)" rather than merging.
+    const QString chosen = subfolder.isEmpty() ? destRoot : FileOps::freePath(destRoot, subfolder);
+    const QString base = baseName();
     const QString src = m_url.toLocalFile();
     const QStringList picked(m_selected.cbegin(), m_selected.cend());
-    m_watcher.setFuture(QtConcurrent::run([src, dest, picked]() -> QString {
+    m_watcher.setFuture(QtConcurrent::run([src, chosen, destRoot, base, subfolder, picked]() -> QString {
         auto a = ArchiveModel::openArchive(src);
         if (!a)
             return QStringLiteral("Couldn't open the archive.");
+        const KArchiveDirectory *root = a->directory();
+        // Never overwrite: if anything being extracted is already there, use a new folder instead.
+        QString dest = chosen;
+        QString note;
+        if (subfolder.isEmpty()) {
+            QStringList names;
+            if (picked.isEmpty())
+                names = root->entries();
+            else
+                for (const QString &p : picked)
+                    if (const KArchiveEntry *e = root->entry(p))
+                        names << e->name();
+            for (const QString &n : std::as_const(names)) {
+                if (QFileInfo::exists(QDir(destRoot).filePath(n))) {
+                    dest = FileOps::freePath(destRoot, base);
+                    note = QStringLiteral("ok:Some of these files were already there, so they went into a new folder, %1. Nothing was replaced.").arg(QFileInfo(dest).fileName());
+                    break;
+                }
+            }
+        }
         if (!QDir().mkpath(dest))
             return QStringLiteral("Couldn't create %1").arg(dest);
-        const KArchiveDirectory *root = a->directory();
         if (picked.isEmpty())
-            return root->copyTo(dest, true) ? QString() : QStringLiteral("Extracting failed. Is there enough space?");
+            return root->copyTo(dest, true) ? note : QStringLiteral("Extracting failed. Is there enough space?");
         for (const QString &p : picked) {
             const KArchiveEntry *e = root->entry(p);
             if (!e)
@@ -274,7 +299,7 @@ void ArchiveModel::extract(const QUrl &destDir, const QString &subfolder)
             if (!ok)
                 return QStringLiteral("Couldn't extract %1").arg(e->name());
         }
-        return {};
+        return note;
     }));
     Q_EMIT busyChanged();
 }

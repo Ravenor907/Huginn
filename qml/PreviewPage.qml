@@ -23,6 +23,18 @@ Rectangle {
         textLines = r.lines
         editable = r.editable
     }
+    property var lastEdit: null
+    function undoEdit() {
+        if (!lastEdit) return
+        const copy = textLines.slice()
+        copy[lastEdit.line] = lastEdit.text
+        const err = System.writeLines(url, copy)
+        if (err) { Ui.say(err, true); return }
+        textLines = copy
+        line = lastEdit.line
+        lastEdit = null
+        Ui.say("Change undone")
+    }
     function editLine() {
         if (!isText) return
         if (!editable) { Ui.say("This file is too big or not plain text, so it's view only.", true); return }
@@ -31,8 +43,9 @@ Rectangle {
             copy[line] = t
             const err = System.writeLines(url, copy)
             if (err) { Ui.say(err, true); return }
+            lastEdit = { line: line, text: textLines[line] }
             textLines = copy
-            Ui.say("Saved. The original is kept as " + System.fileName(url) + ".bak")
+            Ui.say("Saved. Press Y to undo this change.")
         }, false, true)
     }
     readonly property var info: System.fileInfo(url)
@@ -221,7 +234,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         width: parent.width
         prompts: page.isText
-            ? [{ key: "updown", label: "Move" }, { key: "a", label: page.editable ? "Edit line" : "View only" }, { key: "x", label: "Details" }, { key: "b", label: "Close" }]
+            ? [{ key: "updown", label: "Move" }, { key: "a", label: page.editable ? "Edit line" : "View only" }].concat(page.lastEdit ? [{ key: "y", label: "Undo change" }] : []).concat([{ key: "x", label: "Details" }, { key: "b", label: "Close" }])
             : [{ key: "lbrb", label: "Previous / next" }, { key: "lt", label: "Zoom out" }, { key: "rt", label: "Zoom in" }, { key: "x", label: "Details" }, { key: "b", label: "Close" }]
         onPrompt: k => page.handleButton(k === "lbrb" ? "rb" : k)
     }
@@ -236,7 +249,7 @@ Rectangle {
         case "down": if (isText) line = Math.min(textLines.length - 1, line + 1); else img.y -= Theme.px(80); break
         case "a": editLine(); break
         case "x": showDetails = !showDetails; break
-        case "y": Transfer.share([url]); Ui.openPage("transfer", {}); break
+        case "y": if (isText) undoEdit(); else { Transfer.share([url]); Ui.openPage("transfer", {}) } break
         case "b": Ui.closePage(); break
         }
         return true
