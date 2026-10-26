@@ -198,7 +198,7 @@ Rectangle {
             anchors.bottomMargin: Theme.px(16)
             orientation: ListView.Horizontal
             spacing: Theme.px(10)
-            model: page.siblings
+            model: page.isText ? [] : page.siblings
             currentIndex: page.index
             highlightRangeMode: ListView.ApplyRange
             preferredHighlightBegin: width / 2 - Theme.px(56)
