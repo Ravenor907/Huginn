@@ -6,7 +6,7 @@ PKG=io.github.ravenor907.muninn
 mkdir -p screens
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-for p in BLUETOOTH_ADVERTISE BLUETOOTH_CONNECT BLUETOOTH_SCAN NEARBY_WIFI_DEVICES; do adb shell pm grant $PKG android.permission.$p 2>/dev/null || true; done
+for p in BLUETOOTH_ADVERTISE BLUETOOTH_CONNECT BLUETOOTH_SCAN NEARBY_WIFI_DEVICES ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION; do adb shell pm grant $PKG android.permission.$p 2>/dev/null || true; done
 adb shell appops set --uid $PKG MANAGE_EXTERNAL_STORAGE allow 2>/dev/null || true
 adb shell mkdir -p /sdcard/Download/roms
 for f in cachyos-handheld.iso steamdeck-repair.img.bz2 notes.txt; do adb shell "echo test > /sdcard/Download/$f"; done
