@@ -12,6 +12,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRandomGenerator>
+#include <QSslConfiguration>
+#include <QSslSocket>
 #include <QStorageInfo>
 #include <QSysInfo>
 #include <QTcpSocket>
@@ -34,15 +36,32 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
 {
-    m_fingerprint = randomToken();
+    // Our certificate's SHA-256 is our fingerprint, as LocalSend's HTTPS mode defines it. Without a
+    // certificate (it couldn't be made or saved) fall back to plain HTTP and a random fingerprint.
+    m_tls = Tls::load();
+    m_secure = m_tls.isValid() && QSslSocket::supportsSsl();
+    m_fingerprint = m_secure ? m_tls.fingerprint : randomToken();
     QString host = QSysInfo::machineHostName();
     if (host.isEmpty() || host == QLatin1String("localhost"))
         host = QStringLiteral("handheld");
     m_alias = QStringLiteral("Huginn on %1").arg(host);
 
-    connect(&m_server, &QTcpServer::newConnection, this, &LocalSend::onConnection);
+    if (m_secure) {
+        QSslConfiguration cfg = QSslConfiguration::defaultConfiguration();
+        cfg.setLocalCertificate(m_tls.cert);
+        cfg.setPrivateKey(m_tls.key);
+        // Ask for the sender's certificate but don't require it (older Huginn and Muninn have none,
+        // and it's self-signed anyway): when one is shown, the fingerprint it claims must match it.
+        cfg.setPeerVerifyMode(QSslSocket::QueryPeer);
+        cfg.setCaCertificates({});
+        m_tlsServer.setSslConfiguration(cfg);
+        // QSslServer hands over a socket only once its handshake is done.
+        connect(&m_tlsServer, &QTcpServer::pendingConnectionAvailable, this, [this] { onConnection(&m_tlsServer); });
+    }
+    connect(&m_plainServer, &QTcpServer::newConnection, this, [this] { onConnection(&m_plainServer); });
     connect(&m_udp, &QUdpSocket::readyRead, this, &LocalSend::onDatagrams);
-    // Phones are on the self-signed certificates LocalSend makes, so certificate checks can't apply on a home network.
+    // Peers' certificates are self-signed, so the usual checks can't apply; makeRequest() turns them
+    // off and pin() checks the fingerprint instead. This stays for any error that still comes up.
     connect(&m_net, &QNetworkAccessManager::sslErrors, this, [](QNetworkReply *r, const QList<QSslError> &) { r->ignoreSslErrors(); });
 
     m_announceTimer.setInterval(60000);
@@ -99,7 +118,7 @@ QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
                   {QStringLiteral("deviceType"), QStringLiteral("desktop")},
                   {QStringLiteral("fingerprint"), m_fingerprint},
                   {QStringLiteral("port"), int(kPort)},
-                  {QStringLiteral("protocol"), QStringLiteral("http")},
+                  {QStringLiteral("protocol"), m_secure ? QStringLiteral("https") : QStringLiteral("http")},
                   {QStringLiteral("download"), false}};
     if (chatInfo) {
         const QJsonObject extra = chatInfo();
