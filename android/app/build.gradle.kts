@@ -6,10 +6,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Two-part versions only: "0.1", "0.2 Test 3". android/VERSION is the one place it's set.
-val versionText = rootProject.file("VERSION").readText().trim()
+// Two-part versions only: "0.1", "0.2 Test 3". Huginn and Muninn share the repo's VERSION file.
+val versionText = rootProject.file("../VERSION").readLines().first().trim()
 val versionParts = Regex("""^(\d+)\.(\d+)(?: Test (\d+))?$""").find(versionText)?.groupValues
-    ?: error("android/VERSION must look like 0.1 or 0.1 Test 2, not \"$versionText\"")
+    ?: error("VERSION must look like 0.1 or 0.1 Test 2, not \"$versionText\"")
 // A stable release sorts after every test build of the same version.
 val versionNumber = versionParts[1].toInt() * 1_000_000 + versionParts[2].toInt() * 1_000 +
     (versionParts[3].ifEmpty { "999" }).toInt()

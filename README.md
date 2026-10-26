@@ -40,6 +40,14 @@ cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn/releases/latest/
 
 Add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
+### Muninn, the phone companion
+
+Muninn is Huginn's twin raven, for Android 8 or newer: send and receive files with Huginn and LocalSend, chat with everyone nearby, browse files, and make USB drives from the phone. On the phone, open this link and install it:
+
+https://github.com/Ravenor907/Huginn/releases/latest/download/Muninn.apk
+
+Muninn offers each update when it opens. Both apps ship together, in the same release, with the same version number.
+
 ### The one-time USB setup
 
 Installing Ventoy and writing images open a USB stick byte by byte, which Linux only lets an admin do. Huginn's USB Tools has a **Set up** button for Desktop Mode: it asks for your password once and adds a polkit rule that lets your user open **USB drives only**. Game Mode never asks after that. Settings › Safety removes it again.
@@ -66,7 +74,7 @@ A keyboard works too in Desktop Mode: arrows, Enter, Escape, Space, Tab and F10.
 
 ## Updates and versions
 
-Two numbers only: 0.1, 0.2, then 1.0 when it's rock solid. The `VERSION` file on main decides releases: change it and CI builds and publishes that version. Test builds are the next version plus a test number (0.2 Test 3) and only reach you on the Testing channel, which can roll back to stable from Settings.
+Two numbers only: 0.1, 0.2, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, checks both, and publishes them together. Test builds are the next version plus a test number (0.2 Test 3) and only reach you on the Testing channel, which can roll back to stable from Settings.
 
 ## Building
 

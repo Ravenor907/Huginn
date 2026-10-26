@@ -17,7 +17,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Checks GitHub for a newer Muninn (releases tagged muninn-v…) when the app opens, downloads it
+ * Checks GitHub for a newer Muninn (any release with a Muninn.apk) when the app opens, downloads it
  * and hands it to Android's installer. Android always asks the person to confirm an install.
  */
 class Updater(private val context: Context, private val identity: Identity) {
@@ -49,7 +49,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                     if (r.optBoolean("draft")) continue
                     if (identity.channel == "stable" && r.optBoolean("prerelease")) continue
                     val tag = r.optString("tag_name")
-                    if (!tag.startsWith("muninn-v")) continue
+
                     val name = versionOf(tag) ?: continue
                     val assets = r.optJSONArray("assets") ?: continue
                     val apk = (0 until assets.length()).map { assets.getJSONObject(it) }.firstOrNull { it.optString("name").endsWith(".apk") } ?: continue
@@ -109,9 +109,10 @@ class Updater(private val context: Context, private val identity: Identity) {
     companion object {
         private const val RELEASES = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=100"
 
-        /** "muninn-v0.2-test3" -> "0.2 Test 3" */
+        /** "v0.2-test3" -> "0.2 Test 3" */
         fun versionOf(tag: String): String? {
-            val m = Regex("""^muninn-v(\d+)\.(\d+)(?:-test(\d+))?$""").find(tag) ?: return null
+            // Huginn and Muninn share releases: v0.2, v0.3-test1 (muninn-v… from 0.1 Test 1 too).
+            val m = Regex("""^(?:muninn-)?v(\d+)\.(\d+)(?:-test(\d+))?$""").find(tag) ?: return null
             val (a, b, t) = m.destructured
             return if (t.isEmpty()) "$a.$b" else "$a.$b Test $t"
         }
