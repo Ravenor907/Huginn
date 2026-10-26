@@ -47,6 +47,8 @@ class Muninn : Application() {
     /** True once everything is running (the vault is open). */
     val ready = MutableStateFlow(false)
     @Volatile var visible = false
+    /** The conversation on screen right now ("" for none). */
+    @Volatile var openChat = ""
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onCreate() {
@@ -56,8 +58,15 @@ class Muninn : Application() {
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
         direct = Direct(this)
         updater = Updater(this, identity)
-        if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH))
+        if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
+            deleteNotificationChannel("messages")   // 0.32 and older: no vibration set
+            createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "New messages. Pops up on screen, vibrates and plays a sound."
+                enableVibration(true); vibrationPattern = BUZZ
+                enableLights(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
+            })
+        }
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
         if (vault.openDefault()) start()
@@ -76,7 +85,10 @@ class Muninn : Application() {
         contacts = Contacts(this, vault)
         chat = Chat(this, net, close, nostr, contacts, vault)
         closeFiles = CloseFiles(this, close, net)
-        scope.launch { chat.arrivals.collect { (name, text, key) -> if (!visible) notify(name, text, key) } }
+        // A notification for every message, unless that very chat is on screen: then just a buzz.
+        scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key) buzz() else notify(name, text, key) } }
+        // Unsent: take its notification down too, so the text doesn't linger there.
+        scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
     }
 
@@ -87,9 +99,23 @@ class Muninn : Application() {
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVibrate(BUZZ).setOnlyAlertOnce(false)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
-        try { NotificationManagerCompat.from(this).notify(if (preview) key.hashCode() else 1, n) } catch (_: SecurityException) {}
+        try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
     }
 
-    companion object { const val MESSAGES = "messages" }
+    /** A short double buzz: a message arrived in the chat you're looking at. */
+    fun buzz() {
+        try {
+            val v = if (Build.VERSION.SDK_INT >= 31) getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+                else @Suppress("DEPRECATION") getSystemService(android.os.Vibrator::class.java)
+            v?.vibrate(android.os.VibrationEffect.createWaveform(BUZZ, -1))
+        } catch (_: Exception) {}
+    }
+
+    companion object {
+        const val MESSAGES = "chat"
+        val BUZZ = longArrayOf(0, 140, 90, 140)
+    }
 }

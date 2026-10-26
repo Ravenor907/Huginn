@@ -36,7 +36,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** Mine: "sending", "sent", "delivered", "read". Theirs: "read" once a read receipt went back. */
                    val state: String = "",
                    /** A photo's id (stored encrypted in photos/); text is empty then. */
-                   val photo: String = "")
+                   val photo: String = "",
+                   /** Unsent: who took it back ("You" on the sender's phone, their name on the other). */
+                   val unsent: String = "")
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false)
@@ -55,6 +57,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** A private message arrived (name, text, key) — for notifications while Muninn is in the background. */
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
+    /** Someone unsent a message in this chat (key): clear its notification. */
+    val recalls = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
     private val unsentKeeps = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     /** Messages from someone asking to chat, by id (resends don't pile up), until accepted. */
@@ -169,6 +173,32 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
+    /** Takes a message back from both phones. Both show "Message deleted by ...". Sent until they confirm. */
+    fun unsend(peerKey: String, msgId: String) {
+        var target: Msg? = null
+        edit { map ->
+            val list = map[peerKey] ?: return@edit false
+            val m = list.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() } ?: return@edit false
+            if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
+            target = m
+            map[peerKey] = list.map { if (it.id == msgId) it.copy(text = "", photo = "", unsent = "You", state = "unsending", failed = false) else it }
+            true
+        }
+        val m = target ?: return
+        tries[m.id] = Tries(0, 0)
+        bg { attemptUnsend(m) }
+    }
+
+    private fun attemptUnsend(m: Msg) {
+        val t = tries.getOrPut(m.id) { Tries(0, 0) }
+        t.count++
+        t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        val body = envelope("unsend", m.peerKey, m.id, UUID.randomUUID().toString()).toString()
+        close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
+        net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d -> bg { net.post(d, PATH, body) } }
+        (contacts.get(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox)?.let { nostr.publish(it, Base64.getEncoder().encodeToString(body.toByteArray())) }
+    }
+
     fun deleteNearbyMessage(msgId: String) {
         forget(listOf(msgId))
         synchronized(lock) { _nearby.update { l -> l.filterNot { it.id == msgId } }; if (id.keepNearbyHistory) saveNearby() }
@@ -274,12 +304,37 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val r = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
                 val ids = r.optJSONArray("ids")?.let { a -> (0 until minOf(a.length(), 200)).map { a.optString(it) }.toSet() } ?: return 400 to "{}"
                 val st = r.optString("s")
-                if (st != "delivered" && st != "read") return 400 to "{}"
+                if (st != "delivered" && st != "read" && st != "unsent") return 400 to "{}"
                 edit { map ->
                     val before = map[fromKey] ?: return@edit false
-                    map[fromKey] = before.map { m -> if (m.mine && m.id in ids && rank(st) > rank(m.state)) m.copy(state = st, failed = false) else m }
+                    map[fromKey] = before.map { m ->
+                        when {
+                            !m.mine || m.id !in ids -> m
+                            st == "unsent" -> if (m.state == "unsending") m.copy(state = "unsent").also { tries.remove(m.id) } else m
+                            m.unsent.isEmpty() && rank(st) > rank(m.state) -> m.copy(state = st, failed = false)
+                            else -> m
+                        }
+                    }
                     true
                 }
+            }
+            "unsend" -> {
+                if (!isContact(fromKey) && !_met.value.containsKey(fromKey)) return 403 to "{}"
+                val gone = text.trim()
+                var found = false
+                edit { map ->
+                    val list = map[fromKey] ?: return@edit false
+                    val m = list.firstOrNull { it.id == gone && !it.mine } ?: return@edit false
+                    found = true
+                    if (m.unsent.isNotEmpty()) return@edit false
+                    if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
+                    map[fromKey] = list.map { if (it.id == gone) it.copy(text = "", photo = "", unsent = name) else it }
+                    true
+                }
+                // Not here yet (still on its way): make sure it never shows.
+                if (!found) { forget(listOf(gone)); held[fromKey]?.remove(gone) }
+                recalls.tryEmit(fromKey)
+                receipt(fromKey, listOf(gone), "unsent", mailbox)
             }
             "keep" -> {
                 if (isContact(fromKey)) return 200 to "{}"
@@ -523,8 +578,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val now = System.currentTimeMillis()
         incoming.entries.removeIf { now - it.value.started > 15 * 60_000 }   // half a photo that never finished
         for ((_, list) in _private.value) for (m in list) {
+            if (m.mine && m.state == "unsending") {
+                val t = tries.getOrPut(m.id) { Tries(1, now + RETRY[0]) }
+                if (now >= t.next) { t.next = now + RETRY[0]; bg { attemptUnsend(m) } }
+                continue
+            }
             // State "" is from before receipts existed: those were sent already, leave them be.
-            if (!m.mine || m.state.isEmpty() || rank(m.state) >= 3 || now - m.time > DAY) { tries.remove(m.id); continue }
+            if (!m.mine || m.state.isEmpty() || m.unsent.isNotEmpty() || rank(m.state) >= 3 || now - m.time > DAY) { tries.remove(m.id); continue }
             val t = tries[m.id]
             if (t == null) { tries[m.id] = Tries(1, now + RETRY[0]); continue }   // after a restart: wait one round
             if (now >= t.next) { t.next = now + RETRY[0]; bg { attempt(m) } }
@@ -640,11 +700,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
-            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo)) }
+            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent)) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
         Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
-            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"))
+            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"))
     }
 
     private fun save() = synchronized(lock) {

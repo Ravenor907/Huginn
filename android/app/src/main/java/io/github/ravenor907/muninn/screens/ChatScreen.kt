@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
@@ -160,7 +161,7 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
             val r = app.chat.route(c.key)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    Line(c.name, last?.let { if (it.photo.isNotEmpty()) (if (it.mine) "You sent a photo" else "Photo") else it.text } ?: routeText(r), icon = routeIcon(r),
+                    Line(c.name, last?.let { if (it.unsent.isNotEmpty()) "Message deleted" else if (it.photo.isNotEmpty()) (if (it.mine) "You sent a photo" else "Photo") else it.text } ?: routeText(r), icon = routeIcon(r),
                         trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.key }
                 }
                 if (c.key in unread || app.chat.shouldAskKeep(c.key)) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
@@ -224,6 +225,12 @@ private fun Conversation(app: Muninn, key: String) {
     @Suppress("UNUSED_VARIABLE") val wifiNow by app.net.devices.collectAsState()
     val route = app.chat.route(key)
     val context = LocalContext.current
+    // While this chat is on screen, new messages here just buzz instead of notifying; its old notification goes.
+    DisposableEffect(key) {
+        app.openChat = key
+        androidx.core.app.NotificationManagerCompat.from(context).cancel(key.hashCode())
+        onDispose { if (app.openChat == key) app.openChat = "" }
+    }
     val scope = rememberCoroutineScope()
     var picked by remember { mutableStateOf<Uri?>(null) }
     var preparing by remember { mutableStateOf(false) }
@@ -266,9 +273,17 @@ private fun Conversation(app: Muninn, key: String) {
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m ->
                 Bubble(m, showName = false, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null, onTap = { viewing = m }) {
-                    Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
-                        extra = if (m.mine && m.failed) "Try again" else null, onExtra = { app.chat.retry(key, m.id) },
-                        onConfirm = { app.chat.deleteMessage(key, m.id) }))
+                    when {
+                        // Mine, and it got out: take it back from both phones, or just remove it here.
+                        m.mine && m.unsent.isEmpty() && !m.failed -> Ui.sure(Ask("Unsend this message?",
+                            "Unsend removes it from both phones. $name will see “Message deleted by ${app.identity.username}”.",
+                            "Unsend", danger = true, extra = "Delete for me", onExtra = { app.chat.deleteMessage(key, m.id) },
+                            onConfirm = { app.chat.unsend(key, m.id) }))
+                        m.mine && m.failed -> Ui.sure(Ask("This message didn't send", "Try again, or delete it.", "Delete", danger = true,
+                            extra = "Try again", onExtra = { app.chat.retry(key, m.id) }, onConfirm = { app.chat.deleteMessage(key, m.id) }))
+                        else -> Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
+                            onConfirm = { app.chat.deleteMessage(key, m.id) }))
+                    }
                 }
             }
         }
@@ -368,7 +383,10 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = 
                 .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null) tapNow() }, onLongPress = { longNow() }) }.padding(10.dp),
         ) {
             if (showName && !m.mine) Text(m.name, style = Type.small.copy(color = Palette.accent))
-            if (photo != null) {
+            if (m.unsent.isNotEmpty()) {
+                Text(if (m.mine) "Message deleted by you" else "Message deleted by ${m.unsent}",
+                    style = Type.normal.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic))
+            } else if (photo != null) {
                 val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo(), 720) } }
                 Box(Modifier.size(240.dp, 180.dp).background(Palette.groundDeep, Corner), contentAlignment = Alignment.Center) {
                     bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(Corner)) }
@@ -377,6 +395,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = 
             } else Text(m.text, style = Type.normal.copy(color = Palette.text))
             val status = when {
                 !m.mine -> ""
+                m.state == "unsending" -> " · Removing from their phone"
+                m.unsent.isNotEmpty() -> ""
                 m.failed -> " · Didn't send"
                 m.state == "read" -> " · Read"
                 m.state == "delivered" -> " · Delivered"
