@@ -41,6 +41,7 @@ import io.github.ravenor907.muninn.net.LocalSend
 import android.view.WindowManager
 import io.github.ravenor907.muninn.screens.ChatNav
 import io.github.ravenor907.muninn.screens.ChatScreen
+import io.github.ravenor907.muninn.screens.ContactsScreen
 import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FilesScreen
 import io.github.ravenor907.muninn.screens.SettingsScreen
@@ -257,6 +258,7 @@ class MainActivity : ComponentActivity() {
                     "send" -> TransferScreen(app) { startDirect() }
                     "files" -> FilesScreen(app) { files -> Share.pending.addAll(files); tab = "send" }
                     "usb" -> UsbScreen()
+                    "contacts" -> ContactsScreen(app) { tab = "settings" }
                     "settings" -> SettingsScreen(app) { secure() }
                     else -> ChatScreen(app) { askClose() }
                 }

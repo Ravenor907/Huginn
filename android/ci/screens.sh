@@ -24,6 +24,14 @@ for screen in chat send files usb settings; do
     exit 1
   fi
 done
+# A conversation (the photo button and composer) and Settings › Contacts.
+for extra in "chat demo" "screen contacts"; do
+  n=$((n+1)); set -- $extra
+  adb shell am force-stop $PKG
+  adb shell am start -W -n $PKG/.MainActivity --es $1 $2 >/dev/null
+  sleep 5
+  adb exec-out screencap -p > "screens/0$n-$2.png"
+done
 if adb logcat -d | grep -q "FATAL EXCEPTION"; then
   msg=$(adb logcat -d | grep -A20 "FATAL EXCEPTION" | head -30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
   echo "::error title=Crash in logcat::$msg"
