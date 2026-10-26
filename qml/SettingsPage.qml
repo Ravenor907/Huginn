@@ -20,6 +20,7 @@ Rectangle {
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
               options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
             { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
+            { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Phones and PCs with the free LocalSend app can find this handheld. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
         case 1: return [
@@ -194,10 +195,8 @@ Rectangle {
     }
     function press(key) {
         const job = running()
-        if (key === "exit") {
-            if (job) Ui.sure("Exit while this runs?", job, "Exit anyway", () => Qt.quit(), true, true)
-            else Qt.quit()
-        } else if (key === "removeRule") Usb.removeRule()
+        if (key === "exit") Ui.main.requestExit()
+        else if (key === "removeRule") Usb.removeRule()
         else if (key === "check") {
             if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", "Huginn restarts to update. " + job, "Update anyway", () => Updater.install(), true, true)

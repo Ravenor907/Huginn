@@ -79,6 +79,13 @@ Rectangle {
                 text: page.activeModel.filter ? "Clear search" : "Search"
                 onClicked: page.search()
             }
+            HButton {
+                implicitHeight: Theme.px(44)
+                fontSize: 17
+                kind: "danger"
+                text: "Exit"
+                onClicked: Ui.main.requestExit()
+            }
         }
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
@@ -200,7 +207,7 @@ Rectangle {
         statusColor: page.activeModel.selectedCount > 0 ? Theme.accent : Theme.textMuted
         prompts: page.zone === "side"
             ? [{ key: "a", label: "Open" }, { key: "right", label: "Files" }, { key: "start", label: "Settings" }]
-            : [{ key: "a", label: "Open" }, { key: "b", label: "Up" }, { key: "x", label: "Select" },
+            : [{ key: "a", label: "Open" }, { key: "b", label: "Up" }, { key: "x", label: "Select (hold for many)" },
                { key: "y", label: "Actions" }, { key: "lbrb", label: "Panes" }, { key: "back", label: "Search" },
                { key: "start", label: "Settings" }]
         onPrompt: k => k === "lbrb" ? page.handleButton("rb") : page.handleButton(k)
@@ -225,6 +232,7 @@ Rectangle {
         const url = m.urlAt(i)
         const kind = m.kindAt(i)
         if (m.isDirAt(i)) { m.setUrl(url); activePane.currentIndex = 0; return }
+        if (url.toString().startsWith("file:")) Settings.rememberFile(url.toString())
         if (kind === "image" || kind === "text") Ui.openPage("preview", { url: url, folder: m.url })
         else if (kind === "archive") Ui.openPage("archive", { url: url, dest: otherModel.url })
         else if (kind === "disc") Ui.openPage("usb", { iso: url })
@@ -356,6 +364,10 @@ Rectangle {
     }
 
     Timer { id: clearArmed; interval: 3000 }
+    property bool xHeld: false
+    property bool paint: true
+    function handleRelease(b) { if (b === "x") xHeld = false }
+    onVisibleChanged: xHeld = false
 
     function handleButton(b) {
         if (zone === "side") {
@@ -369,8 +381,8 @@ Rectangle {
             return false
         }
         switch (b) {
-        case "up": activePane.move(-1); return true
-        case "down": activePane.move(1); return true
+        case "up": if (xHeld) activeModel.setSelected(activePane.currentIndex, paint); activePane.move(-1); return true
+        case "down": if (xHeld) activeModel.setSelected(activePane.currentIndex, paint); activePane.move(1); return true
         case "lt": activePane.page(-1); return true
         case "rt": activePane.page(1); return true
         case "left": zone = zone === "right" ? "left" : "side"; return true
@@ -388,7 +400,10 @@ Rectangle {
             else activeModel.up()
             return true
         case "x":
+            // Hold X and move to select (or unselect) a run of files in one go.
             activeModel.toggleSelected(activePane.currentIndex)
+            paint = activeModel.isSelectedAt(activePane.currentIndex)
+            xHeld = true
             activePane.move(1)
             return true
         case "y": openWheel(true); return true

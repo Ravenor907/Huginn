@@ -26,6 +26,7 @@ class TransferServer : public QObject
     Q_PROPERTY(QVariantList items READ items NOTIFY itemsChanged)
     Q_PROPERTY(QString saveName READ saveName NOTIFY stateChanged)
     Q_PROPERTY(int sharedCount READ sharedCount NOTIFY itemsChanged)
+    Q_PROPERTY(QStringList shared READ shared NOTIFY itemsChanged)
 
 public:
     explicit TransferServer(Settings *settings, QObject *parent = nullptr);
@@ -37,6 +38,8 @@ public:
     QVariantList items() const;
     QString saveName() const;
     int sharedCount() const { return int(m_shared.size()); }
+    QStringList shared() const { return m_shared; }
+    Q_INVOKABLE void clearShared() { m_shared.clear(); Q_EMIT itemsChanged(); }
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();

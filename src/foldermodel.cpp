@@ -402,6 +402,24 @@ void FolderModel::toggleSelected(int row)
     Q_EMIT selectionChanged();
 }
 
+void FolderModel::setSelected(int row, bool on)
+{
+    if (row < 0 || row >= m_visible.size())
+        return;
+    Item &it = m_all[m_visible.at(row)];
+    if (it.selected == on)
+        return;
+    it.selected = on;
+    const QModelIndex i = index(row);
+    Q_EMIT dataChanged(i, i, {SelectedRole});
+    Q_EMIT selectionChanged();
+}
+
+bool FolderModel::isSelectedAt(int row) const
+{
+    return row >= 0 && row < m_visible.size() && m_all.at(m_visible.at(row)).selected;
+}
+
 void FolderModel::clearSelection()
 {
     for (Item &it : m_all)

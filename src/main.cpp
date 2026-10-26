@@ -2,6 +2,7 @@
 #include "fileops.h"
 #include "foldermodel.h"
 #include "gamepad.h"
+#include "localsend.h"
 #include "network.h"
 #include "places.h"
 #include "settings.h"
@@ -80,6 +81,24 @@ int main(int argc, char *argv[])
     auto *network = new Network(settings, &app);
     auto *updater = new Updater(settings, &app);
     auto *storage = new Storage(&app);
+    auto *localSend = new LocalSend(settings, &app);
+    if (!args.isSet(tour)) {
+        if (settings->nearbySharing())
+            localSend->start();
+        QObject::connect(settings, &Settings::changed, localSend, [settings, localSend] {
+            if (settings->nearbySharing() != localSend->running())
+                settings->nearbySharing() ? localSend->start() : localSend->stop();
+        });
+    }
+    // Long jobs keep the handheld awake until they finish.
+    auto awake = [system, fileOps, usb, localSend] {
+        const bool on = fileOps->busy() || usb->busy() || localSend->busy();
+        system->setKeepAwake(on, usb->busy() ? QStringLiteral("Writing a USB drive") : localSend->busy() ? QStringLiteral("Sending files")
+                                                                                                          : QStringLiteral("Copying files"));
+    };
+    QObject::connect(fileOps, &FileOps::busyChanged, system, awake);
+    QObject::connect(usb, &UsbManager::progressChanged, system, awake);
+    QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
     fileOps->setProtectedRoots(games->protectedRoots());
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
@@ -93,6 +112,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Network", network);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Updater", updater);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Storage", storage);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "LocalSend", localSend);
     qmlRegisterType<FolderModel>("Huginn", 1, 0, "FolderModel");
     qmlRegisterType<ArchiveModel>("Huginn", 1, 0, "ArchiveModel");
 

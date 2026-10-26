@@ -22,11 +22,12 @@ Rectangle {
         const out = []
         const seen = {}
         Settings.recentFolders.forEach(u => {
-            if (out.length < 3 && !seen[u]) { seen[u] = true; out.push({ name: System.prettyPath(u), url: u }) }
+            if (out.length < 2 && !seen[u]) { seen[u] = true; out.push({ name: System.prettyPath(u), url: u }) }
         })
         Places.list.forEach(p => {
-            if (out.length < 3 && p.kind === "folder" && !p.url.startsWith("trash:") && !seen[p.url]) { seen[p.url] = true; out.push({ name: p.name, url: p.url }) }
+            if (out.length < 2 && p.kind === "folder" && !p.url.startsWith("trash:") && !seen[p.url]) { seen[p.url] = true; out.push({ name: p.name, url: p.url }) }
         })
+        out.push({ name: "Recent files", url: "", recent: true })
         out.push({ name: "All files", url: "", all: true })
         return out
     }
@@ -81,11 +82,21 @@ Rectangle {
                 Text { text: "ᚺᚢᚷᛁᚾᚾ"; color: "#8E897F"; font.family: Theme.runic; font.pixelSize: Theme.px(13); font.letterSpacing: Theme.px(6) }
             }
         }
-        Text {
+        HButton {
+            id: exitButton
             anchors.right: parent.right
             anchors.rightMargin: Theme.px(28)
             anchors.verticalCenter: parent.verticalCenter
-            width: parent.width * 0.5
+            implicitHeight: Theme.px(44)
+            kind: "danger"
+            text: "Exit"
+            onClicked: Ui.main.requestExit()
+        }
+        Text {
+            anchors.right: exitButton.left
+            anchors.rightMargin: Theme.px(20)
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width * 0.45
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideLeft
             text: page.drives.map(d => d.name + " " + d.freeText + " free").join("   ·   ")
@@ -231,6 +242,18 @@ Rectangle {
                     }
                 }
                 Text {
+                    // A drive over 90% full slows games' updates and downloads; say so where it's seen.
+                    readonly property var full: page.drives.filter(d => d.usedFraction > 0.9)
+                    visible: full.length > 0
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: full.map(d => d.name + " is " + Math.round(d.usedFraction * 100) + "% full").join(", ") + ". Press A to free up space."
+                    color: Theme.danger
+                    font.family: Theme.body
+                    font.pixelSize: Theme.px(15)
+                    font.weight: Font.DemiBold
+                }
+                Text {
                     width: parent.width
                     elide: Text.ElideRight
                     text: page.shaderBytes > 0 ? "Shader caches use " + System.sizeText(page.shaderBytes) : page.shaderBytes === 0 ? "No shader caches yet" : Storage.measuring ? "Measuring shader caches…" : ""
@@ -300,7 +323,7 @@ Rectangle {
                             anchors.left: parent.left
                             anchors.leftMargin: Theme.px(6)
                             anchors.verticalCenter: parent.verticalCenter
-                            name: "folder"
+                            name: modelData.recent ? "clock" : "folder"
                             size: Theme.px(20)
                             color: parent.on ? Theme.accent : Theme.textMuted
                         }
@@ -366,6 +389,7 @@ Rectangle {
             }
             p.push({ key: "back", label: "Search everything" })
             p.push({ key: "start", label: "Settings" })
+            p.push({ key: "b", label: "Exit" })
             return p
         }
         onPrompt: k => page.handleButton(k)
@@ -473,6 +497,7 @@ Rectangle {
             const r = browseRows[row]
             if (!r) return
             if (r.all) Ui.openPage("browser", {})
+            else if (r.recent) Ui.openPage("recent", {})
             else Ui.main.openInBrowser(r.url)
             break
         }
@@ -509,6 +534,7 @@ Rectangle {
         case "x": if (tile === 0) openDownloads(); return true
         case "back": searchEverything(); return true
         case "start": Ui.openPage("settings", {}); return true
+        case "b": Ui.main.requestExit(); return true
         }
         return false
     }

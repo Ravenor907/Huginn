@@ -29,6 +29,15 @@ Window {
         pageName = name
     }
     function restoreFocus() { keys.forceActiveFocus() }
+    // Every Exit goes through here, so a running copy or USB write is never cut off by surprise.
+    function requestExit() {
+        if (Usb.busy)
+            Ui.sure("Exit while the USB drive is being written?", "Closing now leaves the drive unusable until you start over.", "Exit anyway", () => Qt.quit(), true, true)
+        else if (FileOps.busy || LocalSend.busy)
+            Ui.sure("Exit while this runs?", (FileOps.busy ? FileOps.status : LocalSend.status) + " Closing now stops it partway.", "Exit anyway", () => Qt.quit(), true, true)
+        else
+            Ui.sure("Exit Huginn?", "You'll land back in Steam.", "Exit", () => Qt.quit(), false, false)
+    }
     function showBrowser() {
         returnTo = ""
         pageName = ""
@@ -57,6 +66,7 @@ Window {
         source: {
             switch (app.pageName) {
             case "start": return "HomePage.qml"
+            case "recent": return "RecentPage.qml"
             case "games": return "GamesPage.qml"
             case "storage": return "StoragePage.qml"
             case "usb": return "UsbPage.qml"
@@ -124,6 +134,38 @@ Window {
         if (System.tourDir.length > 0) tour.start()
     }
 
+    // ------------------------------------------------------------- nearby sharing (LocalSend)
+    // Someone wants to send files: ask on screen, wherever the person is in the app. If another
+    // question is already open, wait for it to close instead of replacing it.
+    function showSendRequest() {
+        const r = LocalSend.request
+        if (!r.active) {
+            if (confirm.visible && confirm.tag === "localsend") confirm.dismiss()
+            return
+        }
+        if (confirm.visible) {
+            if (confirm.tag !== "localsend") Ui.say(r.from + " wants to send you files. Answer this first.")
+            return
+        }
+        confirm.open(r.from + " wants to send " + (r.count === 1 ? "a file" : r.count + " files"),
+                     r.names + " (" + r.sizeText + "). They'll be saved in " + Transfer.saveName + ".",
+                     "Accept", () => LocalSend.accept(), false, false, () => LocalSend.decline(), "localsend")
+        confirm.cancelText = "Decline"
+    }
+    Connections {
+        target: LocalSend
+        function onRequestChanged() { app.showSendRequest() }
+        function onFinished(ok, message) { Ui.say(message, !ok) }
+        function onPinNeeded(deviceId, wrong) {
+            Ui.ask(wrong ? "That PIN didn't work. Try again" : "Enter the PIN shown on the other device", "LocalSend", "", "Send",
+                   pin => LocalSend.send(deviceId, Transfer.shared, pin), false)
+        }
+    }
+    Connections {
+        target: confirm
+        function onVisibleChanged() { if (!confirm.visible && LocalSend.request.active) Qt.callLater(app.showSendRequest) }
+    }
+
     // ------------------------------------------------------------- input
     function topHandler() {
         if (updating.visible) return null
@@ -155,7 +197,7 @@ Window {
         anchors.fill: parent
         focus: true
         Keys.onPressed: event => {
-            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space)) return
+            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space || wheel.visible)) return
             const map = {}
             map[Qt.Key_Up] = "up"; map[Qt.Key_Down] = "down"; map[Qt.Key_Left] = "left"; map[Qt.Key_Right] = "right"
             map[Qt.Key_Return] = "a"; map[Qt.Key_Enter] = "a"; map[Qt.Key_Escape] = "b"; map[Qt.Key_Backspace] = "b"
@@ -168,6 +210,7 @@ Window {
             if (event.isAutoRepeat) return
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) app.release("a")
             if (event.key === Qt.Key_Menu || event.key === Qt.Key_F10) app.release("y")
+            if (event.key === Qt.Key_Space) app.release("x")
         }
     }
 

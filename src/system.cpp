@@ -1,6 +1,9 @@
 #include "system.h"
 #include "settings.h"
 
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusObjectPath>
 #include <QCollator>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -401,4 +404,37 @@ void System::grab(QQuickWindow *window, const QString &name)
 void System::tourFinished()
 {
     QTimer::singleShot(0, qApp, [] { QCoreApplication::exit(s_qmlWarnings > 0 ? 3 : 0); });
+}
+
+void System::setKeepAwake(bool on, const QString &reason)
+{
+    if (on == m_awake)
+        return;
+    m_awake = on;
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    auto call = [&bus](const QString &service, const QString &path, const QString &iface, const QString &method, const QVariantList &args) {
+        QDBusMessage m = QDBusMessage::createMethodCall(service, path, iface, method);
+        m.setArguments(args);
+        return bus.call(m, QDBus::Block, 2000);
+    };
+    if (on) {
+        // The desktop portal is the sandbox-friendly way; the screensaver interface covers sessions without it.
+        const QDBusMessage r = call(QStringLiteral("org.freedesktop.portal.Desktop"), QStringLiteral("/org/freedesktop/portal/desktop"),
+                                    QStringLiteral("org.freedesktop.portal.Inhibit"), QStringLiteral("Inhibit"),
+                                    {QString(), uint(4 | 8), QVariantMap{{QStringLiteral("reason"), reason}}});
+        if (r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty())
+            m_inhibitHandle = r.arguments().first().value<QDBusObjectPath>().path();
+        const QDBusMessage c = call(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"),
+                                    QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("Inhibit"), {QStringLiteral("Huginn"), reason});
+        if (c.type() == QDBusMessage::ReplyMessage && !c.arguments().isEmpty())
+            m_screensaverCookie = c.arguments().first().toUInt();
+    } else {
+        if (!m_inhibitHandle.isEmpty())
+            call(QStringLiteral("org.freedesktop.portal.Desktop"), m_inhibitHandle, QStringLiteral("org.freedesktop.portal.Request"), QStringLiteral("Close"), {});
+        m_inhibitHandle.clear();
+        if (m_screensaverCookie)
+            call(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"),
+                 QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("UnInhibit"), {m_screensaverCookie});
+        m_screensaverCookie = 0;
+    }
 }

@@ -54,6 +54,8 @@ public:
 
     Q_INVOKABLE void setUrl(const QUrl &url);
     Q_INVOKABLE void up();
+    Q_INVOKABLE void setSelected(int row, bool on);
+    Q_INVOKABLE bool isSelectedAt(int row) const;
     Q_INVOKABLE bool canGoUp() const;
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void toggleSelected(int row);

@@ -398,7 +398,7 @@ QVariantMap GamesModel::details(int row) const
     if (!g.proton.isEmpty())
         where += QStringLiteral(" · Proton ") + g.proton;
     QVariantList parts{part(QStringLiteral("Saves"), g.compat + QStringLiteral("/pfx/drive_c/users/steamuser"), g.savesBytes),
-                       part(QStringLiteral("Proton prefix"), g.compat, g.prefixBytes),
+                       part(QStringLiteral("Windows C: drive"), g.compat + QStringLiteral("/pfx/drive_c"), g.prefixBytes),
                        part(QStringLiteral("Shader cache"), g.shader, g.shaderBytes),
                        part(QStringLiteral("Game files"), g.installDir, g.gameBytes)};
     return {{QStringLiteral("name"), g.name},

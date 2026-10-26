@@ -49,6 +49,8 @@ public:
     Q_INVOKABLE QVariantList driveSummary() const;
     // { present, percent, charging } from the first battery the kernel reports.
     Q_INVOKABLE QVariantMap battery() const;
+    // Ask the system not to dim or sleep while a long job runs (copies, USB writes, transfers).
+    void setKeepAwake(bool on, const QString &reason);
     Q_INVOKABLE QUrl homeUrl() const;
     Q_INVOKABLE QUrl downloadsUrl() const;
     Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }
@@ -65,6 +67,9 @@ Q_SIGNALS:
     void layoutChanged();
 
 private:
+    QString m_inhibitHandle;     // portal request path
+    uint m_screensaverCookie = 0;
+    bool m_awake = false;
     void openSteamUrl(const QString &url);
     Settings *m_settings;
     QString m_tourDir;

@@ -1,4 +1,6 @@
 #pragma once
+#include <memory>
+#include <atomic>
 
 #include <QDBusObjectPath>
 #include <QObject>
@@ -25,6 +27,8 @@ class UsbManager : public QObject
     Q_PROPERTY(QString status READ status NOTIFY progressChanged)
     Q_PROPERTY(QString log READ log NOTIFY progressChanged)
     Q_PROPERTY(bool failed READ failed NOTIFY progressChanged)
+    Q_PROPERTY(bool checking READ checking NOTIFY checkChanged)
+    Q_PROPERTY(double checkProgress READ checkProgress NOTIFY checkChanged)
 
 public:
     explicit UsbManager(QObject *parent = nullptr);
@@ -48,6 +52,14 @@ public:
     Q_INVOKABLE void eject(const QString &id);
     Q_INVOKABLE void cancel();
 
+    // Checking a download before it's written: a .sha256 (or SHA256SUMS) file next to the image
+    // gives the expected value. { found, expected, source }.
+    Q_INVOKABLE QVariantMap checksumFor(const QString &imageUrl) const;
+    Q_INVOKABLE void verifyImage(const QString &imageUrl, const QString &expected);
+    Q_INVOKABLE void cancelCheck();
+    bool checking() const { return m_checking; }
+    double checkProgress() const { return m_checkProgress; }
+
     static QString ruleText(const QString &user);
 
 Q_SIGNALS:
@@ -55,6 +67,8 @@ Q_SIGNALS:
     void ruleChanged();
     void progressChanged();
     void finished(bool ok, const QString &message);
+    void checkChanged();
+    void checked(bool ok, const QString &message);
 
 private:
     struct Part { QString block; QString label; QString type; QStringList mounts; };
@@ -78,6 +92,11 @@ private:
     QString m_doneText;
     QString m_helperError;
     bool m_busy = false;
+    bool m_checking = false;
+    double m_checkProgress = 0;
+    std::shared_ptr<std::atomic<qint64>> m_checkDone;
+    std::shared_ptr<std::atomic<bool>> m_checkStop;
+    QTimer m_checkTimer;
     bool m_failed = false;
     double m_progress = 0;
     QString m_status;

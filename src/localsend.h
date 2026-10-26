@@ -1,0 +1,153 @@
+#pragma once
+
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QHash>
+#include <QHostAddress>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QObject>
+#include <QPointer>
+#include <QTcpServer>
+#include <QTimer>
+#include <QUdpSocket>
+#include <QVariantList>
+
+class QFile;
+class QNetworkReply;
+class QTcpSocket;
+class Settings;
+
+// Nearby sharing that speaks the LocalSend protocol (v2), so the free LocalSend app on a phone,
+// tablet or PC finds the handheld by itself and sends or receives with no codes to type.
+// Discovery: UDP multicast 224.0.0.167:53317 plus a scan of the home network.
+// Receiving: a small HTTP server on port 53317; every incoming transfer is accepted on screen.
+// Sending: HTTP(S) to the other device, which asks its owner to accept.
+class LocalSend : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(bool running READ running NOTIFY stateChanged)
+    Q_PROPERTY(QString error READ error NOTIFY stateChanged)
+    Q_PROPERTY(QString alias READ alias CONSTANT)
+    Q_PROPERTY(QVariantList devices READ devices NOTIFY devicesChanged)
+    Q_PROPERTY(bool scanning READ scanning NOTIFY devicesChanged)
+    Q_PROPERTY(bool busy READ busy NOTIFY progressChanged)
+    Q_PROPERTY(QString status READ status NOTIFY progressChanged)
+    Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
+    Q_PROPERTY(bool sending READ sending NOTIFY progressChanged)
+    Q_PROPERTY(QVariantMap request READ request NOTIFY requestChanged)
+    Q_PROPERTY(QVariantList items READ items NOTIFY progressChanged)
+
+public:
+    explicit LocalSend(Settings *settings, QObject *parent = nullptr);
+
+    bool running() const { return m_server.isListening(); }
+    QString error() const { return m_error; }
+    QString alias() const { return m_alias; }
+    QVariantList devices() const;
+    bool scanning() const { return m_scanLeft > 0; }
+    bool busy() const { return sending() || m_session.active; }
+    bool sending() const { return m_send.active; }
+    QString status() const { return m_status; }
+    double progress() const;
+    QVariantMap request() const;
+    QVariantList items() const;
+
+    Q_INVOKABLE void start();
+    Q_INVOKABLE void stop();
+    Q_INVOKABLE void refresh();
+    Q_INVOKABLE void accept();
+    Q_INVOKABLE void decline();
+    Q_INVOKABLE void send(const QString &deviceId, const QStringList &paths, const QString &pin = QString());
+    Q_INVOKABLE void cancelSend();
+
+Q_SIGNALS:
+    void stateChanged();
+    void devicesChanged();
+    void progressChanged();
+    void requestChanged();
+    void pinNeeded(const QString &deviceId, bool wrong);
+    void finished(bool ok, const QString &message);
+
+private:
+    struct Device {
+        QString id, alias, model, type, ip, protocol;
+        int port = 53317;
+        QDateTime seen;
+    };
+    struct Conn {
+        QByteArray head;
+        bool headDone = false;
+        QString method, path;
+        QHash<QString, QString> query, headers;
+        qint64 bodyLeft = 0;
+        QByteArray body;
+        QFile *file = nullptr;
+        QString fileId;
+        QCryptographicHash *hash = nullptr;
+        bool replied = false;
+    };
+    struct InFile {
+        QString name;
+        qint64 size = 0;
+        qint64 received = 0;
+        QString token, sha;
+        QString savedAs;
+        bool done = false, failed = false;
+    };
+    struct Session {
+        bool active = false;
+        QString id, from, ip;
+        QHash<QString, InFile> files;
+        QDateTime touched;
+    };
+    struct Pending {
+        QPointer<QTcpSocket> socket;
+        QString from, ip;
+        QHash<QString, InFile> files;
+    };
+    struct OutFile { QString id, path; qint64 size = 0; QString token; };
+    struct Outgoing {
+        bool active = false;
+        QString deviceId, alias, base, sessionId;
+        QList<OutFile> files;
+        int next = 0;
+        qint64 total = 0, sent = 0, current = 0;
+        QPointer<QNetworkReply> reply;
+    };
+
+    QJsonObject info(bool withAnnounce, bool announce) const;
+    void announce();
+    void onDatagrams();
+    void remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback);
+    void registerWith(const QString &ip, int port, const QString &protocol, bool scan);
+    void onConnection();
+    void onData(QTcpSocket *s);
+    void route(QTcpSocket *s, Conn &c);
+    void onBody(QTcpSocket *s, Conn &c);
+    void reply(QTcpSocket *s, int code, const QByteArray &body = {});
+    void endSession(bool ok, const QString &message);
+    void uploadNext();
+    void endSend(bool ok, const QString &message);
+    QString savePath(const QString &name) const;
+    static QString lanAddress();
+
+    Settings *m_settings;
+    QTcpServer m_server;
+    QUdpSocket m_udp;
+    QNetworkAccessManager m_net;
+    QHash<QTcpSocket *, Conn> m_conns;
+    QHash<QString, Device> m_devices;
+    QTimer m_announceTimer;
+    QTimer m_requestTimer;
+    QTimer m_sessionTimer;
+    Session m_session;
+    Pending m_pending;
+    Outgoing m_send;
+    QString m_fingerprint;
+    QString m_alias;
+    QString m_error;
+    QString m_status;
+    int m_scanLeft = 0;
+    QList<QVariantMap> m_history;   // finished incoming files, newest last
+};

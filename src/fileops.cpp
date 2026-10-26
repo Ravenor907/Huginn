@@ -116,7 +116,11 @@ void FileOps::track(KJob *job, const QString &doing, const QString &done)
     });
     connect(job, &KJob::result, this, [this, done](KJob *j) {
         const bool ok = !j->error();
-        const QString msg = ok ? done : FolderModel::friendlyError(j->error(), j->errorString());
+        QString msg = ok ? done : FolderModel::friendlyError(j->error(), j->errorString());
+        if (!ok && m_report.job == j)
+            msg = transferReport(j);
+        if (m_report.job == j)
+            m_report = {};
         m_job.clear();
         m_progress = 0;
         Q_EMIT busyChanged();
@@ -140,6 +144,7 @@ void FileOps::copy(const QVariantList &list, const QUrl &dest)
         job->setAutoRename(true);
         KIO::FileUndoManager::self()->recordCopyJob(job);
         const QString what = urls.size() == 1 ? urls.first().fileName() : QStringLiteral("%1 items").arg(urls.size());
+        watchTransfer(job, urls, dest, false);
         track(job, QStringLiteral("Copying %1…").arg(what), QStringLiteral("Copied %1. Changed your mind? Undo is in the Y menu.").arg(what));
     });
 }
@@ -154,6 +159,7 @@ void FileOps::move(const QVariantList &list, const QUrl &dest)
         job->setAutoRename(true);
         KIO::FileUndoManager::self()->recordCopyJob(job);
         const QString what = urls.size() == 1 ? urls.first().fileName() : QStringLiteral("%1 items").arg(urls.size());
+        watchTransfer(job, urls, dest, true);
         track(job, QStringLiteral("Moving %1…").arg(what), QStringLiteral("Moved %1. Wrong place? Undo is in the Y menu.").arg(what));
     });
 }
@@ -437,4 +443,46 @@ void FileOps::checkRoomThen(const QList<QUrl> &urls, const QUrl &dest, bool move
         }
         return n;
     }));
+}
+
+void FileOps::watchTransfer(KIO::CopyJob *job, const QList<QUrl> &urls, const QUrl &dest, bool move)
+{
+    m_report = {};
+    m_report.job = job;
+    m_report.items = urls;
+    m_report.dest = dest;
+    m_report.move = move;
+    connect(job, &KIO::CopyJob::copyingDone, this, [this, job](KIO::Job *, const QUrl &from, const QUrl &to, const QDateTime &, bool directory, bool) {
+        // A folder is announced when it's created, before what's inside it, so it never counts as finished here.
+        if (m_report.job != job || directory || !m_report.items.contains(from))
+            return;
+        m_report.done << from;
+        if (to.isLocalFile())
+            m_settings->rememberFile(to.toString());
+    });
+}
+
+QString FileOps::transferReport(KJob *job) const
+{
+    // Say exactly what made it, so nobody has to guess what to copy again.
+    QStringList finished, missing;
+    for (const QUrl &u : m_report.items)
+        (m_report.done.contains(u) ? finished : missing) << u.fileName();
+    const bool gone = m_report.dest.isLocalFile() && !QFileInfo::exists(m_report.dest.toLocalFile());
+    QString head = gone ? QStringLiteral("The drive was removed partway.")
+                        : FolderModel::friendlyError(job->error(), job->errorString());
+    auto names = [](const QStringList &l) {
+        QStringList shown = l.mid(0, 4);
+        QString t = shown.join(QStringLiteral(", "));
+        if (l.size() > 4)
+            t += QStringLiteral(" and %1 more").arg(l.size() - 4);
+        return t;
+    };
+    QString out = head;
+    if (!finished.isEmpty())
+        out += QStringLiteral(" Finished: %1.").arg(names(finished));
+    if (!missing.isEmpty())
+        out += QStringLiteral(" Not finished: %1%2.").arg(names(missing),
+                                                         m_report.move ? QStringLiteral(" (still in the original folder)") : QStringLiteral(", copy again"));
+    return out;
 }

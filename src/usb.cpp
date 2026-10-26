@@ -1,4 +1,7 @@
 #include "usb.h"
+#include <QtConcurrent>
+#include <QFutureWatcher>
+#include <QCryptographicHash>
 #include "system.h"
 
 #include <QDBusArgument>
@@ -569,4 +572,97 @@ void UsbManager::cancel()
 {
     if (m_helper)
         ::kill(m_helper->processId(), SIGTERM);
+}
+
+QVariantMap UsbManager::checksumFor(const QString &imageUrl) const
+{
+    const QFileInfo img(QUrl(imageUrl).toLocalFile());
+    const QDir dir = img.dir();
+    const QStringList candidates{img.fileName() + QStringLiteral(".sha256"), img.fileName() + QStringLiteral(".sha256sum"),
+                                 img.completeBaseName() + QStringLiteral(".sha256"), QStringLiteral("SHA256SUMS"),
+                                 QStringLiteral("sha256sums.txt"), QStringLiteral("SHA256SUMS.txt"), QStringLiteral("sha256sum.txt")};
+    static const QRegularExpression hex(QStringLiteral("\\b([0-9a-fA-F]{64})\\b"));
+    for (const QString &c : candidates) {
+        QFile f(dir.filePath(c));
+        if (!f.open(QIODevice::ReadOnly) || f.size() > 1024 * 1024)
+            continue;
+        const QStringList lines = QString::fromUtf8(f.readAll()).split(QLatin1Char('\n'));
+        QString onlyHash;
+        int hashes = 0;
+        for (const QString &line : lines) {
+            const QRegularExpressionMatch m = hex.match(line);
+            if (!m.hasMatch())
+                continue;
+            ++hashes;
+            onlyHash = m.captured(1);
+            // "hash  name", "hash *name" or "SHA256 (name) = hash"
+            if (line.contains(img.fileName()))
+                return {{QStringLiteral("found"), true}, {QStringLiteral("expected"), m.captured(1).toLower()}, {QStringLiteral("source"), c}};
+        }
+        if (hashes == 1 && c.startsWith(img.fileName()))
+            return {{QStringLiteral("found"), true}, {QStringLiteral("expected"), onlyHash.toLower()}, {QStringLiteral("source"), c}};
+    }
+    return {{QStringLiteral("found"), false}};
+}
+
+void UsbManager::verifyImage(const QString &imageUrl, const QString &expected)
+{
+    if (m_checking)
+        return;
+    const QString path = QUrl(imageUrl).toLocalFile();
+    const qint64 total = QFileInfo(path).size();
+    m_checking = true;
+    m_checkProgress = 0;
+    m_checkDone = std::make_shared<std::atomic<qint64>>(0);
+    m_checkStop = std::make_shared<std::atomic<bool>>(false);
+    Q_EMIT checkChanged();
+    auto done = m_checkDone;
+    auto stop = m_checkStop;
+    m_checkTimer.setInterval(200);
+    connect(&m_checkTimer, &QTimer::timeout, this, [this, total] {
+        if (m_checkDone && total > 0) {
+            m_checkProgress = double(m_checkDone->load()) / total;
+            Q_EMIT checkChanged();
+        }
+    }, Qt::UniqueConnection);
+    m_checkTimer.start();
+    auto *watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, expected] {
+        const QString got = watcher->result();
+        watcher->deleteLater();
+        m_checkTimer.stop();
+        const bool stopped = m_checkStop && m_checkStop->load();
+        m_checking = false;
+        m_checkProgress = 0;
+        Q_EMIT checkChanged();
+        if (stopped)
+            Q_EMIT checked(false, QStringLiteral("Check stopped. Nothing was written."));
+        else if (got.isEmpty())
+            Q_EMIT checked(false, QStringLiteral("Couldn't read the image to check it."));
+        else if (got != expected.toLower())
+            Q_EMIT checked(false, QStringLiteral("This download is damaged: it doesn't match its checksum. Download it again. Nothing was written."));
+        else
+            Q_EMIT checked(true, QStringLiteral("The download checked out."));
+    });
+    watcher->setFuture(QtConcurrent::run([path, done, stop]() -> QString {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+            return {};
+        QCryptographicHash h(QCryptographicHash::Sha256);
+        QByteArray buf;
+        while (!f.atEnd()) {
+            if (stop->load())
+                return QStringLiteral("stopped");
+            buf = f.read(4 * 1024 * 1024);
+            h.addData(buf);
+            done->fetch_add(buf.size());
+        }
+        return QString::fromLatin1(h.result().toHex());
+    }));
+}
+
+void UsbManager::cancelCheck()
+{
+    if (m_checkStop)
+        m_checkStop->store(true);
 }

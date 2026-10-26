@@ -11,22 +11,34 @@ Item {
     property bool hold: false
     property bool danger: false
     property var callback: null
+    property var cancelCallback: null
+    property string tag: ""
+    property string cancelText: "Cancel"
     property real held: 0
 
     visible: false
     anchors.fill: parent
 
-    function open(t, msg, confirm, cb, needsHold, isDanger) {
+    function open(t, msg, confirm, cb, needsHold, isDanger, onCancel, openTag) {
         title = t; message = msg; confirmText = confirm || "Continue"
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
+        cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"
         held = 0; visible = true
     }
     function confirm() {
+        cancelCallback = null
         visible = false
         holdTimer.stop()
         if (callback) callback()
     }
-    function cancel() { visible = false; holdTimer.stop(); held = 0 }
+    function cancel() {
+        visible = false; holdTimer.stop(); held = 0
+        const c = cancelCallback
+        cancelCallback = null
+        if (c) c()
+    }
+    // Closes without running either callback (the question went away on its own).
+    function dismiss() { visible = false; holdTimer.stop(); held = 0; cancelCallback = null }
 
     Timer {
         id: holdTimer
@@ -76,7 +88,7 @@ Item {
             Row {
                 anchors.right: parent.right
                 spacing: Theme.px(14)
-                HButton { text: "Cancel"; onClicked: dlg.cancel() }
+                HButton { text: dlg.cancelText; onClicked: dlg.cancel() }
                 HButton {
                     id: go
                     text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : "Hold A: " + dlg.confirmText) : dlg.confirmText

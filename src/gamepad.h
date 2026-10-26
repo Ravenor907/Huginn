@@ -22,6 +22,8 @@ public:
 
     bool connected() const { return m_pad != nullptr; }
     QString style() const { return m_style; }
+    // True while a held d-pad or stick direction is repeating (not a fresh press).
+    Q_INVOKABLE bool repeating() const { return m_repeating; }
     double stickX() const { return m_stickX; }
     double stickY() const { return m_stickY; }
 
@@ -47,6 +49,7 @@ private:
     bool m_sdlReady = false;
     QString m_style = QStringLiteral("xbox");
     QString m_repeatButton;
+    bool m_repeating = false;
     QHash<QString, bool> m_axisHeld;
     double m_stickX = 0;
     double m_stickY = 0;

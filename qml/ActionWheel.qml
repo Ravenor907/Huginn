@@ -219,6 +219,8 @@ Item {
         if (actions[c].enabled !== false) current = c
     }
     function handleButton(b) {
+        // One press moves one slice. Holding a direction must not spin the wheel.
+        if (Gamepad.repeating() && ["up", "down", "left", "right", "lb", "rb"].indexOf(b) >= 0) return true
         switch (b) {
         case "a": pick(); return true
         case "b": close(); return true

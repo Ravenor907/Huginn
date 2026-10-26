@@ -8,6 +8,7 @@
 #include <functional>
 
 class KJob;
+namespace KIO { class CopyJob; }
 class Settings;
 
 // Copy, move, trash, rename, new folder, zip and undo. Everything goes through KIO so it works
@@ -57,6 +58,8 @@ private:
     static QList<QUrl> toUrls(const QVariantList &list);
     bool guard(const QList<QUrl> &urls, const QString &verb);
     void track(KJob *job, const QString &doing, const QString &done);
+    void watchTransfer(KIO::CopyJob *job, const QList<QUrl> &urls, const QUrl &dest, bool move);
+    QString transferReport(KJob *job) const;
     void checkRoomThen(const QList<QUrl> &urls, const QUrl &dest, bool move, const std::function<void()> &start);
     static bool validName(const QString &name, QString *why);
 
@@ -66,4 +69,6 @@ private:
     double m_progress = 0;
     QString m_status;
     QStringList m_protected;
+    struct Report { QPointer<KJob> job; QList<QUrl> items; QList<QUrl> done; QUrl dest; bool move = false; };
+    Report m_report;
 };

@@ -248,7 +248,7 @@ Rectangle {
         }
 
         Rectangle {
-            visible: Usb.busy || Usb.log.length > 0
+            visible: Usb.busy || Usb.checking || Usb.log.length > 0
             width: parent.width
             height: Theme.px(110)
             radius: Theme.radius + 1
@@ -258,10 +258,10 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: Theme.px(16)
                 spacing: Theme.px(10)
-                Text { width: parent.width; elide: Text.ElideRight; text: Usb.status; color: Usb.failed ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.DemiBold }
+                Text { width: parent.width; elide: Text.ElideRight; text: Usb.checking ? "Checking the download… " + Math.round(Usb.checkProgress * 100) + "%" : Usb.status; color: Usb.failed && !Usb.checking ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.DemiBold }
                 Rectangle {
                     width: parent.width; height: Theme.px(6); radius: 1; color: Theme.line
-                    Rectangle { width: parent.width * Usb.progress; height: parent.height; color: Theme.accent }
+                    Rectangle { width: parent.width * (Usb.checking ? Usb.checkProgress : Usb.progress); height: parent.height; color: Theme.accent }
                 }
                 Text { width: parent.width; elide: Text.ElideRight; text: Usb.log; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
             }
@@ -273,11 +273,21 @@ Rectangle {
         anchors.bottom: parent.bottom
         width: parent.width
         status: "Anything that erases a drive needs A held for 2 seconds"
-        prompts: Usb.busy ? [{ key: "b", label: "Stop" }]
+        prompts: Usb.busy || Usb.checking ? [{ key: "b", label: Usb.checking ? "Stop checking" : "Stop" }]
                           : [{ key: "a", label: "Open" }, { key: "x", label: "Pick ISO" }, { key: "b", label: "Back" }]
         onPrompt: k => page.handleButton(k)
     }
 
+    property var pendingWrite: null
+    Connections {
+        target: Usb
+        function onChecked(ok, message) {
+            const p = page.pendingWrite
+            page.pendingWrite = null
+            if (!ok) { Ui.say(message, true); return }
+            if (p) p.ask(message + " ")
+        }
+    }
     function togglePick(url) {
         const p = Object.assign({}, picked)
         if (p[url]) delete p[url]; else p[url] = true
@@ -312,8 +322,16 @@ Rectangle {
             if (needRaw()) return
             const img = pendingImage || Object.keys(picked)[0] || ""
             if (!img) { Ui.say("Pick an image with X first, or open one from the browser."); return }
-            Ui.sure("Erase this drive?", "Everything on " + name + " will be replaced by " + System.fileName(img) + "." + power,
-                    "Erase and write", () => Usb.writeImage(d.id, img), true, true)
+            // Check the download first when it came with a checksum, so a broken download never makes a broken stick.
+            const sum = Usb.checksumFor(img)
+            const ask = note => Ui.sure("Erase this drive?", note + "Everything on " + name + " will be replaced by " + System.fileName(img) + "." + power,
+                                        "Erase and write", () => Usb.writeImage(d.id, img), true, true)
+            if (sum.found) {
+                pendingWrite = { ask: ask }
+                Usb.verifyImage(img, sum.expected)
+            } else {
+                ask("There's no checksum file next to it (like " + System.fileName(img) + ".sha256), so Huginn can't check the download first.\n\n")
+            }
             break
         }
         case "format":
@@ -344,6 +362,10 @@ Rectangle {
     }
 
     function handleButton(b) {
+        if (Usb.checking) {
+            if (b === "b") { pendingWrite = null; Usb.cancelCheck() }
+            return true
+        }
         if (Usb.busy) {
             if (b === "b")
                 Ui.sure("Stop now?", "The drive is only partly written. If you stop, it won't work until you write or format it again.",

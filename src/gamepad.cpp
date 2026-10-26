@@ -60,7 +60,9 @@ Gamepad::Gamepad(QObject *parent)
         if (m_repeatButton.isEmpty())
             return;
         m_repeat.setInterval(70);
+        m_repeating = true;
         Q_EMIT pressed(m_repeatButton);
+        m_repeating = false;
     });
 }
 
