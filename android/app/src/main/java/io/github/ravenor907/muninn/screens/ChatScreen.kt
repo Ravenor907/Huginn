@@ -91,15 +91,17 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     val closeError by app.close.error.collectAsState()
     val nostrUp by app.nostr.connected.collectAsState()
     val met by app.chat.met.collectAsState()
+    val blocked by app.chat.blocked.collectAsState()
     // Everyone reachable right now: close by first, then the same Wi-Fi. (key, name, route)
     val around = buildList {
         close.filter { it.connected && it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.name, "close")) }
         wifi.filter { it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.chatName ?: it.alias, "wifi")) }
     }.distinctBy { it.first }
     // Close-by people already chatting with (not contacts yet) sit with the chats.
-    val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() }
+    val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() && it.first !in blocked }
         val chatRows = (contacts.map { ChatRow(it.chatKey, it.name) } +
         met.filter { (k, _) -> !convos[k].isNullOrEmpty() && !app.chat.isContact(k) }.map { (k, m) -> ChatRow(k, m.name) })
+        .filter { it.key !in blocked }
         .sortedByDescending { convos[it.key]?.lastOrNull()?.time ?: 0L }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -167,11 +169,13 @@ private fun NearbyRoom(app: Muninn) {
             MButton("Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { app.identity.nearbyChat = true; on = true; app.net.announce() }
             return@Column
         }
-        Text("Everyone close by or on this Wi-Fi with Muninn or Huginn sees this. You're “${app.identity.username}”. Hold a message to mute someone.", style = Type.small)
+        Text("Everyone close by or on this Wi-Fi with Muninn or Huginn sees this. You're “${app.identity.username}”. Hold a message to delete it or mute someone.", style = Type.small)
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m ->
                 Bubble(m, showName = true) {
-                    if (!m.mine) Ui.sure(Ask("Mute ${m.name}?", "You won't see their messages here. Unmute any time in Settings.", "Mute", onConfirm = { app.chat.mute(m.peerKey, true) }))
+                    Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
+                        extra = if (m.mine) null else "Mute ${m.name}", onExtra = { app.chat.block(m.peerKey) },
+                        onConfirm = { app.chat.deleteNearbyMessage(m.id) }))
                 }
             }
         }
@@ -199,14 +203,10 @@ private fun Conversation(app: Muninn, key: String) {
             MIcon(routeIcon(route), Palette.accent, 18.dp)
             Text("  ${routeText(route)} · end-to-end encrypted · ${if (app.chat.isVerified(key)) "verified" else "not verified"}", style = Type.small, modifier = Modifier.weight(1f))
         }
-        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!app.chat.isVerified(key)) MButton("Check code", Modifier.weight(1f)) {
+        if (!app.chat.isVerified(key)) Row(Modifier.padding(top = 6.dp)) {
+            MButton("Check code") {
                 Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
                     "It matches", onConfirm = { app.chat.verify(key, name) }))
-            }
-            MButton("Block", Modifier.weight(1f), Kind.Danger) {
-                Ui.sure(Ask("Block $name?", "You won't get their messages, and this conversation is deleted. Unblock any time in Settings.", "Block", danger = true,
-                    onConfirm = { app.chat.block(key); ChatNav.open = "" }))
             }
         }
         if (c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(top = 8.dp)) {
@@ -218,7 +218,13 @@ private fun Conversation(app: Muninn, key: String) {
             }
         } else if (c == null && m?.iSaid == true) Text("You said yes to keeping in touch. Waiting for $name.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
-            items(msgs, key = { it.id }) { m -> Bubble(m, showName = false) {} }
+            items(msgs, key = { it.id }) { m ->
+                Bubble(m, showName = false) {
+                    Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
+                        extra = if (m.mine && m.failed) "Try again" else null, onExtra = { app.chat.retry(key, m.id) },
+                        onConfirm = { app.chat.deleteMessage(key, m.id) }))
+                }
+            }
         }
         if (msgs.isEmpty()) Text("No messages yet.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
         Composer(text, { text = it }, "Message $name") { app.chat.sendPrivate(key, text); text = "" }
@@ -292,8 +298,17 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, onLong: () -> Unit) {
         ) {
             if (showName && !m.mine) Text(m.name, style = Type.small.copy(color = Palette.accent))
             Text(m.text, style = Type.normal.copy(color = Palette.text))
-            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(m.time)) + if (m.failed) " · didn't send" else "",
-                style = Type.small.copy(color = if (m.failed) Palette.danger else Palette.textFaint))
+            val status = when {
+                !m.mine -> ""
+                m.failed -> " · Didn't send"
+                m.state == "read" -> " · Read"
+                m.state == "delivered" -> " · Delivered"
+                m.state == "sent" -> " · Sent"
+                m.state == "sending" -> " · Sending"
+                else -> ""
+            }
+            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(m.time)) + status,
+                style = Type.small.copy(color = when { m.failed -> Palette.danger; m.state == "read" -> Palette.accent; else -> Palette.textFaint }))
         }
     }
 }

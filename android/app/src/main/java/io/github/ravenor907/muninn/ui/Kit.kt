@@ -206,7 +206,9 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTa
 /** One question at a time, app-wide. hold: the confirm button has to be held for 2 seconds. */
 data class Ask(
     val title: String, val message: String, val confirm: String, val danger: Boolean = false, val hold: Boolean = false,
-    val cancel: String = "Cancel", val onCancel: () -> Unit = {}, val onConfirm: () -> Unit,
+    val cancel: String = "Cancel", val onCancel: () -> Unit = {},
+    /** An optional second action, shown beside the main one. */
+    val extra: String? = null, val onExtra: () -> Unit = {}, val onConfirm: () -> Unit,
 )
 
 object Ui {
@@ -227,7 +229,12 @@ fun AskDialog(a: Ask) {
             if (a.hold) HoldButton(a.confirm) { Ui.ask.value = null; a.onConfirm() }
             else MButton(a.confirm, kind = if (a.danger) Kind.Danger else Kind.Accent) { Ui.ask.value = null; a.onConfirm() }
         },
-        dismissButton = { MButton(a.cancel) { Ui.ask.value = null; a.onCancel() } },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
+                a.extra?.let { MButton(it) { Ui.ask.value = null; a.onExtra() } }
+            }
+        },
     )
 }
 

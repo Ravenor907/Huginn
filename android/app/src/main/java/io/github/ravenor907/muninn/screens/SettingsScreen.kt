@@ -40,7 +40,14 @@ private const val DAY = 86_400_000L
 
 @Composable
 fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
+    var showContacts by remember { mutableStateOf(false) }
+    if (showContacts) {
+        androidx.activity.compose.BackHandler { showContacts = false }
+        ContactsScreen(app) { showContacts = false }
+        return
+    }
     val id = app.identity
+    var receipts by remember { mutableStateOf(id.readReceipts) }
     var name by remember { mutableStateOf(id.username) }
     var device by remember { mutableStateOf(id.deviceName) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
@@ -57,6 +64,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var pw2 by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+        MButton("Contacts", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "user") { showContacts = true }
         Section("Privacy")
         Panel {
             Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)
@@ -70,6 +78,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             Text("Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             ToggleRow("Show message text in notifications", "Off: notifications only say “New message”", preview) { preview = it; id.showPreview = it }
+            ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
         Section("Password")
@@ -139,7 +148,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name != id.username) { id.username = name; app.net.announce(); Ui.say("You're “${id.username}” now.") }
             }
             ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
-            if (muted.isNotEmpty()) MButton("Unblock and unmute everyone (${muted.size})", Modifier.fillMaxWidth().padding(top = 6.dp)) { muted.forEach { id.setMuted(it, false) }; muted = id.muted() }
+
         }
         Section("This phone")
         Panel {

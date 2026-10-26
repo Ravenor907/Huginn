@@ -66,6 +66,10 @@ class Identity(context: Context, private val vault: Vault) {
     fun nostrSecret(): String = secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }
 
     // ---- privacy
+    /** Let people see when their messages were read. Delivered always shows. */
+    var readReceipts: Boolean
+        get() = prefs.getBoolean("readReceipts", true)
+        set(v) = prefs.edit().putBoolean("readReceipts", v).apply()
     /** Delete messages older than this (milliseconds); 0 keeps them. */
     var deleteAfter: Long
         get() = prefs.getLong("deleteAfter", 0L)
