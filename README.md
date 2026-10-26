@@ -1,10 +1,6 @@
 <p align="center">
-  <img src="packaging/io.github.ravenor907.Huginn-256.png" width="128" alt="Huginn">
+  <img src="docs/banner.png" width="100%" alt="Huginn and Muninn">
 </p>
-
-<h1 align="center">Huginn</h1>
-
-<p align="center">A file explorer for SteamOS Game Mode. Built for a controller, a 7 inch screen and the couch.</p>
 
 <p align="center">
   <a href="https://github.com/Ravenor907/Huginn/releases"><img src="https://img.shields.io/github/v/release/Ravenor907/Huginn?include_prereleases&label=release&style=for-the-badge&color=C2A25E&labelColor=101112" alt="Release"></a>
@@ -12,27 +8,67 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-9C978D?style=for-the-badge&labelColor=101112" alt="GPL-3.0"></a>
 </p>
 
-Odin's raven Huginn flies out, looks around and comes back with what you were after. This one does that with your files, without sending you to Desktop Mode.
+Odin sends two ravens out every morning: Huginn (thought) and Muninn (memory). They fly the world and come back with what he needs to know.
 
-## What it does
+These two do the same for you. **Huginn** lives on your Steam Deck or SteamOS handheld, **Muninn** lives on your Android phone. Together they move your files, talk to each other, and keep your conversations private: no accounts, no phone numbers, no servers that can read anything, and no tracking.
+
+## Why
+
+- **Private by design.** Every message, photo and voice note is end-to-end encrypted. Only the two people talking can read it. Nothing is stored in the clear, even on your own device.
+- **Built for the hardware.** Huginn is made for a controller, a 7 inch screen and the couch. Muninn is made for one hand.
+- **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the internet. Messages take every route at once and arrive by whichever is fastest.
+- **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
+
+## The messenger (both apps)
 
 | | |
 |---|---|
-| **Two panes, one thumb** | Browse with the d-pad, select with X, hold Y for the action wheel: copy to, move to, rename, extract to, delete, zip, new folder, send to phone, undo. |
-| **Move to…** | Send files straight to a ROM folder, a game's folder (for mods), the SD card or a recent spot, without setting up the other pane. |
+| **End-to-end encryption** | Each person has a key pair made on their own device. Messages are sealed with AES-256-GCM using keys only the two people share. Internet messages are wrapped a second time, so relays can't even see who is writing to whom. |
+| **No account** | You are a key, not a phone number or email. Share your code or QR to add someone. |
+| **Codes that expire** | Your contact code and QR last 1 hour. A code leaked online can't be used to spam you later. Strangers without a valid code are dropped silently. |
+| **Every route at once** | Bluetooth, local Wi-Fi and the internet together, with automatic retries for a full day if the other person is offline. |
+| **Sent, delivered, read** | Ticks for each message. Read receipts can be turned off. |
+| **Unsend** | Remove a message from both devices. The other side sees "Message deleted by" with your name. |
+| **Photos and voice messages** | Photos are shrunk and scrubbed of location and camera data. Voice messages are recorded in memory and carry no metadata. |
+| **Lock** | A 9-dot pattern or a password is required to open the chat. Everything on disk is encrypted with it, and wrong guesses lock you out for longer each time. |
+| **Notifications** | A notification and the raven's call for every message, unless you're already looking at that chat. Muninn listens in the background. |
+| **Nearby chat** | Talk to people in the same room without exchanging codes first. |
+| **Contacts** | Block, unblock or remove people from Settings. Hold a message to delete it. |
+| **Accessibility** | Interface size, larger text, high contrast, a color blind palette and reduced motion. Tablets get the list and the chat side by side. |
+
+## Huginn: the handheld
+
+A file explorer for SteamOS Game Mode, with the messenger built in. No trip to Desktop Mode needed.
+
+| | |
+|---|---|
+| **Two panes, one thumb** | Browse with the d-pad, select with X, hold Y for the action wheel: copy, move, rename, extract, delete, zip, new folder, send to phone, undo. |
+| **Move to…** | Send files straight to a ROM folder, a game's folder (for mods), the SD card or a recent spot. |
 | **Storage** | What's using space on each drive, biggest first. Clear shader caches or empty the trash in one press. |
 | **Steam folders by name** | `compatdata/1245620` becomes Elden Ring, with its saves, Proton prefix and shader cache side by side. Back up saves, clear shader cache, reset a broken prefix. |
-| **Phone transfer** | Scan the QR code, type the PIN, drop files from your phone. Pick files on the handheld and they show up on the phone. |
-| **USB tools** | Install or update Ventoy, copy ISOs onto it, write one image, format a stick. The drive code comes from [Handheld Forge](https://github.com/Ravenor907/Handheld-Forge). |
-| **Look inside archives** | zip, 7z and tar, browsed before extracting. Pick what you want or take it all. |
-| **Previews and quick edits** | Screenshots full screen with a filmstrip. Config files and logs as text, with one-line edits through Steam's keyboard (a .bak copy is kept). |
-| **Network shares** | SFTP shares through the same plumbing Dolphin uses. Windows shares arrive in 0.2. |
-| **Steam's keyboard** | Renaming or searching opens Steam's own keyboard. No new keyboard to learn. |
+| **Phone transfer** | Encrypted transfers to and from Muninn or any LocalSend app. Scan the QR code, type the PIN, done. |
+| **USB tools** | Install or update Ventoy, copy ISOs onto it, write an image, format a stick. |
+| **Look inside archives** | zip, 7z and tar, browsed before extracting. |
+| **Previews and quick edits** | Screenshots full screen with a filmstrip. Config files and logs as text, with one-line edits (a .bak copy is kept). |
+| **Network shares** | SFTP shares through the same plumbing Dolphin uses. |
 | **TV mode** | Docked to a big screen, everything grows to couch size on its own. |
+
+## Muninn: the phone
+
+The messenger, plus the file tools you want in your pocket. Android 8 or newer.
+
+| | |
+|---|---|
+| **Messenger** | Everything above, with a full-screen thread when you scroll and hold-to-record voice. |
+| **Send files** | Encrypted transfers with Huginn and LocalSend. |
+| **Browse files** | Your phone's storage, organized and searchable. |
+| **USB drives** | Make bootable USB drives from the phone. |
 
 ## Install
 
-One file, and it never goes stale: Huginn checks for updates every time it starts and updates itself, so whenever you install it you end up on the newest version. In Desktop Mode, open Konsole and run:
+Both apps ship together, in the same release, with the same version number, and both update themselves when they open.
+
+**Huginn** (Desktop Mode, in Konsole):
 
 ```
 cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
@@ -40,13 +76,9 @@ cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn/releases/latest/
 
 Add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
-### Muninn, the phone companion
-
-Muninn is Huginn's twin raven, for Android 8 or newer: send and receive files with Huginn and LocalSend, chat with everyone nearby, browse files, and make USB drives from the phone. On the phone, open this link and install it:
+**Muninn**: on the phone, open this link and install it:
 
 https://github.com/Ravenor907/Huginn/releases/latest/download/Muninn.apk
-
-Muninn offers each update when it opens. Both apps ship together, in the same release, with the same version number.
 
 ### The one-time USB setup
 
@@ -54,27 +86,35 @@ Installing Ventoy and writing images open a USB stick byte by byte, which Linux 
 
 Never set a password on SteamOS? Open Konsole and run `passwd` first.
 
-Copying ISOs, formatting and ejecting never need the setup.
+## Controls (Huginn)
 
-## Controls
-
-| Button | Browser |
-|---|---|
-| A | Open |
-| B | Up a folder, clear selection or search |
-| X | Select |
-| Y (hold) | Action wheel, release to pick |
-| LB / RB | Switch pane |
-| LT / RT | Page up / down |
-| View | Search this folder |
-| Left stick click | Sort by name, newest or size |
-| Menu | Settings |
+| Button | Files | Chat |
+|---|---|---|
+| A | Open | Write a message |
+| B | Up a folder, clear selection or search | Back |
+| X | Select | Message options |
+| Y (hold) | Action wheel, release to pick | Record a voice message |
+| LB / RB | Switch pane | RB: send a picture |
+| LT / RT | Page up / down | Scroll |
+| View | Search this folder | Keep in touch |
+| Menu | Settings | Settings |
 
 A keyboard works too in Desktop Mode: arrows, Enter, Escape, Space, Tab and F10.
 
-## Updates and versions
+## What's next
 
-One dot only, read as a decimal: 0.3, 0.31, 0.32, 0.4, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, checks both, and publishes them together. There are no separate test builds; every release goes to everyone, and both apps pick it up when they open.
+0.5 is about security first:
+
+- **Forward secrecy:** a fresh key for every message, so a key stolen tomorrow can't open yesterday's messages.
+- **Key change warnings** when a contact's identity changes.
+- **Encrypted backup and restore** of your chats.
+- **Panic lock** to lock everything instantly.
+
+After that: group chats, contact folders, a Windows portable build, a QR scanner and controller mouse control on Huginn.
+
+## Versions
+
+One dot only, read as a decimal: 0.3, 0.31, 0.32, 0.4, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, tests both, and publishes them together.
 
 ## Building
 
@@ -83,7 +123,7 @@ tools/get-fonts.sh
 flatpak-builder --user --install --force-clean build packaging/io.github.ravenor907.Huginn.json
 ```
 
-CI builds the Flatpak, runs the drive helper tests, and opens every screen with `huginn --tour` to catch broken screens before a release.
+Muninn builds with Gradle from `android/`. CI builds both, runs the crypto and drive helper tests, and opens every screen of both apps to catch broken screens before a release.
 
 ## License
 
