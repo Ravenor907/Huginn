@@ -196,9 +196,6 @@ class Close(private val context: Context, private val identity: Identity) {
     companion object {
         const val SERVICE = "io.github.ravenor907.muninn"
         fun newId() = Random.nextLong()
-    }
-
-    companion object {
         const val PERMISSION_TEXT = "Muninn needs the Nearby devices permission to find phones close by. Tap here to allow it."
     }
 }
