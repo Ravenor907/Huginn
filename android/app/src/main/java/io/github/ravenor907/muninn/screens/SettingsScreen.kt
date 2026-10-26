@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.screens
 
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,7 +76,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             var stay by remember { mutableStateOf(id.stayConnected) }
             var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
             androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
-            ToggleRow("Get messages right away", "Stays connected while Muninn is closed (a small silent “Listening” notification). Off: checks about every 15 minutes", stay) {
+            ToggleRow("Get messages right away", "Stays connected while Muninn is closed (a small silent “Listening” notification you can hide). Off: checks about every 15 minutes", stay) {
                 stay = it; id.stayConnected = it
                 if (it) io.github.ravenor907.muninn.net.MessageService.start(ctx) else io.github.ravenor907.muninn.net.MessageService.stop(ctx)
             }
@@ -83,6 +84,15 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 Text("Android's battery saver can still pause Muninn while the phone sleeps, so messages arrive late.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                 MButton("Let Muninn run in the background", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
             } else if (stay) Text("Muninn can run in the background. Messages arrive as they're sent.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            if (stay && Build.VERSION.SDK_INT >= 26) {
+                MButton("Hide the Listening notification", Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    try {
+                        ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
+                    } catch (_: Exception) {}
+                }
+                Text("Turn it off on the next screen. Muninn keeps listening and messages still notify you.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            }
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
                     ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)

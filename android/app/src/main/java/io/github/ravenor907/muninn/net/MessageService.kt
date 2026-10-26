@@ -32,13 +32,21 @@ class MessageService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as Muninn
         val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening for messages", NotificationManager.IMPORTANCE_MIN).apply {
-            description = "Keeps Muninn connected so messages arrive right away. You can hide this one; message notifications still come."
-            setShowBadge(false)
-        })
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Older installs made a channel that showed on the lock screen; channels can't be changed, so replace it.
+            nm.deleteNotificationChannel("listening")
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening for messages", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "Keeps Muninn connected so messages arrive right away. Turn this one off to hide it; Muninn keeps listening and message notifications still come."
+                setShowBadge(false)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+                setSound(null, null)
+                enableVibration(false)
+            })
+        }
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle("Muninn")
             .setContentText("Listening for messages").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET).setShowWhen(false).setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(open).build()
         try {
             if (Build.VERSION.SDK_INT >= 34) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
@@ -59,7 +67,7 @@ class MessageService : Service() {
     override fun onDestroy() { running = false; super.onDestroy() }
 
     companion object {
-        private const val CHANNEL = "listening"
+        const val CHANNEL = "listening_quiet"
         private const val ID = 9
         @Volatile var running = false
 
