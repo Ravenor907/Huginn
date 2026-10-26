@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -56,8 +57,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
 
     private val unsentKeeps = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val held = ConcurrentHashMap<String, MutableList<Msg>>()
+    /** Messages from someone asking to chat, by id (resends don't pile up), until accepted. */
+    private val held = ConcurrentHashMap<String, MutableMap<String, Msg>>()
+    /** One lock for every change to the chats, so copies arriving at once on different routes can't race. */
+    private val lock = Any()
+    /** Ids deleted on this phone in the last two days: a late copy won't bring them back. */
+    private val deleted = ConcurrentHashMap<String, Long>()
+    private val deletedStore = File(context.filesDir, "deleted.json")
     private val recent = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    private val tries = ConcurrentHashMap<String, Tries>()
     private val pool = Executors.newFixedThreadPool(8)
     /** Background work that can't take the app down: a failed send just stays unsent and is retried. */
     private fun bg(f: () -> Unit) = pool.execute { try { f() } catch (e: Exception) { android.util.Log.w("Muninn", "chat", e) } }
@@ -116,7 +124,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         putMet(peerKey, m.copy(iSaid = true, dismissed = false))
         bg {
             val body = envelope("keep", peerKey, "yes", UUID.randomUUID().toString())
-            if (!deliver(peerKey, body, m.mailbox)) unsentKeeps.add(peerKey) else return@execute
+            if (deliver(peerKey, body, m.mailbox)) return@bg
+            unsentKeeps.add(peerKey)
             notices.tryEmit("Couldn't reach ${m.name} yet. Muninn will say yes again when you're close.")
         }
         if (m.theySaid) becomeContacts(peerKey)
@@ -135,7 +144,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Nothing from them arrives, here or in the Nearby room. Their chat is hidden until unblocked. */
     fun block(peerKey: String, on: Boolean = true) {
-        _requests.value = _requests.value.filterNot { it.peerKey == peerKey }
+        _requests.update { l -> l.filterNot { it.peerKey == peerKey } }
         held.remove(peerKey)
         mute(peerKey, on)
         _blocked.value = id.muted()
@@ -147,31 +156,43 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Removes a contact (and anyone met close by); the chat stays unless deleted too. */
     fun removeContact(peerKey: String) {
         contacts.remove(peerKey)
-        _met.value = _met.value - peerKey; saveMet()
+        synchronized(lock) { _met.update { it - peerKey }; saveMet() }
     }
 
     /** Deletes one message on this phone. */
     fun deleteMessage(peerKey: String, msgId: String) {
-        _private.value[peerKey]?.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { File(photosDir, it).delete() }
-        val map = _private.value.toMutableMap()
-        map[peerKey] = map[peerKey].orEmpty().filterNot { it.id == msgId }
-        _private.value = map
-        save()
+        forget(listOf(msgId))
+        edit { map ->
+            map[peerKey]?.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { File(photosDir, it).delete() }
+            map[peerKey] = map[peerKey].orEmpty().filterNot { it.id == msgId }
+            true
+        }
     }
 
     fun deleteNearbyMessage(msgId: String) {
-        _nearby.value = _nearby.value.filterNot { it.id == msgId }
-        if (id.keepNearbyHistory) saveNearby()
+        forget(listOf(msgId))
+        synchronized(lock) { _nearby.update { l -> l.filterNot { it.id == msgId } }; if (id.keepNearbyHistory) saveNearby() }
     }
+
+    private fun forget(ids: List<String>) {
+        val now = System.currentTimeMillis()
+        ids.forEach { deleted[it] = now }
+        deleted.entries.removeIf { now - it.value > 2 * DAY }
+        try { vault.write(deletedStore, JSONObject(HashMap<String, Long>(deleted) as Map<*, *>).toString()) } catch (_: Exception) {}
+    }
+
+    /** Already here (or deleted here): a copy from another route, or a resend. */
+    private fun known(peerKey: String, msgId: String) =
+        msgId in deleted || held[peerKey]?.containsKey(msgId) == true || _private.value[peerKey].orEmpty().any { it.id == msgId }
 
     private fun becomeContacts(peerKey: String) {
         val m = _met.value[peerKey] ?: return
         contacts.put(Contacts.Contact(peerKey, m.name, m.mailbox, verified = m.verified))
-        _met.value = _met.value - peerKey; saveMet()
+        synchronized(lock) { _met.update { it - peerKey }; saveMet() }
         notices.tryEmit("You and ${m.name} are in touch. Message each other from anywhere.")
     }
 
-    private fun putMet(k: String, m: Met) { _met.value = _met.value + (k to m); saveMet() }
+    private fun putMet(k: String, m: Met) = synchronized(lock) { _met.update { it + (k to m) }; saveMet() }
 
     /** How a contact can be reached right now: "close", "wifi", "internet" or "". */
     fun route(peerKey: String): String = when {
@@ -192,6 +213,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (fromKey in id.muted()) return 200 to "{}"   // blocked: dropped quietly
         val room = o.optString("room")
         if (room == "photo") return receivePiece(o, fromKey, name, via)
+        val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
+        val sentId = o.optString("id")
+        // A copy that's already here (another route, or a resend): confirm again, don't count it.
+        if (room == "private" && sentId.isNotEmpty() && known(fromKey, sentId)) {
+            if (held[fromKey]?.containsKey(sentId) != true) receipt(fromKey, listOf(sentId), "delivered", mailbox)
+            return 200 to "{}"
+        }
+        if (room == "nearby" && sentId.isNotEmpty() && (sentId in deleted || _nearby.value.any { it.id == sentId })) return 200 to "{}"
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room.
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         if (room != "receipt") synchronized(q) {
@@ -200,22 +229,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             q.addLast(now)
         }
         val key = try { ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(fromKey)) } catch (e: Exception) { return 400 to "{}" }
-        val text = ChatCrypto.open(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data")))?.take(MAX) ?: return 403 to "{}"
-        val msgId = o.optString("id").ifEmpty { UUID.randomUUID().toString() }
+        val opened = ChatCrypto.open(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data"))) ?: return 403 to "{}"
+        val text = if (room == "receipt") opened else opened.take(MAX)
+        val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
         val msg = Msg(msgId, fromKey, name, text, false, now, via = via)
-        val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         when (room) {
             "nearby" -> {
                 if (!id.nearbyChat || via == "internet") return 403 to "{}"
-                if (fromKey !in id.muted() && _nearby.value.none { it.id == msgId }) addNearby(msg)
+                addNearby(msg)
             }
             "private" -> {
                 val c = contacts.get(fromKey)
                 if (c != null) {
                     if (mailbox != null && c.mailbox != mailbox) contacts.put(c.copy(mailbox = mailbox))
-                    if (_private.value[fromKey].orEmpty().none { it.id == msgId }) {
-                        addPrivate(fromKey, msg)
-                        _unread.value = _unread.value + fromKey
+                    if (addPrivate(fromKey, msg)) {
+                        _unread.update { it + fromKey }
                         arrivals.tryEmit(Triple(c.name, text, fromKey))
                     }
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
@@ -225,17 +253,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     // Close by or on the same Wi-Fi (or someone met that way): no asking first.
                     val m = _met.value[fromKey]
                     putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
-                    if (_private.value[fromKey].orEmpty().none { it.id == msgId }) {
-                        addPrivate(fromKey, msg)
-                        _unread.value = _unread.value + fromKey
+                    if (addPrivate(fromKey, msg)) {
+                        _unread.update { it + fromKey }
                         arrivals.tryEmit(Triple(name, text, fromKey))
                     }
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else {
                     // A code shared some other way: they already have this phone's code, so ask.
-                    held.getOrPut(fromKey) { mutableListOf() }.add(msg)
-                    if (_requests.value.none { it.peerKey == fromKey }) {
-                        _requests.value = _requests.value + Request(fromKey, name, ChatCrypto.pairingCode(key), mailbox, via == "internet")
+                    held.getOrPut(fromKey) { java.util.Collections.synchronizedMap(LinkedHashMap()) }.putIfAbsent(msgId, msg)
+                    var isNew = false
+                    _requests.update { list -> if (list.any { it.peerKey == fromKey }) list else { isNew = true; list + Request(fromKey, name, ChatCrypto.pairingCode(key), mailbox, via == "internet") } }
+                    if (isNew) {
                         notices.tryEmit("$name wants to chat")
                         arrivals.tryEmit(Triple(name, "Wants to chat with you", fromKey))
                     }
@@ -247,10 +275,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val ids = r.optJSONArray("ids")?.let { a -> (0 until minOf(a.length(), 200)).map { a.optString(it) }.toSet() } ?: return 400 to "{}"
                 val st = r.optString("s")
                 if (st != "delivered" && st != "read") return 400 to "{}"
-                val map = _private.value.toMutableMap()
-                map[fromKey] = map[fromKey].orEmpty().map { m -> if (m.mine && m.id in ids && rank(st) > rank(m.state)) m.copy(state = st, failed = false) else m }
-                _private.value = map
-                save()
+                edit { map ->
+                    val before = map[fromKey] ?: return@edit false
+                    map[fromKey] = before.map { m -> if (m.mine && m.id in ids && rank(st) > rank(m.state)) m.copy(state = st, failed = false) else m }
+                    true
+                }
             }
             "keep" -> {
                 if (isContact(fromKey)) return 200 to "{}"
@@ -267,8 +296,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun acceptRequest(r: Request) {
         contacts.put(Contacts.Contact(r.peerKey, r.name, r.mailbox, verified = !r.viaInternet))
-        _requests.value = _requests.value.filterNot { it.peerKey == r.peerKey }
-        held.remove(r.peerKey)?.let { list -> list.forEach { addPrivate(r.peerKey, it) }; receipt(r.peerKey, list.map { it.id }, "delivered", r.mailbox) }
+        _requests.update { l -> l.filterNot { it.peerKey == r.peerKey } }
+        held.remove(r.peerKey)?.let { m ->
+            val list = synchronized(m) { m.values.toList() }
+            list.forEach { addPrivate(r.peerKey, it) }
+            receipt(r.peerKey, list.map { it.id }, "delivered", r.mailbox)
+        }
     }
 
     // ------------------------------------------------------------------ photos
@@ -289,6 +322,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val msgId = UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, msgId), jpeg)
         val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId)
+        tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
@@ -317,7 +351,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (msgId.isEmpty() || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         // Already have it (a copy from another route, or a resend): just confirm again.
-        if (_private.value[fromKey].orEmpty().any { it.id == msgId }) { receipt(fromKey, listOf(msgId), "delivered", mailbox); return 200 to "{}" }
+        if (known(fromKey, msgId)) { receipt(fromKey, listOf(msgId), "delivered", mailbox); return 200 to "{}" }
         val now = System.currentTimeMillis()
         val q = pieceTimes.getOrPut(fromKey) { ArrayDeque() }
         synchronized(q) {
@@ -341,15 +375,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val m = _met.value[fromKey]
             putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
         } else if (mailbox != null && contact.mailbox != mailbox) contacts.put(contact.copy(mailbox = mailbox))
-        addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId))
-        _unread.value = _unread.value + fromKey
-        arrivals.tryEmit(Triple(contact?.name ?: name, "Photo", fromKey))
+        if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId))) {
+            _unread.update { it + fromKey }
+            arrivals.tryEmit(Triple(contact?.name ?: name, "Photo", fromKey))
+        }
         receipt(fromKey, listOf(msgId), "delivered", mailbox)
         return 200 to "{}"
     }
 
     fun declineRequest(r: Request) {
-        _requests.value = _requests.value.filterNot { it.peerKey == r.peerKey }
+        _requests.update { l -> l.filterNot { it.peerKey == r.peerKey } }
         held.remove(r.peerKey)
     }
 
@@ -363,14 +398,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** The chat is on screen: clear the dot and, if allowed, tell them what was read. */
     fun markRead(peerKey: String) {
-        _unread.value = _unread.value - peerKey
+        _unread.update { it - peerKey }
         if (!id.readReceipts) return
-        val fresh = _private.value[peerKey].orEmpty().filter { !it.mine && it.state != "read" }
-        if (fresh.isEmpty()) return
-        val map = _private.value.toMutableMap()
-        map[peerKey] = map[peerKey].orEmpty().map { if (!it.mine && it.state != "read") it.copy(state = "read") else it }
-        _private.value = map
-        save()
+        var fresh = emptyList<Msg>()
+        edit { map ->
+            fresh = map[peerKey].orEmpty().filter { !it.mine && it.state != "read" }
+            if (fresh.isEmpty()) return@edit false
+            map[peerKey] = map[peerKey].orEmpty().map { if (!it.mine && it.state != "read") it.copy(state = "read") else it }
+            true
+        }
         receipt(peerKey, fresh.map { it.id }, "read", null)
     }
 
@@ -380,9 +416,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun receipt(peerKey: String, ids: List<String>, state: String, mailbox: String?) {
         if (ids.isEmpty()) return
         bg {
-            val body = JSONObject().put("ids", JSONArray(ids.takeLast(200))).put("s", state).toString()
-            deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()),
-                mailbox ?: contacts.get(peerKey)?.mailbox ?: _met.value[peerKey]?.mailbox)
+            // 40 ids a receipt keeps each one small on every route.
+            ids.takeLast(200).chunked(40).forEach { part ->
+                val body = JSONObject().put("ids", JSONArray(part)).put("s", state).toString()
+                deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()),
+                    mailbox ?: contacts.get(peerKey)?.mailbox ?: _met.value[peerKey]?.mailbox)
+            }
         }
     }
 
@@ -418,6 +457,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
         val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending")
+        tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
@@ -433,8 +473,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     // phone keeps the first copy and drops the rest. Until a "delivered" receipt comes back it is
     // sent again after 5 s, then less often, for a day. So someone walking out of range still gets it.
 
-    private class Tries(var count: Int, var next: Long)
-    private val tries = ConcurrentHashMap<String, Tries>()
+    private class Tries(@Volatile var count: Int, @Volatile var next: Long)
 
     /** Their internet mailbox, if this message may use it: contacts always; someone met close by
      *  only for messages sent while they were in range (a backup as they walk away). */
@@ -511,11 +550,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return ""
     }
 
-    @Synchronized private fun update(peer: String, msgId: String, f: (Msg) -> Msg) {
+    private fun update(peer: String, msgId: String, f: (Msg) -> Msg) {
+        edit { map ->
+            val before = map[peer] ?: return@edit false
+            map[peer] = before.map { if (it.id == msgId) f(it) else it }
+            true
+        }
+    }
+
+    /** Every change to the chats goes through here: one at a time, then saved. Returns whether it changed. */
+    private fun edit(f: (MutableMap<String, List<Msg>>) -> Boolean): Boolean = synchronized(lock) {
         val map = _private.value.toMutableMap()
-        map[peer] = map[peer].orEmpty().map { if (it.id == msgId) f(it) else it }
+        if (!f(map)) return@synchronized false
         _private.value = map
         save()
+        true
     }
 
     private fun envelope(room: String, theirKey: String, text: String, msgId: String): JSONObject {
@@ -529,14 +578,18 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun mute(peerKey: String, on: Boolean) {
         id.setMuted(peerKey, on)
-        if (on) _nearby.value = _nearby.value.filterNot { it.peerKey == peerKey && !it.mine }
+        if (on) synchronized(lock) { _nearby.update { l -> l.filterNot { it.peerKey == peerKey && !it.mine } } }
     }
 
-    fun clearNearby() { _nearby.value = emptyList(); nearbyStore.delete() }
+    fun clearNearby() = synchronized(lock) { _nearby.value = emptyList(); nearbyStore.delete() }
 
     fun deleteConversation(peerKey: String) {
-        _private.value[peerKey].orEmpty().forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
-        _private.value = _private.value - peerKey; save()
+        edit { map ->
+            val gone = map.remove(peerKey) ?: return@edit false
+            forget(gone.map { it.id })
+            gone.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
+            true
+        }
     }
 
     /** Removes messages older than the person's "Delete messages after" choice. */
@@ -544,38 +597,46 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val age = id.deleteAfter
         if (age <= 0) return
         val cutoff = System.currentTimeMillis() - age
-        val n = _nearby.value.filter { it.time >= cutoff }
-        if (n.size != _nearby.value.size) { _nearby.value = n; if (id.keepNearbyHistory) saveNearby() }
-        _private.value.values.flatten().filter { it.time < cutoff && it.photo.isNotEmpty() }.forEach { File(photosDir, it.photo).delete() }
-        val map = _private.value.mapValues { (_, v) -> v.filter { it.time >= cutoff } }
-        if (map.values.sumOf { it.size } != _private.value.values.sumOf { it.size }) { _private.value = map; save() }
+        synchronized(lock) {
+            val n = _nearby.value.filter { it.time >= cutoff }
+            if (n.size != _nearby.value.size) { _nearby.value = n; if (id.keepNearbyHistory) saveNearby() }
+        }
+        edit { map ->
+            var changed = false
+            for (k in map.keys.toList()) {
+                val (old, keep) = map[k]!!.partition { it.time < cutoff }
+                if (old.isEmpty()) continue
+                old.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
+                map[k] = keep; changed = true
+            }
+            changed
+        }
     }
 
     /** Erases every conversation on this phone. */
     fun deleteAll() {
-        _private.value = emptyMap(); _nearby.value = emptyList()
-        photosDir.deleteRecursively()
-        save(); nearbyStore.delete()
+        synchronized(lock) {
+            _private.value = emptyMap(); _nearby.value = emptyList()
+            photosDir.deleteRecursively()
+            save(); nearbyStore.delete()
+        }
     }
 
-    private fun addNearby(m: Msg) {
+    private fun addNearby(m: Msg) = synchronized(lock) {
+        if (_nearby.value.any { it.id == m.id }) return@synchronized
         _nearby.value = (_nearby.value + m).takeLast(300)
         if (id.keepNearbyHistory) saveNearby()
     }
 
-    private fun addPrivate(peer: String, m: Msg) {
-        val map = _private.value.toMutableMap()
-        map[peer] = (map[peer].orEmpty() + m).takeLast(1000)
-        _private.value = map
-        save()
+    /** False if it's already there or was deleted here: copies from other routes are dropped. */
+    private fun addPrivate(peer: String, m: Msg): Boolean = edit { map ->
+        val list = map[peer].orEmpty()
+        if (m.id in deleted || list.any { it.id == m.id }) return@edit false
+        map[peer] = (list + m).takeLast(1000)
+        true
     }
 
-    private fun replace(peer: String, m: Msg) {
-        val map = _private.value.toMutableMap()
-        map[peer] = map[peer].orEmpty().map { if (it.id == m.id) m else it }
-        _private.value = map
-        save()
-    }
+    private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
@@ -586,13 +647,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"))
     }
 
-    @Synchronized private fun save() {
+    private fun save() = synchronized(lock) {
         val o = JSONObject(); _private.value.forEach { (k, v) -> o.put(k, toJson(v)) }
         vault.write(store, o.toString())
     }
     private fun resendKeeps() {
-        unsentKeeps.filter { route(it).isNotEmpty() }.forEach { k ->
-            if (deliver(k, envelope("keep", k, "yes", UUID.randomUUID().toString()), null)) unsentKeeps.remove(k)
+        unsentKeeps.toList().forEach { k ->
+            val mailbox = contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox
+            if (deliver(k, envelope("keep", k, "yes", UUID.randomUUID().toString()), mailbox)) unsentKeeps.remove(k)
         }
     }
 
@@ -615,6 +677,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
                     Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v")) } }
             }
+            vault.read(deletedStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
             if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
             prune()
         } catch (_: Exception) {}

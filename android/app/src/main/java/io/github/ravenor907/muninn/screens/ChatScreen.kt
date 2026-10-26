@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -121,8 +122,9 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     }.distinctBy { it.first }
     // Close-by people already chatting with (not contacts yet) sit with the chats.
     val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() && it.first !in blocked }
-        val chatRows = (contacts.map { ChatRow(it.chatKey, it.name) } +
-        met.filter { (k, _) -> !convos[k].isNullOrEmpty() && !app.chat.isContact(k) }.map { (k, m) -> ChatRow(k, m.name) })
+        // Contacts, plus anyone else there's a conversation with (met close by, or removed as a contact).
+    val chatRows = (contacts.map { ChatRow(it.chatKey, it.name) } +
+        convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> ChatRow(k, met[k]?.name ?: app.chat.nameOf(k)) })
         .filter { it.key !in blocked }
         .sortedByDescending { convos[it.key]?.lastOrNull()?.time ?: 0L }
 
@@ -183,7 +185,7 @@ private fun NearbyRoom(app: Muninn) {
     var text by remember { mutableStateOf("") }
     var on by remember { mutableStateOf(app.identity.nearbyChat) }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
         Section("Nearby room") { MButton("Back", icon = "back") { ChatNav.open = "" } }
         if (!on) {
@@ -217,7 +219,10 @@ private fun Conversation(app: Muninn, key: String) {
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.size) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    // Redraw as they come into or go out of range (route, and when to ask "Keep in touch?").
+    @Suppress("UNUSED_VARIABLE") val closeNow by app.close.list.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val wifiNow by app.net.devices.collectAsState()
     val route = app.chat.route(key)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -357,9 +362,11 @@ private fun AddSomeone(app: Muninn) {
 @Composable
 private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = null, onTap: () -> Unit = {}, onLong: () -> Unit) {
     Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
+        val tapNow by rememberUpdatedState(onTap)
+        val longNow by rememberUpdatedState(onLong)
         Column(
             Modifier.widthIn(max = 300.dp).background(if (m.mine) Palette.accentFill else Palette.panel, Corner)
-                .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null) onTap() }, onLongPress = { onLong() }) }.padding(10.dp),
+                .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null) tapNow() }, onLongPress = { longNow() }) }.padding(10.dp),
         ) {
             if (showName && !m.mine) Text(m.name, style = Type.small.copy(color = Palette.accent))
             if (photo != null) {

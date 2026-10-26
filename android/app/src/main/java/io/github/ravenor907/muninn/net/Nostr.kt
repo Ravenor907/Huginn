@@ -29,6 +29,7 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val live = ConcurrentHashMap<String, Boolean>()
     private val seen = LinkedHashSet<String>()
+    private val working = HashSet<String>()
     private val outbox = mutableListOf<String>()        // events waiting for a relay
     private val subId = "muninn-" + UUID.randomUUID().toString().take(8)
 
@@ -110,10 +111,13 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     private fun handle(ev: JSONObject) {
         val id = ev.optString("id")
-        synchronized(seen) { if (id.isEmpty() || seen.contains(id)) return }
-        // Only trust what the event's own signature covers.
-        if (idOf(ev) != id || !Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig")))) return
-        if (onEnvelope?.invoke(ev.optString("content")) != true) return
+        // The same event comes from every relay at once: only one copy is handled at a time.
+        synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
+        try {
+            // Only trust what the event's own signature covers.
+            if (idOf(ev) != id || !Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig")))) return
+            if (onEnvelope?.invoke(ev.optString("content")) != true) return
+        } finally { synchronized(seen) { working.remove(id) } }
         synchronized(seen) {
             seen.add(id)
             while (seen.size > 2000) seen.remove(seen.first())
