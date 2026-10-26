@@ -20,8 +20,8 @@
     </ul>
   </description>
   <launchable type="desktop-id">io.github.ravenor907.Huginn.desktop</launchable>
-  <url type="homepage">https://github.com/Ravenor907/Huginn</url>
-  <url type="bugtracker">https://github.com/Ravenor907/Huginn/issues</url>
+  <url type="homepage">https://github.com/Ravenor907/Huginn-Muninn</url>
+  <url type="bugtracker">https://github.com/Ravenor907/Huginn-Muninn/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="0.1" date="2026-10-26"/>

@@ -117,7 +117,7 @@ class Updater(private val context: Context, private val identity: Identity) {
     }
 
     companion object {
-        private const val RELEASES = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=100"
+        private const val RELEASES = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100"
         private const val RECHECK_MS = 5 * 60_000L
 
         /** "v0.31" -> "0.31". Old test tags (v0.3-test1) and anything else -> null. */

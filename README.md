@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ravenor907/Huginn/releases"><img src="https://img.shields.io/github/v/release/Ravenor907/Huginn?include_prereleases&label=release&style=for-the-badge&color=C2A25E&labelColor=101112" alt="Release"></a>
-  <a href="https://github.com/Ravenor907/Huginn/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/Ravenor907/Huginn/build.yml?branch=main&label=build&style=for-the-badge&labelColor=101112" alt="Build"></a>
+  <a href="https://github.com/Ravenor907/Huginn-Muninn/releases"><img src="https://img.shields.io/github/v/release/Ravenor907/Huginn-Muninn?include_prereleases&label=release&style=for-the-badge&color=C2A25E&labelColor=101112" alt="Release"></a>
+  <a href="https://github.com/Ravenor907/Huginn-Muninn/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/Ravenor907/Huginn-Muninn/build.yml?branch=main&label=build&style=for-the-badge&labelColor=101112" alt="Build"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-9C978D?style=for-the-badge&labelColor=101112" alt="GPL-3.0"></a>
 </p>
 
@@ -71,14 +71,14 @@ Both apps ship together, in the same release, with the same version number, and 
 **Huginn** (Desktop Mode, in Konsole):
 
 ```
-cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
+cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
 Add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
 **Muninn**: on the phone, open this link and install it:
 
-https://github.com/Ravenor907/Huginn/releases/latest/download/Muninn.apk
+https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk
 
 ### The one-time USB setup
 

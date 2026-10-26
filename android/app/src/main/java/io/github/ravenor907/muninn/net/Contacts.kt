@@ -55,7 +55,7 @@ class Contacts(context: Context, private val vault: Vault) {
         const val PREFIX = "MUNINN1:"
         /** What the QR holds: a page that opens Muninn, or offers the download if it isn't installed.
          *  The code is after "#", which browsers never send to the server. */
-        const val PAGE = "https://ravenor907.github.io/Huginn/add/#"
+        const val PAGE = "https://ravenor907.github.io/Huginn-Muninn/add/#"
         fun link(code: String) = PAGE + code
 
         fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {

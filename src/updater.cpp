@@ -16,7 +16,7 @@
 
 namespace
 {
-const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=100";
+const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100";
 const char *kAppId = "io.github.ravenor907.Huginn";
 
 // Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0.

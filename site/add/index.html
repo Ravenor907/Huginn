@@ -42,7 +42,7 @@
   <div class="panel">
     <h2>Don't have Muninn yet?</h2>
     <p>It's free, for Android phones.</p>
-    <a class="btn" href="https://github.com/Ravenor907/Huginn/releases/latest/download/Muninn.apk">Download Muninn</a>
+    <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">Download Muninn</a>
     <ol>
       <li>Open the downloaded file. If Android asks, allow installs from your browser.</li>
       <li>Open Muninn and set your pattern or password.</li>
@@ -72,7 +72,7 @@
   } else {
     document.getElementById("code").textContent = code;
     var body = code.slice("MUNINN1:".length);
-    var store = "https://github.com/Ravenor907/Huginn/releases/latest/download/Muninn.apk";
+    var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
     document.getElementById("open").href = /Android/i.test(navigator.userAgent)
       ? "intent://add/" + body + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
       : "muninn://add/" + body;

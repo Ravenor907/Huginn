@@ -28,7 +28,7 @@ namespace
 {
 const QString kPath = QStringLiteral("/api/huginn/v1/message");
 const QString kPrefix = QStringLiteral("MUNINN1:");
-const QString kPage = QStringLiteral("https://ravenor907.github.io/Huginn/add/#");
+const QString kPage = QStringLiteral("https://ravenor907.github.io/Huginn-Muninn/add/#");
 const int kKeepAfter = 10;
 const qint64 kDay = 86400000;
 // Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min.
