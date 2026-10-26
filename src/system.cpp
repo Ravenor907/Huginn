@@ -299,6 +299,49 @@ QVariantList System::sampleImages()
     return out;
 }
 
+QVariantList System::newestDownloads(int limit) const
+{
+    QVariantList out;
+    const QDir dl(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+    const QFileInfoList files = dl.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+    const QDate today = QDate::currentDate();
+    const QLocale en(QLocale::English);
+    for (const QFileInfo &fi : files) {
+        if (out.size() >= limit)
+            break;
+        const QDate d = fi.lastModified().date();
+        const QString when = d == today ? QStringLiteral("Today") : d == today.addDays(-1) ? QStringLiteral("Yesterday") : en.toString(d, QStringLiteral("MMM d"));
+        QString kind = fi.isDir() ? QStringLiteral("folder") : kindOf(QUrl::fromLocalFile(fi.absoluteFilePath()));
+        const QString n = fi.fileName().toLower();
+        for (const char *ext : {".zip", ".7z", ".tar.gz", ".tar.xz", ".tgz"})
+            if (n.endsWith(QLatin1String(ext))) kind = QStringLiteral("archive");
+        if (n.endsWith(QLatin1String(".iso")) || n.endsWith(QLatin1String(".img")))
+            kind = QStringLiteral("disc");
+        out << QVariantMap{{QStringLiteral("name"), fi.fileName()}, {QStringLiteral("url"), QUrl::fromLocalFile(fi.absoluteFilePath()).toString()},
+                           {QStringLiteral("when"), when}, {QStringLiteral("kind"), kind}};
+    }
+    return out;
+}
+
+QVariantList System::driveSummary() const
+{
+    QVariantList out;
+    QStringList roots{QDir::homePath()};
+    for (const QStorageInfo &s : QStorageInfo::mountedVolumes())
+        if (s.isValid() && s.isReady() && QString::fromUtf8(s.device()).contains(QLatin1String("mmcblk")))
+            roots << s.rootPath();
+    for (const QString &r : roots) {
+        const QStorageInfo si(r);
+        if (si.bytesTotal() <= 0)
+            continue;
+        out << QVariantMap{{QStringLiteral("name"), r == QDir::homePath() ? QStringLiteral("Internal") : QStringLiteral("SD Card")},
+                           {QStringLiteral("freeText"), formatSize(si.bytesAvailable())},
+                           {QStringLiteral("totalText"), formatSize(si.bytesTotal())},
+                           {QStringLiteral("usedFraction"), 1.0 - double(si.bytesAvailable()) / si.bytesTotal()}};
+    }
+    return out;
+}
+
 QString System::sampleText()
 {
     const QString dir = (m_tourDir.isEmpty() ? QDir::tempPath() : m_tourDir) + QStringLiteral("/samples");
@@ -311,6 +354,7 @@ QString System::sampleText()
 }
 
 QUrl System::homeUrl() const { return QUrl::fromLocalFile(QDir::homePath()); }
+QUrl System::downloadsUrl() const { return QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)); }
 
 QUrl System::parentUrl(const QUrl &url) const
 {

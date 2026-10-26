@@ -298,6 +298,12 @@ void FolderModel::up()
     setUrl(parent);
 }
 
+bool FolderModel::canGoUp() const
+{
+    const QUrl parent = KIO::upUrl(m_url);
+    return !parent.isEmpty() && parent.adjusted(QUrl::StripTrailingSlash) != m_url.adjusted(QUrl::StripTrailingSlash);
+}
+
 void FolderModel::refresh()
 {
     m_cameFrom.clear();
@@ -355,6 +361,8 @@ void FolderModel::onResult(KJob *job)
     rebuild(m_cameFrom);
     countFolders();
     m_cameFrom.clear();
+    if (s_settings && !job->error() && m_url.isLocalFile() && m_url.toLocalFile() != QDir::homePath())
+        s_settings->rememberFolder(m_url.toString());
     Q_EMIT loadingChanged();
     Q_EMIT selectionChanged();
 }

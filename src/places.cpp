@@ -47,6 +47,7 @@ void Places::rebuild()
     m_lastMounts = cardMounts();
     QVariantList l;
     const QString home = QDir::homePath();
+    l << place(QStringLiteral("Start"), QStringLiteral("start"));
     l << place(QStringLiteral("Home"), QStringLiteral("folder"), QUrl::fromLocalFile(home));
     for (const QString &m : std::as_const(m_lastMounts)) {
         const QString label = QFileInfo(m).fileName();

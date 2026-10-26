@@ -25,6 +25,7 @@ class Settings : public QObject
     Q_PROPERTY(bool showType READ showType WRITE setShowType NOTIFY changed)
     Q_PROPERTY(QString sortMode READ sortMode WRITE setSortMode NOTIFY changed)
     Q_PROPERTY(QStringList recentDestinations READ recentDestinations NOTIFY changed)
+    Q_PROPERTY(QStringList recentFolders READ recentFolders NOTIFY recentFoldersChanged)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -46,6 +47,8 @@ public:
     QString sortMode() const { return value("sortMode", "name").toString(); }
     QStringList recentDestinations() const { return value("recentDestinations", QStringList()).toStringList(); }
     Q_INVOKABLE void rememberDestination(const QString &url);
+    QStringList recentFolders() const { return value("recentFolders", QStringList()).toStringList(); }
+    void rememberFolder(const QString &url);
 
     void setLayout(const QString &v) { set("layout", v); }
     void setUiSize(const QString &v) { set("uiSize", v); }
@@ -68,6 +71,7 @@ public:
 
 Q_SIGNALS:
     void changed();
+    void recentFoldersChanged();
 
 private:
     QVariant value(const QString &key, const QVariant &fallback) const { return m_settings.value(key, fallback); }

@@ -46,3 +46,15 @@ void Settings::rememberDestination(const QString &url)
         list.removeLast();
     set("recentDestinations", list);
 }
+
+void Settings::rememberFolder(const QString &url)
+{
+    // Kept quietly (no general "changed" signal), so browsing never reloads the panes.
+    QStringList list = recentFolders();
+    list.removeAll(url);
+    list.prepend(url);
+    while (list.size() > 8)
+        list.removeLast();
+    m_settings.setValue("recentFolders", list);
+    Q_EMIT recentFoldersChanged();
+}

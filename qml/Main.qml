@@ -12,21 +12,35 @@ Window {
     color: Theme.ground
 
     // ------------------------------------------------------------- pages
-    property string pageName: ""
+    property string pageName: "start"
     property var pageArgs: ({})
+
+    // Pages opened from the start screen go back to it; everything else goes back to the browser.
+    property string returnTo: ""
 
     function openPage(name, args) {
         pageArgs = args || {}
-        if (name === "browser") { closePage(); return }
+        if (name === "browser") { showBrowser(); return }
+        if (name === pageName) {
+            if (pageLoader.item && pageLoader.item.setArgs) pageLoader.item.setArgs(pageArgs)
+            return
+        }
+        returnTo = name === "start" ? "" : pageName === "start" ? "start" : returnTo
         pageName = name
     }
     function restoreFocus() { keys.forceActiveFocus() }
+    function showBrowser() {
+        returnTo = ""
+        pageName = ""
+        keys.forceActiveFocus()
+    }
     function openInBrowser(url) {
-        closePage()
+        showBrowser()
         browser.activeModel.setUrl(url)
     }
     function closePage() {
-        pageName = ""
+        pageName = returnTo
+        returnTo = ""
         keys.forceActiveFocus()
     }
 
@@ -42,6 +56,7 @@ Window {
         active: app.pageName !== ""
         source: {
             switch (app.pageName) {
+            case "start": return "HomePage.qml"
             case "games": return "GamesPage.qml"
             case "storage": return "StoragePage.qml"
             case "usb": return "UsbPage.qml"
@@ -163,6 +178,7 @@ Window {
         id: tour
         property int step: 0
         readonly property var steps: [
+            { page: "start", file: "00-start" },
             { page: "", file: "01-browser" },
             { page: "", wheel: true, file: "02-action-wheel" },
             { page: "", prompt: true, file: "03-rename" },
@@ -189,7 +205,7 @@ Window {
             const args = { tour: true }
             if (s.text) { args.tour = false; args.url = System.sampleText(); args.folder = "" }
             if (s.section) args.section = s.section
-            if (s.page === "") app.closePage(); else app.openPage(s.page, args)
+            if (s.page === "") app.showBrowser(); else app.openPage(s.page, args)
             if (s.picker) picker.open("Move 2 items to…", [{ name: "Other pane", detail: "Home / Downloads", url: "file:///tmp" }], null)
             if (s.wheel) { browser.openWheel(false); wheel.current = 1 }
             if (s.prompt) prompt.open("Rename folder", "Home", "screenshots", "Rename", null, false)

@@ -45,7 +45,11 @@ public:
     Q_INVOKABLE QVariantList imagesBeside(const QUrl &url) const;
     Q_INVOKABLE QVariantList sampleImages();
     Q_INVOKABLE QString sampleText();
+    Q_INVOKABLE QVariantList newestDownloads(int limit) const;
+    Q_INVOKABLE QVariantList driveSummary() const;
     Q_INVOKABLE QUrl homeUrl() const;
+    Q_INVOKABLE QUrl downloadsUrl() const;
+    Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }
     Q_INVOKABLE QUrl parentUrl(const QUrl &url) const;
     Q_INVOKABLE QString parentPath(const QUrl &url) const;
     Q_INVOKABLE QString fileName(const QVariant &url) const;
