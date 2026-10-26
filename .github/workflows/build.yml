@@ -119,6 +119,13 @@ jobs:
               assert needle in text, needle
           print("unattend.xml OK")
           PY
+      - name: Draw the project banner (both ravens)
+        if: always()
+        shell: bash
+        run: |
+          pip install --quiet pillow || exit 0
+          mkdir -p tour
+          python3 tools/make-banner.py tour/banner.png || true
       - name: Publish screenshots to the ci-tour branch
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: bash
