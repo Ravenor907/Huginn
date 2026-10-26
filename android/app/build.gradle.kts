@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.net.URI
+import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
@@ -88,11 +90,11 @@ val fetchOpus by tasks.registering {
     outputs.dir(opusSrc)
     doLast {
         if (File(opusSrc, "CMakeLists.txt").exists()) return@doLast
-        fun sha(f: File) = java.security.MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+        fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
         opusDir.mkdirs()
         val tgz = File(opusDir, "opus-$opusVersion.tar.gz")
         if (!tgz.exists() || sha(tgz) != opusSha256)
-            java.net.URI("https://github.com/xiph/opus/releases/download/v$opusVersion/opus-$opusVersion.tar.gz").toURL().openStream()
+            URI("https://github.com/xiph/opus/releases/download/v$opusVersion/opus-$opusVersion.tar.gz").toURL().openStream()
                 .use { input -> tgz.outputStream().use { input.copyTo(it) } }
         val got = sha(tgz)
         if (got != opusSha256) { tgz.delete(); throw GradleException("libopus $opusVersion download has SHA-256 $got, expected $opusSha256") }
