@@ -63,6 +63,10 @@ class Muninn : Application() {
             createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "New messages. Pops up on screen, vibrates and plays a sound."
                 enableVibration(true); vibrationPattern = BUZZ
+                // The raven call: Muninn's own message sound.
+                setSound(android.net.Uri.parse("android.resource://$packageName/${R.raw.raven_message}"),
+                    android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                 enableLights(true)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
             })
