@@ -85,7 +85,7 @@ Rectangle {
 
     // ------------------------------------------------------------- list
     ListView {
-        id: left
+        id: listPane
         visible: !lock.visible
         anchors.top: divider.bottom
         anchors.topMargin: Theme.px(12)
@@ -103,7 +103,7 @@ Rectangle {
         delegate: Rectangle {
             readonly property bool on: page.zone === "list" && page.row === index
             readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
-            width: left.width
+            width: listPane.width
             height: Theme.px(64)
             radius: Theme.radius
             color: on ? Theme.focusFill : here ? Theme.panel : Theme.panelLow
@@ -142,8 +142,8 @@ Rectangle {
     Rectangle {
         id: pane
         visible: !lock.visible
-        anchors.top: left.top
-        anchors.left: left.right
+        anchors.top: listPane.top
+        anchors.left: listPane.right
         anchors.leftMargin: Theme.px(16)
         anchors.right: parent.right
         anchors.rightMargin: Theme.px(28)
