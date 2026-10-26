@@ -90,6 +90,7 @@ Rectangle {
             implicitHeight: Theme.px(44)
             kind: "danger"
             text: "Exit"
+            focused: page.tile === 7   // reached with Up from the top row
             onClicked: Ui.main.requestExit()
         }
         Text {
@@ -522,14 +523,16 @@ Rectangle {
         switch (b) {
         case "up":
             if ((tile === 0 || tile === 3) && row > 0) { row--; return true }
-            if (tile === 3) go(1)
+            if (tile === 0 || tile === 1 || tile === 2) go(7)   // the Exit button, top right
+            else if (tile === 3) go(1)
             else if (tile === 4) go(2)
             else if (tile === 5) go(6)
             else if (tile === 6) go(4)
             return true
         case "down":
             if ((tile === 0 || tile === 3) && row < rowsIn(tile) - 1) { row++; return true }
-            if (tile === 1) go(3)
+            if (tile === 7) go(2)
+            else if (tile === 1) go(3)
             else if (tile === 2) go(4)
             else if (tile === 4) go(6)
             else if (tile === 6) go(5)
@@ -544,7 +547,7 @@ Rectangle {
             else if (tile === 1) go(2)
             else if (tile === 3) go(4)
             return true
-        case "a": activate(); return true
+        case "a": if (tile === 7) Ui.main.requestExit(); else activate(); return true
         case "x": if (tile === 0) openDownloads(); return true
         case "back": searchEverything(); return true
         case "start": Ui.openPage("settings", {}); return true
