@@ -49,7 +49,7 @@ Rectangle {
         return m.state === "read" ? " · Read" : m.state === "delivered" ? " · Delivered" : m.state === "sent" ? " · Sent" : m.state === "sending" ? " · Sending" : ""
     }
 
-    onOpenKeyChanged: { sel = -1; Voice.stop(); if (openKey !== "") Chat.markRead(openKey) Chat.openChat = openKey }
+    onOpenKeyChanged: { sel = -1; Voice.stop(); if (openKey !== "") Chat.markRead(openKey); Chat.openChat = openKey }
     onMessagesChanged: if (openKey !== "" && !locked) Chat.markRead(openKey)
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
 

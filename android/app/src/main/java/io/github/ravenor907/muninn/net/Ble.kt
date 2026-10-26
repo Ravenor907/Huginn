@@ -501,7 +501,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         if (Build.VERSION.SDK_INT >= 33) {
             when (s.notifyCharacteristicChanged(device, out, false, frame)) {
                 BluetoothStatusCodes.SUCCESS -> SENT
-                BluetoothStatusCodes.ERROR_DEVICE_NOT_CONNECTED -> FAILED
+                BluetoothStatusCodes.ERROR_GATT_WRITE_NOT_ALLOWED, BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND -> FAILED
                 BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION -> { _error.value = PERMISSION_TEXT; FAILED }
                 else -> BUSY   // usually ERROR_GATT_WRITE_REQUEST_BUSY; worth another try
             }
