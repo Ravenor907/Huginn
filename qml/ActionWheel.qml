@@ -8,7 +8,7 @@ Item {
     property var actions: []              // [{ id, label, icon, enabled }]
     property string subject
     property string detail
-    property int current: 0
+    property int current: -1           // -1: nothing picked, the safe default
     property bool holdToPick: false        // opened by holding Y: releasing Y picks
     signal chosen(string id)
     signal closed()
@@ -21,13 +21,13 @@ Item {
         subject = subj
         detail = det
         holdToPick = fromHold
-        current = Math.max(0, acts.findIndex(a => a.enabled !== false))
+        current = -1
         visible = true
     }
     function close() { visible = false; closed() }
     function pick() {
         const a = actions[current]
-        if (!a || a.enabled === false) return
+        if (!a || a.enabled === false) { close(); return }
         visible = false
         chosen(a.id)
     }
@@ -154,6 +154,7 @@ Item {
 
     function step(dir) {
         const n = actions.length
+        if (current < 0) current = dir > 0 ? -1 : 0
         for (let i = 1; i <= n; ++i) {
             const c = (current + dir * i + n * 4) % n
             if (actions[c].enabled !== false) { current = c; return }

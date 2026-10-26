@@ -33,6 +33,9 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
         || !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY")
         || qEnvironmentVariable("SteamGamepadUI") == QLatin1String("1");
     connect(settings, &Settings::changed, this, &System::layoutChanged);
+    if (QScreen *screen = QGuiApplication::primaryScreen())
+        connect(screen, &QScreen::geometryChanged, this, &System::layoutChanged);
+    connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, &System::layoutChanged);
 }
 
 QString System::version() const
@@ -54,6 +57,20 @@ bool System::tvLayout() const
     const QSizeF mm = s->physicalSize();
     const double diagonalInches = std::hypot(mm.width(), mm.height()) / 25.4;
     return diagonalInches > 16.0 && diagonalInches < 200.0;
+}
+
+double System::uiScale() const
+{
+    // The layout is drawn for a 720-line screen; a 1080p handheld gets 1.5x, and so on.
+    // The owner's Size setting multiplies that, and TV layout adds a little more for the couch.
+    double base = 1.5;   // the CI tour renders as a 1080p handheld, like the Ally X
+    if (m_tourDir.isEmpty()) {
+        base = 1.0;
+        if (const QScreen *screen = QGuiApplication::primaryScreen())
+            base = qBound(1.0, screen->geometry().height() / 720.0, 3.0);
+    }
+    const double size = qBound(50, m_settings->uiSize().toInt(), 200) / 100.0;
+    return base * size * (tvLayout() ? 1.15 : 1.0);
 }
 
 QString System::formatSize(qint64 bytes)

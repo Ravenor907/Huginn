@@ -15,6 +15,7 @@ class System : public QObject
     Q_OBJECT
     Q_PROPERTY(bool gameMode READ gameMode CONSTANT)
     Q_PROPERTY(bool tvLayout READ tvLayout NOTIFY layoutChanged)
+    Q_PROPERTY(double uiScale READ uiScale NOTIFY layoutChanged)
     Q_PROPERTY(bool windowed READ windowed CONSTANT)
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(QString tourDir READ tourDir CONSTANT)
@@ -29,6 +30,7 @@ public:
 
     bool gameMode() const { return m_gameMode; }
     bool tvLayout() const;
+    double uiScale() const;
     bool windowed() const { return m_windowed; }
     QString version() const;
     QString tourDir() const { return m_tourDir; }

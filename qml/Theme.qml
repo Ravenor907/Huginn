@@ -29,9 +29,9 @@ QtObject {
     readonly property color accentFill: Qt.rgba(accent.r * 0.25 + 0.06, accent.g * 0.25 + 0.06, accent.b * 0.25 + 0.06, 1)
     readonly property color focusFill: Qt.rgba(accent.r * 0.12 + 0.11, accent.g * 0.12 + 0.11, accent.b * 0.12 + 0.1, 1)
 
-    // TV layout scales everything up for the couch.
+    // Everything scales with the screen and the Size setting (see System::uiScale).
     readonly property bool tv: System.tvLayout
-    readonly property real s: tv ? 1.45 : 1.0
+    readonly property real s: System.uiScale
     function px(v) { return Math.round(v * s) }
 
     readonly property string display: "Cinzel"

@@ -17,6 +17,8 @@ Rectangle {
         case 0: return [
             { kind: "segmented", key: "layout", title: "Layout", note: "Auto picks the TV layout when docked to a big screen",
               options: [{ value: "auto", label: "Auto" }, { value: "handheld", label: "Handheld" }, { value: "tv", label: "TV" }] },
+            { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
+              options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
             { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]

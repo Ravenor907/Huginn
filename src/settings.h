@@ -10,6 +10,7 @@ class Settings : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QString layout READ layout WRITE setLayout NOTIFY changed)
+    Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed)
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY changed)
     Q_PROPERTY(QString channel READ channel WRITE setChannel NOTIFY changed)
     Q_PROPERTY(bool showHidden READ showHidden WRITE setShowHidden NOTIFY changed)
@@ -23,6 +24,7 @@ public:
     explicit Settings(QObject *parent = nullptr);
 
     QString layout() const { return value("layout", "auto").toString(); }
+    QString uiSize() const { return value("uiSize", "100").toString(); }
     QString accent() const { return value("accent", "gold").toString(); }
     QString channel() const { return value("channel", "stable").toString(); }
     bool showHidden() const { return value("showHidden", false).toBool(); }
@@ -33,6 +35,7 @@ public:
     QString transferFolder() const;
 
     void setLayout(const QString &v) { set("layout", v); }
+    void setUiSize(const QString &v) { set("uiSize", v); }
     void setAccent(const QString &v) { set("accent", v); }
     void setChannel(const QString &v) { set("channel", v); }
     void setShowHidden(bool v) { set("showHidden", v); }

@@ -4,8 +4,8 @@ import Huginn
 
 Window {
     id: app
-    width: 1280
-    height: 800
+    width: System.tourDir.length > 0 ? 1920 : 1280
+    height: System.tourDir.length > 0 ? 1080 : 800
     visible: true
     visibility: System.windowed ? Window.Windowed : Window.FullScreen
     title: "Huginn"
