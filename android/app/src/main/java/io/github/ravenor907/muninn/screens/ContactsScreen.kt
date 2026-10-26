@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.ChatWire
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.Line
 import io.github.ravenor907.muninn.ui.MButton
@@ -26,7 +27,9 @@ fun ContactsScreen(app: Muninn, back: () -> Unit) {
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
     data class P(val key: String, val name: String, val detail: String, val contact: Boolean)
-    val people = (contacts.map { P(it.chatKey, it.name, if (it.verified) "In touch · verified" else "In touch", true) } +
+    // A nickname shows as "Nickname (their name)".
+    val people = (contacts.map { P(it.chatKey, ChatWire.listName(it),
+        when { it.keyChanged -> "In touch · security key changed"; it.verified -> "In touch · verified"; else -> "In touch" }, true) } +
         met.filterKeys { k -> contacts.none { it.chatKey == k } }.map { (k, m) -> P(k, m.name, "Met close by", false) })
     val active = people.filter { it.key !in blocked }.sortedBy { it.name.lowercase() }
     val off = blocked.map { k -> people.firstOrNull { it.key == k } ?: P(k, app.chat.nameOf(k), "", false) }

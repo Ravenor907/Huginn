@@ -48,6 +48,7 @@ class Vault(private val context: Context) {
         } else {
             return false
         }
+        applyRestore()
         _locked.value = false
         return true
     }
@@ -56,7 +57,9 @@ class Vault(private val context: Context) {
         val o = read() ?: return openDefault()
         if (o.optString("mode") != "password") return openDefault()
         val kek = Crypto.derive(password, Crypto.b64d(o.getString("salt")), o.optInt("rounds", ROUNDS))
+        val wasClosed = dataKey == null
         dataKey = Crypto.open(kek, Crypto.b64d(o.getString("wrapped"))) ?: return false
+        if (wasClosed) applyRestore()   // only on a fresh open, before chats load
         _locked.value = false
         return true
     }
@@ -128,6 +131,63 @@ class Vault(private val context: Context) {
         return Crypto.open(k, b.copyOfRange(Crypto.MAGIC.size, b.size))?.let { String(it) }
     }
 
+    // ------------------------------------------------------------------ backups
+
+    /** True if [file] is one of the vault's encrypted files. */
+    fun isSealed(file: File): Boolean = try {
+        file.isFile && file.length() >= Crypto.MAGIC.size &&
+            file.inputStream().use { s -> ByteArray(Crypto.MAGIC.size).also { s.read(it) } }.contentEquals(Crypto.MAGIC)
+    } catch (e: Exception) { false }
+
+    /** Every encrypted file Muninn keeps (chats, contacts, keys, photos, voice, sessions), by name relative to its folder. */
+    fun sealedFiles(): List<Pair<String, File>> {
+        val root = context.filesDir
+        return root.walkTopDown().onEnter { it == root || it.name != STAGE && !(it.parentFile == root && it.name == "tls") }
+            .filter { it.isFile && it.name != keyFile.name && !it.name.endsWith(".tmp") && isSealed(it) }
+            .map { it.relativeTo(root).invariantSeparatorsPath to it }.toList()
+    }
+
+    /**
+     * Gets a restore ready: each file is encrypted with this phone's key into a waiting folder. Nothing
+     * running is touched; the swap happens on the next open (see [applyRestore]), before chats load,
+     * so nothing still in memory can write over it. Must be unlocked.
+     */
+    fun stageRestore(files: List<Pair<String, ByteArray>>) {
+        val k = dataKey ?: throw IllegalStateException("Muninn is locked")
+        val dir = File(context.filesDir, STAGE)
+        dir.deleteRecursively(); dir.mkdirs()
+        val names = ArrayList<String>()
+        for ((name, data) in files) {
+            if (!BackupFormat.safeName(name) || name == keyFile.name || name == DONE || name.substringBefore('/') in setOf(STAGE, "tls")) continue
+            val f = File(dir, name)
+            f.parentFile?.mkdirs()
+            f.writeBytes(Crypto.MAGIC + Crypto.seal(k, data))
+            names += name
+        }
+        // Written last: without it the folder is an unfinished restore and is thrown away.
+        File(dir, DONE).writeText(names.joinToString("\n"))
+    }
+
+    /** Swaps in a staged restore. Safe to repeat if it's interrupted. */
+    private fun applyRestore() {
+        val dir = File(context.filesDir, STAGE)
+        if (!dir.exists()) return
+        val done = File(dir, DONE)
+        if (!done.exists()) { dir.deleteRecursively(); return }
+        val names = done.readLines().filter { it.isNotEmpty() }.toSet()
+        try {
+            sealedFiles().forEach { (name, f) -> if (name !in names) f.delete() }
+            for (name in names) {
+                val src = File(dir, name)
+                if (!src.exists()) continue
+                val dst = File(context.filesDir, name)
+                dst.parentFile?.mkdirs()
+                if (!src.renameTo(dst)) { dst.delete(); src.renameTo(dst) }
+            }
+            dir.deleteRecursively()
+        } catch (_: Exception) {}
+    }
+
     /** Erases everything Muninn keeps: chats, contacts, keys, settings. */
     fun eraseAll() {
         context.filesDir.listFiles()?.forEach { it.deleteRecursively() }
@@ -177,5 +237,8 @@ class Vault(private val context: Context) {
     companion object {
         private const val ALIAS = "muninn-vault"
         private const val ROUNDS = 310_000
+        /** Where a restore waits for the next open. */
+        const val STAGE = "restore-pending"
+        private const val DONE = ".done"
     }
 }

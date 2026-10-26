@@ -16,22 +16,40 @@ import java.io.File
  * who isn't already in touch (their phone drops messages without a valid invite).
  */
 class Contacts(context: Context, private val vault: Vault) {
-    data class Contact(val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null)
-
     private val file = File(context.filesDir, "contacts.json")
     private val _all = MutableStateFlow(load())
     val all: StateFlow<List<Contact>> = _all.asStateFlow()
 
     fun get(chatKey: String) = _all.value.firstOrNull { it.chatKey == chatKey }
 
+    /** Adds or updates. Never downgrades: a verified contact stays verified, a known mailbox is kept. */
     @Synchronized
     fun put(c: Contact) {
         val old = get(c.chatKey)
-        // Never downgrade: a verified contact stays verified, a known mailbox is kept.
-        val merged = if (old == null) c else c.copy(verified = c.verified || old.verified, mailbox = c.mailbox ?: old.mailbox,
-            name = c.name.ifBlank { old.name }, invite = c.invite ?: old.invite)
+        val merged = if (old == null) c else ChatWire.merge(old, c)
         _all.value = _all.value.filterNot { it.chatKey == c.chatKey } + merged
         save()
+    }
+
+    /** Stores [c] exactly as given (verify, rename, ratchet on). */
+    @Synchronized
+    fun set(c: Contact) {
+        if (get(c.chatKey) == null) return
+        _all.value = _all.value.map { if (it.chatKey == c.chatKey) c else it }
+        save()
+    }
+
+    /** Their key changed: the contact at [oldKey] becomes [c] (a new key). */
+    @Synchronized
+    fun replaceKey(oldKey: String, c: Contact) {
+        _all.value = _all.value.filterNot { it.chatKey == oldKey || it.chatKey == c.chatKey } + c
+        save()
+    }
+
+    @Synchronized
+    fun rename(chatKey: String, nickname: String) {
+        val c = get(chatKey) ?: return
+        set(c.copy(nickname = ChatWire.nickname(nickname)))
     }
 
     @Synchronized
@@ -42,27 +60,25 @@ class Contacts(context: Context, private val vault: Vault) {
 
     private fun save() {
         val a = JSONArray()
-        _all.value.forEach { a.put(JSONObject().put("k", it.chatKey).put("n", it.name).put("p", it.mailbox ?: "").put("v", it.verified).put("i", it.invite ?: "")) }
+        _all.value.forEach { a.put(ChatWire.contactToJson(it)) }
         vault.write(file, a.toString())
     }
 
     private fun load(): List<Contact> = try {
         val a = JSONArray(vault.read(file) ?: return emptyList())
-        (0 until a.length()).map { a.getJSONObject(it) }.map { Contact(it.getString("k"), it.getString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("v"), it.optString("i").ifEmpty { null }) }
+        (0 until a.length()).map { ChatWire.contactFromJson(a.getJSONObject(it)) }
     } catch (e: Exception) { emptyList() }
 
     companion object {
-        const val PREFIX = "MUNINN1:"
+        const val PREFIX = ChatWire.PREFIX
         /** What the QR holds: a page that opens Muninn, or offers the download if it isn't installed.
          *  The code is after "#", which browsers never send to the server. */
         const val PAGE = "https://ravenor907.github.io/Huginn-Muninn/add/#"
         fun link(code: String) = PAGE + code
 
-        fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
-            val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
-                .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
-            return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
-        }
+        /** Only ever my own name and keys: a nickname is never in a code. */
+        fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String =
+            ChatWire.code(name, chatKey, mailbox, invite, expires)
 
         /** When the code's invite runs out (ms), or 0 for older codes without one. */
         fun expires(text: String): Long {

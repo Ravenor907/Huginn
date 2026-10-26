@@ -111,7 +111,8 @@ import java.util.Calendar
 import java.text.DateFormat
 import java.util.Date
 
-private data class ChatRow(val key: String, val name: String)
+/** [name] is what's shown (a nickname if set); [alt] is the name they chose, so search finds either. */
+private data class ChatRow(val key: String, val name: String, val alt: String = name)
 
 /** Where a conversation is open: "" none, "nearby" the room, "code", "add", or a contact's key. */
 object ChatNav {
@@ -293,14 +294,14 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     // Close-by people already chatting with (not contacts yet) sit with the chats.
     val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() && it.first !in blocked }
         // Contacts, plus anyone else there's a conversation with (met close by, or removed as a contact).
-    val chatRows = (contacts.map { ChatRow(it.chatKey, it.name) } +
+    val chatRows = (contacts.map { ChatRow(it.chatKey, it.shown, it.name) } +
         convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> ChatRow(k, met[k]?.name ?: app.chat.nameOf(k)) })
         .filter { it.key !in blocked }
         .sortedByDescending { convos[it.key]?.lastOrNull()?.time ?: 0L }
-    // Search: a chat's name or its last message.
+    // Search: a chat's nickname, the name they chose, or its last message.
     val q = query.trim()
     val shownRows = if (q.isEmpty()) chatRows else chatRows.filter { c ->
-        c.name.contains(q, ignoreCase = true) || convos[c.key]?.lastOrNull()?.let { preview(it).contains(q, ignoreCase = true) } == true
+        c.name.contains(q, ignoreCase = true) || c.alt.contains(q, ignoreCase = true) || convos[c.key]?.lastOrNull()?.let { preview(it).contains(q, ignoreCase = true) } == true
     }
     val shownStrangers = if (q.isEmpty()) strangers else strangers.filter { it.second.contains(q, ignoreCase = true) }
     val roomPreview = if (app.identity.nearbyChat) "${around.size} around you · you're “${app.identity.username}”" else "Off"
@@ -494,7 +495,8 @@ private fun Conversation(app: Muninn, key: String) {
     val met by app.chat.met.collectAsState()
     @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // redraw when they become a contact
     val m = met[key]
-    val name = c?.name ?: m?.name ?: app.chat.nameOf(key)
+    val name = c?.shown ?: m?.name ?: app.chat.nameOf(key)
+    var renaming by remember { mutableStateOf(false) }
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
@@ -543,6 +545,18 @@ private fun Conversation(app: Muninn, key: String) {
                     Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
                         "It matches", onConfirm = { app.chat.verify(key, name) }))
                 })
+            // A name for them on this phone only: it's never sent.
+            if (c != null) DropdownMenuItem(text = { Text("Rename", style = bodyStyle) }, leadingIcon = { MIcon("user", Palette.accent, 20.dp) },
+                onClick = { close(); renaming = true })
+        }
+        if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
+        // Their security key changed: say so until the code has been checked.
+        if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
+            MButton("Check code") {
+                Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
+                    "It matches", onConfirm = { app.chat.verify(key, name) }))
+            }
         }
         if (c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
             Text(if (m.theySaid) "$name wants to keep in touch" else "Keep in touch with $name?", style = Type.big)
@@ -559,7 +573,7 @@ private fun Conversation(app: Muninn, key: String) {
                 val m = msgs[i]
                 Column {
                     if (i == 0 || dayIndex(msgs[i - 1].time) != dayIndex(m.time)) DayLabel(m.time)
-                    Bubble(m, showName = false, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null, onTap = { viewing = m }) {
+                    Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null, onTap = { viewing = m }) {
                         when {
                             // Mine, and it got out: take it back from both phones, or just remove it here.
                             m.mine && m.unsent.isEmpty() && !m.failed -> Ui.sure(Ask("Unsend this message?",
@@ -712,9 +726,16 @@ private fun AddSomeone(app: Muninn) {
             found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
             else -> {
                 Text("Found: ${found.name}", style = Type.big)
+                // Someone already here with a different key: adding this is a key change, so say it first.
+                val replaces = app.chat.keyChangeFor(found)
+                replaces?.let { old ->
+                    Text("You already have ${old.shown} with a different security key. If you add this code, check the code with them before trusting new messages.",
+                        style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                }
                 MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
                     app.chat.addContact(found)
-                    Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
+                    // A key change has its own warning (from Chat): don't cover it.
+                    if (replaces == null) Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
                     ChatNav.open = found.chatKey
                 }
             }
@@ -723,7 +744,7 @@ private fun AddSomeone(app: Muninn) {
 }
 
 @Composable
-private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = null, onTap: () -> Unit = {}, onLong: () -> Unit) {
+private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, photo: (() -> ByteArray?)? = null, onTap: () -> Unit = {}, onLong: () -> Unit) {
     val tapNow by rememberUpdatedState(onTap)
     val longNow by rememberUpdatedState(onLong)
     val align = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart
@@ -775,7 +796,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = 
                         name()
                         // The time (and receipt) sits inline after the text, on its last line.
                         Row(verticalAlignment = Alignment.Bottom) {
-                            if (m.unsent.isNotEmpty()) Text(if (m.mine) "Message deleted by you" else "Message deleted by ${m.unsent}",
+                            if (m.unsent.isNotEmpty()) Text(if (m.mine) "Message deleted by you" else "Message deleted by ${theirName ?: m.unsent}",
                                 style = bodyStyle.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                                 modifier = Modifier.weight(1f, fill = false))
                             else Text(m.text, style = bodyStyle, modifier = Modifier.weight(1f, fill = false))
@@ -862,4 +883,23 @@ private fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, label
         Spacer(Modifier.width(10.dp))
         Text(label, style = labelStyle, maxLines = 1)
     }
+}
+
+/** Rename: a nickname kept on this phone only. Empty goes back to the name they chose. */
+@Composable
+private fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
+    var text by remember(c.chatKey) { mutableStateOf(c.nickname ?: "") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { done(null) },
+        containerColor = Palette.panel,
+        title = { Text("Rename ${c.name}", style = Type.big) },
+        text = {
+            Column {
+                Text("Only you see this name. Leave it empty to use “${c.name}”.", style = Type.normal)
+                Field(text, { text = it.take(40) }, c.name, Modifier.padding(top = 10.dp))
+            }
+        },
+        confirmButton = { MButton("Save", kind = Kind.Accent) { done(text) } },
+        dismissButton = { MButton("Cancel") { done(null) } },
+    )
 }

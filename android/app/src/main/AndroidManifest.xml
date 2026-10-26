@@ -76,7 +76,37 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+            <!-- Long-press the icon: "Lock now" (panic lock). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- Panic lock: the "Lock now" shortcut opens this, it locks Muninn and closes without a screen. -->
+        <activity
+            android:name=".ui.PanicActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="io.github.ravenor907.muninn.LOCK_NOW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Panic lock: the "Lock Muninn" quick settings tile. -->
+        <service
+            android:name=".ui.PanicTile"
+            android:exported="true"
+            android:icon="@drawable/ic_lock"
+            android:label="@string/tile_lock"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".forge.ForgeService"

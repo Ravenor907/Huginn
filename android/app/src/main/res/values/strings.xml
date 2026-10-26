@@ -3,4 +3,7 @@
     <string name="app_name">Muninn</string>
     <string name="channel_name">USB drives</string>
     <string name="channel_transfer">Transfers</string>
+    <string name="shortcut_lock_short">Lock now</string>
+    <string name="shortcut_lock_long">Lock Muninn now</string>
+    <string name="tile_lock">Lock Muninn</string>
 </resources>

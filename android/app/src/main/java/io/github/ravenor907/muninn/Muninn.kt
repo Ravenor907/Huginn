@@ -104,7 +104,7 @@ class Muninn : Application() {
         chat = Chat(this, net, close, ble, nostr, contacts, vault)
         closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
-        scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key) buzz() else notify(name, text, key) } }
+        scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key) } }
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
@@ -127,7 +127,8 @@ class Muninn : Application() {
 
     /** Privacy first: unless the person allows previews, a notification says only "New message". */
     fun notify(name: String?, text: String?, key: String) {
-        val preview = identity.showPreview && name != null
+        // Panic-locked: never a name or text on the notification.
+        val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value
         val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).putExtra("chat", key)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)

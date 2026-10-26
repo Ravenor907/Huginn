@@ -60,7 +60,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         scope.launch {
             val ok = withContext(Dispatchers.Default) { app.vault.unlock(secret) }   // the key stretching takes a moment
             busy = false
-            if (ok) { pw = ""; prefs.edit().putInt("lockFails", 0).apply(); done(true) }
+            if (ok) { pw = ""; prefs.edit().putInt("lockFails", 0).apply(); io.github.ravenor907.muninn.ui.Panic.unlocked(); done(true) }
             else {
                 wrong = true
                 val fails = prefs.getInt("lockFails", 0) + 1

@@ -129,8 +129,24 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                     }
                 }
                 Text("While locked, messages from the internet still arrive as “New message” and open once you unlock.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
+                var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
+                ToggleRow("Panic lock", "Lock Muninn in one move from anywhere: the “Lock Muninn” quick settings tile, or “Lock now” when you long-press Muninn's icon. " +
+                    "Message notifications are cleared and new ones hide their text until you unlock", panic) {
+                    panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
+                }
+                if (panic) {
+                    Text("Add the tile: swipe down twice, tap the pencil, and drag “Lock Muninn” into your tiles.", style = Type.small, modifier = Modifier.padding(bottom = 4.dp))
+                    if (io.github.ravenor907.muninn.ui.Panic.canShake(ctx))
+                        ToggleRow("Shake to lock", "Shake the phone hard 3 times while Muninn is open", shake) {
+                            shake = it; io.github.ravenor907.muninn.ui.Panic.setShake(ctx, it)
+                        }
+                }
             }
         }
+        Section("Backup")
+        BackupPanel(app)
         Section("Erase")
         Panel {
             Text("Delete every message on this phone, or erase everything Muninn keeps (messages, contacts, keys and settings).", style = Type.normal)

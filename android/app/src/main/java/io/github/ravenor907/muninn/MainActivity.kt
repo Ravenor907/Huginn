@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        io.github.ravenor907.muninn.ui.Panic.watch(this, this)
         secure()
         if (app.ready.value) startNet()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -261,7 +262,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Root() {
         val ready by app.ready.collectAsState()
-        if (!ready || uiLocked) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet() } }; return }
+        val panic by io.github.ravenor907.muninn.ui.Panic.locked.collectAsState()
+        LaunchedEffect(panic) { if (panic) toList() }
+        if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet() } }; return }
         // A lock is required: on first open (or from a version before it was), set one before anything else.
         var locked by remember { mutableStateOf(app.vault.hasPassword || ciSkip) }
         if (!locked) { FirstLock(app) { locked = true }; return }
