@@ -1,0 +1,114 @@
+name: build
+
+on:
+  push:
+    branches: [main, testing, dev]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  drive-helper:
+    name: Drive helper tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Ravenor907/Handheld-Forge
+          ref: 010576ae680b458a74bbcaa2617269890d0e509a
+          path: forge
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ventoy update keeps images and Secure Boot setting
+        run: HUGINN_FORGE_PATH=$PWD/forge python helper/test_drivetool.py -v
+
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fonts
+        run: tools/get-fonts.sh
+      - name: Version from tag
+        run: |
+          v=0.1
+          case "$GITHUB_REF" in
+            refs/tags/v*) t=${GITHUB_REF#refs/tags/v}; v=$(echo "$t" | sed -E 's/-test([0-9]+)$/ Test \1/') ;;
+          esac
+          echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" packaging/io.github.ravenor907.Huginn.json
+      - uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: fb-${{ hashFiles('packaging/*.json') }}-${{ github.sha }}
+          restore-keys: fb-${{ hashFiles('packaging/*.json') }}-
+      - name: Build Flatpak
+        shell: bash
+        run: |
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          set +e
+          flatpak-builder --repo=repo --disable-rofiles-fuse --force-clean --install-deps-from=flathub \
+            --state-dir=.flatpak-builder flatpak_app packaging/io.github.ravenor907.Huginn.json > build.log 2>&1
+          code=$?
+          set -e
+          tail -n 40 build.log
+          if [ $code -ne 0 ]; then
+            # Logs can't always be downloaded, so the errors go out as one annotation.
+            last=$(tail -n 45 build.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Flatpak build failed (last lines)::$last"
+            errs=$(grep -E "error:|Error:|ERROR:|undefined reference" build.log | grep -v WERROR | head -n 25 | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            [ -n "$errs" ] && echo "::error title=Error lines::$errs"
+            exit 1
+          fi
+          flatpak build-bundle repo Huginn.flatpak io.github.ravenor907.Huginn \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+      - name: Screenshot tour (fails on any broken screen)
+        shell: bash
+        run: |
+          mkdir -p tour /tmp/tourhome
+          set +e
+          flatpak install --user -y --noninteractive Huginn.flatpak > tour/install.txt 2>&1 || cat tour/install.txt
+          timeout 240 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_QUICK_BACKEND=software \
+            io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
+          code=$?
+          set -e
+          cat tour/log.txt
+          if [ $code -ne 0 ]; then
+            msg=$( (echo "exit $code"; grep -iE "qml|warning|error" tour/log.txt | head -n 60) | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Screenshot tour failed::$msg"
+          fi
+          ls tour/*.png
+          exit $code
+      - name: Publish screenshots to the ci-tour branch
+        if: always() && github.event_name == 'push'
+        shell: bash
+        run: |
+          [ -d tour ] || exit 0
+          cd tour
+          git init -q -b ci-tour
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Screenshot tour for ${GITHUB_SHA::7}" || exit 0
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-tour
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: Huginn.flatpak
+          path: Huginn.flatpak
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Huginn ${{ env.HUGINN_VERSION }}
+          files: Huginn.flatpak
+          prerelease: ${{ contains(github.ref, '-test') }}
+          generate_release_notes: true

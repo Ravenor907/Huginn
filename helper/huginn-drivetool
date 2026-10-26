@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Huginn's drive helper. Huginn opens the USB drive through udisks and hands this helper the
+open file descriptor; the helper does the byte-level work with Handheld Forge's own modules
+(github.com/Ravenor907/Handheld-Forge), so both apps share one tested Ventoy installer.
+
+Every message to Huginn is one JSON object per line on stdout:
+  {"stage": "write", "done": 10, "total": 100}
+  {"log": "text"}
+  {"result": {...}}            last line on success
+  {"error": "text"}            last line on failure
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import lzma
+import os
+import signal
+import sys
+import threading
+from pathlib import Path
+
+FORGE = os.environ.get("HUGINN_FORGE_PATH", "/app/lib/huginn/forge")
+sys.path.insert(0, FORGE)
+
+from handheld_forge import ventoy  # noqa: E402
+from handheld_forge.blockdev import FdDisk, cancelled  # noqa: E402
+from handheld_forge.rawwrite import Cancelled, RawWriteError, write_image  # noqa: E402
+
+CANCEL = threading.Event()
+
+
+def emit(**msg) -> None:
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def stage(name, done=0, total=0) -> None:
+    emit(stage=name, done=int(done), total=int(total))
+
+
+def log(text) -> None:
+    emit(log=str(text))
+
+
+def inspect(dev) -> dict:
+    found = ventoy.detect(dev)
+    if not found:
+        return {"ventoy": False}
+    _, efi = found
+    part2 = ventoy.read_efi(dev, efi)
+    return {
+        "ventoy": True,
+        "version": ventoy.version_of(part2) or "",
+        "secureBoot": ventoy.secure_boot_enabled(part2),
+        "gpt": dev.read(0, 1)[450] == 0xEE,
+    }
+
+
+def update(dev, files: ventoy.Files) -> None:
+    """Ventoy2Disk.sh -u for MBR drives: new boot code and EFI partition, images untouched."""
+    found = ventoy.detect(dev)
+    if not found:
+        raise RawWriteError("This drive doesn't have Ventoy on it, so there's nothing to update.")
+    _, efi = found
+    s0 = bytearray(dev.read(0, 1))
+    if s0[450] == 0xEE:
+        raise RawWriteError("This drive uses Ventoy's GPT layout. Install Ventoy again to update it.")
+    secure = ventoy.secure_boot_enabled(ventoy.read_efi(dev, efi))
+    core = lzma.decompress(files.core_img_xz)
+    if len(core) > 2047 * 512:
+        raise RawWriteError("This Ventoy release's boot code is larger than expected.")
+    part2 = bytearray(lzma.decompress(files.disk_img_xz))
+    if len(part2) != ventoy.PART2_SECTORS * 512 or efi.sectors * 512 != len(part2):
+        raise RawWriteError("This Ventoy release's EFI partition doesn't fit this drive's layout.")
+    if not secure:
+        ventoy.disable_secure_boot(part2)
+    log("Secure Boot support stays " + ("on" if secure else "off"))
+
+    uuid = bytes(s0[384:400])
+    s0[0:440] = files.boot_img[:440]
+    s0[384:400] = uuid
+    if s0[446] == 0x00 and s0[462] == 0x80:
+        s0[446], s0[462] = 0x80, 0x00
+    reserved = dev.read(2040, 8)
+    core_sectors = bytearray(core.ljust(2047 * 512, b"\0"))
+    core_sectors[2039 * 512 : 2047 * 512] = reserved
+
+    plan = [(efi.start, bytes(part2)), (1, bytes(core_sectors)), (0, bytes(s0))]
+    total = sum(len(d) for _, d in plan) // 512
+    done = 0
+    for lba, data in plan:
+        for at in range(0, len(data), 2048 * 512):
+            if cancelled(CANCEL):
+                raise Cancelled()
+            piece = data[at : at + 2048 * 512]
+            dev.write(lba + at // 512, piece)
+            done += len(piece) // 512
+            stage("write", done, total)
+    dev.sync()
+
+    log("Reading Ventoy back from the drive to confirm")
+    checked = 0
+    for lba, data in plan:
+        back = dev.read(lba, len(data) // 512)
+        if hashlib.sha256(back).digest() != hashlib.sha256(data).digest():
+            raise RawWriteError("The drive didn't keep what was written. It may be failing; try another drive.")
+        checked += len(data) // 512
+        stage("check", checked, total)
+    log("Ventoy is updated. Your images were not touched.")
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("command", choices=["inspect", "ventoy-install", "ventoy-update", "write-image"])
+    p.add_argument("--fd", type=int, required=True)
+    p.add_argument("--name", default="drive")
+    p.add_argument("--cache", default=str(Path.home() / ".cache" / "huginn" / "ventoy"))
+    p.add_argument("--secure-boot", default="1")
+    p.add_argument("--image", default="")
+    a = p.parse_args()
+
+    signal.signal(signal.SIGTERM, lambda *_: CANCEL.set())
+    dev = FdDisk(a.fd, a.name)
+    try:
+        if a.command == "inspect":
+            emit(result=inspect(dev))
+        elif a.command in ("ventoy-install", "ventoy-update"):
+            rel, files = ventoy.fetch_latest(Path(a.cache), stage=stage, log=log, cancel=CANCEL)
+            if a.command == "ventoy-install":
+                ventoy.install(dev, files, stage=stage, log=log, cancel=CANCEL, secure_boot=a.secure_boot == "1")
+            else:
+                update(dev, files)
+            emit(result={"version": rel.version})
+        else:
+            from handheld_forge.imagekind import ImageKind
+
+            name = a.image.lower()
+            kind = False
+            for suffix, k in ((".bz2", "BZIP2"), (".xz", "XZ"), (".gz", "GZIP"), (".zip", "ZIP")):
+                if name.endswith(suffix) and hasattr(ImageKind, k):
+                    kind = getattr(ImageKind, k)
+            n = write_image(a.fd, a.image, compressed=kind, stage=stage, log=log, cancel=CANCEL)
+            emit(result={"bytes": n})
+    except Cancelled:
+        emit(error="Stopped. The drive may need to be written again before it boots.")
+        return 2
+    except (RawWriteError, OSError) as e:
+        emit(error=str(e))
+        return 1
+    finally:
+        dev.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

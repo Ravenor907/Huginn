@@ -1,0 +1,7 @@
+build/
+.flatpak-builder/
+repo/
+*.flatpak
+fonts/
+__pycache__/
+tour/

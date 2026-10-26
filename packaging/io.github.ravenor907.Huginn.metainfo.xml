@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ravenor907.Huginn</id>
+  <name>Huginn</name>
+  <summary>A controller-first file explorer for SteamOS Game Mode</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.ravenor907">
+    <name>Ravenor907</name>
+  </developer>
+  <description>
+    <p>Huginn is a file explorer built for handhelds and the couch. Every action works from a controller,
+    text is typed with Steam's own keyboard, and the layout grows for a TV when docked.</p>
+    <ul>
+      <li>Two panes, an action wheel, and trash with undo</li>
+      <li>Steam folders shown by game name, with saves, Proton prefix and shader cache in one place</li>
+      <li>Phone transfer over your home network with a QR code and PIN</li>
+      <li>Ventoy install and update, image writing and USB formatting</li>
+      <li>Archive browsing and extraction, image and text previews, network shares</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.ravenor907.Huginn.desktop</launchable>
+  <url type="homepage">https://github.com/Ravenor907/Huginn</url>
+  <url type="bugtracker">https://github.com/Ravenor907/Huginn/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1" date="2026-10-26"/>
+  </releases>
+</component>

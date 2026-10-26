@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Huginn
+GenericName=File Explorer
+Comment=A controller-first file explorer for SteamOS Game Mode
+Exec=huginn
+Icon=io.github.ravenor907.Huginn
+Terminal=false
+Categories=System;FileManager;Utility;
+Keywords=files;folders;explorer;steam deck;handheld;ventoy;usb;
+StartupNotify=true
