@@ -13,6 +13,7 @@ find_package(KF6CoreAddons REQUIRED)
 find_package(KF6KIO REQUIRED)
 find_package(KF6Archive REQUIRED)
 find_package(KF6Prison REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 
@@ -34,6 +35,9 @@ qt_add_executable(huginn
     src/updater.cpp src/updater.h
     src/storage.cpp src/storage.h
     src/localsend.cpp src/localsend.h
+    src/chat.cpp src/chat.h
+    src/direct.cpp src/direct.h
+    src/chatcrypto.cpp src/chatcrypto.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
@@ -76,6 +80,7 @@ qt_add_qml_module(huginn
         qml/DestinationPicker.qml
         qml/HomePage.qml
         qml/RecentPage.qml
+        qml/ChatPage.qml
     RESOURCES
         qml/assets/raven-gold.png
         ${HUGINN_FONTS}
@@ -84,7 +89,7 @@ qt_add_qml_module(huginn
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon Divider PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented FileRow FilePane
                    ActionWheel TextPrompt ConfirmDialog Toast BrowserPage GamesPage UsbPage TransferPage NetworkPage
-                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage)
+                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage ChatPage)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
@@ -97,6 +102,7 @@ target_link_libraries(huginn PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::DBus Qt6::Concurrent
     KF6::CoreAddons KF6::KIOCore KF6::KIOWidgets KF6::Archive KF6::Prison
     PkgConfig::SDL2
+    OpenSSL::Crypto
 )
 
 include(GNUInstallDirs)

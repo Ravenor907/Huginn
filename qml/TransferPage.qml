@@ -217,7 +217,7 @@ Rectangle {
                 Image {
                     anchors.fill: parent
                     anchors.margins: Theme.px(10)
-                    source: Transfer.running ? "image://qr/" + encodeURIComponent(Transfer.address) : ""
+                    source: Direct.on ? "image://qr/" + encodeURIComponent(Direct.qr) : Transfer.running ? "image://qr/" + encodeURIComponent(Transfer.address) : ""
                     smooth: false
                     cache: false
                 }
@@ -229,9 +229,12 @@ Rectangle {
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "No LocalSend app? Scan this with the phone camera"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16); font.weight: Font.DemiBold }
-                Text { width: parent.width; elide: Text.ElideRight; text: Transfer.running ? Transfer.address.replace("http://", "") : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(17) }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: Direct.on ? "Direct connect is on. Scan with the phone camera to join Huginn's Wi-Fi" : "No LocalSend app? Scan this with the phone camera"; color: Direct.on ? Theme.accent : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16); font.weight: Font.DemiBold }
+                Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(16) }
+                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? Transfer.address.replace("http://", "") : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(17) }
+                Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.px(14) }
                 Row {
+                    visible: !Direct.on
                     spacing: Theme.px(10)
                     Text { anchors.verticalCenter: parent.verticalCenter; text: "PIN"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(15) }
                     Text { anchors.verticalCenter: parent.verticalCenter; text: Transfer.pin; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.px(24); font.weight: Font.Bold; font.letterSpacing: Theme.px(6) }
@@ -246,7 +249,7 @@ Rectangle {
         width: parent.width
         status: "The backup page stops when you leave this screen"
         prompts: LocalSend.sending ? [{ key: "b", label: "Stop sending" }]
-            : [{ key: "a", label: "Send" }, { key: "y", label: "Look again" }, { key: "x", label: "New PIN" }, { key: "b", label: "Back" }]
+            : [{ key: "a", label: "Send" }, { key: "y", label: "Look again" }, { key: "back", label: Direct.on ? "Stop Direct connect" : "Direct connect" }, { key: "x", label: "New PIN" }, { key: "b", label: "Back" }]
         onPrompt: k => page.handleButton(k)
     }
 
@@ -257,6 +260,12 @@ Rectangle {
         LocalSend.send(d.id, Transfer.shared)
     }
 
+    // No shared Wi-Fi: the handheld makes its own for the phone to join.
+    function toggleDirect() {
+        if (Direct.on) { Direct.stop(); Ui.say("Direct connect is off. The handheld goes back to your usual Wi-Fi."); return }
+        Ui.sure("Start Direct connect?", "The handheld makes its own private Wi-Fi (no internet) and shows a code for the phone's camera. It leaves your usual Wi-Fi until you stop it.",
+                "Start", () => Direct.start(), false, false)
+    }
     function handleButton(b) {
         if (LocalSend.sending) {
             if (b === "b") LocalSend.cancelSend()
@@ -267,6 +276,7 @@ Rectangle {
         case "down": current = Math.min(devices.length - 1, current + 1); break
         case "a": sendTo(); break
         case "y": LocalSend.refresh(); break
+        case "back": toggleDirect(); break
         case "x": Transfer.newPin(); break
         case "b": Ui.closePage(); break
         }

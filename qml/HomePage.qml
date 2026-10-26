@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // The start screen: what just landed in Downloads, how full each drive is, and one press to
-// every tool. Tiles: 0 Downloads, 1 Storage, 2 Games, 3 Browse files, 4 Phone Transfer, 5 USB Tools.
+// every tool. Tiles: 0 Downloads, 1 Storage, 2 Games, 3 Browse files, 4 Phone Transfer, 5 USB Tools, 6 Chat.
 Rectangle {
     id: page
     color: Theme.ground
@@ -351,17 +351,27 @@ Rectangle {
             index: 4
             on: page.tile === 4
             onActivated: { page.go(4); page.activate() }
-            x: grid.c0 + grid.unit + 2 * grid.gap; y: grid.rowH + grid.gap; width: grid.unit; height: (grid.rowH - grid.gap) / 2
+            x: grid.c0 + grid.unit + 2 * grid.gap; y: grid.rowH + grid.gap; width: grid.unit; height: (grid.rowH - 2 * grid.gap) / 3
             compact: true
             icon: "phone"
             title: "Phone Transfer"
             detail: "Send and receive with LocalSend"
         }
         Tile {
+            index: 6
+            on: page.tile === 6
+            onActivated: { page.go(6); page.activate() }
+            x: grid.c0 + grid.unit + 2 * grid.gap; y: grid.rowH + grid.gap + (grid.rowH - 2 * grid.gap) / 3 + grid.gap; width: grid.unit; height: (grid.rowH - 2 * grid.gap) / 3
+            compact: true
+            icon: "network"
+            title: "Chat"
+            detail: Chat.requests.length > 0 ? Chat.requests.length + " want to chat" : Chat.nearbyOn ? Chat.nearbyCount + " nearby · " + Chat.username : "Nearby chat is off"
+        }
+        Tile {
             index: 5
             on: page.tile === 5
             onActivated: { page.go(5); page.activate() }
-            x: grid.c0 + grid.unit + 2 * grid.gap; y: grid.rowH + grid.gap + (grid.rowH + grid.gap) / 2; width: grid.unit; height: (grid.rowH - grid.gap) / 2
+            x: grid.c0 + grid.unit + 2 * grid.gap; y: grid.rowH + grid.gap + 2 * ((grid.rowH - 2 * grid.gap) / 3 + grid.gap); width: grid.unit; height: (grid.rowH - 2 * grid.gap) / 3
             compact: true
             icon: "usb"
             title: "USB Tools"
@@ -503,6 +513,7 @@ Rectangle {
         }
         case 4: Ui.openPage("transfer", {}); break
         case 5: Ui.openPage("usb", {}); break
+        case 6: Ui.openPage("chat", {}); break
         }
     }
 
@@ -512,18 +523,20 @@ Rectangle {
             if ((tile === 0 || tile === 3) && row > 0) { row--; return true }
             if (tile === 3) go(1)
             else if (tile === 4) go(2)
-            else if (tile === 5) go(4)
+            else if (tile === 5) go(6)
+            else if (tile === 6) go(4)
             return true
         case "down":
             if ((tile === 0 || tile === 3) && row < rowsIn(tile) - 1) { row++; return true }
             if (tile === 1) go(3)
             else if (tile === 2) go(4)
-            else if (tile === 4) go(5)
+            else if (tile === 4) go(6)
+            else if (tile === 6) go(5)
             return true
         case "left":
             if (tile === 1 || tile === 3) go(0)
             else if (tile === 2) go(1)
-            else if (tile === 4 || tile === 5) go(3)
+            else if (tile === 4 || tile === 5 || tile === 6) go(3)
             return true
         case "right":
             if (tile === 0) go(1)

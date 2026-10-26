@@ -3,6 +3,9 @@
 #include "foldermodel.h"
 #include "gamepad.h"
 #include "localsend.h"
+#include "chat.h"
+#include "direct.h"
+#include "chatcrypto.h"
 #include "network.h"
 #include "places.h"
 #include "settings.h"
@@ -63,7 +66,11 @@ int main(int argc, char *argv[])
     args.addOption(windowed);
     QCommandLineOption unattend(QStringLiteral("unattend-sample"), QStringLiteral("Print the Windows setup file with every choice on (for CI), then quit."));
     args.addOption(unattend);
+    QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(chatTest);
     args.process(app);
+    if (args.isSet(chatTest))
+        return ChatCrypto::selfTest(args.value(chatTest)) ? 0 : 1;
     if (args.isSet(unattend)) {
         const QVariantMap all{{QStringLiteral("bypass"), true}, {QStringLiteral("noOnline"), true}, {QStringLiteral("user"), QStringLiteral("Player")},
                               {QStringLiteral("regional"), true}, {QStringLiteral("noData"), true}, {QStringLiteral("noBitlocker"), true}};
@@ -91,6 +98,8 @@ int main(int argc, char *argv[])
     auto *updater = new Updater(settings, &app);
     auto *storage = new Storage(&app);
     auto *localSend = new LocalSend(settings, &app);
+    auto *chat = new Chat(localSend, &app);
+    auto *direct = new Direct(&app);
     if (!args.isSet(tour)) {
         if (settings->nearbySharing())
             localSend->start();
@@ -122,6 +131,8 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Updater", updater);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Storage", storage);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "LocalSend", localSend);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Chat", chat);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterType<FolderModel>("Huginn", 1, 0, "FolderModel");
     qmlRegisterType<ArchiveModel>("Huginn", 1, 0, "ArchiveModel");
 

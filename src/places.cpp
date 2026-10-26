@@ -59,6 +59,7 @@ void Places::rebuild()
         l << place(QStringLiteral("Steam Library"), QStringLiteral("folder"), QUrl::fromLocalFile(steam + QStringLiteral("/steamapps/common")));
     l << place(QStringLiteral("Games"), QStringLiteral("games"));
     l << place(QStringLiteral("Storage"), QStringLiteral("storage"));
+    l << place(QStringLiteral("Chat"), QStringLiteral("chat"));
     l << place(QStringLiteral("Screenshots"), QStringLiteral("folder"), QUrl::fromLocalFile(SteamFiles::screenshotsDir()));
     QString emulation = home + QStringLiteral("/Emulation");
     for (const QString &m : std::as_const(m_lastMounts))

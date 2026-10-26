@@ -15,11 +15,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * nothing shared from mobile data) and shows a QR code. Another phone's camera joins it, then
  * sending and chat work as on any Wi-Fi. Huginn does the same on the handheld.
  */
+private const val BACKSLASH = '\u005C'
+
 class Direct(private val context: Context) {
     data class State(val on: Boolean = false, val ssid: String = "", val password: String = "", val error: String? = null, val starting: Boolean = false) {
         /** The standard Wi-Fi QR text every Android and iPhone camera understands. */
         val qr get() = "WIFI:T:WPA;S:${esc(ssid)};P:${esc(password)};;"
-        private fun esc(s: String) = s.replace("\\", "\\\\").replace(";", "\;").replace(",", "\\,").replace(":", "\\:").replace("\"", "\\\"")
+        private fun esc(s: String) = buildString { for (c in s) { if (c == BACKSLASH || c == ';' || c == ',' || c == ':' || c == '"') append(BACKSLASH); append(c) } }
     }
 
     private val _state = MutableStateFlow(State())

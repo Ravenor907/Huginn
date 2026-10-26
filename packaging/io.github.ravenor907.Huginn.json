@@ -12,6 +12,7 @@
         "--device=all",
         "--filesystem=host",
         "--system-talk-name=org.freedesktop.UDisks2",
+        "--system-talk-name=org.freedesktop.NetworkManager",
         "--talk-name=org.freedesktop.Flatpak",
         "--talk-name=org.kde.kiod6",
         "--talk-name=org.kde.kpasswdserver6",

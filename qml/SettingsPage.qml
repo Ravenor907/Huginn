@@ -20,6 +20,9 @@ Rectangle {
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
               options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
             { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
+            { kind: "toggle", key: "nearbyOn", chat: true, title: "Nearby chat", note: "Everyone on the same Wi-Fi with Huginn or Muninn can see and message you" },
+            { kind: "button", key: "chatName", title: "Nearby chat name: " + Chat.username, note: "What people see instead of your name", label: "Change" },
+            { kind: "toggle", key: "keepNearby", chat: true, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes" },
             { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Phones and PCs with the free LocalSend app can find this handheld. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
@@ -142,8 +145,8 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         visible: modelData.kind === "toggle"
-                        checked: modelData.kind === "toggle" ? Settings[modelData.key] : false
-                        onToggled: Settings[modelData.key] = !Settings[modelData.key]
+                        checked: modelData.kind === "toggle" ? (modelData.chat ? Chat[modelData.key] : Settings[modelData.key]) : false
+                        onToggled: { const o = modelData.chat ? Chat : Settings; o[modelData.key] = !o[modelData.key] }
                     }
                     Row {
                         id: accentCtl
@@ -196,6 +199,7 @@ Rectangle {
     function press(key) {
         const job = running()
         if (key === "exit") Ui.main.requestExit()
+        else if (key === "chatName") Ui.ask("Nearby chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (key === "removeRule") Usb.removeRule()
         else if (key === "check") {
             if (!Updater.available) Updater.check()
@@ -210,7 +214,7 @@ Rectangle {
     function change(dir) {
         const r = rows[row]
         if (!r) return
-        if (r.kind === "toggle") Settings[r.key] = !Settings[r.key]
+        if (r.kind === "toggle") { const o = r.chat ? Chat : Settings; o[r.key] = !o[r.key] }
         else if (r.kind === "segmented") {
             const opts = r.options
             let i = opts.findIndex(o => o.value === Settings[r.key])

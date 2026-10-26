@@ -101,9 +101,31 @@ QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
                   {QStringLiteral("port"), int(kPort)},
                   {QStringLiteral("protocol"), QStringLiteral("http")},
                   {QStringLiteral("download"), false}};
+    if (chatInfo) {
+        const QJsonObject extra = chatInfo();
+        for (auto it = extra.begin(); it != extra.end(); ++it)
+            o.insert(it.key(), it.value());
+    }
     if (withAnnounce)
         o.insert(QStringLiteral("announce"), announceFlag);
     return o;
+}
+
+QList<LocalSend::Peer> LocalSend::chatPeers() const
+{
+    QList<Peer> out;
+    for (const Device &d : m_devices)
+        if (!d.chatKey.isEmpty())
+            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type};
+    return out;
+}
+
+QString LocalSend::baseFor(const QString &chatKey) const
+{
+    for (const Device &d : m_devices)
+        if (d.chatKey == chatKey)
+            return QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port);
+    return {};
 }
 
 void LocalSend::start()
@@ -232,6 +254,9 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.ip = ip;
     d.port = o.value(QStringLiteral("port")).toInt(kPort);
     d.protocol = o.value(QStringLiteral("protocol")).toString(protocolFallback);
+    d.chatKey = o.value(QStringLiteral("chatKey")).toString();
+    d.chatName = o.value(QStringLiteral("chatName")).toString();
+    d.app = o.value(QStringLiteral("chatApp")).toString();
     d.seen = QDateTime::currentDateTime();
     m_devices.insert(id, d);
     Q_EMIT devicesChanged();
@@ -244,7 +269,8 @@ QVariantList LocalSend::devices() const
     QVariantList out;
     for (const Device &d : std::as_const(list))
         out << QVariantMap{{QStringLiteral("id"), d.id}, {QStringLiteral("alias"), d.alias}, {QStringLiteral("model"), d.model},
-                           {QStringLiteral("type"), d.type}, {QStringLiteral("ip"), d.ip}};
+                           {QStringLiteral("type"), d.type}, {QStringLiteral("ip"), d.ip}, {QStringLiteral("app"), d.app},
+                           {QStringLiteral("chatKey"), d.chatKey}, {QStringLiteral("chatName"), d.chatName}};
     return out;
 }
 
@@ -429,6 +455,10 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         return;
     }
 
+    if (path == QStringLiteral("/api/huginn/v1/message")) {
+        reply(s, chatReceive ? chatReceive(c.body, ip) : 404, "{}");
+        return;
+    }
     const QJsonObject body = QJsonDocument::fromJson(c.body).object();
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
         remember(body, ip, QStringLiteral("https"));

@@ -67,6 +67,7 @@ Window {
             switch (app.pageName) {
             case "start": return "HomePage.qml"
             case "recent": return "RecentPage.qml"
+            case "chat": return "ChatPage.qml"
             case "games": return "GamesPage.qml"
             case "storage": return "StoragePage.qml"
             case "usb": return "UsbPage.qml"
@@ -236,7 +237,8 @@ Window {
             { page: "storage", file: "12-storage" },
             { page: "", picker: true, file: "13-move-to" },
             { page: "preview", text: true, file: "14-text" },
-            { page: "settings", section: 1, file: "15-settings-browser" }
+            { page: "settings", section: 1, file: "15-settings-browser" },
+            { page: "chat", file: "16-chat" }
         ]
         interval: 1500
         repeat: true

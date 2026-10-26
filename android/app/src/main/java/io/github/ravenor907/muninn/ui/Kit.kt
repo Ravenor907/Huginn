@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
@@ -162,7 +163,7 @@ fun Line(title: String, detail: String = "", icon: String? = null, trailing: Str
 }
 
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTapsAndLong(onTap: () -> Unit, onLong: () -> Unit) {
-    androidx.compose.foundation.gestures.detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() })
+    detectTapGestures(onTap = { onTap() }, onLongPress = { onLong() })
 }
 
 // ------------------------------------------------------------------ dialogs and toasts

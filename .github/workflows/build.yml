@@ -98,6 +98,10 @@ jobs:
           fi
           ls tour/*.png
           exit $code
+      - name: Chat encryption matches Muninn (shared test vectors)
+        shell: bash
+        run: |
+          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
       - name: Windows setup file is valid and has every choice
         shell: bash
         run: |
