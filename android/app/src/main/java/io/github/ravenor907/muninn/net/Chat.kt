@@ -33,7 +33,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long,
                    val failed: Boolean = false, val via: String = "",
                    /** Mine: "sending", "sent", "delivered", "read". Theirs: "read" once a read receipt went back. */
-                   val state: String = "")
+                   val state: String = "",
+                   /** A photo's id (stored encrypted in photos/); text is empty then. */
+                   val photo: String = "")
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false)
@@ -61,6 +63,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val store = File(context.filesDir, "chats.json")
     private val nearbyStore = File(context.filesDir, "nearby.json")
     private val metStore = File(context.filesDir, "met.json")
+    private val photosDir = File(context.filesDir, "photos")
 
     init {
         load()
@@ -147,6 +150,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Deletes one message on this phone. */
     fun deleteMessage(peerKey: String, msgId: String) {
+        _private.value[peerKey]?.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { File(photosDir, it).delete() }
         val map = _private.value.toMutableMap()
         map[peerKey] = map[peerKey].orEmpty().filterNot { it.id == msgId }
         _private.value = map
@@ -185,6 +189,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val now = System.currentTimeMillis()
         if (fromKey in id.muted()) return 200 to "{}"   // blocked: dropped quietly
         val room = o.optString("room")
+        if (room == "photo") return receivePiece(o, fromKey, name, via)
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room.
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         if (room != "receipt") synchronized(q) {
@@ -261,7 +266,84 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun acceptRequest(r: Request) {
         contacts.put(Contacts.Contact(r.peerKey, r.name, r.mailbox, verified = !r.viaInternet))
         _requests.value = _requests.value.filterNot { it.peerKey == r.peerKey }
-        held.remove(r.peerKey)?.forEach { addPrivate(r.peerKey, it) }
+        held.remove(r.peerKey)?.let { list -> list.forEach { addPrivate(r.peerKey, it) }; receipt(r.peerKey, list.map { it.id }, "delivered", r.mailbox) }
+    }
+
+    // ------------------------------------------------------------------ photos
+    // A photo is shrunk on the sending phone (Photos.kt), cut into pieces of 16 KB, and each piece is
+    // sealed and sent like a message (room "photo"). The other phone puts them back together and
+    // answers "delivered" once it has them all. Pieces fit every route: Nearby's 32 KB limit and relays'.
+
+    private class Incoming(val from: String, val parts: Array<ByteArray?>, val started: Long)
+    private val incoming = ConcurrentHashMap<String, Incoming>()
+    private val pieceTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+
+    fun photo(photoId: String): ByteArray? = vault.readBytes(File(photosDir, photoId))
+
+    fun sendPhoto(peerKey: String, jpeg: ByteArray) {
+        val name = nameOf(peerKey)
+        if (!isContact(peerKey)) meet(peerKey, name)
+        val r = route(peerKey)
+        val msgId = UUID.randomUUID().toString()
+        vault.writeBytes(File(photosDir, msgId), jpeg)
+        val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId)
+        addPrivate(peerKey, mine)
+        if (r.isEmpty() && backupMailbox(mine) == null) {
+            replace(peerKey, mine.copy(failed = true))
+            notices.tryEmit("$name is out of range. Say yes to Keep in touch to send from anywhere.")
+            return
+        }
+        attempt(mine)
+    }
+
+    private fun pieces(m: Msg): List<JSONObject>? {
+        val bytes = photo(m.photo) ?: return null
+        val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(m.peerKey))
+        val parts = Photos.split(bytes)
+        return parts.mapIndexed { i, part ->
+            val s = ChatCrypto.sealBytes(key, part)
+            JSONObject().put("room", "photo").put("fromKey", id.publicKey).put("fromName", id.username).put("fromId", id.fingerprint)
+                .put("mailbox", nostr.publicKey).put("id", m.id).put("i", i).put("n", parts.size).put("nonce", s.nonce).put("data", s.data)
+        }
+    }
+
+    private fun receivePiece(o: JSONObject, fromKey: String, name: String, via: String): Pair<Int, String> {
+        val contact = contacts.get(fromKey)
+        if (contact == null && via == "internet" && !_met.value.containsKey(fromKey)) return 403 to "{}"
+        val msgId = o.optString("id")
+        val n = o.optInt("n"); val i = o.optInt("i", -1)
+        if (msgId.isEmpty() || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
+        val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
+        // Already have it (a copy from another route, or a resend): just confirm again.
+        if (_private.value[fromKey].orEmpty().any { it.id == msgId }) { receipt(fromKey, listOf(msgId), "delivered", mailbox); return 200 to "{}" }
+        val now = System.currentTimeMillis()
+        val q = pieceTimes.getOrPut(fromKey) { ArrayDeque() }
+        synchronized(q) {
+            while (q.isNotEmpty() && now - q.first() > 60_000) q.removeFirst()
+            if (q.size >= 1000) return 429 to "{}"   // about 15 MB a minute at most
+            q.addLast(now)
+        }
+        if (incoming.size > 20 && !incoming.containsKey(msgId)) return 429 to "{}"
+        val key = try { ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(fromKey)) } catch (e: Exception) { return 400 to "{}" }
+        val part = ChatCrypto.openBytes(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data"))) ?: return 403 to "{}"
+        val inc = incoming.getOrPut(msgId) { Incoming(fromKey, arrayOfNulls(n), now) }
+        if (inc.from != fromKey || inc.parts.size != n) return 400 to "{}"
+        synchronized(inc) {
+            inc.parts[i] = part
+            if (inc.parts.any { it == null }) return 200 to "{}"
+            incoming.remove(msgId)
+        }
+        val jpeg = Photos.join(inc.parts.map { it!! }) ?: return 400 to "{}"
+        vault.writeBytes(File(photosDir, msgId), jpeg)
+        if (contact == null) {
+            val m = _met.value[fromKey]
+            putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
+        } else if (mailbox != null && contact.mailbox != mailbox) contacts.put(contact.copy(mailbox = mailbox))
+        addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId))
+        _unread.value = _unread.value + fromKey
+        arrivals.tryEmit(Triple(contact?.name ?: name, "Photo", fromKey))
+        receipt(fromKey, listOf(msgId), "delivered", mailbox)
+        return 200 to "{}"
     }
 
     fun declineRequest(r: Request) {
@@ -358,10 +440,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         contacts.get(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox?.takeIf { m.via == "close" || m.via == "wifi" }
 
     private fun attempt(m: Msg) {
-        val body = envelope("private", m.peerKey, m.text, m.id).toString()
         val t = tries.getOrPut(m.id) { Tries(0, 0) }
         t.count++
         t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        if (m.photo.isNotEmpty()) { attemptPhoto(m, t); return }
+        val body = envelope("private", m.peerKey, m.text, m.id).toString()
         var any = false
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")); any = true; markSent(m, "close") }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
@@ -372,11 +455,32 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
+    /** Like a message, but in pieces. The internet only carries it if the close-by and Wi-Fi routes
+     *  haven't delivered it within 5 s (so a big photo isn't sent twice for nothing). */
+    private fun attemptPhoto(m: Msg, t: Tries) {
+        val parts = pieces(m) ?: return
+        // Don't start again while a big photo is still on its way (about 200 ms a piece close by).
+        t.next = maxOf(t.next, System.currentTimeMillis() + parts.size * 200L)
+        var any = false
+        close.endpointFor(m.peerKey)?.let { ep -> parts.forEach { close.send(ep, JSONObject(it.toString()).put("t", "msg")) }; any = true; markSent(m, "close") }
+        net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
+            any = true
+            pool.execute { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
+        }
+        val mailbox = backupMailbox(m)
+        if (mailbox != null && (!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES) {
+            parts.forEach { nostr.publish(mailbox, Base64.getEncoder().encodeToString(it.toString().toByteArray())) }
+            any = true; markSent(m, "internet")
+        }
+        if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
+    }
+
     private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
 
     /** Runs every second: anything of mine not yet delivered (and under a day old) is tried again. */
     private fun retryLoop() {
         val now = System.currentTimeMillis()
+        incoming.entries.removeIf { now - it.value.started > 15 * 60_000 }   // half a photo that never finished
         for ((_, list) in _private.value) for (m in list) {
             if (!m.mine || rank(m.state) >= 3 || now - m.time > DAY) { tries.remove(m.id); continue }
             val t = tries[m.id]
@@ -427,7 +531,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun clearNearby() { _nearby.value = emptyList(); nearbyStore.delete() }
 
-    fun deleteConversation(peerKey: String) { _private.value = _private.value - peerKey; save() }
+    fun deleteConversation(peerKey: String) {
+        _private.value[peerKey].orEmpty().forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
+        _private.value = _private.value - peerKey; save()
+    }
 
     /** Removes messages older than the person's "Delete messages after" choice. */
     fun prune() {
@@ -436,6 +543,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val cutoff = System.currentTimeMillis() - age
         val n = _nearby.value.filter { it.time >= cutoff }
         if (n.size != _nearby.value.size) { _nearby.value = n; if (id.keepNearbyHistory) saveNearby() }
+        _private.value.values.flatten().filter { it.time < cutoff && it.photo.isNotEmpty() }.forEach { File(photosDir, it.photo).delete() }
         val map = _private.value.mapValues { (_, v) -> v.filter { it.time >= cutoff } }
         if (map.values.sumOf { it.size } != _private.value.values.sumOf { it.size }) { _private.value = map; save() }
     }
@@ -443,6 +551,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Erases every conversation on this phone. */
     fun deleteAll() {
         _private.value = emptyMap(); _nearby.value = emptyList()
+        photosDir.deleteRecursively()
         save(); nearbyStore.delete()
     }
 
@@ -467,11 +576,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
-            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state)) }
+            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo)) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
         Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
-            it.optBoolean("failed"), it.optString("via"), it.optString("state"))
+            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"))
     }
 
     @Synchronized private fun save() {

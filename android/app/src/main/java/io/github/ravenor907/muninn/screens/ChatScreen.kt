@@ -1,5 +1,27 @@
 package io.github.ravenor907.muninn.screens
 
+import android.content.ContentValues
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
+import io.github.ravenor907.muninn.net.Photos
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -137,7 +159,7 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
             val r = app.chat.route(c.key)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    Line(c.name, last?.text ?: routeText(r), icon = routeIcon(r),
+                    Line(c.name, last?.let { if (it.photo.isNotEmpty()) (if (it.mine) "You sent a photo" else "Photo") else it.text } ?: routeText(r), icon = routeIcon(r),
                         trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.key }
                 }
                 if (c.key in unread || app.chat.shouldAskKeep(c.key)) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
@@ -197,6 +219,26 @@ private fun Conversation(app: Muninn, key: String) {
     val list = rememberLazyListState()
     LaunchedEffect(msgs.size) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
     val route = app.chat.route(key)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var picked by remember { mutableStateOf<Uri?>(null) }
+    var preparing by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
+    fun sendPhoto(uri: Uri, hd: Boolean) {
+        preparing = true
+        scope.launch {
+            val jpeg = withContext(Dispatchers.Default) { Photos.prepare(context, uri, hd) }
+            if (jpeg == null) Ui.say("That photo couldn't be opened.", true)
+            else withContext(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) }
+            preparing = false; picked = null
+        }
+    }
+    viewing?.let { v ->
+        BackHandler { viewing = null }
+        PhotoViewer(app, v) { viewing = null }
+        return
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
         Section(name) { MButton("Back", icon = "back") { ChatNav.open = "" } }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -219,7 +261,7 @@ private fun Conversation(app: Muninn, key: String) {
         } else if (c == null && m?.iSaid == true) Text("You said yes to keeping in touch. Waiting for $name.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m ->
-                Bubble(m, showName = false) {
+                Bubble(m, showName = false, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null, onTap = { viewing = m }) {
                     Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
                         extra = if (m.mine && m.failed) "Try again" else null, onExtra = { app.chat.retry(key, m.id) },
                         onConfirm = { app.chat.deleteMessage(key, m.id) }))
@@ -227,13 +269,36 @@ private fun Conversation(app: Muninn, key: String) {
             }
         }
         if (msgs.isEmpty()) Text("No messages yet.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
-        Composer(text, { text = it }, "Message $name") { app.chat.sendPrivate(key, text); text = "" }
+        picked?.let { uri ->
+            Panel(Modifier.padding(bottom = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    UriThumb(uri, Modifier.size(72.dp))
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(if (preparing) "Getting it ready…" else "Send this photo?", style = Type.big)
+                        Text("Location and camera details are removed.", style = Type.small)
+                    }
+                }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton("Cancel", Modifier.weight(1f), enabled = !preparing) { picked = null }
+                    MButton("High quality", Modifier.weight(1f), enabled = !preparing) { sendPhoto(uri, true) }
+                    MButton("Send", Modifier.weight(1f), Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
+                }
+                Text("Send: quick anywhere. High quality: sharper, best close by or on Wi-Fi; up to a minute over the internet.",
+                    style = Type.small, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+        Composer(text, { text = it }, "Message $name", onPhoto = {
+            pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }) { app.chat.sendPrivate(key, text); text = "" }
     }
 }
 
 @Composable
-private fun Composer(text: String, onText: (String) -> Unit, hint: String, onSend: () -> Unit) {
+private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, onSend: () -> Unit) {
     Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onPhoto != null) Box(Modifier.size(44.dp).clickable(role = Role.Button, onClickLabel = "Send a photo") { onPhoto() }, contentAlignment = Alignment.Center) {
+            MIcon("image", Palette.accent, 26.dp)
+        }
         Field(text, { onText(it.take(Chat.MAX)) }, hint, Modifier.weight(1f), single = false)
         MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { onSend() }
     }
@@ -290,14 +355,20 @@ private fun AddSomeone(app: Muninn) {
 }
 
 @Composable
-private fun Bubble(m: Chat.Msg, showName: Boolean, onLong: () -> Unit) {
+private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = null, onTap: () -> Unit = {}, onLong: () -> Unit) {
     Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Column(
             Modifier.widthIn(max = 300.dp).background(if (m.mine) Palette.accentFill else Palette.panel, Corner)
-                .pointerInput(m.id) { detectTapGestures(onLongPress = { onLong() }) }.padding(10.dp),
+                .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null) onTap() }, onLongPress = { onLong() }) }.padding(10.dp),
         ) {
             if (showName && !m.mine) Text(m.name, style = Type.small.copy(color = Palette.accent))
-            Text(m.text, style = Type.normal.copy(color = Palette.text))
+            if (photo != null) {
+                val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo(), 720) } }
+                Box(Modifier.size(240.dp, 180.dp).background(Palette.groundDeep, Corner), contentAlignment = Alignment.Center) {
+                    bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(Corner)) }
+                        ?: Text("Photo", style = Type.small)
+                }
+            } else Text(m.text, style = Type.normal.copy(color = Palette.text))
             val status = when {
                 !m.mine -> ""
                 m.failed -> " · Didn't send"
@@ -312,3 +383,55 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, onLong: () -> Unit) {
         }
     }
 }
+
+/** Decodes a JPEG, no bigger than [max] pixels on the long side. */
+private fun decode(bytes: ByteArray?, max: Int): ImageBitmap? {
+    if (bytes == null) return null
+    val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+    var sample = 1
+    while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= max) sample *= 2
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+}
+
+@Composable
+private fun UriThumb(uri: Uri, modifier: Modifier) {
+    val context = LocalContext.current
+    val bmp by produceState<ImageBitmap?>(null, uri) {
+        value = withContext(Dispatchers.IO) { try { context.contentResolver.openInputStream(uri)?.use { decode(it.readBytes(), 200) } } catch (e: Exception) { null } }
+    }
+    Box(modifier.background(Palette.groundDeep, Corner), contentAlignment = Alignment.Center) {
+        bmp?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(Corner)) }
+    }
+}
+
+/** A photo full screen: Back, or Save to the phone's Pictures/Muninn. */
+@Composable
+private fun PhotoViewer(app: Muninn, m: Chat.Msg, close: () -> Unit) {
+    val context = LocalContext.current
+    val bytes = remember(m.id) { app.chat.photo(m.photo) }
+    val bmp = remember(m.id) { decode(bytes, 2048) }
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Back", icon = "back") { close() }
+            Spacer(Modifier.weight(1f))
+            MButton("Save to phone", kind = Kind.Accent, icon = "download", enabled = bytes != null) {
+                Ui.say(if (bytes != null && savePhoto(context, bytes)) "Saved in Pictures › Muninn." else "Couldn't save it.", bytes == null)
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                ?: Text("This photo can't be shown.", style = Type.normal)
+        }
+    }
+}
+
+private fun savePhoto(context: Context, bytes: ByteArray): Boolean = try {
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, "Muninn-${System.currentTimeMillis()}.jpg")
+        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Muninn")
+    }
+    val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    uri != null && context.contentResolver.openOutputStream(uri)?.use { it.write(bytes); true } == true
+} catch (e: Exception) { false }

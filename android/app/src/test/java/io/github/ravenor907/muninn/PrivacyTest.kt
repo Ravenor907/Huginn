@@ -34,6 +34,25 @@ class PrivacyTest {
         assert(!a.contentEquals(Vault.Crypto.derive("wrong horse", salt, 1000)))
     }
 
+    @Test fun photoPiecesRoundTrip() {
+        val jpeg = ByteArray(50_000) { (it * 7).toByte() }.also { it[0] = 0xFF.toByte(); it[1] = 0xD8.toByte() }
+        val parts = io.github.ravenor907.muninn.net.Photos.split(jpeg)
+        assertEquals(4, parts.size)
+        assert(parts.all { it.size <= io.github.ravenor907.muninn.net.Photos.PIECE })
+        assertArrayEquals(jpeg, io.github.ravenor907.muninn.net.Photos.join(parts))
+        assertNull(io.github.ravenor907.muninn.net.Photos.join(listOf(byteArrayOf(1, 2, 3))))   // not a JPEG
+    }
+
+    @Test fun photoPieceSealing() {
+        val key = ByteArray(32) { 3 }
+        val piece = ByteArray(16 * 1024) { it.toByte() }
+        val sealed = ChatCrypto.sealBytes(key, piece)
+        assertArrayEquals(piece, ChatCrypto.openBytes(key, sealed))
+        assertNull(ChatCrypto.openBytes(ByteArray(32) { 4 }, sealed))
+        // A sealed piece plus its message wrapping stays under Nearby's 32 KB limit.
+        assert(sealed.data.length + sealed.nonce.length + 600 < 32 * 1024)
+    }
+
     @Test fun contactCodeRoundTrip() {
         val key = ChatCrypto.b64(ChatCrypto.newKeyPair().public.encoded)
         val code = Contacts.code("Raven 1234", key, "ab".repeat(32))

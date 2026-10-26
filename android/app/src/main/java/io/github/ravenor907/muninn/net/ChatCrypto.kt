@@ -72,6 +72,24 @@ object ChatCrypto {
         null
     }
 
+    /** Same as seal/open, for raw bytes (photo pieces), so they aren't turned into text twice. */
+    fun sealBytes(key: ByteArray, plain: ByteArray): Sealed {
+        val nonce = ByteArray(12).also { random.nextBytes(it) }
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+        c.updateAAD(AAD)
+        return Sealed(b64(nonce), b64(c.doFinal(plain)))
+    }
+
+    fun openBytes(key: ByteArray, sealed: Sealed): ByteArray? = try {
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, b64d(sealed.nonce)))
+        c.updateAAD(AAD)
+        c.doFinal(b64d(sealed.data))
+    } catch (e: Exception) {
+        null
+    }
+
     private fun hkdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(salt, "HmacSHA256"))

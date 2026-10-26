@@ -97,6 +97,22 @@ class Vault(private val context: Context) {
         tmp.renameTo(file)
     }
 
+    fun writeBytes(file: File, data: ByteArray) {
+        val k = dataKey ?: throw IllegalStateException("Muninn is locked")
+        file.parentFile?.mkdirs()
+        val tmp = File(file.path + ".tmp")
+        tmp.writeBytes(Crypto.MAGIC + Crypto.seal(k, data))
+        tmp.renameTo(file)
+    }
+
+    fun readBytes(file: File): ByteArray? {
+        if (!file.exists()) return null
+        val k = dataKey ?: return null
+        val b = file.readBytes()
+        if (b.size < Crypto.MAGIC.size || !b.copyOfRange(0, Crypto.MAGIC.size).contentEquals(Crypto.MAGIC)) return null
+        return Crypto.open(k, b.copyOfRange(Crypto.MAGIC.size, b.size))
+    }
+
     /** Null if missing, locked or damaged. Files from before encryption are read once and re-saved encrypted. */
     fun read(file: File): String? {
         if (!file.exists()) return null
