@@ -133,6 +133,7 @@ private:
     struct Outgoing {
         bool active = false;
         QString deviceId, alias, base, sessionId;
+        QString expected;   // the device's fingerprint when it uses HTTPS: its certificate must match
         QList<OutFile> files;
         int next = 0;
         qint64 total = 0, sent = 0, current = 0;

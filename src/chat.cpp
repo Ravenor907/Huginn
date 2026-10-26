@@ -182,7 +182,7 @@ QVariantMap Chat::parseCode(const QString &text) const
         return {};
     QString body;
     for (const QChar c : text.mid(i + kPrefix.size())) {
-        if (!(c.isLetterOrDigit() || c == QLatin1Char('-') || c == QLatin1Char('_')))
+        if (!(c.isLetterOrNumber() || c == QLatin1Char('-') || c == QLatin1Char('_')))
             break;
         body += c;
     }

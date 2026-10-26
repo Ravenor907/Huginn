@@ -45,6 +45,7 @@ qt_add_executable(huginn
     src/nostr.cpp src/nostr.h
     src/ble.cpp src/ble.h
     src/bleframes.cpp src/bleframes.h
+    src/tls.cpp src/tls.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")

@@ -147,12 +147,81 @@ QString LocalSend::baseFor(const QString &chatKey) const
     return {};
 }
 
+// ------------------------------------------------------------------ certificates
+
+QString LocalSend::expectedFor(const QUrl &url) const
+{
+    // The fingerprint a device at this address announced, newest first. Only for HTTPS: a device
+    // with encryption off has a random fingerprint and no certificate to check.
+    if (url.scheme() != QLatin1String("https"))
+        return {};
+    const Device *best = nullptr;
+    for (const Device &d : m_devices)
+        if (d.protocol == QLatin1String("https") && d.ip == url.host() && d.port == url.port(kPort) && (!best || d.seen > best->seen))
+            best = &d;
+    return best ? best->id : QString();
+}
+
+QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected) const
+{
+    QNetworkRequest req(url);
+    if (url.scheme() != QLatin1String("https"))
+        return req;
+    QSslConfiguration c = QSslConfiguration::defaultConfiguration();
+    // Peers' certificates are self-signed, so there's no authority to check them against;
+    // pin() compares the fingerprint instead.
+    c.setPeerVerifyMode(QSslSocket::VerifyNone);
+    // Peers are addressed by IP, and the name below is not a real host name: send none.
+    c.setSslOption(QSsl::SslOptionDisableServerNameIndication, true);
+    if (m_secure) {
+        // Show our certificate: newer LocalSend apps require one, and use it to prove our fingerprint.
+        c.setLocalCertificate(m_tls.cert);
+        c.setPrivateKey(m_tls.key);
+    }
+    req.setSslConfiguration(c);
+    // Qt reuses open connections by host, port and this name. A name per expected fingerprint
+    // means a connection checked for one device is never reused for a request meant for another,
+    // or one opened unchecked during a scan.
+    if (!expected.isEmpty())
+        req.setPeerVerifyName(QStringLiteral("p") + expected.left(40).toLower());
+    return req;
+}
+
+void LocalSend::pin(QNetworkReply *r, const QString &expected)
+{
+    // Runs right after the handshake, before anything is sent: Qt documents aborting here as the
+    // way to refuse a peer. The fingerprint seen is kept for scans, which have nothing to expect yet.
+    connect(r, &QNetworkReply::encrypted, this, [r, expected] {
+        const QString got = Tls::fingerprintOf(r->sslConfiguration().peerCertificate());
+        r->setProperty("peerFingerprint", got);
+        if (!expected.isEmpty() && !Tls::sameFingerprint(got, expected)) {
+            qWarning("Nearby sharing: refused %s, its certificate doesn't match the fingerprint it announced",
+                     qPrintable(r->url().host()));
+            r->setProperty("pinFailed", true);
+            r->abort();
+        }
+    });
+}
+
+QNetworkRequest LocalSend::peerRequest(const QUrl &url) const
+{
+    return makeRequest(url, expectedFor(url));
+}
+
+void LocalSend::pinReply(QNetworkReply *r)
+{
+    pin(r, expectedFor(r->request().url()));
+}
+
+// ------------------------------------------------------------------ start and stop
+
 void LocalSend::start()
 {
     if (running())
         return;
     m_error.clear();
-    if (!m_server.listen(QHostAddress::AnyIPv4, kPort)) {
+    QTcpServer &server = m_secure ? static_cast<QTcpServer &>(m_tlsServer) : m_plainServer;
+    if (!server.listen(QHostAddress::AnyIPv4, kPort)) {
         m_error = QStringLiteral("Nearby sharing couldn't start. Is the LocalSend app already running on this handheld?");
         Q_EMIT stateChanged();
         return;
@@ -174,7 +243,8 @@ void LocalSend::stop()
     m_announceTimer.stop();
     m_sessionTimer.stop();
     m_udp.close();
-    m_server.close();
+    m_tlsServer.close();
+    m_plainServer.close();
     Q_EMIT stateChanged();
 }
 
@@ -212,21 +282,33 @@ void LocalSend::refresh()
     Q_EMIT devicesChanged();
 }
 
-void LocalSend::registerWith(const QString &ip, int port, const QString &protocol, bool scan)
+void LocalSend::registerWith(const QString &ip, int port, const QString &protocol, bool scan, const QString &expected)
 {
-    QNetworkRequest req(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, ip).arg(port).arg(kApi)));
+    // expected: the fingerprint the device announced (empty for a scan, which can't know it yet).
+    const QString pinTo = protocol == QLatin1String("https") ? expected : QString();
+    QNetworkRequest req = makeRequest(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, ip).arg(port).arg(kApi)), pinTo);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(scan ? 2500 : 5000);
     QNetworkReply *r = m_net.post(req, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
+    pin(r, pinTo);
     connect(r, &QNetworkReply::finished, this, [this, r, ip, port, protocol, scan] {
         r->deleteLater();
         const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
         const bool ok = r->error() == QNetworkReply::NoError && !o.isEmpty();
-        if (ok) {
+        if (r->property("pinFailed").toBool()) {
+            // Someone answered with a different certificate than the device announced: ignore it.
+        } else if (ok) {
             QJsonObject withPort = o;
             if (!withPort.contains(QStringLiteral("port")))
                 withPort.insert(QStringLiteral("port"), port);
-            remember(withPort, ip, protocol);
+            // Over HTTPS the certificate is the device's identity, whatever the answer claims.
+            QString proven;
+            if (protocol == QLatin1String("https")) {
+                proven = r->property("peerFingerprint").toString();
+                if (proven.isEmpty())
+                    proven = Tls::fingerprintOf(r->sslConfiguration().peerCertificate());
+            }
+            remember(withPort, ip, protocol, proven);
         } else if (protocol == QLatin1String("https") && (r->error() == QNetworkReply::SslHandshakeFailedError
                                                           || r->error() == QNetworkReply::UnknownNetworkError
                                                           || r->error() == QNetworkReply::ProtocolFailure
@@ -251,19 +333,30 @@ void LocalSend::onDatagrams()
         QByteArray data(int(m_udp.pendingDatagramSize()), Qt::Uninitialized);
         m_udp.readDatagram(data.data(), data.size(), &from);
         const QJsonObject o = QJsonDocument::fromJson(data).object();
-        if (o.isEmpty() || o.value(QStringLiteral("fingerprint")).toString() == m_fingerprint)
+        const QString fp = o.value(QStringLiteral("fingerprint")).toString();
+        if (o.isEmpty() || Tls::sameFingerprint(fp, m_fingerprint))   // our own announcement
             continue;
         const QString ip = QHostAddress(from.toIPv4Address()).toString();
         remember(o, ip, QStringLiteral("https"));
         if (o.value(QStringLiteral("announce")).toBool(o.value(QStringLiteral("announcement")).toBool()))
-            registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), false);
+            registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), false, fp);
     }
 }
 
-void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback)
+void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback, const QString &provenFp)
 {
-    const QString id = o.value(QStringLiteral("fingerprint")).toString();
-    if (id.isEmpty() || id == m_fingerprint)
+    // provenFp: the fingerprint of a certificate the device actually showed us. It wins over
+    // what the message claims.
+    QString id = provenFp.isEmpty() ? o.value(QStringLiteral("fingerprint")).toString() : provenFp;
+    if (id.isEmpty() || Tls::sameFingerprint(id, m_fingerprint))
+        return;
+    const QString protocol = o.value(QStringLiteral("protocol")).toString(protocolFallback);
+    if (protocol == QLatin1String("https"))
+        id = id.toUpper();   // certificate hashes: one spelling, so a device is listed once
+    // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
+    // claiming it with encryption off, which would skip the certificate check when sending.
+    const auto old = m_devices.constFind(id);
+    if (old != m_devices.constEnd() && old->protocol == QLatin1String("https") && protocol != QLatin1String("https"))
         return;
     Device d;
     d.id = id;
@@ -272,7 +365,7 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.type = o.value(QStringLiteral("deviceType")).toString(QStringLiteral("mobile"));
     d.ip = ip;
     d.port = o.value(QStringLiteral("port")).toInt(kPort);
-    d.protocol = o.value(QStringLiteral("protocol")).toString(protocolFallback);
+    d.protocol = protocol;
     d.chatKey = o.value(QStringLiteral("chatKey")).toString();
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
@@ -295,10 +388,13 @@ QVariantList LocalSend::devices() const
 
 // ------------------------------------------------------------------ receiving
 
-void LocalSend::onConnection()
+void LocalSend::onConnection(QTcpServer *server)
 {
-    while (QTcpSocket *s = m_server.nextPendingConnection()) {
-        m_conns.insert(s, Conn{});
+    while (QTcpSocket *s = server->nextPendingConnection()) {
+        Conn conn;
+        if (auto *ssl = qobject_cast<QSslSocket *>(s))
+            conn.peerFp = Tls::fingerprintOf(ssl->peerCertificate());
+        m_conns.insert(s, conn);
         connect(s, &QTcpSocket::readyRead, this, [this, s] { onData(s); });
         connect(s, &QTcpSocket::disconnected, this, [this, s] {
             auto it = m_conns.find(s);
@@ -324,6 +420,10 @@ void LocalSend::onConnection()
             }
             s->deleteLater();
         });
+        // The request may have arrived together with the end of the handshake, before we were
+        // listening for it. Read it from the event loop rather than inside the server's signal.
+        if (s->bytesAvailable() > 0)
+            QTimer::singleShot(0, s, [this, s] { onData(s); });
     }
 }
 
@@ -479,8 +579,17 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         return;
     }
     const QJsonObject body = QJsonDocument::fromJson(c.body).object();
+    // A sender that showed a certificate must claim that certificate's fingerprint, or it is
+    // pretending to be another device: answer, but don't list it (LocalSend does the same).
+    const QString peerFp = c.peerFp;
+    const auto learn = [this, ip, peerFp](const QJsonObject &o) {
+        if (peerFp.isEmpty())
+            remember(o, ip, QStringLiteral("https"));
+        else if (Tls::sameFingerprint(o.value(QStringLiteral("fingerprint")).toString(), peerFp))
+            remember(o, ip, QStringLiteral("https"), peerFp);
+    };
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
-        remember(body, ip, QStringLiteral("https"));
+        learn(body);
         reply(s, 200, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
         return;
     }
@@ -493,7 +602,7 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         const QJsonObject from = body.value(QStringLiteral("info")).toObject();
         const QJsonObject files = body.value(QStringLiteral("files")).toObject();
         if (files.isEmpty()) { reply(s, 400); return; }
-        remember(from, ip, QStringLiteral("https"));
+        learn(from);
         Pending p;
         p.socket = s;
         p.from = from.value(QStringLiteral("alias")).toString(ip);
@@ -711,6 +820,8 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
     m_send.deviceId = deviceId;
     m_send.alias = dev->alias;
     m_send.base = QStringLiteral("%1://%2:%3%4").arg(dev->protocol, dev->ip).arg(dev->port).arg(kApi);
+    // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
+    m_send.expected = dev->protocol == QLatin1String("https") ? dev->id : QString();
     QJsonObject files;
     int n = 0;
     for (const QString &p : paths) {
@@ -739,17 +850,22 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
     QUrl url(m_send.base + QStringLiteral("/prepare-upload"));
     if (!pin.isEmpty())
         url.setQuery(QStringLiteral("pin=") + QString::fromLatin1(QUrl::toPercentEncoding(pin)));
-    QNetworkRequest req(url);
+    QNetworkRequest req = makeRequest(url, m_send.expected);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(5 * 60 * 1000);   // the other person has to tap Accept
     QNetworkReply *r = m_net.post(req, QJsonDocument(QJsonObject{{QStringLiteral("info"), info(false, false)}, {QStringLiteral("files"), files}})
                                            .toJson(QJsonDocument::Compact));
+    pin(r, m_send.expected);
     m_send.reply = r;
     connect(r, &QNetworkReply::finished, this, [this, r, pin, deviceId] {
         r->deleteLater();
         if (m_send.reply != r)
             return;
         const int code = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (r->property("pinFailed").toBool()) {
+            endSend(false, QStringLiteral("Didn't send: the device answering isn't the %1 that was found earlier. Look again and pick it.").arg(m_send.alias));
+            return;
+        }
         if (r->error() == QNetworkReply::OperationCanceledError && code == 0) {
             endSend(false, QStringLiteral("Sending stopped."));
             return;
@@ -815,12 +931,13 @@ void LocalSend::uploadNext()
     q.addQueryItem(QStringLiteral("fileId"), f.id);
     q.addQueryItem(QStringLiteral("token"), f.token);
     url.setQuery(q);
-    QNetworkRequest req(url);
+    QNetworkRequest req = makeRequest(url, m_send.expected);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/octet-stream"));
     req.setHeader(QNetworkRequest::ContentLengthHeader, f.size);
     req.setTransferTimeout(60000);   // no progress for a minute means the connection is gone
     QNetworkReply *r = m_net.post(req, file);
     file->setParent(r);
+    pin(r, m_send.expected);
     m_send.reply = r;
     connect(r, &QNetworkReply::uploadProgress, this, [this, r](qint64 sent, qint64) {
         if (m_send.reply != r)
@@ -833,6 +950,10 @@ void LocalSend::uploadNext()
         if (m_send.reply != r)
             return;
         const int code = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (r->property("pinFailed").toBool()) {
+            endSend(false, QStringLiteral("Sending stopped: the device answering isn't the %1 that was found earlier.").arg(m_send.alias));
+            return;
+        }
         if (r->error() != QNetworkReply::NoError || code != 200) {
             QStringList left;
             for (int i = m_send.next; i < m_send.files.size(); ++i)
@@ -855,9 +976,10 @@ void LocalSend::cancelSend()
     if (!m_send.active)
         return;
     if (!m_send.sessionId.isEmpty()) {
-        QNetworkRequest req(QUrl(m_send.base + QStringLiteral("/cancel?sessionId=") + m_send.sessionId));
+        QNetworkRequest req = makeRequest(QUrl(m_send.base + QStringLiteral("/cancel?sessionId=") + m_send.sessionId), m_send.expected);
         req.setTransferTimeout(3000);
         QNetworkReply *c = m_net.post(req, QByteArray());
+        pin(c, m_send.expected);
         connect(c, &QNetworkReply::finished, c, &QObject::deleteLater);
     }
     if (m_send.reply)
