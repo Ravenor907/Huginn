@@ -45,7 +45,6 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var device by remember { mutableStateOf(id.deviceName) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
     var keep by remember { mutableStateOf(id.keepNearbyHistory) }
-    var channel by remember { mutableStateOf(id.channel) }
     var muted by remember { mutableStateOf(id.muted()) }
     val up by app.updater.state.collectAsState()
     var deleteAfter by remember { mutableStateOf(id.deleteAfter) }
@@ -153,11 +152,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         }
         Section("Updates")
         Panel {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton("Stable", Modifier.weight(1f), if (channel == "stable") Kind.Accent else Kind.Normal) { channel = "stable"; id.channel = "stable" }
-                MButton("Testing", Modifier.weight(1f), if (channel == "testing") Kind.Accent else Kind.Normal) { channel = "testing"; id.channel = "testing" }
-            }
-            Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+            Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal)
+            Text("Muninn checks for a new version every time you open it.", style = Type.small)
             if (up.busy && up.progress > 0f) Bar(up.progress, Modifier.padding(top = 6.dp))
             MButton(if (up.ready) "Install ${up.latest}" else "Check now", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = !up.busy) {
                 if (up.ready) app.updater.download() else app.updater.check()

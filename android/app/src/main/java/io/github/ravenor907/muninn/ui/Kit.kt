@@ -1,6 +1,10 @@
 package io.github.ravenor907.muninn.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -108,11 +112,40 @@ fun MButton(text: String, modifier: Modifier = Modifier, kind: Kind = Kind.Norma
     }
     Row(
         modifier.heightIn(min = 48.dp).clip(Corner).background(bg).border(1.dp, line, Corner)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
     ) {
-        if (icon != null) { MIcon(icon, if (enabled) fg else Palette.textFaint, 20.dp); Spacer(Modifier.width(10.dp)) }
-        Text(text, fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = if (enabled) fg else Palette.textFaint, textAlign = TextAlign.Center)
+        if (icon != null) { MIcon(icon, if (enabled) fg else Palette.textFaint, 20.dp); Spacer(Modifier.width(8.dp)) }
+        FitText(text, TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
+            color = if (enabled) fg else Palette.textFaint, textAlign = TextAlign.Center), Modifier.weight(1f, fill = false))
+    }
+}
+
+/**
+ * Text that fits the space it's given on any phone and at any font size: it never splits a word
+ * across lines. It shrinks (down to 70%) until every word fits on a line and the whole label takes
+ * at most two lines; only if it still can't fit at the smallest size does it wrap normally.
+ */
+@Composable
+fun FitText(text: String, style: TextStyle, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val measurer = rememberTextMeasurer()
+        val maxW = constraints.maxWidth
+        val size = remember(text, style, maxW) {
+            if (!constraints.hasBoundedWidth) return@remember style.fontSize
+            val words = text.split(' ').filter { it.isNotEmpty() }
+            var s = style.fontSize.value
+            val floor = s * 0.7f
+            while (s > floor) {
+                val st = style.copy(fontSize = s.sp)
+                val widest = words.maxOfOrNull { measurer.measure(it, st, softWrap = false, maxLines = 1).size.width } ?: 0
+                val lines = measurer.measure(text, st, constraints = Constraints(maxWidth = maxW)).lineCount
+                if (widest <= maxW && lines <= 2) break
+                s -= 0.5f
+            }
+            maxOf(s, floor).sp
+        }
+        Text(text, style = style.copy(fontSize = size, lineHeight = size * 1.2f))
     }
 }
 

@@ -6,13 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Two-part versions only: "0.1", "0.2 Test 3". Huginn and Muninn share the repo's VERSION file.
+// One dot only, read as a decimal: 0.3 < 0.31 < 0.4 < 1.0. Huginn and Muninn share the repo's VERSION file.
 val versionText = rootProject.file("../VERSION").readLines().first().trim()
-val versionParts = Regex("""^(\d+)\.(\d+)(?: Test (\d+))?$""").find(versionText)?.groupValues
-    ?: error("VERSION must look like 0.1 or 0.1 Test 2, not \"$versionText\"")
-// A stable release sorts after every test build of the same version.
-val versionNumber = versionParts[1].toInt() * 1_000_000 + versionParts[2].toInt() * 1_000 +
-    (versionParts[3].ifEmpty { "999" }).toInt()
+val versionParts = Regex("""^(\d+)\.(\d+)$""").find(versionText)?.groupValues
+    ?: error("VERSION must look like 0.3 or 0.31, not \"$versionText\"")
+// Same ranking as the in-app updater, so every release installs over the one before it
+// (old "0.3 Test 1" builds used codes in the thousands, far below these).
+val versionNumber = ((versionParts[1].toLong() * 1_000_000 + (versionParts[2] + "000000").take(6).toLong()) * 10 + 5).toInt()
 
 android {
     namespace = "io.github.ravenor907.muninn"

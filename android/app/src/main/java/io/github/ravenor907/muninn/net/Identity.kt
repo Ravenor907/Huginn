@@ -36,10 +36,6 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
 
-    var channel: String
-        get() = prefs.getString("channel", "testing") ?: "testing"
-        set(v) = prefs.edit().putString("channel", v).apply()
-
     /** Where received files go. */
     var receiveFolder: File
         get() = File(prefs.getString("receiveFolder", null) ?: Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath)

@@ -74,7 +74,7 @@ A keyboard works too in Desktop Mode: arrows, Enter, Escape, Space, Tab and F10.
 
 ## Updates and versions
 
-Two numbers only: 0.1, 0.2, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, checks both, and publishes them together. Test builds are the next version plus a test number (0.2 Test 3) and only reach you on the Testing channel, which can roll back to stable from Settings.
+One dot only, read as a decimal: 0.3, 0.31, 0.32, 0.4, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, checks both, and publishes them together. There are no separate test builds; every release goes to everyone, and both apps pick it up when they open.
 
 ## Building
 

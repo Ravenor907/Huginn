@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Chat
@@ -66,7 +68,7 @@ private fun routeText(r: String) = when (r) {
 private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet" -> "network"; else -> "user" }
 
 @Composable
-fun ChatScreen(app: Muninn) {
+fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     val open = ChatNav.open
     if (open.isNotEmpty()) {
         BackHandler { ChatNav.open = "" }
@@ -99,7 +101,8 @@ fun ChatScreen(app: Muninn) {
                 MButton("Add someone", Modifier.weight(1f), Kind.Accent, icon = "plus") { ChatNav.open = "add" }
                 MButton("My code", Modifier.weight(1f), icon = "user") { ChatNav.open = "code" }
             }
-            if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 8.dp))
+            if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger),
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(top = 8.dp, bottom = 4.dp))
         }
         if (requests.isNotEmpty()) item { Section("Wants to chat") }
         items(requests, key = { "r" + it.peerKey }) { r ->

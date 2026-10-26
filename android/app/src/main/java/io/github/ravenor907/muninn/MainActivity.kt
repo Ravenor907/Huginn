@@ -71,7 +71,34 @@ class MainActivity : ComponentActivity() {
     private var netStarted = false
 
     private val closePermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) app.close.start { app.chat.hello() }
+        if (granted.values.all { it }) { app.close.start { app.chat.hello() }; return@registerForActivityResult }
+        // Android stops showing the prompt after it's been refused (twice on newer versions). Then the
+        // only way to allow it is Muninn's app settings, so the message on Chat says to tap for that.
+        val refused = granted.filterValues { !it }.keys
+        closeBlocked = refused.isNotEmpty() && refused.none { shouldShowRequestPermissionRationale(it) }
+        if (closeBlocked) app.close.blocked() else app.close.denied()
+    }
+    private var closeBlocked = false
+    private val autoAsked = mutableSetOf<String>()
+
+    private fun closePerms(): List<String> = when {
+        Build.VERSION.SDK_INT >= 33 -> listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES)
+        Build.VERSION.SDK_INT >= 31 -> listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+        else -> listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    } + app.close.missing.value
+
+    private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    /** Starts close-by chat, asking for whatever permission it still needs. Also what tapping the Chat message does. */
+    fun askClose() {
+        val need = closePerms().distinct().filterNot { granted(it) }
+        when {
+            need.isEmpty() -> app.close.start { app.chat.hello() }
+            closeBlocked -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            else -> closePermission.launch(need.toTypedArray())
+        }
     }
 
     private val directPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -113,17 +140,8 @@ class MainActivity : ComponentActivity() {
         netStarted = true
         app.net.start()
         app.net.refresh()
-        app.updater.check()
         app.nostr.connect()
-        val perms = when {
-            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES)
-            Build.VERSION.SDK_INT >= 31 -> arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
-            else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) app.close.start { app.chat.hello() }
-        else closePermission.launch(perms)
+        askClose()
     }
 
     /** "Block screenshots": also hides Muninn's screen in recent apps. */
@@ -149,7 +167,13 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         storageOk = hasStorage()
         Jobs.setVisible(true)
+        app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()
+        // Back from Muninn's app settings with the permission now allowed: start close-by chat.
+        if (netStarted && !app.close.running && app.close.error.value != null && closePerms().all { granted(it) }) {
+            closeBlocked = false
+            app.close.start { app.chat.hello() }
+        }
     }
 
     override fun onPause() {
@@ -207,6 +231,8 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             launch { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
             launch { app.chat.notices.collect { Ui.say(it) } }
+            // Nearby Connections named a permission the usual set didn't cover (location on some phones): ask once.
+            launch { app.close.missing.collect { m -> if (m.isNotEmpty() && autoAsked.addAll(m)) askClose() } }
             launch { app.net.pinNeeded.collect { Ui.say("That device asks for a PIN. Turn off its PIN setting in LocalSend to send from Muninn.", true) } }
         }
         LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
@@ -232,7 +258,7 @@ class MainActivity : ComponentActivity() {
                     "files" -> FilesScreen(app) { files -> Share.pending.addAll(files); tab = "send" }
                     "usb" -> UsbScreen()
                     "settings" -> SettingsScreen(app) { secure() }
-                    else -> ChatScreen(app)
+                    else -> ChatScreen(app) { askClose() }
                 }
                 toast?.let { (text, bad) ->
                     Box(Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().background(if (bad) Palette.dangerFill else Palette.raised).clickable { Ui.toast.value = null }.padding(14.dp)) {

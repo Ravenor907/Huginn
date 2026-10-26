@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Two-part versions only (0.1, 0.2, 1.0). Test builds add " Test N".
+# One dot only, read as a decimal: 0.3, 0.31, 0.4, 1.0.
 set(HUGINN_VERSION "0.1" CACHE STRING "Version shown in the app")
 project(huginn VERSION 0.1 LANGUAGES CXX)
 

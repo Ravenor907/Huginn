@@ -12,7 +12,6 @@ class Settings : public QObject
     Q_PROPERTY(QString layout READ layout WRITE setLayout NOTIFY changed)
     Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed)
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY changed)
-    Q_PROPERTY(QString channel READ channel WRITE setChannel NOTIFY changed)
     Q_PROPERTY(bool showHidden READ showHidden WRITE setShowHidden NOTIFY changed)
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool protectLibrary READ protectLibrary WRITE setProtectLibrary NOTIFY changed)
@@ -35,7 +34,6 @@ public:
     QString layout() const { return value("layout", "auto").toString(); }
     QString uiSize() const { return value("uiSize", "100").toString(); }
     QString accent() const { return value("accent", "gold").toString(); }
-    QString channel() const { return value("channel", "stable").toString(); }
     bool showHidden() const { return value("showHidden", false).toBool(); }
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
     bool protectLibrary() const { return value("protectLibrary", true).toBool(); }
@@ -59,7 +57,6 @@ public:
     void setLayout(const QString &v) { set("layout", v); }
     void setUiSize(const QString &v) { set("uiSize", v); }
     void setAccent(const QString &v) { set("accent", v); }
-    void setChannel(const QString &v) { set("channel", v); }
     void setShowHidden(bool v) { set("showHidden", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setProtectLibrary(bool v) { set("protectLibrary", v); }

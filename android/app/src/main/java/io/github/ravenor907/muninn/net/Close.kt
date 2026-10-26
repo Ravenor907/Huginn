@@ -38,6 +38,9 @@ class Close(private val context: Context, private val identity: Identity) {
     val list: StateFlow<List<Peer>> = _list.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+    /** Permissions Nearby Connections said it was missing on the last try (asked for on top of the usual set). */
+    private val _missing = MutableStateFlow<List<String>>(emptyList())
+    val missing: StateFlow<List<String>> = _missing.asStateFlow()
     @Volatile var running = false
         private set
 
@@ -81,14 +84,24 @@ class Close(private val context: Context, private val identity: Identity) {
         val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
         if (code == ConnectionsStatusCodes.STATUS_ALREADY_ADVERTISING || code == ConnectionsStatusCodes.STATUS_ALREADY_DISCOVERING) return
         _error.value = when (code) {
-            ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH, ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_ADMIN,
-            ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_COARSE_LOCATION, ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_FINE_LOCATION ->
-                "Muninn needs the Nearby devices permission to find phones close by."
+            ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH, ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_ADMIN -> {
+                _missing.value = if (android.os.Build.VERSION.SDK_INT >= 31) listOf(android.Manifest.permission.BLUETOOTH_SCAN,
+                    android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
+                PERMISSION_TEXT
+            }
+            ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_COARSE_LOCATION, ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_FINE_LOCATION -> {
+                _missing.value = listOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                PERMISSION_TEXT
+            }
             ConnectionsStatusCodes.STATUS_BLUETOOTH_ERROR -> "Turn Bluetooth on to find phones close by."
             else -> "Close-by search isn't available on this phone (Google Play services needed)."
         }
         running = false
     }
+
+    /** Shown when Android won't ask again: the person has to allow it in Muninn's app settings. */
+    fun blocked() { _error.value = "Close-by chat is off. Tap here, then allow Nearby devices (and Location if listed) in Muninn's permissions." }
+    fun denied() { _error.value = PERMISSION_TEXT }
 
     private val discovery = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpoint: String, info: DiscoveredEndpointInfo) {
@@ -183,5 +196,9 @@ class Close(private val context: Context, private val identity: Identity) {
     companion object {
         const val SERVICE = "io.github.ravenor907.muninn"
         fun newId() = Random.nextLong()
+    }
+
+    companion object {
+        const val PERMISSION_TEXT = "Muninn needs the Nearby devices permission to find phones close by. Tap here to allow it."
     }
 }

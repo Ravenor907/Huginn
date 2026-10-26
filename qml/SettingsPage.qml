@@ -42,12 +42,8 @@ Rectangle {
               label: "Remove", enabled: Usb.rawReady && !System.gameMode }
         ]
         case 3: return [
-            { kind: "segmented", key: "channel", title: "Update channel", note: "Testing gets new features first and can be rolled back",
-              options: [{ value: "stable", label: "Stable" }, { value: "testing", label: "Testing" }] },
-            { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + " · " + (Settings.channel === "testing" ? "Testing" : "Stable") + " channel",
-              label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
-            { kind: "button", key: "rollback", title: "Go back to stable", note: "Installs the newest stable release over a test build",
-              label: "Roll back", enabled: System.version.indexOf("Test") >= 0 && !Updater.busy }
+            { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts.",
+              label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy }
         ]
         default: return [
             { kind: "info", title: "Huginn " + System.version, note: "A controller-first file explorer for SteamOS. Made by Ravenor907." },
@@ -205,9 +201,6 @@ Rectangle {
             if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", "Huginn restarts to update. " + job, "Update anyway", () => Updater.install(), true, true)
             else Updater.install()
-        } else if (key === "rollback") {
-            Ui.sure("Go back to the last stable version?", "Huginn installs the stable version and restarts. Your settings stay. " + job,
-                    "Roll back", () => Updater.rollback(), job.length > 0, false)
         }
     }
 

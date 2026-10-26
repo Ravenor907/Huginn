@@ -19,13 +19,15 @@ namespace
 const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn/releases?per_page=100";
 const char *kAppId = "io.github.ravenor907.Huginn";
 
-// "0.2 Test 3" -> {0, 2, 3}; a stable "0.2" ranks above any "0.2 Test n".
-QList<int> parts(const QString &v)
+// Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0.
+// An old test build ("0.3 Test 1", from before test builds were dropped) sits just below its version.
+qint64 rank(const QString &v)
 {
-    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^(\\d+)\\.(\\d+)(?: Test (\\d+))?")).match(v);
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^(\\d+)\\.(\\d+)( Test \\d+)?")).match(v);
     if (!m.hasMatch())
-        return {0, 0, 0};
-    return {m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).isEmpty() ? 1000000 : m.captured(3).toInt()};
+        return 0;
+    const qint64 frac = (m.captured(2) + QStringLiteral("000000")).left(6).toLongLong();
+    return (m.captured(1).toLongLong() * 1000000 + frac) * 10 + (m.captured(3).isEmpty() ? 5 : 0);
 }
 }
 
@@ -35,43 +37,33 @@ Updater::Updater(Settings *settings, QObject *parent)
     , m_current(QCoreApplication::applicationVersion())
     , m_status(QStringLiteral("Up to date as far as Huginn knows"))
 {
-    connect(settings, &Settings::changed, this, [this] {
-        m_latestTag.clear();
-        Q_EMIT changed();
-    });
 }
 
 void Updater::startAutoUpdate()
 {
     if (!System::inFlatpak())
         return;   // a development build updates by rebuilding
-    fetch(m_settings->channel() != QLatin1String("testing"), false, true);
+    fetch(false, true);
 }
 
 QString Updater::versionFromTag(const QString &tag)
 {
-    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^v?(\\d+\\.\\d+)(?:-test(\\d+))?$"), QRegularExpression::CaseInsensitiveOption).match(tag);
-    if (!m.hasMatch())
-        return {};
-    return m.captured(2).isEmpty() ? m.captured(1) : m.captured(1) + QStringLiteral(" Test ") + m.captured(2);
+    // Releases are tagged v0.3, v0.31 and so on. Old test tags (v0.3-test1) don't match and are skipped.
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^v(\\d+\\.\\d+)$")).match(tag);
+    return m.hasMatch() ? m.captured(1) : QString();
 }
 
 bool Updater::newer(const QString &a, const QString &b)
 {
-    return parts(a) > parts(b);
+    return rank(a) > rank(b);
 }
 
 void Updater::check()
 {
-    fetch(m_settings->channel() != QLatin1String("testing"), false);
+    fetch(false);
 }
 
-void Updater::rollback()
-{
-    fetch(true, true);
-}
-
-void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
+void Updater::fetch(bool installAfter, bool autoMode)
 {
     if (m_busy)
         return;
@@ -82,7 +74,7 @@ void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *r = m_net.get(req);
-    connect(r, &QNetworkReply::finished, this, [this, r, stableOnly, installAfter, autoMode] {
+    connect(r, &QNetworkReply::finished, this, [this, r, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
         if (r->error() != QNetworkReply::NoError) {
@@ -95,7 +87,7 @@ void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
             const QJsonObject rel = v.toObject();
             if (rel.value(QStringLiteral("draft")).toBool())
                 continue;
-            if (stableOnly && rel.value(QStringLiteral("prerelease")).toBool())
+            if (rel.value(QStringLiteral("prerelease")).toBool())
                 continue;
             const QString tag = rel.value(QStringLiteral("tag_name")).toString();
             if (!tag.startsWith(QLatin1Char('v')))   // Muninn (the phone app) releases are muninn-v…
@@ -120,7 +112,7 @@ void Updater::fetch(bool stableOnly, bool installAfter, bool autoMode)
         m_assetUrl = bestAsset;
         if (installAfter) {
             if (bestTag.isEmpty()) {
-                m_status = QStringLiteral("There's no stable release to go back to yet.");
+                m_status = QStringLiteral("No release found on GitHub.");
                 Q_EMIT changed();
                 return;
             }

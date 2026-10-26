@@ -46,9 +46,10 @@ jobs:
       - name: Version
         shell: bash
         run: |
-          # VERSION holds "0.1", "0.2 Test 3" and so on. Changing it on main makes a release.
+          # VERSION holds one dot only: 0.3, 0.31, 0.4. Changing it on main makes a release.
           v=$(head -n1 VERSION | tr -d '\r')
-          tag="v$(echo "$v" | sed -E 's/ Test ([0-9]+)$/-test\1/')"
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
+          tag="v$v"
           echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
           echo "HUGINN_TAG=$tag" >> "$GITHUB_ENV"
           sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" packaging/io.github.ravenor907.Huginn.json
@@ -238,7 +239,7 @@ jobs:
         id: v
         run: |
           v=$(head -n1 VERSION | tr -d '\r')
-          tag="v$(echo "$v" | sed -E 's/ Test ([0-9]+)$/-test\1/')"
+          tag="v$v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
@@ -263,9 +264,9 @@ jobs:
           files: |
             Huginn.flatpak
             Muninn.apk
-          prerelease: ${{ contains(steps.v.outputs.version, 'Test') }}
-          make_latest: ${{ !contains(steps.v.outputs.version, 'Test') }}
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           body: |
             **Huginn** (SteamOS handheld): Huginn.flatpak. Installed copies update themselves at launch.
-            **Muninn** (Android phone): Muninn.apk. Installed copies offer the update when they open.
+            **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.

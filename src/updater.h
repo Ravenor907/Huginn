@@ -5,9 +5,8 @@
 
 class Settings;
 
-// Ally Hub-style updates from GitHub releases. Stable follows releases; Testing also takes
-// pre-releases (tagged like v0.2-test3, shown as "0.2 Test 3"). Updates install the release's
-// Flatpak bundle for this user, then Huginn restarts.
+// Ally Hub-style updates from GitHub releases (tagged v0.3, v0.31...). Updates install the
+// release's Flatpak bundle for this user, then Huginn restarts.
 class Updater : public QObject
 {
     Q_OBJECT
@@ -26,21 +25,20 @@ public:
     QString status() const { return m_status; }
     bool autoUpdating() const { return m_auto; }
 
-    // At launch: if a newer release is out on the owner's channel, install it and restart.
+    // At launch: if a newer release is out, install it and restart.
     void startAutoUpdate();
 
     Q_INVOKABLE void check();
     Q_INVOKABLE void install();
-    Q_INVOKABLE void rollback();
 
-    static QString versionFromTag(const QString &tag);   // v0.2-test3 -> "0.2 Test 3"
+    static QString versionFromTag(const QString &tag);   // v0.31 -> "0.31"; anything else -> empty
     static bool newer(const QString &a, const QString &b);
 
 Q_SIGNALS:
     void changed();
 
 private:
-    void fetch(bool stableOnly, bool installAfter, bool autoMode = false);
+    void fetch(bool installAfter, bool autoMode = false);
     void download(const QString &url, const QString &tag);
     Settings *m_settings;
     QNetworkAccessManager m_net;
