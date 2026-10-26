@@ -37,14 +37,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Fonts
         run: tools/get-fonts.sh
-      - name: Version from tag
+      - name: Version
+        shell: bash
         run: |
-          v=0.1
-          case "$GITHUB_REF" in
-            refs/tags/v*) t=${GITHUB_REF#refs/tags/v}; v=$(echo "$t" | sed -E 's/-test([0-9]+)$/ Test \1/') ;;
-          esac
+          # VERSION holds "0.1", "0.2 Test 3" and so on. Changing it on main makes a release.
+          v=$(head -n1 VERSION | tr -d '\r')
+          tag="v$(echo "$v" | sed -E 's/ Test ([0-9]+)$/-test\1/')"
           echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          echo "HUGINN_TAG=$tag" >> "$GITHUB_ENV"
           sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" packaging/io.github.ravenor907.Huginn.json
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] \
+             && ! git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$tag" > /dev/null; then
+            echo "HUGINN_RELEASE=1" >> "$GITHUB_ENV"
+          fi
       - uses: actions/cache@v4
         with:
           path: .flatpak-builder
@@ -105,10 +110,12 @@ jobs:
           name: Huginn.flatpak
           path: Huginn.flatpak
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.HUGINN_RELEASE == '1'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.HUGINN_TAG }}
+          target_commitish: ${{ github.sha }}
           name: Huginn ${{ env.HUGINN_VERSION }}
           files: Huginn.flatpak
-          prerelease: ${{ contains(github.ref, '-test') }}
+          prerelease: ${{ contains(env.HUGINN_VERSION, 'Test') }}
           generate_release_notes: true
