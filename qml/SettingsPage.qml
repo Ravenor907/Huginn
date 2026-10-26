@@ -38,6 +38,10 @@ Rectangle {
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
             { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
             { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },
+            { kind: "toggle", key: "panicLock", vault: true, title: "Panic lock (hold L3 and R3)", note: "Hold both stick clicks for a second anywhere in Huginn: Chat locks at once and notifications hide message text until you unlock" },
+            { kind: "toggle", key: "lockOnLeave", vault: true, title: "Lock when I leave Huginn", note: "Chat locks the moment you switch to Steam or another app, or the handheld sleeps" },
+            { kind: "button", key: "backup", title: "Back up chats", note: "An encrypted copy in Documents, opened with a backup password. Use the backup on one device at a time.", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
+            { kind: "button", key: "restore", title: "Restore from backup", note: "Replaces everything in Chat on this computer with a backup from Documents", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Every conversation on this computer. Contacts stay", label: "Delete" },
             { kind: "button", key: "eraseChat", title: "Erase everything in Chat", note: "Messages, photos, voice, contacts, keys and the lock. Huginn closes", label: "Erase" }
         ]
@@ -104,93 +108,116 @@ Rectangle {
         }
     }
 
-    Column {
+    // The rows scroll so the focused one is always on screen (Chat has more than fit).
+    Flickable {
+        id: rowsView
         anchors.top: nav.top
         anchors.left: nav.right
         anchors.leftMargin: Theme.px(4)
         anchors.right: parent.right
         anchors.rightMargin: Theme.px(28)
-        spacing: Theme.px(10)
-        Repeater {
-            model: page.rows
-            Rectangle {
-                readonly property bool focused: page.inSection && page.row === index
-                width: parent.width
-                height: Math.max(Theme.px(72), texts.implicitHeight + Theme.px(24))
-                radius: Theme.radius
-                color: focused ? Theme.focusFill : Theme.panel
-                border.width: focused ? Theme.focusWidth : 1
-                border.color: focused ? Theme.accent : Theme.line
-                Column {
-                    id: texts
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.px(20)
-                    anchors.right: control.left
-                    anchors.rightMargin: Theme.px(20)
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.px(2)
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
-                }
-                Item {
-                    id: control
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.px(20)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: modelData.kind === "segmented" ? segCtl.implicitWidth
-                         : modelData.kind === "toggle" ? toggleCtl.implicitWidth
-                         : modelData.kind === "accent" ? accentCtl.implicitWidth
-                         : modelData.kind === "button" ? buttonCtl.implicitWidth : 0
-                    height: Theme.px(44)
-                    Segmented {
-                        id: segCtl
-                        anchors.right: parent.right
+        anchors.bottom: bar.top
+        anchors.bottomMargin: Theme.px(10)
+        contentWidth: width
+        contentHeight: rowsCol.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        Column {
+            id: rowsCol
+            width: rowsView.width
+            spacing: Theme.px(10)
+            Repeater {
+                id: rowRepeater
+                model: page.rows
+                Rectangle {
+                    readonly property bool focused: page.inSection && page.row === index
+                    width: parent.width
+                    height: Math.max(Theme.px(72), texts.implicitHeight + Theme.px(24))
+                    radius: Theme.radius
+                    color: focused ? Theme.focusFill : Theme.panel
+                    border.width: focused ? Theme.focusWidth : 1
+                    border.color: focused ? Theme.accent : Theme.line
+                    Column {
+                        id: texts
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.px(20)
+                        anchors.right: control.left
+                        anchors.rightMargin: Theme.px(20)
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: modelData.kind === "segmented"
-                        options: modelData.options || []
-                        value: modelData.kind === "segmented" ? (modelData.chat ? String(Chat[modelData.key]) : Settings[modelData.key]) : ""
-                        onPicked: v => { if (modelData.chat) Chat[modelData.key] = Number(v); else Settings[modelData.key] = v }
+                        spacing: Theme.px(2)
+                        Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
+                        Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                     }
-                    ToggleSwitch {
-                        id: toggleCtl
+                    Item {
+                        id: control
                         anchors.right: parent.right
+                        anchors.rightMargin: Theme.px(20)
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: modelData.kind === "toggle"
-                        checked: modelData.kind === "toggle" ? (modelData.chat ? Chat[modelData.key] : Settings[modelData.key]) : false
-                        onToggled: { const o = modelData.chat ? Chat : Settings; o[modelData.key] = !o[modelData.key] }
-                    }
-                    Row {
-                        id: accentCtl
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: modelData.kind === "accent"
-                        spacing: Theme.px(10)
-                        Repeater {
-                            model: [{ v: "gold", n: "Gold" }, { v: "iron", n: "Iron" }, { v: "copper", n: "Copper" }]
-                            Rectangle {
-                                width: Theme.px(44); height: width; radius: Theme.radius
-                                color: Theme.accents[modelData.v]
-                                border.width: Settings.accent === modelData.v ? 2 : 1
-                                border.color: Settings.accent === modelData.v ? Theme.text : Theme.lineMuted
-                                TapHandler { onTapped: Settings.accent = modelData.v }
+                        width: modelData.kind === "segmented" ? segCtl.implicitWidth
+                             : modelData.kind === "toggle" ? toggleCtl.implicitWidth
+                             : modelData.kind === "accent" ? accentCtl.implicitWidth
+                             : modelData.kind === "button" ? buttonCtl.implicitWidth : 0
+                        height: Theme.px(44)
+                        Segmented {
+                            id: segCtl
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: modelData.kind === "segmented"
+                            options: modelData.options || []
+                            value: modelData.kind === "segmented" ? (modelData.chat ? String(Chat[modelData.key]) : Settings[modelData.key]) : ""
+                            onPicked: v => { if (modelData.chat) Chat[modelData.key] = Number(v); else Settings[modelData.key] = v }
+                        }
+                        ToggleSwitch {
+                            id: toggleCtl
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: modelData.kind === "toggle"
+                            checked: modelData.kind === "toggle" ? page.source(modelData)[modelData.key] : false
+                            onToggled: { const o = page.source(modelData); o[modelData.key] = !o[modelData.key] }
+                        }
+                        Row {
+                            id: accentCtl
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: modelData.kind === "accent"
+                            spacing: Theme.px(10)
+                            Repeater {
+                                model: [{ v: "gold", n: "Gold" }, { v: "iron", n: "Iron" }, { v: "copper", n: "Copper" }]
+                                Rectangle {
+                                    width: Theme.px(44); height: width; radius: Theme.radius
+                                    color: Theme.accents[modelData.v]
+                                    border.width: Settings.accent === modelData.v ? 2 : 1
+                                    border.color: Settings.accent === modelData.v ? Theme.text : Theme.lineMuted
+                                    TapHandler { onTapped: Settings.accent = modelData.v }
+                                }
                             }
                         }
+                        HButton {
+                            id: buttonCtl
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: modelData.kind === "button"
+                            implicitHeight: Theme.px(44)
+                            text: modelData.label || ""
+                            enabled: modelData.enabled !== false
+                            onClicked: page.press(modelData.key)
+                        }
                     }
-                    HButton {
-                        id: buttonCtl
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: modelData.kind === "button"
-                        implicitHeight: Theme.px(44)
-                        text: modelData.label || ""
-                        enabled: modelData.enabled !== false
-                        onClicked: page.press(modelData.key)
-                    }
+                    TapHandler { onTapped: { page.inSection = true; page.row = index } }
                 }
-                TapHandler { onTapped: { page.inSection = true; page.row = index } }
             }
         }
     }
+    function showRow() {
+        const item = rowRepeater.itemAt(row)
+        if (!item) return
+        const top = row === 0 ? 0 : item.y - Theme.px(10)
+        const bottom = item.y + item.height + Theme.px(10)
+        if (top < rowsView.contentY) rowsView.contentY = top
+        else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
+    }
+    onRowChanged: Qt.callLater(showRow)
+    onSectionChanged: rowsView.contentY = 0
 
     PromptBar {
         id: bar
@@ -207,11 +234,54 @@ Rectangle {
         if (FileOps.busy) return FileOps.status + " Closing now stops it partway."
         return ""
     }
+    // Where a toggle's value lives.
+    function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
+
+    // ------------------------------------------------------------- chat backup
+    function startBackup() {
+        if (!Vault.exists || Vault.screenLocked) { Ui.say("Open Chat and unlock it first.", true); return }
+        Ui.ask("Backup password", "At least 8 characters. You need it to restore, and it can't be recovered", "", "Next", t => {
+            if (t.length < 8) { Ui.say("The backup password needs at least 8 characters.", true); return }
+            Ui.ask("Type it again", "To be sure", "", "Back up", t2 => {
+                if (t2 !== t) { Ui.say("They didn't match. Nothing was saved.", true); return }
+                Ui.say("Backing up your chats...")
+                Vault.backup(t)
+            }, true)
+        }, true)
+    }
+    function startRestore() {
+        if (!Vault.exists || Vault.screenLocked) { Ui.say("Open Chat and unlock it first.", true); return }
+        const list = Vault.backups()
+        if (!list.length) { Ui.say("No backups in Documents. Put a .mbk file there first.", true); return }
+        const apps = {}
+        list.forEach(e => apps[e.url] = e.app)
+        Ui.pickFrom("Restore which backup?", [{ header: "In Documents", items: list }], url => {
+            if (apps[url] === "muninn") { Ui.say("That's a Muninn backup. Restore it in Muninn.", true); return }
+            Ui.ask("Backup password", "The one you chose when you backed up", "", "Open", pw => {
+                Ui.say("Opening the backup...")
+                Vault.openBackup(url, pw)
+            }, true)
+        })
+    }
+    Connections {
+        target: Vault
+        function onDone(what, ok, message) {
+            if (what === "open" && ok)
+                Ui.sure("Replace everything in Chat?",
+                        message + " Every message, photo, voice message, contact and key on this computer is replaced by it. Your chat lock stays the same. Use the backup on one device at a time. Huginn restarts after.",
+                        "Hold to restore", () => Vault.restoreOpened(), true, true, () => Vault.forgetOpened())
+            else
+                Ui.say(message, !ok)
+        }
+    }
+
     function press(key) {
         const job = running()
         if (key === "exit") Ui.main.requestExit()
         else if (key === "chatName") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (key === "contacts") Ui.openPage("contacts", {})
+        else if (key === "backup") startBackup()
+        else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Open Chat and unlock it first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Every conversation on this computer is deleted. Contacts stay.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
@@ -228,7 +298,7 @@ Rectangle {
     function change(dir) {
         const r = rows[row]
         if (!r) return
-        if (r.kind === "toggle") { const o = r.chat ? Chat : Settings; o[r.key] = !o[r.key] }
+        if (r.kind === "toggle") { const o = source(r); o[r.key] = !o[r.key] }
         else if (r.kind === "segmented") {
             const opts = r.options
             let i = opts.findIndex(o => o.value === (r.chat ? String(Chat[r.key]) : Settings[r.key]))

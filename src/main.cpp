@@ -6,6 +6,7 @@
 #include "chat.h"
 #include "direct.h"
 #include "chatcrypto.h"
+#include "chatwire.h"
 #include "ratchet.h"
 #include "ble.h"
 #include "bleframes.h"
@@ -78,7 +79,7 @@ int main(int argc, char *argv[])
     args.addOption(windowed);
     QCommandLineOption unattend(QStringLiteral("unattend-sample"), QStringLiteral("Print the Windows setup file with every choice on (for CI), then quit."));
     args.addOption(unattend);
-    QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors and the message envelopes (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(chatTest);
     QCommandLineOption ratchetTest(QStringLiteral("ratchet-selftest"), QStringLiteral("Check the message ratchet against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(ratchetTest);
@@ -86,9 +87,15 @@ int main(int argc, char *argv[])
     args.addOption(nostrTest);
     QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing and Bluetooth framing (for CI), then quit."));
     args.addOption(privacyTest);
+    QCommandLineOption backupTest(QStringLiteral("backup-selftest"), QStringLiteral("Back up and restore a temporary chat folder (for CI), then quit."));
+    args.addOption(backupTest);
     args.process(app);
-    if (args.isSet(chatTest))
-        return ChatCrypto::selfTest(args.value(chatTest)) ? 0 : 1;
+    if (args.isSet(chatTest)) {
+        const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
+        return a && b ? 0 : 1;
+    }
+    if (args.isSet(backupTest))
+        return Vault::backupSelfTest() ? 0 : 1;
     if (args.isSet(ratchetTest))
         return Ratchet::selfTest(args.value(ratchetTest)) ? 0 : 1;
     if (args.isSet(nostrTest))
@@ -178,13 +185,13 @@ int main(int argc, char *argv[])
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
-    QObject::connect(chat, &Chat::arrived, &app, [chat, sound](const QString &name, const QString &text, const QString &key) {
+    QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
         if (looking)
             return;
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
-            const bool preview = chat->showPreview();
+            const bool preview = chat->showPreview() && !vault->screenLocked();
             QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"));
             n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), 0u, QStringLiteral("io.github.ravenor907.Huginn"),
                    preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"), QStringList(), QVariantMap(), 6000);

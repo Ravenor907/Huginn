@@ -2,6 +2,7 @@ import QtQuick
 import Huginn
 
 // Settings › Chat › Contacts: everyone you're in touch with or met close by, and who's blocked.
+// Someone renamed here shows as "Nickname (their name)".
 // Blocking lives here, not in the chat itself.
 Rectangle {
     id: page
@@ -73,7 +74,7 @@ Rectangle {
             Ui.sure("Unblock " + p.name + "?", "Their messages reach you again, and your chat with them comes back.", "Unblock", () => Chat.block(p.key, false))
             return
         }
-        const items = [{ name: "Message", url: "open" }]
+        const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" }]
         if (!p.verified) items.push({ name: "Check code", detail: "Make sure nobody is in between", url: "code" })
         items.push({ name: "Block", detail: "Nothing from them reaches you. They aren't told", url: "block" })
         if (p.contact) items.push({ name: "Remove contact", detail: "Your chat with them stays", url: "remove" })
@@ -81,6 +82,9 @@ Rectangle {
             if (a === "open") { Ui.closePage(); Ui.openPage("chat", {}); }
             else if (a === "code") Ui.sure("Check it's really " + p.name, "Code: " + Chat.codeWith(p.key) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
                                            "It matches", () => Chat.verify(p.key))
+            else if (a === "rename")
+                Ui.ask("Rename " + Chat.realNameOf(p.key), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
+                       t => Chat.setNickname(p.key, t), false, true)
             else if (a === "block") { Chat.block(p.key, true); Ui.say(p.name + " blocked.") }
             else if (a === "remove") { Chat.removeContact(p.key); Ui.say(p.name + " removed. Your chat with them stays.") }
         })

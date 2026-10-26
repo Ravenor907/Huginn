@@ -22,7 +22,8 @@ Rectangle {
     readonly property var entries: {
         const out = [{ kind: "add", name: "Add someone", detail: "Paste the code they sent you" },
                      { kind: "code", name: "My code", detail: "Show a QR anyone can scan to message you" }]
-        Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, detail: "Wants to chat (has your code)" }))
+        Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
+                                              detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
         out.push({ kind: "nearby", name: "Nearby room", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
         Chat.chats.forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
         Chat.around.forEach(p => out.push({ kind: "stranger", key: p.key, name: p.name, detail: page.routeText(p.route) + " · A to message", route: p.route }))
@@ -34,7 +35,7 @@ Rectangle {
                     { id: "2", name: Chat.username, text: "Sending it over LocalSend now", mine: true, time: Date.now(), state: "read" }]
         return openKey === "" ? Chat.nearby : (Chat.chats, Chat.messagesWith(openKey))
     }
-    readonly property string openName: openKey === "" ? "" : Chat.nameOf(openKey)
+    readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
 
     function routeText(r) {
         return r === "bluetooth" ? "Close by (Bluetooth)" : r === "wifi" ? "Same Wi-Fi" : r === "internet" ? "Over the internet" : "Not reachable right now"
@@ -67,7 +68,8 @@ Rectangle {
         width: parent.width
         title: "Chat"
         subtitle: page.locked ? "Locked" : page.openKey === "" ? "Nearby: everyone close by or on this Wi-Fi with Huginn or Muninn"
-                : page.routeText(Chat.route(page.openKey)) + " · end-to-end encrypted · " + (Chat.isVerified(page.openKey) ? "verified" : "not verified")
+                : (Chat.chats, page.routeText(Chat.route(page.openKey))) + " · end-to-end encrypted · "
+                  + (Chat.keyChanged(page.openKey) ? "security key changed, not verified" : Chat.isVerified(page.openKey) ? "verified" : "not verified")
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
 
@@ -185,19 +187,21 @@ Rectangle {
                 readonly property bool picked: page.zone === "messages" && page.sel === index
                 Rectangle {
                     id: bubble
+                    // A note from Huginn itself (a changed security key) sits in the middle.
                     anchors.right: modelData.mine ? parent.right : undefined
-                    width: Math.min(list.width * 0.75, Math.max(body.implicitWidth, meta.implicitWidth, modelData.photo ? Theme.px(260) : 0) + Theme.px(28))
+                    anchors.horizontalCenter: modelData.system ? parent.horizontalCenter : undefined
+                    width: Math.min(list.width * (modelData.system ? 0.9 : 0.75), Math.max(body.implicitWidth, meta.implicitWidth, modelData.photo ? Theme.px(260) : 0) + Theme.px(28))
                     height: col.implicitHeight + Theme.px(18)
                     radius: Theme.radius + 2
-                    color: modelData.mine ? Theme.accentFill : Theme.raised
-                    border.width: parent.picked ? Theme.focusWidth : 0
-                    border.color: Theme.accent
+                    color: modelData.system ? Theme.dangerFill : modelData.mine ? Theme.accentFill : Theme.raised
+                    border.width: parent.picked ? Theme.focusWidth : modelData.system ? 1 : 0
+                    border.color: modelData.system && !parent.picked ? Theme.danger : Theme.accent
                     Column {
                         id: col
                         x: Theme.px(14); y: Theme.px(9)
                         width: parent.width - Theme.px(28)
                         spacing: Theme.px(4)
-                        Text { visible: !modelData.mine && page.openKey === ""; text: modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
+                        Text { visible: !modelData.mine && !modelData.system && page.openKey === ""; text: modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
                         Image {
                             visible: !!modelData.photo && !modelData.voice && !modelData.unsent
                             width: Theme.px(260); height: Theme.px(190)
@@ -223,7 +227,7 @@ Rectangle {
                             visible: !modelData.photo || !!modelData.unsent
                             width: parent.width; wrapMode: Text.Wrap
                             text: modelData.unsent ? (modelData.mine ? "Message deleted by you" : "Message deleted by " + modelData.unsent) : modelData.text
-                            font.italic: !!modelData.unsent
+                            font.italic: !!modelData.unsent || !!modelData.system
                             color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18)
                         }
                         Text {
@@ -314,7 +318,7 @@ Rectangle {
         prompts: lock.visible ? [{ key: "b", label: "Back" }]
             : page.zone === "list" ? [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
             : [{ key: "a", label: "Write" }].concat(page.openKey !== "" ? [{ key: "y", label: "Hold to talk" }, { key: "rb", label: "Picture" }] : [])
-                .concat(page.sel >= 0 ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "List" }])
+                .concat(page.sel >= 0 || page.openKey !== "" ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "List" }])
         onPrompt: k => page.handleButton(k)
     }
 
@@ -334,9 +338,45 @@ Rectangle {
             if (!c.key) { Ui.say("That isn't a Muninn code. Ask them for My code › Share code.", true); return }
             if (c.mine) { Ui.say("That's your own code.", true); return }
             if (c.expired) { Ui.say("That code has expired (they last an hour). Ask them for a new one.", true); return }
-            Chat.addContact(t)
-            Ui.say(c.name + " added. Say hi: they'll get it wherever they are.")
-            openKey = c.key; zone = "messages"
+            const r = Chat.replaces(t)
+            const added = () => { Ui.say(c.name + " added. Say hi: they'll get it wherever they are."); openKey = c.key; zone = "messages" }
+            if (!r.key) { Chat.addContact(t); added(); return }
+            // A contact with this inbox or name already has another security key: never replaced quietly.
+            if (r.sameInbox) {
+                Ui.sure(r.name + "'s security key changed?", "This code has " + r.name + "'s inbox but a different security key. Use it only if you've checked with them "
+                        + "another way (in person or a call). Your chat carries on with the new key, marked not verified.", "Use the new key",
+                        () => { Chat.addContact(t, r.key); openKey = c.key; zone = "messages" }, false, true)
+                return
+            }
+            Ui.pickFrom("Is this " + r.name + "?", [{ header: "Not the security key you have for " + r.name, items: [
+                { name: "Someone new", detail: "Add " + c.name + " as another contact", url: "new" },
+                { name: "Same person, new key", detail: "Your chat with " + r.name + " carries on, marked not verified. Check the code with them", url: "same" }] }],
+                a => {
+                    if (a === "same") { Chat.addContact(t, r.key); openKey = c.key; zone = "messages" }
+                    else { Chat.addContact(t); added() }
+                })
+        })
+    }
+    // A name only for this computer: never sent. Empty goes back to their own name.
+    function rename(k) {
+        Ui.ask("Rename " + Chat.realNameOf(k), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(k), "Save",
+               t => { Chat.setNickname(k, t); Ui.say(t.trim() === "" ? "Back to " + Chat.realNameOf(k) + "." : "Renamed to " + Chat.nameOf(k) + ".") }, false, true)
+    }
+    function checkCode(k) {
+        const n = Chat.nameOf(k)
+        Ui.sure("Check it's really " + n, "Code: " + Chat.codeWith(k) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
+                "It matches", () => Chat.verify(k))
+    }
+    function conversationItems() {
+        const items = [{ name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" }]
+        if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
+        return items
+    }
+    function conversationOptions() {
+        const k = openKey
+        Ui.pickFrom(openName, [{ header: "", items: conversationItems() }], a => {
+            if (a === "rename") rename(k)
+            else if (a === "code") checkCode(k)
         })
     }
     function choose() {
@@ -347,6 +387,13 @@ Rectangle {
         case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; zone = "messages"; return
         case "request":
+            if (e.replaces) {
+                Ui.sure(e.name + " says they're " + e.replacesName, "Their security key isn't the one you have for " + e.replacesName + ". Accept only if you've checked with them "
+                        + "another way (in person or a call). Your chat with " + e.replacesName + " then carries on with the new key, marked not verified.", "Accept",
+                        () => { Chat.acceptRequest(e.key); openKey = e.key; zone = "messages" }, false, true, () => Chat.declineRequest(e.key))
+                Ui.confirm.cancelText = "Decline"
+                return
+            }
             Ui.sure(e.name + " wants to chat", "They have your code. Only accept if you know who it is.", "Accept",
                     () => { Chat.acceptRequest(e.key); openKey = e.key; zone = "messages" }, false, false, () => Chat.declineRequest(e.key))
             Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
@@ -367,6 +414,13 @@ Rectangle {
     }
     function options() {
         const m = messages[sel]
+        if (m && m.system) {
+            const k = openKey
+            const items = Chat.isVerified(k) ? [] : [{ name: "Check code", detail: "Make sure it's really them", url: "code" }]
+            items.push({ name: "Delete for me", detail: "Only on this computer", url: "delete" })
+            Ui.pickFrom("Security key", [{ header: "", items: items }], a => { if (a === "code") checkCode(k); else if (a === "delete") Chat.deleteMessage(k, m.id) })
+            return
+        }
         if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "It's deleted on this computer only.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
         if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
@@ -376,7 +430,9 @@ Rectangle {
         if (openKey === "" && !m.mine) items.push({ name: "Mute " + m.name, detail: "Hide their messages here", url: "mute" })
         items.push({ name: openKey === "" ? "Delete" : "Delete for me", detail: "Only on this computer", url: "delete" })
         const k = openKey
-        Ui.pickFrom("Message", [{ header: "", items: items }], a => {
+        const sections = [{ header: "", items: items }]
+        if (k !== "") sections.push({ header: "Conversation", items: conversationItems() })
+        Ui.pickFrom("Message", sections, a => {
             if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
@@ -384,6 +440,8 @@ Rectangle {
             else if (a === "retry") Chat.retry(k, m.id)
             else if (a === "mute") Chat.block(m.peer, true)
             else if (a === "delete") { if (k === "") Chat.deleteNearbyMessage(m.id); else Chat.deleteMessage(k, m.id) }
+            else if (a === "rename") rename(k)
+            else if (a === "code") checkCode(k)
         })
     }
 
@@ -413,7 +471,11 @@ Rectangle {
         case "right": zone = "messages"; break
         case "left": zone = "list"; sel = -1; break
         case "a": if (zone === "list") choose(); else write(); break
-        case "x": if (zone === "messages" && sel >= 0) options(); else if (zone === "messages") write(); break
+        case "x":
+            if (zone === "messages" && sel >= 0) options()
+            else if (zone === "messages" && openKey !== "") conversationOptions()
+            else if (zone === "messages") write()
+            break
         case "y":
             if (zone === "messages" && openKey !== "" && !Voice.recording) {
                 if (!Voice.start(openKey)) Ui.say("The microphone isn't available right now.", true)

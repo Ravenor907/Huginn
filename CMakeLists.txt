@@ -38,6 +38,7 @@ qt_add_executable(huginn
     src/chat.cpp src/chat.h
     src/direct.cpp src/direct.h
     src/chatcrypto.cpp src/chatcrypto.h
+    src/chatwire.cpp src/chatwire.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h

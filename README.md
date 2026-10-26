@@ -24,16 +24,21 @@ These two do the same for you. **Huginn** lives on your Steam Deck or SteamOS ha
 | | |
 |---|---|
 | **End-to-end encryption** | Each person has a key pair made on their own device. Messages are sealed with AES-256-GCM using keys only the two people share. Internet messages are wrapped a second time, so relays can't even see who is writing to whom. |
+| **A fresh key for every message** | Forward secrecy: keys move on with every message, so a key stolen tomorrow can't open yesterday's conversation. |
+| **Key change warnings** | If a contact's security key ever changes, the chat says so and asks you to check the code with them. Nothing is trusted silently. |
 | **No account** | You are a key, not a phone number or email. Share your code or QR to add someone. |
 | **Codes that expire** | Your contact code and QR last 1 hour. A code leaked online can't be used to spam you later. Strangers without a valid code are dropped silently. |
 | **Every route at once** | Bluetooth, local Wi-Fi and the internet together, with automatic retries for a full day if the other person is offline. |
 | **Sent, delivered, read** | Ticks for each message. Read receipts can be turned off. |
 | **Unsend** | Remove a message from both devices. The other side sees "Message deleted by" with your name. |
 | **Photos and voice messages** | Photos are shrunk and scrubbed of location and camera data. Voice messages are recorded in memory and carry no metadata. |
-| **Lock** | A 9-dot pattern or a password is required to open the chat. Everything on disk is encrypted with it, and wrong guesses lock you out for longer each time. |
+| **Lock** | A 9-dot pattern or a password is required to open the chat. Everything on disk is encrypted with it, and wrong guesses lock you out for longer each time. There's no visible erase button for a snoop to press. |
 | **Notifications** | A notification and the raven's call for every message, unless you're already looking at that chat. Muninn listens in the background. |
 | **Nearby chat** | Talk to people in the same room without exchanging codes first. |
+| **Private nicknames** | Rename anyone ("Raven 6645" becomes "Wifey"). Only you see it; it never leaves your device. |
 | **Contacts** | Block, unblock or remove people from Settings. Hold a message to delete it. |
+| **Encrypted backup** | Save all your chats to one password-protected file and restore them later. |
+| **Panic lock** | Lock everything instantly: a quick settings tile, a home screen shortcut or a hard shake on Muninn; hold L3 and R3 on Huginn. Message text stays hidden in notifications until you unlock. |
 | **Accessibility** | Interface size, larger text, high contrast, a color blind palette and reduced motion. Tablets get the list and the chat side by side. |
 
 ## Huginn: the handheld
@@ -59,10 +64,10 @@ The messenger, plus the file tools you want in your pocket. Android 8 or newer.
 
 | | |
 |---|---|
-| **Messenger** | Everything above, with a full-screen thread when you scroll and hold-to-record voice. |
+| **Messenger** | Everything above, in a clean layout: search, round avatars with unread counts, one + button for adding people, and full-screen conversations. Hold the mic to record voice. |
 | **Send files** | Encrypted transfers with Huginn and LocalSend. |
 | **Browse files** | Your phone's storage, organized and searchable. |
-| **USB drives** | Make bootable USB drives from the phone. |
+| **Useful ISOs** | Bootable USB drives from the phone, sorted into folders: **Gaming** (SteamOS, Bazzite, CachyOS, Batocera), **Desktop** (Linux Mint, Ubuntu, Fedora) and **Tools** (Memtest86+, GParted, Clonezilla, SystemRescue, Rescuezilla). Each one comes from its official source and is checked before it's written, or added to a Ventoy drive. Bring your own ISO for anything else, Windows included. |
 
 ## Install
 
@@ -98,23 +103,17 @@ Never set a password on SteamOS? Open Konsole and run `passwd` first.
 | LT / RT | Page up / down | Scroll |
 | View | Search this folder | Keep in touch |
 | Menu | Settings | Settings |
+| L3 + R3 (hold) | | Panic lock |
 
 A keyboard works too in Desktop Mode: arrows, Enter, Escape, Space, Tab and F10.
 
 ## What's next
 
-0.5 is about security first:
-
-- **Forward secrecy:** a fresh key for every message, so a key stolen tomorrow can't open yesterday's messages.
-- **Key change warnings** when a contact's identity changes.
-- **Encrypted backup and restore** of your chats.
-- **Panic lock** to lock everything instantly.
-
-After that: group chats, contact folders, a Windows portable build, a QR scanner and controller mouse control on Huginn.
+0.6: group chats, contact folders (Family, Work, whatever you like), a Windows portable build, a QR scanner and controller mouse control on Huginn.
 
 ## Versions
 
-One dot only, read as a decimal: 0.3, 0.31, 0.32, 0.4, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, tests both, and publishes them together.
+One dot only, read as a decimal: 0.3, 0.31, 0.32, 0.4, 0.5, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn and Muninn, tests both, and publishes them together.
 
 ## Building
 

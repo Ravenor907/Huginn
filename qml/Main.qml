@@ -160,7 +160,17 @@ Window {
         function onNotice(text) { Ui.say(text) }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && pageLoader.source.toString().indexOf("ChatPage") >= 0) return
-            Ui.say(Chat.showPreview ? name + ": " + text : "New message. Open Chat to read it.")
+            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : "New message. Open Chat to read it.")
+        }
+    }
+    // Panic lock (hold L3 and R3): close anything open over the screen.
+    Connections {
+        target: Vault
+        function onPanicked() {
+            if (prompt.visible) prompt.cancel()
+            if (wheel.visible) wheel.close()
+            if (picker.visible) picker.close()
+            Ui.say("Chat locked.")
         }
     }
     Connections {
