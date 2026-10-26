@@ -50,8 +50,17 @@ Rectangle {
     }
 
     onOpenKeyChanged: { sel = -1; Voice.stop(); if (openKey !== "") Chat.markRead(openKey); Chat.openChat = openKey }
-    onMessagesChanged: if (openKey !== "" && !locked) Chat.markRead(openKey)
-    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
+    // Read only counts when someone is actually looking: not while a game is in front.
+    onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
+    Component.onCompleted: Vault.back()   // away more than a minute: locked again
+    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
+    Connections {
+        target: Qt.application
+        function onStateChanged() {
+            if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (page.openKey !== "" && !page.locked) Chat.markRead(page.openKey) }
+            else Vault.away()
+        }
+    }
 
     PageHeader {
         id: header
@@ -70,7 +79,7 @@ Rectangle {
         anchors.top: divider.bottom; anchors.topMargin: Theme.px(16)
         anchors.horizontalCenter: parent.horizontalCenter
         width: Math.min(parent.width - Theme.px(56), Theme.px(620))
-        onFinished: if (mode === "change") page.changeLock = false   // after an unlock, the change step follows
+        onFinished: how => { if (how === "change") page.changeLock = false }   // after an unlock, the change step follows
         onCancelled: { if (page.changeLock) page.changeLock = false; else Ui.closePage() }
     }
 
@@ -340,6 +349,7 @@ Rectangle {
         case "request":
             Ui.sure(e.name + " wants to chat", "They have your code. Only accept if you know who it is.", "Accept",
                     () => { Chat.acceptRequest(e.key); openKey = e.key; zone = "messages" }, false, false, () => Chat.declineRequest(e.key))
+            Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
             return
         case "stranger": Chat.meet(e.key, e.name); openKey = e.key; zone = "messages"; return
         default: openKey = e.key; zone = "messages"
@@ -406,7 +416,7 @@ Rectangle {
         case "x": if (zone === "messages" && sel >= 0) options(); else if (zone === "messages") write(); break
         case "y":
             if (zone === "messages" && openKey !== "" && !Voice.recording) {
-                if (!Voice.start()) Ui.say("The microphone isn't available right now.", true)
+                if (!Voice.start(openKey)) Ui.say("The microphone isn't available right now.", true)
             }
             break
         case "rb": if (zone === "messages" && openKey !== "") pickPicture(); break

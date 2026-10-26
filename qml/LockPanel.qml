@@ -12,7 +12,7 @@ Rectangle {
     property string note: ""
     property bool bad: false
     property int wait: Vault.waitSeconds
-    signal finished()
+    signal finished(string how)   // "setup", "unlock" or "change": what just finished
     signal cancelled()
 
     color: Theme.panel
@@ -28,12 +28,12 @@ Rectangle {
         if (Vault.setSecret(secret, pattern)) {
             Ui.say(pattern ? "Pattern set. Don't forget it: it can't be recovered." : "Password set. Don't lose it: it can't be recovered.")
             first = null; note = ""; bad = false
-            finished()
+            finished(mode === "setup" ? "setup" : "change")
         } else { note = "That didn't save. Try again."; bad = true }
     }
     function tryUnlock(secret) {
         if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
-        if (Vault.unlock(secret)) { note = ""; bad = false; finished() }
+        if (Vault.unlock(secret)) { note = ""; bad = false; finished("unlock") }
         else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds }
     }
     function onPattern(dots) {

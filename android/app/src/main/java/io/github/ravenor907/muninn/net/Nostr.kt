@@ -79,6 +79,9 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
         }
     }
 
+    /** Asks every open relay for the inbox again: after unlocking, so what came while locked is read now. */
+    fun resubscribe() { for ((url, ws) in sockets) if (live[url] == true) subscribe(ws) }
+
     fun disconnect() {
         keepAlive = false
         synchronized(sockets) { sockets.values.forEach { it.close(1000, null) }; sockets.clear() }

@@ -45,6 +45,8 @@ public:
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();
+    // Chat just opened (unlocked): introduce ourselves on links made while it was locked.
+    void sayHello();
 
     // Queues a message for the peer with this chatKey. False when it isn't connected or is over 64 KB.
     // True means queued, not delivered.
@@ -70,6 +72,7 @@ private:
         QLowEnergyCharacteristic inbox;
         QString name, chatKey, mailbox;
         bool ready = false;
+        bool said = false;          // our hello went out: only then can messages use this link
         int mtu = BleFrames::kMinMtu;
         quint32 nextNumber = 0;
         QList<QByteArray> frames;   // waiting to be written, in order

@@ -213,6 +213,7 @@ Rectangle {
         else if (key === "chatName") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (key === "contacts") Ui.openPage("contacts", {})
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
+        else if (key === "deleteMessages" && !Chat.ready) Ui.say("Open Chat and unlock it first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Every conversation on this computer is deleted. Contacts stay.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
         else if (key === "eraseChat") Ui.sure("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes. Your files and other settings stay.",
                                               "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)

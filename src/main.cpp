@@ -146,18 +146,33 @@ int main(int argc, char *argv[])
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
     auto *voice = new Voice(chat, &app);
+    // The raven call: for new messages, and once when something arrives while Chat is locked.
+    auto *sound = new QSoundEffect(&app);
+    sound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
+
     if (!args.isSet(tour)) {
         // Stay reachable while Huginn runs: the relays (reconnecting by themselves) and Bluetooth.
         // Locked: say something came, once per message (replaced by Chat once unlocked).
-        nostr->onEnvelope = [chat](const QString &) { Q_EMIT chat->notice(QStringLiteral("New message. Open Chat and unlock it to read.")); return false; };
-        QObject::connect(vault, &Vault::opened, nostr, [nostr] { nostr->reconnectNow(); });
+        // At most once every few minutes: retries and receipts would otherwise each raise one.
+        nostr->onEnvelope = [chat, sound](const QString &) {
+            static qint64 last = 0;
+            const qint64 t = QDateTime::currentMSecsSinceEpoch();
+            if (t - last > 5 * 60000) {
+                last = t;
+                sound->play();
+                Q_EMIT chat->notice(QStringLiteral("New message. Open Chat and unlock it to read."));
+            }
+            return false;
+        };
+        // Unlocked (Chat has just started): introduce ourselves on Bluetooth links made while locked,
+        // and ask the relays for the inbox again so messages that came while locked are read now.
+        QObject::connect(vault, &Vault::opened, nostr, [nostr, ble] { ble->sayHello(); nostr->reconnectNow(); nostr->resubscribe(); });
+        QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
         nostr->setKeepAlive(true);
         nostr->connectRelays();
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
-    auto *sound = new QSoundEffect(&app);
-    sound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
         if (looking)

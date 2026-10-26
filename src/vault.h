@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QObject>
 #include <QString>
 
@@ -31,6 +32,9 @@ public:
     // Shows the lock screen again; the data key stays in memory while Huginn runs, so incoming
     // messages are still saved (encrypted) in the background.
     Q_INVOKABLE void lockScreen() { m_screenLocked = true; Q_EMIT changed(); }
+    // Leaving Chat (or Huginn going to the background) starts the clock; back after a minute = locked again.
+    Q_INVOKABLE void away() { if (!locked()) m_awaySince = QDateTime::currentMSecsSinceEpoch(); }
+    Q_INVOKABLE void back() { if (m_awaySince && QDateTime::currentMSecsSinceEpoch() - m_awaySince > 60000) lockScreen(); m_awaySince = 0; }
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
     bool screenLocked() const { return m_screenLocked || locked(); }
     // Erases every message, photo, voice message, contact and key. Huginn's other settings stay.
@@ -57,4 +61,5 @@ private:
     QString keyFile() const;
     QByteArray m_key;
     bool m_screenLocked = false;
+    qint64 m_awaySince = 0;
 };

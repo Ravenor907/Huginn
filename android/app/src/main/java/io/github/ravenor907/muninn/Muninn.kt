@@ -108,6 +108,8 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        // Messages that came while locked were only announced: ask the relays for them again now.
+        nostr.resubscribe()
     }
 
     private var listening = false

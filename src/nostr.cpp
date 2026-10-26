@@ -349,6 +349,13 @@ void Nostr::disconnect()
     }
 }
 
+void Nostr::resubscribe()
+{
+    for (auto it = m_links.begin(); it != m_links.end(); ++it)
+        if (m_live.contains(it.key()) && it->ws)
+            subscribe(it->ws.data());
+}
+
 void Nostr::subscribe(QWebSocket *ws)
 {
     const QString pub = publicKey();

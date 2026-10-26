@@ -78,11 +78,11 @@ bool Vault::unlock(const QString &secret)
     bool ok = false;
     const QByteArray key = open(kek, QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1()), &ok);
     if (!ok || key.size() != 32) {
-        // Every 5 wrong tries, wait 30 seconds (kept across restarts), so guessing is slow.
+        // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
         const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
         settings().setValue(QStringLiteral("vault/fails"), fails);
         if (fails % 5 == 0)
-            settings().setValue(QStringLiteral("vault/until"), QDateTime::currentMSecsSinceEpoch() + 30000);
+            settings().setValue(QStringLiteral("vault/until"), QDateTime::currentMSecsSinceEpoch() + qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)));
         Q_EMIT changed();
         return false;
     }
@@ -128,6 +128,9 @@ void Vault::eraseAll()
     m_key.fill(0);
     m_key.clear();
     settings().remove(QStringLiteral("vault"));
+    // The inbox address and chat identity go too, so an erased computer doesn't keep the old mailbox.
+    settings().remove(QStringLiteral("nostr"));
+    settings().remove(QStringLiteral("chat"));
     Q_EMIT changed();
 }
 

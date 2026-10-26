@@ -292,15 +292,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             return 200 to "{}"
         }
         if (room == "nearby" && sentId.isNotEmpty() && (deleted.containsKey(sentId) || _nearby.value.any { it.id == sentId })) return 200 to "{}"
-        // No more than 5 messages in 10 seconds from anyone: nobody can flood a room.
+        val key = try { ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(fromKey)) } catch (e: Exception) { return 400 to "{}" }
+        val opened = ChatCrypto.open(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data"))) ?: return 403 to "{}"
+        // No more than 5 messages in 10 seconds from anyone: nobody can flood a room. Counted only once
+        // a message proved it's really from them, so nobody can use it to block a real contact.
+        if (recent.size > 500) recent.clear()
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         if (room != "receipt") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
             if (q.size >= 5) return 429 to "{}"
             q.addLast(now)
         }
-        val key = try { ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(fromKey)) } catch (e: Exception) { return 400 to "{}" }
-        val opened = ChatCrypto.open(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data"))) ?: return 403 to "{}"
         val text = if (room == "receipt") opened else opened.take(MAX)
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
         val msg = Msg(msgId, fromKey, name, text, false, now, via = via)
@@ -603,7 +605,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (ble.send(m.peerKey, body)) { any = true; markSent(m, "close") }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
             any = true
-            bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 3) it.copy(state = "delivered", via = "wifi", failed = false) else it } }
+            bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
+            // "Sent" only: a 200 just means some device answered; "Delivered" comes from their sealed receipt.
         }
         backupMailbox(m)?.let { nostr.publish(it, wrap(m.peerKey, body)); any = true; markSent(m, "internet") }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }

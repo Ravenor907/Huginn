@@ -65,7 +65,11 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                 wrong = true
                 val fails = prefs.getInt("lockFails", 0) + 1
                 prefs.edit().putInt("lockFails", fails).apply()
-                if (fails % 5 == 0) { waitUntil = System.currentTimeMillis() + 30_000; prefs.edit().putLong("lockUntil", waitUntil).apply() }
+                // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour.
+                if (fails % 5 == 0) {
+                    val wait = minOf(3_600_000L, 30_000L shl minOf(fails / 5 - 1, 7))
+                    waitUntil = System.currentTimeMillis() + wait; prefs.edit().putLong("lockUntil", waitUntil).apply()
+                }
             }
         }
     }

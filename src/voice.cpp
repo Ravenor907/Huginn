@@ -21,8 +21,8 @@ Voice::Voice(Chat *chat, QObject *parent)
     m_ticker.setInterval(150);
     connect(&m_ticker, &QTimer::timeout, this, [this] {
         Q_EMIT tick();
-        if (m_recording && elapsed() >= 5 * 60 * 1000 && !m_sendTo.isEmpty())
-            finish(m_sendTo);
+        if (m_recording && elapsed() >= 5 * 60 * 1000 && !m_target.isEmpty())
+            finish(m_target);   // the 5-minute limit: send what there is
     });
 }
 
@@ -56,10 +56,11 @@ QString Voice::length(int ms)
     return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'));
 }
 
-bool Voice::start()
+bool Voice::start(const QString &key)
 {
     stop();
     cancel();
+    m_target = key;
     m_error.clear();
     if (!m_session) {
         m_session = new QMediaCaptureSession(this);
@@ -125,6 +126,7 @@ void Voice::cancel()
         m_recorder->stop();
     m_recording = false;
     m_sendTo.clear();
+    m_target.clear();
     QFile::remove(tempFile());
     m_ticker.stop();
     Q_EMIT changed();

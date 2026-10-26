@@ -146,7 +146,7 @@ QVariantList Ble::peers() const
 {
     QVariantList out;
     for (const Link *l : m_links) {
-        if (!l->ready)
+        if (!l->ready || !l->said)
             continue;
         out << QVariantMap{{QStringLiteral("address"), l->address},
                            {QStringLiteral("name"), l->name},
@@ -420,8 +420,26 @@ void Ble::onReady(Link *l)
     Seen &s = m_seen[l->address];
     s.failures = 0;
     s.retryAtMs = 0;
-    // Our hello always goes first on a new link.
-    queue(l, m_hello ? m_hello() : QByteArray());
+    // Our hello always goes first on a new link. While Chat is locked there's none yet: then the
+    // link waits (unused) until sayHello() runs at unlock.
+    const QByteArray hello = m_hello ? m_hello() : QByteArray();
+    if (!hello.isEmpty()) {
+        queue(l, hello);
+        l->said = true;
+    }
+    Q_EMIT changed();
+}
+
+void Ble::sayHello()
+{
+    const QByteArray hello = m_hello ? m_hello() : QByteArray();
+    if (hello.isEmpty())
+        return;
+    for (Link *l : std::as_const(m_links))
+        if (l->ready && !l->said) {
+            queue(l, hello);
+            l->said = true;
+        }
     Q_EMIT changed();
 }
 
@@ -439,7 +457,10 @@ bool Ble::send(const QString &chatKey, const QByteArray &json)
     if (json.size() > int(BleFrames::kMaxMessage))
         return false;
     for (Link *l : std::as_const(m_links)) {
-        if (l->ready && l->chatKey == chatKey) {
+        if (l->ready && l->said && l->chatKey == chatKey) {
+            // Bluetooth is slow: past about 2 MB waiting, say no so other routes carry it.
+            if (l->frames.size() > 4096)
+                return false;
             queue(l, json);
             return true;
         }

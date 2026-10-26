@@ -48,6 +48,9 @@ public:
     Q_INVOKABLE void connectRelays();
     // The network came back: drop dead connections and connect again now.
     Q_INVOKABLE void reconnectNow();
+    // Asks every open relay for the inbox again: after unlocking (the key and the handler change),
+    // or once the mailbox is first known on a fresh install.
+    Q_INVOKABLE void resubscribe();
     // Closes every relay and turns keepAlive off. Hides QObject::disconnect; call that one as QObject::disconnect.
     Q_INVOKABLE void disconnect();
     // Sends sealed content to someone's mailbox through every relay. Returns how many relays are connected now.

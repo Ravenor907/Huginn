@@ -34,7 +34,7 @@ public:
     qreal progress() const;
     QString error() const { return m_error; }
 
-    Q_INVOKABLE bool start();
+    Q_INVOKABLE bool start(const QString &key);
     // Stops and sends to that chat (too short = nothing sent).
     Q_INVOKABLE void finish(const QString &key);
     Q_INVOKABLE void cancel();
@@ -59,5 +59,5 @@ private:
     QTimer m_ticker;
     bool m_recording = false;
     qint64 m_started = 0;
-    QString m_sendTo, m_playing, m_error;
+    QString m_sendTo, m_target, m_playing, m_error;
 };

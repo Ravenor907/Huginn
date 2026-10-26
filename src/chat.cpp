@@ -78,9 +78,10 @@ void Chat::start()
             pub = kp.publicDer;
         }
         secrets.insert(QStringLiteral("chatPriv"), b64(priv));
-        m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact));
         m_settings.setValue(QStringLiteral("chat/pub"), pub.toBase64());
-        m_settings.remove(QStringLiteral("chat/priv"));
+        // Only drop the old copy once the vault really has it, or the identity could be lost.
+        if (m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact)))
+            m_settings.remove(QStringLiteral("chat/priv"));
     }
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
@@ -484,15 +485,6 @@ int Chat::receive(const QByteArray &body, const QString &via)
             if (str(v.toMap(), "id") == sentId)
                 return 200;
     }
-    // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room.
-    if (room != QLatin1String("receipt")) {
-        QList<qint64> &q = m_recent[fromKey];
-        while (!q.isEmpty() && now() - q.first() > 10000)
-            q.removeFirst();
-        if (q.size() >= 5)
-            return 429;
-        q << now();
-    }
     const QByteArray key = keyWith(fromKey);
     if (key.isEmpty())
         return 400;
@@ -501,6 +493,18 @@ int Chat::receive(const QByteArray &body, const QString &via)
                                               QByteArray::fromBase64(o.value(QStringLiteral("data")).toString().toLatin1()), &ok);
     if (!ok)
         return 403;
+    // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room. Counted only
+    // once a message proved it's really from them, so nobody can use it to block a real contact.
+    if (room != QLatin1String("receipt")) {
+        if (m_recent.size() > 500)
+            m_recent.clear();
+        QList<qint64> &q = m_recent[fromKey];
+        while (!q.isEmpty() && now() - q.first() > 10000)
+            q.removeFirst();
+        if (q.size() >= 5)
+            return 429;
+        q << now();
+    }
     const QString text = room == QLatin1String("receipt") ? QString::fromUtf8(plain) : QString::fromUtf8(plain).left(kMax);
     const QString msgId = sentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : sentId;
 
@@ -780,6 +784,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
         receipt(fromKey, {id}, QStringLiteral("delivered"), mailbox);
         return 200;
     }
+    if (m_pieceTimes.size() > 500)
+        m_pieceTimes.clear();
     QList<qint64> &q = m_pieceTimes[fromKey];
     while (!q.isEmpty() && now() - q.first() > 60000)
         q.removeFirst();
@@ -982,6 +988,8 @@ void Chat::attempt(const QString &key, const QString &id)
     if (ble) {
         any = true;
         markSent(QStringLiteral("bluetooth"));
+        if (photo)
+            t.next = qMax(t.next, now() + bodies.size() * 3000);   // about 3 s a piece over Bluetooth: don't pile up resends
     }
     const QString base = m_net->baseFor(key);
     if (!base.isEmpty()) {
@@ -993,10 +1001,11 @@ void Chat::attempt(const QString &key, const QString &id)
                 *good = *good && code == 200;
                 if (--*left > 0 || !*good)
                     return;
-                // Same Wi-Fi answers only once it has the message, so a text is delivered right here.
-                update(key, id, [photo](QVariantMap &x) {
-                    if (str(x, "unsent").isEmpty() && rank(str(x, "state")) < (photo ? 2 : 3)) {
-                        x.insert(QStringLiteral("state"), photo ? QStringLiteral("sent") : QStringLiteral("delivered"));
+                // "Sent" only: a 200 just means some device answered. "Delivered" comes from their sealed
+                // receipt, which only the real person can make.
+                update(key, id, [](QVariantMap &x) {
+                    if (str(x, "unsent").isEmpty() && rank(str(x, "state")) < 2) {
+                        x.insert(QStringLiteral("state"), QStringLiteral("sent"));
                         x.insert(QStringLiteral("via"), QStringLiteral("wifi"));
                         x.insert(QStringLiteral("failed"), false);
                     }
@@ -1251,6 +1260,8 @@ void Chat::deleteNearbyMessage(const QString &id)
 
 void Chat::deleteAll()
 {
+    if (!m_ready)
+        return;   // locked: nothing could be saved, so don't pretend
     m_private.clear();
     m_nearby.clear();
     QDir(m_vault->path(QStringLiteral("photos"))).removeRecursively();
@@ -1334,8 +1345,11 @@ void Chat::load()
                     m_private.insert(it.key(), it.value().toArray().toVariantList());
             f.close();
         }
-        QFile::remove(old);
-        save();
+        QJsonObject check;
+        for (auto it = m_private.begin(); it != m_private.end(); ++it)
+            check.insert(it.key(), QJsonArray::fromVariantList(it.value()));
+        if (m_vault->write(QStringLiteral("chats.json"), QJsonDocument(check).toJson(QJsonDocument::Compact)))
+            QFile::remove(old);   // only once the encrypted copy is saved
     }
     // Older messages kept a display time ("8:41 PM"); from now on it's milliseconds.
     for (auto it = m_private.begin(); it != m_private.end(); ++it)
