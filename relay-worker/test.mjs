@@ -123,11 +123,13 @@ await test("global cap of 3000 per day", async () => {
   assert.equal(r.data.error, "global_limit");
 });
 
-await test("fails closed when KV is missing or broken", async () => {
-  upstreamCalls.length = 0;
+await test("no KV bound: limits counted in memory; broken KV fails closed", async () => {
   const e = env();
   delete e.LIMITS;
-  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) })).status, 503);
+  const ID2 = "b".repeat(64);
+  for (let i = 0; i < 30; i++) assert.equal((await call(e, { id: ID2, t: NOW, sig: sign(ID2, NOW) })).status, 200);
+  assert.equal((await call(e, { id: ID2, t: NOW, sig: sign(ID2, NOW) })).status, 429);
+  upstreamCalls.length = 0;
   const kv = new FakeKV();
   kv.fail = true;
   assert.equal((await call(env(kv), { id: ID, t: NOW, sig: sign(ID, NOW) })).status, 503);

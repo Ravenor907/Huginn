@@ -41,6 +41,15 @@ async function readBody(request) {
   }
 }
 
+const memStore = new Map();
+const memKV = {
+  async get(k) { const v = memStore.get(k); return v && v.exp > Date.now() ? v.val : null; },
+  async put(k, val, opts) {
+    if (memStore.size > 20000) memStore.clear();
+    memStore.set(k, { val, exp: Date.now() + (opts && opts.expirationTtl ? opts.expirationTtl * 1000 : 172800000) });
+  },
+};
+
 async function takeQuota(kv, id, nowSec) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
   const gKey = "g:" + day;
@@ -59,7 +68,6 @@ async function handleTurn(request, env, nowSec) {
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN || !env.APP_SECRET) {
     return json(503, { error: "not_configured" });
   }
-  if (!env.LIMITS) return json(503, { error: "limits_unavailable" });
 
   const body = await readBody(request);
   if (!body) return json(400, { error: "bad_request" });
@@ -72,7 +80,7 @@ async function handleTurn(request, env, nowSec) {
 
   let quota;
   try {
-    quota = await takeQuota(env.LIMITS, id, nowSec);
+    quota = await takeQuota(env.LIMITS || memKV, id, nowSec);
   } catch {
     return json(503, { error: "limits_unavailable" });
   }
