@@ -137,7 +137,7 @@ QList<LocalSend::Peer> LocalSend::chatPeers() const
     QList<Peer> out;
     for (const Device &d : m_devices)
         if (!d.chatKey.isEmpty())
-            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type};
+            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type, d.onion};
     return out;
 }
 
@@ -362,7 +362,10 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
         return;
     Device d;
     d.id = id;
-    d.alias = o.value(QStringLiteral("alias")).toString(ip);
+    // Never an address on screen: a device without a name is just "A nearby device".
+    d.alias = o.value(QStringLiteral("alias")).toString().trimmed();
+    if (d.alias.isEmpty())
+        d.alias = QStringLiteral("A nearby device");
     d.model = o.value(QStringLiteral("deviceModel")).toString();
     d.type = o.value(QStringLiteral("deviceType")).toString(QStringLiteral("mobile"));
     d.ip = ip;
@@ -371,6 +374,7 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.chatKey = o.value(QStringLiteral("chatKey")).toString();
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
+    d.onion = o.value(QStringLiteral("onion")).toString().left(70);
     d.seen = QDateTime::currentDateTime();
     m_devices.insert(id, d);
     Q_EMIT devicesChanged();
@@ -383,7 +387,7 @@ QVariantList LocalSend::devices() const
     QVariantList out;
     for (const Device &d : std::as_const(list))
         out << QVariantMap{{QStringLiteral("id"), d.id}, {QStringLiteral("alias"), d.alias}, {QStringLiteral("model"), d.model},
-                           {QStringLiteral("type"), d.type}, {QStringLiteral("ip"), d.ip}, {QStringLiteral("app"), d.app},
+                           {QStringLiteral("type"), d.type}, {QStringLiteral("app"), d.app},
                            {QStringLiteral("chatKey"), d.chatKey}, {QStringLiteral("chatName"), d.chatName}};
     return out;
 }
@@ -607,7 +611,9 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         learn(from);
         Pending p;
         p.socket = s;
-        p.from = from.value(QStringLiteral("alias")).toString(ip);
+        p.from = from.value(QStringLiteral("alias")).toString().trimmed();
+        if (p.from.isEmpty())
+            p.from = QStringLiteral("A nearby device");
         p.ip = ip;
         qint64 total = 0;
         for (auto it = files.begin(); it != files.end(); ++it) {

@@ -120,7 +120,10 @@ Rectangle {
             Ui.sure("Unblock " + p.name + "?", "Their messages reach you again, and your chat with them comes back.", "Unblock", () => Chat.block(p.key, false))
             return
         }
-        const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" }]
+        const ids = Chat.foldersOf(p.key)
+        const inFolders = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
+        const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" },
+                       { name: "Folders", detail: inFolders.length ? "In " + inFolders.join(", ") : "Family, Work, Kindred or your own", url: "folders" }]
         if (!p.verified) items.push({ name: "Check code", detail: "Make sure nobody is in between", url: "code" })
         items.push({ name: "Block", detail: "Nothing from them reaches you. They aren't told", url: "block" })
         if (p.contact) items.push({ name: "Remove contact", detail: "Your chat with them stays", url: "remove" })
@@ -131,8 +134,24 @@ Rectangle {
             else if (a === "rename")
                 Ui.ask("Rename " + Chat.realNameOf(p.key), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
                        t => Chat.setNickname(p.key, t), false, true)
+            else if (a === "folders") pickFolders(p)
             else if (a === "block") { Chat.block(p.key, true); Ui.say(p.name + " blocked.") }
             else if (a === "remove") { Chat.removeContact(p.key); Ui.say(p.name + " removed. Your chat with them stays.") }
+        })
+    }
+    // Folders are only on this computer; Direct messages shows them as filters.
+    function pickFolders(p) {
+        const ids = Chat.foldersOf(p.key)
+        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: ids.indexOf(f.id) >= 0 ? "In it · A takes them out" : "A puts them in" }))
+        items.push({ name: "New folder", detail: "Make one and put them in it", url: "+" })
+        Ui.pickFrom("Folders for " + p.name, [{ header: "Only on this computer", items: items }], id => {
+            if (id === "+") {
+                Ui.ask("New folder", "A name only you see", "", "Make it", t => { const f = Chat.addFolder(t); if (f !== "") Chat.setInFolder(f, p.key, true) }, false, true)
+                return
+            }
+            const on = Chat.foldersOf(p.key).indexOf(id) < 0
+            Chat.setInFolder(id, p.key, on)
+            Ui.say(on ? "Added." : "Taken out.")
         })
     }
     function handleButton(b) {

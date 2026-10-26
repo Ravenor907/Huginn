@@ -14,7 +14,8 @@ does otherwise still interoperates.
 - Identity: each device has one P-256 key pair, the "chat key". Its public half travels as standard base64
   of the SubjectPublicKeyInfo DER (`fromKey`, contact codes). In 0.6 the same key also signs (ECDSA, see 2.2).
 - Envelope, on every route:
-  `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", [invite], (nonce, data) | (rh, data)}`.
+  `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps, [invite], [o], (nonce, data) | (rh, data)}`
+  (`caps` is 1.1, `o` is 0.1).
 - Routes: Bluetooth LE (BleFrames), local Wi-Fi `POST /api/huginn/v1/message`, internet as a Nostr kind 1059
   event whose content is the envelope sealed to the recipient's chat key with a one-off key.
 - Pairwise sealing: the 0.5 message ratchet per contact (`tools/ratchet_ref.py`), or v1 (static shared key)
@@ -25,6 +26,26 @@ does otherwise still interoperates.
 
 All new payloads in this document are UTF-8 JSON plaintext inside `data`, sealed exactly like a private
 message. "Send to X" always means: build an envelope for X, seal it pairwise for X, send it on all routes.
+
+### 0.1 Onion addresses (`o`, `onion`)
+
+From 0.6 each app runs a Tor onion service and the internet route tries the peer's onion address first
+(`POST /api/huginn/v1/message` to `http://<onion>.onion`), with the Nostr mailbox as the fallback for when
+they're offline. The address travels as 56 lowercase base32 characters (`a`-`z`, `2`-`7`), without
+`.onion`; receivers also accept it with the suffix and in upper case, and ignore anything else.
+
+| where | field | notes |
+|---|---|---|
+| contact code `MUNINN1:<base64url JSON>` | `"o"` | next to `n` name, `k` chat key, `p` mailbox, `i` invite, `x` expiry (s) |
+| group code `MUNINNG1:<base64url JSON>` (3.5) | `"o"` | the admin's onion address; Huginn sends and reads it, Muninn doesn't yet (its join is answered over the mailbox, and the admin's envelopes then carry `o`) |
+| envelope | `"o"` | the sender's onion address; only to contacts and group peers, never in room `nearby` |
+| Bluetooth LE hello `{"t":"hello", name, chatKey, mailbox, app, ...}` | `"onion"` | both apps send it |
+| Wi-Fi (LocalSend) announcement and `/register` answer | `"onion"` | next to `chatKey`, `chatName`, `chatApp`, `mailbox`; Huginn sends it, Muninn doesn't yet |
+
+All of them are optional: 0.5 apps ignore them, and an app without Tor leaves them out. A receiver keeps the
+`o` of an **authentic** envelope (after it opened) as that contact's or group peer's onion address, so it
+follows a reinstall. Codes give the first value. A hello or announcement isn't authenticated, so it is a
+hint only (an app that learns from it SHOULD let the next authentic envelope correct it).
 
 ## 1. Capabilities
 
@@ -241,7 +262,7 @@ Two ways in:
 
    ```
    MUNINNG1:<base64url(JSON {"g", "gn": group name, "a": admin chat key, "an": admin name,
-                              "p": admin mailbox, "i": token, "x": expiry seconds})>
+                              "p": admin mailbox, "i": token, "x": expiry seconds, ["o": admin onion]})>
    ```
 
    valid for 1 hour, usable by several people until it expires (the admin can revoke it). The joiner sends
@@ -315,10 +336,14 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
 - Signaling travels in room `call`, sealed pairwise like any message, on all routes.
 - Each call has a fresh P-256 ephemeral key on each side, signed with the chat key. ECDH of the two gives
   the call root; HKDF gives per-direction AES-256-GCM keys that change every 16384 packets.
-- Audio is Opus, 20 ms frames. Every packet goes out on every live path at once: UDP on the local network,
-  UDP over the internet (STUN-found address and hole punching), and Bluetooth LE when connected. The
-  receiver keeps the first copy of each sequence number.
-- No relay server for media. If no path works the call fails with "Can't connect".
+- Audio is Opus, 20 ms frames. Every packet goes out on every live path at once: UDP on the shared Wi-Fi,
+  UDP through the TURN relay over the internet, and Bluetooth LE when connected. The receiver keeps the
+  first copy of each sequence number.
+- **Relay only over the internet.** Nothing is ever sent straight to a peer's internet address: no STUN,
+  no hole punching, no `host` or `srflx` candidates. Each side allocates its own address on the TURN relay
+  (Cloudflare, logins from the relay Worker, see `docs/relay.md`) and sends to the other side's relayed
+  address through it. So the person you call never learns your IP address, and you never learn theirs.
+- If no path works the call fails with "Can't connect".
 
 Calls are offered only to contacts with `c1`, and to group peers inside a voice room (section 6).
 
@@ -328,12 +353,12 @@ Plaintext `{"t": <type>, "call": <call id>, ...}`.
 
 | t | from | fields | meaning |
 |---|---|---|---|
-| `offer` | caller | `eph`, `sig`, `ts`, `cands`, `ble`, `codec`, [`g`, `ch`] | start a call. `g`/`ch` only inside a voice room |
+| `offer` | caller | `eph`, `sig`, `ts`, `cands`, [`lp`], `ble`, `codec`, [`g`, `ch`] | start a call. `g`/`ch` only inside a voice room |
 | `ring` | callee | | the offer arrived and is ringing (caller shows "Ringing") |
-| `answer` | callee | `eph`, `sig`, `cands`, `ble` | accepted |
+| `answer` | callee | `eph`, `sig`, `cands`, [`lp`], `ble` | accepted |
 | `decline` | callee | | said no |
 | `busy` | callee | | already in a call |
-| `cands` | either | `cands` | new local candidates (network changed), at most one per 2 s |
+| `cands` | either | `cands`, [`lp`] | candidates that weren't ready before (the relay came up, Wi-Fi changed), at most one per 2 s |
 | `mute` | either | `on` (bool) | muted or unmuted |
 | `hangup` | either | `why`: `hangup`, `noanswer`, `nopath`, `dropped`, `error` | the call is over |
 
@@ -341,10 +366,12 @@ Plaintext `{"t": <type>, "call": <call id>, ...}`.
 - `sig`: signature (2.2, domain `huginn-muninn call v1`) over exactly `{"t", "call", "eph"}`. Verify it
   with the envelope's `fromKey`; refuse the offer or answer if it fails. It binds the ephemeral key to the
   identity even if a v1-sealed envelope was used. Vectors: `call.offer`, `call.answer`.
-- `ts`: caller's clock in ms. The callee ignores an offer whose `ts` is more than 60 s old or 120 s ahead
+- `ts`: caller's clock in ms, a JSON integer. The callee ignores an offer whose `ts` is more than 60 s old or 120 s ahead
   by its own clock, and shows it as a missed call instead (an offer can sit on a relay for hours).
 - `codec`: `"opus16"` (5.5). An answer to an unknown codec is `decline`.
 - `ble`: true if this device can carry media to the other over Bluetooth LE right now (5.6).
+- `cands` and `lp`: below. `cands` is always there in `offer`, `answer` and `cands` (an empty array when
+  nothing is ready yet).
 - Dedupe by call id: a second `offer` with the same id is a retry; answer it again with `ring` (or the
   same `answer` bytes).
 
@@ -357,16 +384,26 @@ Timing:
   is never kept in the day-long Outbox.
 - A device in a call answers any other `offer` with `busy` (voice room offers excepted, section 6).
 
-Candidates:
+Candidates (the final 0.6 format, the same in both apps):
 
 ```json
-"cands": [{"t": "host", "a": "192.168.1.20", "p": 40312}, {"t": "host", "a": "2001:db8::5", "p": 40312},
-          {"t": "srflx", "a": "203.0.113.7", "p": 51820}]
+"cands": [{"t": "relay", "a": "104.30.1.2", "p": 61000}, {"t": "lan", "p": 40312}],
+"lp": 40312
 ```
 
-At most 8. `host`: each local address of the call socket (IPv4 private and public, IPv6 global; never
-loopback or link-local). `srflx`: the public address the STUN servers saw. Gathering takes at most 1.5 s;
-send the offer with what is ready, and anything later in `cands`.
+- `relay`: this side's relayed transport address on the TURN server (`a` an IPv4 or IPv6 literal, `p` the
+  port). It is the relay's address, never the device's. Sent once the allocation is up.
+- `lan`: the port of this side's call socket, with **no address**: the other side already knows this
+  device's Wi-Fi address from Chat's discovery (the LocalSend announcement it came from), so no IP of the
+  person is ever put in a message. Sent only while Chat reaches the peer over the shared Wi-Fi.
+- `lp` (top level): the same port as the `lan` candidate. Both apps send the port both ways (an early
+  Muninn sent only `lp`, an early Huginn only the `lan` candidate) and accept either; when both are there
+  and differ, `lp` wins.
+- At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
+- Receivers take the first `relay` whose `a` is an IP literal (a name would mean a DNS lookup outside Tor,
+  so it is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
+- Send the offer with what is ready (an app may wait up to 4 s for its relay), and anything later in
+  `cands`. Resent offers and answers carry the newest candidates.
 
 ### 5.3 Key derivation
 
@@ -405,8 +442,9 @@ offset size
 - `nonce = salt (4) || 00 00 00 00 || seq (4, big-endian)`, with key and salt of `epoch(seq)` for the
   sender's direction.
 - Plaintext: audio is one Opus packet; ping is 8 random bytes; pong is the 8 bytes of the ping it answers.
-- Size 28 to 1200 bytes. The first byte 0x81 tells media apart from STUN (first byte 0x00 or 0x01) on the
-  UDP socket and from a JSON envelope (`{`, 0x7B) on Bluetooth.
+- Size 28 to 1200 bytes. The first byte 0x81 tells media apart from STUN and TURN messages (first byte
+  0x00 or 0x01) and ChannelData (0x40 to 0x7F) on a UDP socket, and from a JSON envelope (`{`, 0x7B) on
+  Bluetooth.
 - A sender never reuses a seq. A call ends before seq would wrap (2^32 packets is over two years).
 
 Receiving (reference `Receiver.open`), in this order:
@@ -443,25 +481,29 @@ Muted: the muted side sends no audio packets (pings go on) and sends `mute` `on:
 
 ### 5.6 Paths
 
-One UDP socket per device for all calls, bound to a random port on all interfaces, open only while a call or
-voice room is active. Incoming UDP: bytes 4..7 equal to `21 12 A4 42` with a first byte of 0x00 or 0x01 is
-STUN; first byte 0x81 is media; anything else is dropped.
+One UDP socket for the Wi-Fi path per call, bound to a random port on all interfaces, open only while a
+call is active. Incoming UDP: first byte 0x81 is media; anything else is dropped. The relay has its own
+socket or TLS connection (below).
 
-**STUN.** On starting or answering a call, send a STUN Binding Request (RFC 5389, no authentication) from
-the call socket to each server and take the XOR-MAPPED-ADDRESS from each answer as a `srflx` candidate
-(same address twice counts once). Default servers, editable in settings like the Nostr relays:
-`stun.l.google.com:19302`, `stun.cloudflare.com:3478`. Repeat every 30 s during the call; send `cands` if the
-address changed.
+**Relay (internet).** On starting or answering a call (the callee may start while it rings), get a TURN
+login from the relay Worker through Tor (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
+Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
+peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
+any other `turns:` URL. The TURN server's host name is looked up **through Tor only** (SOCKS5 RESOLVE),
+retried a few times; if Tor can't answer, there is no relay for this call ("Can't reach the call relay
+right now") and the system resolver is never asked. Media to the peer goes to the peer's `relay`
+candidate through this side's own allocation; media from it arrives as relayed data from that address,
+and anything relayed from another address is dropped. Both sides need an allocation for the relay path to
+work. The allocation is released when the call ends.
 
-**Punching.** As soon as a side has both ephemeral keys (the callee after it answers, the caller when the
-answer arrives), it sends a ping to every remote candidate: every 50 ms for 2 s, then every 250 ms, until
-that candidate is live or 15 s pass. Both sides doing this at once opens most home NATs (an outgoing packet
-creates the mapping the other side's packet then comes in through). Symmetric NATs on both ends will not
-open; there is no relay to fall back to in 0.6.
+**Wi-Fi.** When Chat reaches the peer on the shared Wi-Fi, send to the peer's Wi-Fi address (from Chat's
+discovery) at the port of its `lan` candidate or `lp`. Packets on this path are accepted only from that
+address.
 
-**Live paths.** A UDP path is a remote address and port. It becomes live when an authentic packet arrives
-from it, including one not in the candidate list (a NAT in between rewrote it). Every ping is answered with
-a pong to the address it came from. A path is dead after 4 s with no authentic packet on it.
+**Live paths.** A path becomes live when an authentic packet arrives on it. Every ping is answered with a
+pong on the path it came on. A path is dead after 4 s with no authentic packet on it. Pings: every 50 ms
+for 2 s, then every 250 ms, until the path is live or 15 s pass; once live every 1 s (which also keeps the
+relay's channel and the Wi-Fi mapping fresh); dead paths every 2 s for revival.
 
 **Bluetooth LE.** When both sent `ble:true` and the two are connected over Bluetooth LE, media packets go
 over a new characteristic `MEDIA` = `7b1e0005-6d75-6e69-6e6e-48756767696e` on Muninn's service:
@@ -469,11 +511,10 @@ Huginn (central) writes without response, Muninn (peripheral) notifies. One pack
 header, so the negotiated MTU must be at least 3 + packet size (185 or more; with a smaller MTU, Bluetooth
 is not a media path). Media never waits in the message queue: a packet that can't be written within 40 ms
 is dropped. Two Muninns close by may also use their Nearby Connections link (BYTES payloads) the same way.
-These paths are live by the same rule (authentic packet within 4 s).
+These paths are live by the same rule (authentic packet within 4 s). Optional: an app without it sends
+`ble:false` and uses the relay and Wi-Fi only.
 
-**Sending.** Every audio packet goes out on every live path: up to 3 UDP paths (host before srflx, then
-lowest round trip) plus Bluetooth when live. Each live path gets a ping every 1 s, which also keeps the NAT
-mapping open (well inside the usual 30 s UDP timeout). Dead candidates get a ping every 2 s for revival.
+**Sending.** Every audio packet goes out on every live path (relay, Wi-Fi, Bluetooth).
 
 **No path.** If no path is live 15 s after the answer was sent or received, both sides show "Can't connect"
 and send `hangup` `why:"nopath"`. During a call, if every path is dead, show "Reconnecting"; after 20 s,
@@ -481,13 +522,16 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 
 ### 5.7 IP addresses (shown to the user before the first internet call)
 
-- The person you call learns your local network addresses and your public internet address, and you learn
-  theirs. A public address shows roughly where you are (town or internet provider).
-- The STUN servers (Google and Cloudflare by default) see your public address and that you're using STUN,
-  not who you call.
-- Nostr relays see nothing new: signaling is sealed like any message.
-- Calls over Bluetooth or the same Wi-Fi only expose local addresses. A setting "Internet calls" (default on)
-  can be turned off: then no STUN is done and only `host` candidates with private addresses are sent.
+- The person you call never learns your IP address, and you never learn theirs: offers and answers carry
+  only the relay's address and, on the same Wi-Fi, a port.
+- The TURN relay (Cloudflare) sees your public address, because the audio goes from your device to it
+  directly (not through Tor). It can't hear the call: media is encrypted end to end (5.3, 5.4).
+- The relay Worker gets its requests through Tor: it sees a hash of your chat key and the time, never your
+  address. The TURN server's name is looked up through Tor too, so your DNS server doesn't see it.
+- Nostr relays and onion routes see nothing new: signaling is sealed like any message.
+- Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
+  A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
+  candidate is sent, and calls work only over Wi-Fi and Bluetooth.
 
 ## 6. Voice rooms (group calls)
 

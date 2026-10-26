@@ -1,0 +1,695 @@
+#include "turnclient.h"
+
+#include "callcrypto.h"
+#include "relayconfig.h"
+#include "../tor.h"
+
+#include <QDateTime>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkProxy>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPointer>
+#include <QSslSocket>
+#include <QTcpSocket>
+#include <QTimeZone>
+#include <QUdpSocket>
+#include <QUrl>
+
+namespace
+{
+qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
+const int kUdpGiveUpMs = 3500;     // no Allocate answer over UDP by then: try TLS
+const int kTlsGiveUpMs = 9000;
+const int kRebindMs = 4 * 60 * 1000;   // permissions last 5 minutes, channels 10
+
+// One SOCKS5 RESOLVE (Tor's 0xF0 extension) on Tor's SOCKS port: the name is looked up by the Tor
+// network, so no DNS server near this device sees it. done gets a null address when Tor can't.
+void torResolveOnce(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done)
+{
+    Tor *tor = Tor::instance();
+    const QByteArray name = host.toLatin1();
+    const quint16 port = tor && tor->ready() ? tor->proxy().port() : 0;
+    if (!port || name.isEmpty() || name.size() > 255) {
+        QTimer::singleShot(0, ctx, [done] { done(QHostAddress()); });
+        return;
+    }
+    auto *sock = new QTcpSocket(ctx);
+    sock->setProxy(QNetworkProxy::NoProxy);
+    auto finished = std::make_shared<bool>(false);
+    auto step = std::make_shared<int>(0);
+    auto buf = std::make_shared<QByteArray>();
+    auto end = [sock, finished, done](const QHostAddress &a) {
+        if (*finished)
+            return;
+        *finished = true;
+        sock->disconnect();
+        sock->abort();
+        sock->deleteLater();
+        done(a);
+    };
+    QObject::connect(sock, &QTcpSocket::connected, sock, [sock] { sock->write(QByteArray("\x05\x01\x00", 3)); });
+    QObject::connect(sock, &QTcpSocket::readyRead, sock, [sock, step, buf, name, end] {
+        *buf += sock->readAll();
+        if (*step == 0) {
+            if (buf->size() < 2)
+                return;
+            if (buf->at(0) != 5 || buf->at(1) != 0)
+                return end(QHostAddress());
+            buf->remove(0, 2);
+            *step = 1;
+            sock->write(QByteArray("\x05\xF0\x00\x03", 4) + char(name.size()) + name + QByteArray(2, 0));
+        }
+        if (buf->size() < 4)
+            return;
+        if (buf->at(1) != 0)
+            return end(QHostAddress());
+        const int type = buf->at(3), len = type == 1 ? 4 : type == 4 ? 16 : -1;
+        if (len < 0)
+            return end(QHostAddress());
+        if (buf->size() < 4 + len)
+            return;
+        const QByteArray ip = buf->mid(4, len);
+        if (len == 4)
+            end(QHostAddress((quint32(quint8(ip[0])) << 24) | (quint32(quint8(ip[1])) << 16) | (quint32(quint8(ip[2])) << 8) | quint32(quint8(ip[3]))));
+        else
+            end(QHostAddress(reinterpret_cast<const quint8 *>(ip.constData())));
+    });
+    QObject::connect(sock, &QTcpSocket::errorOccurred, sock, [end](QAbstractSocket::SocketError) { end(QHostAddress()); });
+    QTimer::singleShot(15000, sock, [end] { end(QHostAddress()); });
+    sock->connectToHost(QHostAddress(QHostAddress::LocalHost), port);
+}
+}
+
+void CallNet::resolveViaTor(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries)
+{
+    // An IP literal needs no lookup. A name goes only to Tor, never the system resolver: that would tell
+    // the local network and its DNS server that this device is making a call (and when).
+    const QHostAddress literal(host);
+    if (!literal.isNull()) {
+        QTimer::singleShot(0, ctx, [done, literal] { done(literal); });
+        return;
+    }
+    QPointer<QObject> guard(ctx);
+    torResolveOnce(host, ctx, [host, ctx, guard, done, tries](const QHostAddress &a) {
+        if (!guard)
+            return;
+        if (!a.isNull() || tries <= 1) {
+            done(a);
+            return;
+        }
+        QTimer::singleShot(1000, ctx, [host, ctx, done, tries] { resolveViaTor(host, ctx, done, tries - 1); });
+    });
+}
+
+QHostAddress CallNet::toHost(const Stun::Address &a)
+{
+    if (a.ip.size() == 4)
+        return QHostAddress((quint32(quint8(a.ip[0])) << 24) | (quint32(quint8(a.ip[1])) << 16) | (quint32(quint8(a.ip[2])) << 8) | quint32(quint8(a.ip[3])));
+    if (a.ip.size() == 16)
+        return QHostAddress(reinterpret_cast<const quint8 *>(a.ip.constData()));
+    return QHostAddress();
+}
+
+Stun::Address CallNet::fromHost(const QHostAddress &h, quint16 port)
+{
+    Stun::Address a;
+    a.port = port;
+    bool v4 = false;
+    const quint32 ip4 = h.toIPv4Address(&v4);
+    if (v4) {
+        a.ip = QByteArray(4, 0);
+        a.ip[0] = char(ip4 >> 24);
+        a.ip[1] = char(ip4 >> 16);
+        a.ip[2] = char(ip4 >> 8);
+        a.ip[3] = char(ip4);
+    } else if (h.protocol() == QAbstractSocket::IPv6Protocol) {
+        const Q_IPV6ADDR v6 = h.toIPv6Address();
+        a.ip = QByteArray(reinterpret_cast<const char *>(v6.c), 16);
+    }
+    return a;
+}
+
+// ------------------------------------------------------------------ the Worker
+
+RelayCredentials::RelayCredentials(QObject *parent) : QObject(parent) {}
+
+QByteArray RelayCredentials::body(const QByteArray &identityKey, qint64 t, const QByteArray &secret)
+{
+    const QByteArray id = CallCrypto::sha256(identityKey).toHex();
+    const QByteArray sig = CallCrypto::hmacSha256(secret, id + "." + QByteArray::number(t)).toHex();
+    return QJsonDocument(QJsonObject{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("t"), t},
+                                     {QStringLiteral("sig"), QString::fromLatin1(sig)}})
+        .toJson(QJsonDocument::Compact);
+}
+
+void RelayCredentials::get(const QByteArray &identityKey, std::function<void(const TurnLogin &, const QString &)> done)
+{
+    // Reuse a login until 5 minutes before it expires.
+    if (m_cache.valid() && nowMs() < m_cache.expiresMs - 300000) {
+        const TurnLogin l = m_cache;
+        QTimer::singleShot(0, this, [done, l] { done(l, QString()); });
+        return;
+    }
+    if (!RelayConfig::configured()) {
+        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("relay not set up")); });
+        return;
+    }
+    if (nowMs() < m_blockedUntil) {
+        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("relay resting")); });
+        return;
+    }
+    m_identity = identityKey;
+    m_waiting << done;
+    if (!m_busy)
+        fetch();
+}
+
+void RelayCredentials::fetch()
+{
+    m_busy = true;
+    Tor *tor = Tor::instance();
+    if (!tor) {
+        finish(TurnLogin(), QStringLiteral("no Tor"));
+        return;
+    }
+    if (!tor->ready()) {
+        // Everything on the internet goes through Tor; wait for it a while.
+        auto *ctx = new QObject(this);
+        connect(tor, &Tor::readyChanged, ctx, [this, ctx, tor] {
+            if (!tor->ready())
+                return;
+            ctx->deleteLater();
+            fetch();
+        });
+        QTimer::singleShot(45000, ctx, [this, ctx] {
+            ctx->deleteLater();
+            finish(TurnLogin(), QStringLiteral("Tor not ready"));
+        });
+        return;
+    }
+    m_net.setProxy(tor->proxy(QStringLiteral("turn")));
+    QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setTransferTimeout(30000);
+    const qint64 t = nowMs() / 1000;
+    QNetworkReply *r = m_net.post(req, body(m_identity, t, QByteArray(RelayConfig::kAppSecret)));
+    connect(r, &QNetworkReply::finished, this, [this, r] {
+        r->deleteLater();
+        const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
+        if (status == 200) {
+            TurnLogin l;
+            const QJsonValue urls = o.value(QStringLiteral("urls"));
+            if (urls.isArray()) {
+                for (const QJsonValue &u : urls.toArray())
+                    l.urls << u.toString();
+            } else if (urls.isString()) {
+                l.urls << urls.toString();
+            }
+            l.username = o.value(QStringLiteral("username")).toString();
+            l.credential = o.value(QStringLiteral("credential")).toString();
+            l.expiresMs = nowMs() + qint64(o.value(QStringLiteral("ttl")).toDouble()) * 1000;
+            if (l.valid()) {
+                m_cache = l;
+                finish(l, QString());
+                return;
+            }
+            finish(TurnLogin(), QStringLiteral("bad answer"));
+            return;
+        }
+        if (status == 429) {
+            // Daily cap: not again until the next UTC day.
+            const QDateTime tomorrow(QDateTime::currentDateTimeUtc().date().addDays(1), QTime(0, 0), QTimeZone::UTC);
+            m_blockedUntil = tomorrow.toMSecsSinceEpoch();
+        } else if (status >= 500 || status == 0) {
+            m_blockedUntil = nowMs() + 60000;
+        }
+        finish(TurnLogin(), o.value(QStringLiteral("error")).toString(status ? QStringLiteral("refused") : QStringLiteral("no answer")));
+    });
+}
+
+void RelayCredentials::finish(const TurnLogin &login, const QString &why)
+{
+    m_busy = false;
+    const auto waiting = m_waiting;
+    m_waiting.clear();
+    for (const auto &w : waiting)
+        w(login, why);
+}
+
+// ------------------------------------------------------------------ TURN
+
+TurnClient::TurnClient(const TurnLogin &login, QObject *parent) : QObject(parent), m_login(login)
+{
+    m_servers = servers(login.urls);
+    m_refresh.setSingleShot(true);
+    connect(&m_refresh, &QTimer::timeout, this, [this] { refresh(600); });
+    m_rebind.setInterval(kRebindMs);
+    connect(&m_rebind, &QTimer::timeout, this, [this] {
+        for (Peer &p : m_peers)
+            bind(p);
+    });
+    m_giveUp.setSingleShot(true);
+    connect(&m_giveUp, &QTimer::timeout, this, [this] {
+        if (!ready())
+            tryNext();
+    });
+}
+
+TurnClient::~TurnClient()
+{
+    stop();
+}
+
+QList<TurnClient::Server> TurnClient::servers(const QStringList &urls)
+{
+    // UDP first (the first turn: ... transport=udp), then TLS on 443, then any other turns:.
+    QList<Server> udp, tls443, tls;
+    for (const QString &raw : urls) {
+        const bool secure = raw.startsWith(QLatin1String("turns:"));
+        if (!secure && !raw.startsWith(QLatin1String("turn:")))
+            continue;   // never STUN
+        QString rest = raw.mid(secure ? 6 : 5);
+        QString transport = secure ? QStringLiteral("tcp") : QStringLiteral("udp");
+        const int q = rest.indexOf(QLatin1Char('?'));
+        if (q >= 0) {
+            const QString query = rest.mid(q + 1);
+            rest = rest.left(q);
+            if (query.contains(QLatin1String("transport=tcp")))
+                transport = QStringLiteral("tcp");
+        }
+        const int colon = rest.lastIndexOf(QLatin1Char(':'));
+        Server s;
+        s.host = colon > 0 ? rest.left(colon) : rest;
+        s.port = quint16(colon > 0 ? rest.mid(colon + 1).toUInt() : (secure ? 5349 : 3478));
+        s.tls = secure;
+        if (s.host.isEmpty() || !s.port)
+            continue;
+        if (!secure && transport == QLatin1String("udp"))
+            udp << s;
+        else if (secure && s.port == 443)
+            tls443 << s;
+        else if (secure)
+            tls << s;
+        // Plain TURN over TCP is skipped: TLS on 443 gets through the same firewalls.
+    }
+    QList<Server> out;
+    if (!udp.isEmpty())
+        out << udp.first();
+    out << tls443 << tls;
+    if (out.isEmpty()) {
+        out << Server{QStringLiteral("turn.cloudflare.com"), 3478, false};
+        out << Server{QStringLiteral("turn.cloudflare.com"), 443, true};
+    }
+    return out;
+}
+
+void TurnClient::start()
+{
+    m_stopped = false;
+    m_next = 0;
+    m_resolved.clear();
+    m_unresolved.clear();
+    tryNext();
+}
+
+void TurnClient::tryNext()
+{
+    dropPending();
+    if (m_udp) {
+        m_udp->deleteLater();
+        m_udp = nullptr;
+    }
+    if (m_tls) {
+        m_tls->disconnect(this);
+        m_tls->abort();
+        m_tls->deleteLater();
+        m_tls = nullptr;
+    }
+    m_tlsBuf.clear();
+    m_realm.clear();
+    m_nonce.clear();
+    m_key.clear();
+    if (m_stopped)
+        return;
+    if (m_next >= m_servers.size()) {
+        // Not one name could be looked up through Tor: say so (nothing was sent anywhere else).
+        fail(m_resolved.isEmpty() ? QStringLiteral("Can't reach the call relay right now") : QStringLiteral("relay unreachable"));
+        return;
+    }
+    const Server s = m_servers.at(m_next++);
+    auto go = [this, s](const QHostAddress &ip) {
+        if (s.tls)
+            connectTls(s, ip);
+        else
+            connectUdp(ip, s.port);
+    };
+    if (m_resolved.contains(s.host)) {
+        go(m_resolved.value(s.host));
+        return;
+    }
+    if (m_unresolved.contains(s.host)) {
+        QTimer::singleShot(0, this, &TurnClient::tryNext);
+        return;
+    }
+    CallNet::resolveViaTor(s.host, this, [this, s, go](const QHostAddress &ip) {
+        if (m_stopped || m_tls || m_udp)
+            return;
+        if (ip.isNull()) {
+            m_unresolved.insert(s.host);
+            tryNext();
+            return;
+        }
+        m_resolved.insert(s.host, ip);
+        go(ip);
+    });
+}
+
+void TurnClient::connectUdp(const QHostAddress &host, quint16 port)
+{
+    m_udp = new QUdpSocket(this);
+    const bool v4 = host.protocol() == QAbstractSocket::IPv4Protocol;
+    if (!m_udp->bind(v4 ? QHostAddress(QHostAddress::AnyIPv4) : QHostAddress(QHostAddress::AnyIPv6), 0)) {
+        tryNext();
+        return;
+    }
+    m_serverAddr = host;
+    m_serverPort = port;
+    connect(m_udp, &QUdpSocket::readyRead, this, &TurnClient::onDatagrams);
+    m_giveUp.start(kUdpGiveUpMs);
+    allocate();
+}
+
+void TurnClient::connectTls(const Server &s, const QHostAddress &ip)
+{
+    m_tls = new QSslSocket(this);
+    m_serverPort = s.port;
+    connect(m_tls, &QSslSocket::encrypted, this, [this] { allocate(); });
+    connect(m_tls, &QSslSocket::readyRead, this, &TurnClient::onTlsData);
+    connect(m_tls, &QSslSocket::disconnected, this, [this] {
+        if (!m_stopped && ready())
+            fail(QStringLiteral("relay closed"));
+    });
+    connect(m_tls, &QSslSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
+        if (!m_stopped && !ready())
+            QTimer::singleShot(0, this, &TurnClient::tryNext);
+    });
+    m_giveUp.start(kTlsGiveUpMs);
+    // To the address Tor looked up; the certificate is still checked against the server's name.
+    m_tls->setProxy(QNetworkProxy::NoProxy);
+    m_tls->connectToHostEncrypted(ip.toString(), s.port, s.host);
+}
+
+void TurnClient::stop()
+{
+    if (m_stopped)
+        return;
+    if (ready())
+        refresh(0);   // deallocate; fire and forget
+    m_stopped = true;
+    m_refresh.stop();
+    m_rebind.stop();
+    m_giveUp.stop();
+    dropPending();
+    m_relayed = Stun::Address();
+    if (m_tls) {
+        m_tls->disconnect(this);
+        m_tls->disconnectFromHost();
+    }
+}
+
+void TurnClient::dropPending()
+{
+    for (auto &p : m_pending)
+        delete p.second.timer;
+    m_pending.clear();
+}
+
+void TurnClient::fail(const QString &why)
+{
+    m_relayed = Stun::Address();
+    m_refresh.stop();
+    m_rebind.stop();
+    Q_EMIT failed(why);
+}
+
+void TurnClient::allocate()
+{
+    QByteArray transport(4, 0);
+    transport[0] = 17;   // UDP
+    request(Stun::Allocate, {{Stun::RequestedTransport, transport}}, !m_key.isEmpty());
+}
+
+void TurnClient::refresh(quint32 lifetime)
+{
+    QByteArray v(4, 0);
+    v[0] = char(lifetime >> 24);
+    v[1] = char(lifetime >> 16);
+    v[2] = char(lifetime >> 8);
+    v[3] = char(lifetime);
+    request(Stun::Refresh, {{Stun::Lifetime, v}});
+}
+
+void TurnClient::bind(Peer &p)
+{
+    QByteArray ch(4, 0);
+    ch[0] = char(p.channel >> 8);
+    ch[1] = char(p.channel);
+    request(Stun::ChannelBind, {{Stun::ChannelNumber, ch}}, true, p.addr);
+}
+
+void TurnClient::request(quint16 method, const std::vector<std::pair<quint16, QByteArray>> &attrs, bool auth, const Stun::Address &peer)
+{
+    Pending p;
+    p.msg.method = method;
+    p.msg.cls = Stun::Request;
+    p.msg.tid = Stun::newTid();
+    for (const auto &a : attrs)
+        p.msg.add(a.first, a.second);
+    if (peer.valid())
+        p.msg.addAddress(Stun::XorPeerAddress, peer);   // XORed with this request's own tid
+    p.auth = auth && !m_key.isEmpty();
+    p.timer = new QTimer(this);
+    p.timer->setSingleShot(true);
+    const QByteArray tid = p.msg.tid;
+    connect(p.timer, &QTimer::timeout, this, [this, tid] { transmit(tid); });
+    m_pending[tid] = p;
+    transmit(tid);
+}
+
+void TurnClient::transmit(const QByteArray &tid)
+{
+    auto it = m_pending.find(tid);
+    if (it == m_pending.end())
+        return;
+    Pending &p = it->second;
+    if (p.tries >= (m_tls ? 1 : 6)) {
+        const quint16 method = p.msg.method;
+        delete p.timer;
+        m_pending.erase(it);
+        if (method == Stun::Refresh && ready() && !m_stopped)
+            fail(QStringLiteral("relay stopped answering"));
+        return;
+    }
+    Stun::Message m = p.msg;
+    if (p.auth) {
+        m.addText(Stun::Username, m_login.username);
+        m.addText(Stun::Realm, m_realm);
+        m.addText(Stun::Nonce, m_nonce);
+    }
+    writeRaw(Stun::encode(m, p.auth ? m_key : QByteArray(), false));
+    ++p.tries;
+    // UDP: 250 ms, doubling, at most 1.6 s apart. TLS is reliable: one try, 8 s to answer.
+    p.timer->start(m_tls ? 8000 : p.rto);
+    p.rto = qMin(p.rto * 2, 1600);
+}
+
+void TurnClient::writeRaw(const QByteArray &bytes)
+{
+    if (m_udp)
+        m_udp->writeDatagram(bytes, m_serverAddr, m_serverPort);
+    else if (m_tls && m_tls->isEncrypted())
+        m_tls->write(bytes);
+}
+
+void TurnClient::onDatagrams()
+{
+    while (m_udp && m_udp->hasPendingDatagrams()) {
+        QByteArray b(int(qMax<qint64>(0, m_udp->pendingDatagramSize())), 0);
+        QHostAddress from;
+        quint16 port = 0;
+        const qint64 n = m_udp->readDatagram(b.data(), b.size(), &from, &port);
+        if (n <= 0)
+            continue;
+        b.resize(int(n));
+        // Only the relay itself talks on this socket.
+        if (port != m_serverPort || !(from.isEqual(m_serverAddr, QHostAddress::TolerantConversion)))
+            continue;
+        onPacket(b);
+    }
+}
+
+void TurnClient::onTlsData()
+{
+    if (!m_tls)
+        return;
+    m_tlsBuf += m_tls->readAll();
+    for (;;) {
+        const int n = Stun::frameLength(m_tlsBuf);
+        if (n < 0) {
+            fail(QStringLiteral("relay stream out of step"));
+            return;
+        }
+        if (n == 0 || m_tlsBuf.size() < n)
+            return;
+        QByteArray frame = m_tlsBuf.left(n);
+        m_tlsBuf.remove(0, n);
+        onPacket(frame);
+    }
+}
+
+void TurnClient::onPacket(const QByteArray &b)
+{
+    if (Stun::isChannelData(b)) {
+        quint16 ch = 0;
+        QByteArray data;
+        if (!Stun::parseChannelData(b, &ch, &data))
+            return;
+        for (const Peer &p : std::as_const(m_peers))
+            if (p.channel == ch) {
+                Q_EMIT this->data(p.addr, data);
+                return;
+            }
+        return;
+    }
+    Stun::Message m;
+    if (!Stun::parse(b, &m))
+        return;
+    if (m.method == Stun::Data && m.cls == Stun::Indication) {
+        const Stun::Address peer = m.address(Stun::XorPeerAddress);
+        if (peer.valid())
+            Q_EMIT this->data(peer, m.get(Stun::DataAttr));
+        return;
+    }
+    if (m.cls == Stun::Success || m.cls == Stun::Error)
+        onResponse(m, b);
+}
+
+void TurnClient::onResponse(const Stun::Message &m, const QByteArray &bytes)
+{
+    auto it = m_pending.find(m.tid);
+    if (it == m_pending.end())
+        return;
+    // Once we have a key, answers must carry a valid MESSAGE-INTEGRITY (the first 401 can't).
+    if (!m_key.isEmpty() && it->second.auth && !Stun::checkIntegrity(bytes, m_key))
+        return;
+    Pending p = it->second;
+    delete p.timer;
+    m_pending.erase(it);
+
+    if (m.cls == Stun::Error) {
+        const int code = m.errorCode();
+        if ((code == 401 && !p.auth) || code == 438) {
+            // Learn (or renew) realm and nonce, then ask again with the credential.
+            m_realm = m.text(Stun::Realm).isEmpty() ? m_realm : m.text(Stun::Realm);
+            m_nonce = m.text(Stun::Nonce);
+            m_key = Stun::longTermKey(m_login.username, m_realm, m_login.credential);
+            std::vector<std::pair<quint16, QByteArray>> attrs;
+            for (const auto &a : p.msg.attrs)
+                if (a.first != Stun::XorPeerAddress)
+                    attrs.push_back(a);
+            // A peer address is XORed with the tid, so it is decoded and encoded again for the new one.
+            request(p.msg.method, attrs, true, p.msg.address(Stun::XorPeerAddress));
+            return;
+        }
+        if (p.msg.method == Stun::Allocate) {
+            if (code == 437 && ready())
+                return;
+            // 401 with the credential: the login is no good. Anything else: try the next server.
+            if (code == 401) {
+                fail(QStringLiteral("relay login refused"));
+                return;
+            }
+            QTimer::singleShot(0, this, &TurnClient::tryNext);
+        }
+        return;
+    }
+
+    switch (p.msg.method) {
+    case Stun::Allocate: {
+        const Stun::Address relayed = m.address(Stun::XorRelayedAddress);
+        if (!relayed.valid()) {
+            QTimer::singleShot(0, this, &TurnClient::tryNext);
+            return;
+        }
+        m_giveUp.stop();
+        m_relayed = relayed;
+        const quint32 life = m.u32(Stun::Lifetime, 600);
+        m_refresh.start(int(qMax<quint32>(30, life > 60 ? life - 60 : life / 2)) * 1000);
+        m_rebind.start();
+        for (Peer &peer : m_peers)
+            bind(peer);
+        Q_EMIT allocated();
+        break;
+    }
+    case Stun::Refresh: {
+        const quint32 life = m.u32(Stun::Lifetime, 600);
+        if (life > 0)
+            m_refresh.start(int(qMax<quint32>(30, life > 60 ? life - 60 : life / 2)) * 1000);
+        break;
+    }
+    case Stun::ChannelBind: {
+        const quint16 ch = quint16((quint8(p.msg.get(Stun::ChannelNumber).at(0)) << 8) | quint8(p.msg.get(Stun::ChannelNumber).at(1)));
+        for (Peer &peer : m_peers)
+            if (peer.channel == ch)
+                peer.bound = true;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void TurnClient::addPeer(const Stun::Address &peer)
+{
+    if (!peer.valid())
+        return;
+    for (const Peer &p : std::as_const(m_peers))
+        if (p.addr == peer)
+            return;
+    if (m_nextChannel > 0x4FFF)
+        return;
+    Peer p;
+    p.addr = peer;
+    p.channel = m_nextChannel++;
+    m_peers << p;
+    if (ready())
+        bind(m_peers.last());
+}
+
+bool TurnClient::send(const Stun::Address &peer, const QByteArray &data)
+{
+    if (!ready())
+        return false;
+    for (const Peer &p : std::as_const(m_peers)) {
+        if (p.addr != peer)
+            continue;
+        if (p.bound) {
+            writeRaw(Stun::channelData(p.channel, data, m_tls != nullptr));
+        } else {
+            // Until the channel is bound: a Send indication (no authentication on indications).
+            Stun::Message m;
+            m.method = Stun::Send;
+            m.cls = Stun::Indication;
+            m.tid = Stun::newTid();
+            m.addAddress(Stun::XorPeerAddress, peer);
+            m.add(Stun::DataAttr, data);
+            writeRaw(Stun::encode(m));
+        }
+        return true;
+    }
+    return false;
+}

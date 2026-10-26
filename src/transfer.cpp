@@ -2,7 +2,7 @@
 #include "settings.h"
 #include "system.h"
 
-#include <Prison/Barcode>
+#include "platform/qrcode.h"
 
 #include <QDir>
 #include <QFile>
@@ -402,15 +402,11 @@ QImage QrImageProvider::requestImage(const QString &id, QSize *size, const QSize
     const int side = requestedSize.width() > 0 ? requestedSize.width() : 512;
     QImage out(side, side, QImage::Format_RGB32);
     out.fill(QColor("#E4E1DA"));
-    auto code = Prison::Barcode::create(Prison::QRCode);
-    if (code) {
-        code->setData(text);
-        const QImage qr = code->toImage(QSizeF(side, side));
-        if (!qr.isNull()) {
-            QPainter p(&out);
-            p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-            p.drawImage(QRect(0, 0, side, side), qr);
-        }
+    const QImage qr = Platform::qrCode(text, side);
+    if (!qr.isNull()) {
+        QPainter p(&out);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.drawImage(QRect(0, 0, side, side), qr);
     }
     if (size)
         *size = out.size();

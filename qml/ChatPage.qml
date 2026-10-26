@@ -10,7 +10,9 @@ Rectangle {
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "list" or "messages"
+    property string zone: "list"      // "chips" (folder filters), "list" or "messages"
+    property string folder: ""        // the folder filter, "" for everyone
+    property int chip: 0
     property string openKey: ""       // "" = Nearby room, otherwise a private chat
     property int sel: -1              // selected message, for its options
     property bool showCode: false
@@ -24,6 +26,7 @@ Rectangle {
         tour = !!a.tour
         changeLock = !!a.changeLock
         if (a.zone) zone = a.zone
+        if (a.folders) { zone = "chips"; chip = Math.min(1, chips.length - 1) }
         if (a.open) { openKey = a.open; zone = "messages" }   // from Contacts › Message
     }
 
@@ -31,9 +34,18 @@ Rectangle {
     // The lock's own LB / RB (pattern or password) win over moving along the rail.
     readonly property bool ownsShoulders: lock.visible && lock.mode !== "unlock"
 
+    // Folder chips at the top: All, each folder, then + to make one.
+    readonly property var chips: [{ id: "", name: "All" }].concat(Chat.folders).concat([{ id: "+", name: "+ Folder" }])
     readonly property var entries: {
-        const out = [{ kind: "add", name: "Add someone", detail: "Paste the code they sent you" },
+        const out = [{ kind: "add", name: "Add someone", detail: "Paste their code, or a group code" },
                      { kind: "code", name: "My code", detail: "A QR anyone can scan to message you" }]
+        if (folder !== "") {
+            Chat.chats.filter(c => (c.folders || []).indexOf(folder) >= 0)
+                .forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
+            return out
+        }
+        Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName,
+                                                  detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
         out.push({ kind: "nearby", name: "Nearby room", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
@@ -52,10 +64,11 @@ Rectangle {
 
     // What the hint bar shows (Main.qml adds LB RB).
     readonly property var prompts: lock.visible ? [{ key: "b", label: "Back" }]
+        : zone === "chips" ? [{ key: "a", label: "Show" }, { key: "x", label: "Folder options" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
             .concat(sel >= 0 || openKey !== "" ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
-    readonly property string status: lock.visible ? "" : Chat.internet > 0 ? "Internet: connected" : "Internet: offline"
+    readonly property string status: lock.visible ? "" : Chat.netStatus
 
     function routeText(r) {
         return r === "bluetooth" ? "Close by (Bluetooth)" : r === "wifi" ? "Same Wi-Fi" : r === "internet" ? "Over the internet" : "Not reachable right now"
@@ -74,7 +87,11 @@ Rectangle {
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     function senderName(m) { return m.mine ? Chat.username : openKey === "" ? (m.name || "Someone") : openName }
 
-    onOpenKeyChanged: { sel = -1; Voice.stop(); if (openKey !== "") Chat.markRead(openKey); Chat.openChat = openKey }
+    onOpenKeyChanged: {
+        sel = -1; Voice.stop()
+        if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
+        Chat.openChat = openKey
+    }
     // Read only counts when someone is actually looking: not while a game is in front.
     onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
     Component.onCompleted: Vault.back()   // away more than a minute: locked again
@@ -97,10 +114,45 @@ Rectangle {
 
         PageHeader { id: listHead; width: parent.width; title: "Direct messages" }
 
+        // Folders (only on this computer) as filter chips.
+        Flow {
+            id: chipRow
+            visible: !page.locked
+            anchors.top: listHead.bottom
+            anchors.topMargin: Theme.px(10)
+            x: Theme.px(10)
+            width: parent.width - Theme.px(20)
+            spacing: Theme.px(6)
+            Repeater {
+                model: page.chips
+                Rectangle {
+                    readonly property bool on: page.active && page.zone === "chips" && page.chip === index
+                    readonly property bool picked: modelData.id === page.folder && modelData.id !== "+"
+                    height: Theme.px(30)
+                    width: chipLabel.implicitWidth + Theme.px(22)
+                    radius: height / 2
+                    color: picked ? Theme.accentFill : chipHover.hovered ? Theme.raised : Theme.tile
+                    border.width: on ? Theme.focusWidth : picked ? 1 : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.id === "+" ? "New folder" : "Show " + modelData.name
+                    Text {
+                        id: chipLabel
+                        anchors.centerIn: parent
+                        text: modelData.name || ""
+                        color: parent.picked ? Theme.accent : Theme.textSoft
+                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: parent.picked ? Font.DemiBold : Font.Normal
+                    }
+                    HoverHandler { id: chipHover }
+                    TapHandler { onTapped: { page.zone = "chips"; page.chip = index; page.pickChip() } }
+                }
+            }
+        }
+
         ListView {
             id: listPane
             visible: !page.locked
-            anchors.top: listHead.bottom
+            anchors.top: chipRow.visible ? chipRow.bottom : listHead.bottom
             anchors.topMargin: Theme.px(10)
             anchors.bottom: netStrip.top
             anchors.bottomMargin: Theme.px(6)
@@ -141,12 +193,12 @@ Rectangle {
                         visible: !parent.parent.person
                         anchors.centerIn: parent
                         size: Theme.px(18)
-                        name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : "people"
+                        name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : "people"
                         color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
                     }
                     // Requests wait for an answer: a lock badge so they stand out.
                     Rectangle {
-                        visible: modelData.kind === "request"
+                        visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
                         anchors.right: parent.right; anchors.bottom: parent.bottom
                         anchors.margins: -Theme.px(2)
                         width: Theme.px(14); height: width; radius: width / 2
@@ -164,7 +216,7 @@ Rectangle {
                     }
                     Text {
                         width: parent.width; elide: Text.ElideRight; text: modelData.detail
-                        color: modelData.kind === "request" ? Theme.accent : Theme.textMuted
+                        color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(13)
                     }
                 }
@@ -206,11 +258,13 @@ Rectangle {
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
                     name: "shield"; size: Theme.px(15)
-                    color: Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
+                    color: Chat.torReady || Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: (Chat.internet > 0 ? "Online" : "Offline") + (Chat.nearbyOn ? " · nearby on" : "") + " · encrypted"
+                    width: netStrip.width - Theme.px(50)
+                    elide: Text.ElideRight
+                    text: Chat.netStatus + (Chat.nearbyOn ? " · nearby on" : "") + " · encrypted"
                     color: Theme.textSoft
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
@@ -247,6 +301,13 @@ Rectangle {
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
+            }
+            HButton {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !page.locked && page.openKey !== ""
+                text: "Call"
+                fontSize: 15
+                onClicked: page.startCall()
             }
         }
 
@@ -524,7 +585,14 @@ Rectangle {
         }
     }
     function addSomeone() {
-        Ui.ask("Add someone", "Paste the code they sent you (it starts with MUNINN1)", "", "Add", t => {
+        Ui.ask("Add someone", "Paste the code they sent you (it starts with MUNINN1), or a group code (MUNINNG1)", "", "Add", t => {
+            if (t.indexOf("MUNINNG1:") >= 0) {
+                const gc = Chat.parseGroupCode(t)
+                const r = Chat.joinWithCode(t)
+                if (r === "") Ui.say("Asked " + gc.adminName + " to let you in to " + gc.name + ". It opens once they do.")
+                else Ui.say(r, true)
+                return
+            }
             const c = Chat.parseCode(t)
             if (!c.key) { Ui.say("That isn't a Muninn code. Ask them for My code › Share code.", true); return }
             if (c.mine) { Ui.say("That's your own code.", true); return }
@@ -559,17 +627,68 @@ Rectangle {
                 "It matches", () => Chat.verify(k))
     }
     function conversationItems() {
-        const items = [{ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
-                       { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" }]
+        const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" },
+                       { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
+                       { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
+                       { name: "Folders", detail: folderNames(openKey), url: "folders" }]
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
+    }
+    function startCall() {
+        const w = Calls.call(openKey)
+        if (w !== "") Ui.say(w, true)
     }
     function conversationOptions() {
         const k = openKey
         Ui.pickFrom(openName, [{ header: "", items: conversationItems() }], a => {
-            if (a === "picture") pickPicture()
+            if (a === "call") startCall()
+            else if (a === "picture") pickPicture()
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
+            else if (a === "folders") pickFolders(k)
+        })
+    }
+    // ------------------------------------------------------------- folders (only on this computer)
+    function folderNames(k) {
+        const ids = Chat.foldersOf(k)
+        const names = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
+        return names.length ? "In " + names.join(", ") : "Sort them into Family, Work, Kindred or your own"
+    }
+    function pickFolders(k) {
+        const ids = Chat.foldersOf(k)
+        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: ids.indexOf(f.id) >= 0 ? "In it · A takes them out" : "A puts them in" }))
+        items.push({ name: "New folder", detail: "Make one and put them in it", url: "+" })
+        Ui.pickFrom("Folders for " + Chat.nameOf(k), [{ header: "Only on this computer", items: items }], id => {
+            if (id === "+") {
+                Ui.ask("New folder", "A name only you see", "", "Make it", t => { const f = Chat.addFolder(t); if (f !== "") Chat.setInFolder(f, k, true) }, false, true)
+                return
+            }
+            const on = Chat.foldersOf(k).indexOf(id) < 0
+            Chat.setInFolder(id, k, on)
+            const f = Chat.folders.find(x => x.id === id)
+            Ui.say((on ? "Added to " : "Taken out of ") + (f ? f.name : "the folder") + ".")
+        })
+    }
+    function pickChip() {
+        const c = chips[chip]
+        if (!c) return
+        if (c.id === "+") {
+            Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => { if (Chat.addFolder(t) === "") Ui.say("Give the folder a name.", true) }, false, true)
+            return
+        }
+        folder = c.id
+        row = 0
+    }
+    function chipOptions() {
+        const c = chips[chip]
+        if (!c || c.id === "" || c.id === "+") { pickChip(); return }
+        const id = c.id
+        Ui.pickFrom(c.name, [{ header: "Only on this computer", items: [
+            { name: "Rename", url: "rename" },
+            { name: "Delete the folder", detail: "The people in it stay", url: "delete" }] }], a => {
+            if (a === "rename") Ui.ask("Rename " + c.name, "A name only you see", c.name, "Save", t => Chat.renameFolder(id, t), false, true)
+            else if (a === "delete") Ui.sure("Delete " + c.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete",
+                                         () => { if (folder === id) folder = ""; Chat.deleteFolder(id) }, false, false)
         })
     }
     function choose() {
@@ -579,6 +698,16 @@ Rectangle {
         case "add": addSomeone(); return
         case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; zone = "messages"; return
+        case "ginvite":
+            if (e.waiting) {
+                Ui.sure("Waiting for " + e.fromName, "They let you in to " + e.name + " when their app gets your request. Stop waiting?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
+                return
+            }
+            Ui.sure(e.fromName + " invited you to " + e.name, "Everyone in a group sees your name and can message the group. You can leave any time.", "Join",
+                    () => { const r = Chat.acceptGroupInvite(e.g); if (r === "") Ui.say("Joining " + e.name + "…"); else Ui.say(r, true) }, false, false,
+                    () => Chat.declineGroupInvite(e.g))
+            Ui.confirm.cancelText = "Decline"
+            return
         case "request":
             if (e.replaces) {
                 Ui.sure(e.name + " says they're " + e.replacesName, "Their security key isn't the one you have for " + e.replacesName + ". Accept only if you've checked with them "
@@ -655,9 +784,22 @@ Rectangle {
             if (b === "start") { Chat.keepInTouch(openKey); return true }
             if (b === "back") { Chat.notNow(openKey); return true }
         }
+        if (zone === "chips") {
+            switch (b) {
+            case "left": if (chip === 0) return false; chip--; return true
+            case "right": chip = Math.min(chips.length - 1, chip + 1); return true
+            case "down": zone = "list"; return true
+            case "a": pickChip(); return true
+            case "x": chipOptions(); return true
+            case "b": zone = "list"; return true
+            case "up": return true
+            }
+            return false
+        }
         switch (b) {
         case "up":
-            if (zone === "list") row = Math.max(0, row - 1)
+            if (zone === "list" && row === 0 && !locked) { zone = "chips"; chip = Math.max(0, chips.findIndex(c => c.id === folder)) }
+            else if (zone === "list") row = Math.max(0, row - 1)
             else if (messages.length > 0) { sel = sel < 0 ? messages.length - 1 : Math.max(0, sel - 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "down":

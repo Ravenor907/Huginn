@@ -61,7 +61,7 @@ class Direct(private val context: Context) {
         } catch (e: SecurityException) {
             _state.value = State(error = "Muninn needs the Nearby devices (or Location) permission for Direct connect.")
         } catch (e: Exception) {
-            _state.value = State(error = "Direct connect isn't available on this phone: ${e.message}")
+            _state.value = State(error = "Direct connect isn't available on this phone.")
         }
     }
 

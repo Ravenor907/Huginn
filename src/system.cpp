@@ -1,9 +1,13 @@
 #include "system.h"
 #include "settings.h"
 
+#include "platform/keepawake.h"
+
+#ifndef Q_OS_WIN
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
+#endif
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -29,8 +33,15 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     : QObject(parent)
     , m_settings(settings)
     , m_tourDir(tourDir)
+#ifdef Q_OS_WIN
+    , m_windowed(true)   // a Windows PC: a normal window, not full screen
+#else
     , m_windowed(windowed)
+#endif
 {
+#ifdef Q_OS_WIN
+    Q_UNUSED(windowed);
+#endif
     m_gameMode = qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QLatin1String("gamescope"), Qt::CaseInsensitive)
         || !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY")
         || qEnvironmentVariable("SteamGamepadUI") == QLatin1String("1");
@@ -197,6 +208,10 @@ void System::setKeepAwake(bool on, const QString &reason)
     if (on == m_awake)
         return;
     m_awake = on;
+#ifdef Q_OS_WIN
+    Q_UNUSED(reason);
+    Platform::keepAwake(on);
+#else
     QDBusConnection bus = QDBusConnection::sessionBus();
     auto call = [&bus](const QString &service, const QString &path, const QString &iface, const QString &method, const QVariantList &args) {
         QDBusMessage m = QDBusMessage::createMethodCall(service, path, iface, method);
@@ -223,4 +238,5 @@ void System::setKeepAwake(bool on, const QString &reason)
                  QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("UnInhibit"), {m_screensaverCookie});
         m_screensaverCookie = 0;
     }
+#endif
 }

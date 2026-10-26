@@ -1,18 +1,20 @@
 # Relay credentials (app side)
 
-Calls can fall back to Cloudflare TURN relays. The apps never hold the Cloudflare TURN token. They ask the
-relay Worker (`relay-worker/worker.js`) for a short-lived TURN login instead. The apps are relay-only for
-this path: they get TURN URLs, never STUN URLs, from the Worker.
+Over the internet, call audio goes only through Cloudflare TURN relays (docs/protocol-0.6.md 5.1 and 5.6):
+there is no STUN and no direct internet path. The apps never hold the Cloudflare TURN token. They ask the
+relay Worker (`relay-worker/worker.js`) for a short-lived TURN login instead, and get TURN URLs from it,
+never STUN URLs.
 
 ## Constants
 
 The Worker URL and `APP_SECRET` live in one constants file per app, and nowhere else:
 
-- Huginn: `src/relayconfig.h`
-- Muninn: `android/app/src/main/java/io/github/ravenor907/muninn/RelayConfig.kt`
+- Huginn: `src/call/relayconfig.h` (`RelayConfig::kWorkerUrl`, `RelayConfig::kAppSecret`)
+- Muninn: `android/app/src/main/java/io/github/ravenor907/muninn/net/call/RelayConfig.kt`
+  (`RelayConfig.WORKER_URL`, `RelayConfig.APP_SECRET`)
 
 ```
-RELAY_URL  = "https://huginn-relay.<account>.workers.dev"
+WORKER_URL = "https://huginn-relay.ravenor907.workers.dev"
 APP_SECRET = "<64 hex chars, same value as the Worker secret>"
 ```
 
@@ -21,13 +23,15 @@ protection is the Worker's daily caps.
 
 ## Request
 
-`POST {RELAY_URL}/turn`, `Content-Type: application/json`, sent over Tor like other network requests.
+`POST {WORKER_URL}/turn`, `Content-Type: application/json`, sent over Tor like other network requests.
 
 ```json
 {"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
 ```
 
-- `id`: lowercase hex SHA-256 of the caller's identity public key (64 chars).
+- `id`: lowercase hex SHA-256 (64 chars) of the raw SubjectPublicKeyInfo DER of the caller's chat key: the
+  bytes whose standard base64 is the `fromKey` of its envelopes (not that base64 text, and not the bare EC
+  point). Huginn `RelayCredentials::body`, Muninn `TurnCreds.body`; both self-tests check the same example.
 - `t`: current Unix time in whole seconds (a JSON integer, not a string).
 - `sig`: lowercase hex HMAC-SHA256 with key `APP_SECRET` (the UTF-8 bytes of the string) over the UTF-8
   string `id + "." + t`, for example `aaaa...aaaa.1800000000` (the 64-char id, a dot, then the digits of t).
@@ -68,7 +72,8 @@ Errors are JSON `{"error": "<code>"}`:
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
 | 503 | `limits_unavailable`, `not_configured` | Worker not set up or KV down. Retry later. |
 
-On any error, the call goes on without a relay (direct paths only).
+On any error, the call goes on without a relay: only the Wi-Fi and Bluetooth paths can work, and an internet
+call fails with "Can't connect".
 
 ## Caching
 
@@ -79,6 +84,14 @@ On any error, the call goes on without a relay (direct paths only).
 - After a 429, don't ask again until the next UTC day. After a 5xx, wait at least 60 s before asking again.
 - A call already using a login keeps it; refreshing only affects new allocations.
 
+## Reaching the TURN server
+
+The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up through Tor only (SOCKS5
+RESOLVE on Tor's port), a few tries a second apart, and never fall back to the system resolver: that would
+tell the local network and its DNS server when this device makes a call. If Tor can't answer, the call has
+no relay and says "Can't reach the call relay right now". The audio itself then goes from the device to the
+TURN server's address directly (UDP, or TLS on 443), not through Tor.
+
 ## Health
 
-`GET {RELAY_URL}/health` returns `{"ok":true}`. The apps don't need it; it is for the owner to check the Worker.
+`GET {WORKER_URL}/health` returns `{"ok":true}`. The apps don't need it; it is for the owner to check the Worker.

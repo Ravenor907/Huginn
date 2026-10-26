@@ -41,6 +41,9 @@ import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Received
 import io.github.ravenor907.muninn.screens.CallsScreen
 import io.github.ravenor907.muninn.screens.ChatColumn
+import io.github.ravenor907.muninn.screens.ChannelColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import io.github.ravenor907.muninn.screens.ChatMain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -164,6 +167,7 @@ class MainActivity : ComponentActivity() {
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
         if (ciSkip && intent?.getBooleanExtra("menu", false) == true) ChatNav.menu = true   // CI: the + menu
+        if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
         if (savedInstanceState == null) { openChat(intent); openAdd(intent) }
         handleShare(intent)
         setContent { MuninnTheme { Root() } }
@@ -182,7 +186,7 @@ class MainActivity : ComponentActivity() {
     /** Set when an intent picked the chat to show; cleared once Muninn is back on screen (onResume). */
     private var intentChose = false
 
-    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.menu = false }
+    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.space = ""; ChatNav.menu = false }
 
     /** A scanned contact QR opened Muninn: go to Add someone with the code filled in. */
     private fun openAdd(i: Intent?) {
@@ -198,6 +202,17 @@ class MainActivity : ComponentActivity() {
         val key = i?.getStringExtra("chat") ?: return
         tab = "chat"
         ChatNav.open = if (key == "inbox") "" else key
+        intentChose = true
+    }
+
+    /** Test builds only: a small group for the CI screenshots (made once, then reused). */
+    private fun ciGroup() {
+        val gs = app.chat.groups
+        val g = gs.all.value.values.firstOrNull { it.state.name == "The Family" }?.g ?: gs.create("The Family")?.also { g ->
+            gs.addChannel(g, "photos", false); gs.addChannel(g, "Living room", true); gs.sendText(g, "main", "Dinner at six")
+        } ?: return
+        tab = "chat"
+        ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(g) + if (intent?.getBooleanExtra("gsettings", false) == true) "/settings" else ""
         intentChose = true
     }
 
@@ -275,6 +290,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Root() {
+        // Kids' TV: its own screens, with no lock and no sign in.
+        if (io.github.ravenor907.muninn.tv.KidMode.on(app)) { io.github.ravenor907.muninn.tv.TvRoot(app); return }
         val ready by app.ready.collectAsState()
         val panic by io.github.ravenor907.muninn.ui.Panic.locked.collectAsState()
         LaunchedEffect(panic) { if (panic) toList() }
@@ -414,22 +431,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The rail's top part: direct messages now; groups join this list in a later version. */
-    private data class RailSpace(val id: String, val label: String)
-    private val spaces = listOf(RailSpace("chat", "Direct messages"))
+    /** The rail's top part: direct messages, then each group (protocol 0.6), then New group. */
+    @Composable
+    private fun RailSpaces() {
+        val groups by app.chat.groups.all.collectAsState()
+        val unread by app.chat.groups.unreadGroups.collectAsState()
+        val dms = tab == "chat" && ChatNav.space.isEmpty()
+        RailButton("Direct messages", dms, round = false, fill = Palette.field, onClick = { ChatNav.space = ""; if (dms) toList() else { show("chat"); ChatNav.open = "" } }) {
+            Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(32.dp))
+        }
+        Box(Modifier.size(width = 32.dp, height = 2.dp).background(Palette.hairline))
+        groups.values.forEach { grp ->
+            val on = tab == "chat" && ChatNav.space == grp.g
+            val name = grp.state.name
+            // The open one is a rounded square in gold, the rest circles (the mockup); a gold dot for unread.
+            Box(contentAlignment = Alignment.TopEnd) {
+                RailButton(if (grp.g in unread) "$name, unread" else name, on, round = !on, fill = if (on) Palette.gold else Palette.coolTint,
+                    onClick = { show("chat"); ChatNav.space = grp.g; ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(grp.g) }) {
+                    Text(name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "#",
+                        style = Type.big.copy(fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = if (on) Palette.onGold else Palette.accent))
+                }
+                if (grp.g in unread && !on) Box(Modifier.padding(top = 2.dp, end = 12.dp).size(12.dp).clip(CircleShape).background(Palette.gold))
+            }
+        }
+        RailButton("New group", false, round = true, fill = androidx.compose.ui.graphics.Color.Transparent,
+            onClick = { show("chat"); ChatNav.space = ""; ChatNav.open = "newgroup" }) {
+            MIcon("plus", Palette.textMuted, 22.dp)
+        }
+    }
 
     @Composable
     private fun TabletLayout(toast: Pair<String, Boolean>?) {
         Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                spaces.forEach { sp ->
-                    RailButton(sp.label, tab == sp.id, round = false, fill = Palette.field, onClick = { if (tab == sp.id) toList() else show(sp.id) }) {
-                        Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(32.dp))
-                    }
-                }
-                Box(Modifier.size(width = 32.dp, height = 2.dp).background(Palette.hairline))
-                Spacer(Modifier.weight(1f))
+                // Groups can be many: the top part scrolls, the tabs below stay put.
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
                 listOf("files" to ("folder" to "Files"), "calls" to ("call" to "Calls"), "contacts" to ("people" to "Contacts"), "settings" to ("gear" to "Settings")).forEach { (id, v) ->
                     val on = tab == id
                     RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
@@ -442,11 +480,24 @@ class MainActivity : ComponentActivity() {
                 UpdateBanner()
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (tab == "chat") Row(Modifier.fillMaxSize()) {
+                        // A group opened from anywhere (a notification, the list) picks it on the rail too.
+                        val opened = ChatNav.groupOf(ChatNav.open)
+                        LaunchedEffect(opened) { if (opened != null) ChatNav.space = opened }
+                        val groups by app.chat.groups.all.collectAsState()
+                        val space = groups[ChatNav.space]
                         Column(Modifier.width(270.dp).fillMaxHeight().background(Palette.panelLow)) {
-                            ColumnHeader("Direct messages") {
-                                if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                            if (space != null) {
+                                // A group: its channels (TEXT, then VOICE rooms), the conversation in the main column.
+                                ColumnHeader(space.state.name) {
+                                    IconAction("gear", "Group settings") { ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(space.g) + "/settings" }
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
+                            } else {
+                                ColumnHeader("Direct messages") {
+                                    if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
                             }
-                            Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
                         }
                         Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.hairline))
                         Box(Modifier.weight(1f).fillMaxHeight()) { ChatMain(app) }

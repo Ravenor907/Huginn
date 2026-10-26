@@ -34,6 +34,9 @@ done
 # A conversation (top bar, bubbles, composer), the chat list's + menu and the lock screen.
 shot conversation --es chat demo
 shot new-chat-menu --es screen chat --ez menu true
+# Groups: a group conversation (channel chips, sender names) and its settings (members, channels, folders).
+shot group --ez group true
+shot group-settings --ez group true --ez gsettings true
 shot lock --es screen lock
 # Tablet size (1280x800 at density 160, so 1280dp wide): the rail, chat list and conversation.
 adb shell wm size 1280x800
@@ -41,6 +44,8 @@ adb shell wm density 160
 sleep 2
 shot tablet-chats --es screen chat
 shot tablet-conversation --es chat demo
+# The rail's group button, the channel column (TEXT, VOICE) and the group in the main column.
+shot tablet-group --ez group true
 shot tablet-files --es screen files
 shot tablet-settings --es screen settings
 adb shell wm size reset

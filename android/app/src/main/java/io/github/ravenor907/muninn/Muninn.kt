@@ -20,6 +20,7 @@ import io.github.ravenor907.muninn.net.Identity
 import io.github.ravenor907.muninn.net.InboxWorker
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Nostr
+import io.github.ravenor907.muninn.net.Tor
 import io.github.ravenor907.muninn.net.Vault
 import io.github.ravenor907.muninn.update.Updater
 import kotlinx.coroutines.CoroutineScope
@@ -82,6 +83,18 @@ class Muninn : Application() {
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
         if (vault.openDefault()) start()
         dropOldTools()
+        // All internet traffic goes through Tor: it runs while Muninn is on screen (and, with
+        // "Get messages right away", inside MessageService), and stops a little after neither needs it.
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            private var started = 0
+            override fun onActivityStarted(activity: android.app.Activity) { if (started++ == 0) Tor.hold(this@Muninn, "screen") }
+            override fun onActivityStopped(activity: android.app.Activity) { if (--started <= 0) { started = 0; Tor.release("screen") } }
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+            override fun onActivityResumed(activity: android.app.Activity) {}
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
         // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
         try {
             getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
@@ -104,6 +117,8 @@ class Muninn : Application() {
         ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
         contacts = Contacts(this, vault)
         chat = Chat(this, net, close, ble, nostr, contacts, vault)
+        io.github.ravenor907.muninn.tv.Tv.install(this)
+        io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
         closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key) } }

@@ -40,8 +40,11 @@ QtObject {
     readonly property color focusFill: Qt.rgba(accent.r * 0.12 + 0.11, accent.g * 0.12 + 0.11, accent.b * 0.12 + 0.1, 1)
 
     // Everything scales with the screen, the layout density and the Size setting (see System::uiScale).
+    // Desktop gets a boost on top: System's desktop density was far too small to read on a 1080p or
+    // 1440p monitor at arm's length (body text near 14 px). With it, 1080p reads like the mockups
+    // (16 to 18 px) and 1440p grows with the screen.
     readonly property bool desktop: System.desktop
-    readonly property real s: System.uiScale
+    readonly property real s: System.uiScale * (desktop ? 1.3 : 1)
     function px(v) { return Math.round(v * s) }
     // Text sizes: the overall Size, times the separate Text size.
     function fs(v) { return Math.round(v * s * textScale) }

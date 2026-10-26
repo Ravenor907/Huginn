@@ -3,10 +3,12 @@
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QBluetoothLocalDevice>
 #include <QBluetoothUuid>
+#ifdef Q_OS_LINUX
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
 #include <QDBusVariant>
+#endif
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -31,12 +33,13 @@ constexpr int kSetupTimeoutMs = 25000;   // connect, discover, HELLO and notific
 constexpr qint64 kMaxBackoffMs = 120000;
 constexpr int kMaxLinks = 3;
 
-const QString kBluez = QStringLiteral("org.bluez");
-
 qint64 nowMs()
 {
     return QDateTime::currentMSecsSinceEpoch();
 }
+
+#ifdef Q_OS_LINUX
+const QString kBluez = QStringLiteral("org.bluez");
 
 // Small blocking D-Bus helpers with a short timeout, so a stuck BlueZ can't freeze the screen for long.
 QDBusMessage bluezCall(const QString &path, const QString &iface, const QString &method, const QVariantList &args)
@@ -100,6 +103,12 @@ bool bluezReachable()
     QDBusConnectionInterface *bus = QDBusConnection::systemBus().interface();
     return bus && bus->isServiceRegistered(kBluez).value();
 }
+#else
+// Windows (and anything else): Qt talks to the system's Bluetooth stack itself (WinRT on Windows),
+// and QLowEnergyController::mtu() reports the negotiated MTU for a central there.
+int bluezMtu(const QString &) { return 0; }
+bool bluezReachable() { return true; }
+#endif
 }
 
 Ble::Ble(std::function<QByteArray()> hello, QObject *parent)
@@ -151,7 +160,8 @@ QVariantList Ble::peers() const
         out << QVariantMap{{QStringLiteral("address"), l->address},
                            {QStringLiteral("name"), l->name},
                            {QStringLiteral("chatKey"), l->chatKey},
-                           {QStringLiteral("mailbox"), l->mailbox}};
+                           {QStringLiteral("mailbox"), l->mailbox},
+                           {QStringLiteral("onion"), l->onion}};
     }
     return out;
 }
@@ -403,6 +413,7 @@ void Ble::onHello(Link *l, const QByteArray &value)
     l->chatKey = key;
     l->name = o.value(QStringLiteral("name")).toString();
     l->mailbox = o.value(QStringLiteral("mailbox")).toString();
+    l->onion = o.value(QStringLiteral("onion")).toString().left(70);   // 0.6: where it's reached over Tor
 
     const QLowEnergyCharacteristic outbox = l->svc->characteristic(kOutbox);
     const QLowEnergyDescriptor cccd = outbox.clientCharacteristicConfiguration();

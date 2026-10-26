@@ -27,15 +27,21 @@ Window {
     Binding { target: System; property: "desktop"; value: app.desktopLayout }
 
     // ------------------------------------------------------------- the rail
-    // Groups join this list in a later update, between Direct messages and the bottom buttons.
+    // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
+    readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
+                                       { id: "tour-kindred", name: "Kindred", unread: 0 }]
+    readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length },
-        { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true },
+        { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+    ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?", badge: g.unread || 0 })))
+     .concat([
+        { id: "newgroup", kind: "add", label: "New group", action: true },
+        { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
         { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
         { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
         { id: "exit", kind: "icon", icon: "power", label: "Exit Huginn", bottom: true, action: true }
-    ]
-    // LB and RB step through the sections (Exit is reached with the D-pad only).
+    ])
+    // LB and RB step through the sections and groups (New group and Exit are reached with the D-pad).
     readonly property var cycle: railItems.filter(e => !e.action).map(e => e.id)
 
     // ------------------------------------------------------------- pages
@@ -54,14 +60,26 @@ Window {
             if (pageLoader.item && pageLoader.item.setArgs) pageLoader.item.setArgs(pageArgs)
             return
         }
+        const groupToGroup = name.startsWith("g:") && pageName.startsWith("g:")
         pageName = name
+        // From one group to another the page stays loaded: hand it the new arguments.
+        if (groupToGroup && pageLoader.item && pageLoader.item.setArgs) pageLoader.item.setArgs(pageArgs)
     }
     function openRail(index) {
         const e = railItems[index]
         if (!e) return
         railIndex = index
         if (e.id === "exit") { requestExit(); return }
+        if (e.id === "newgroup") { newGroup(); return }
         openPage(e.id, {})
+    }
+    function newGroup() {
+        if (Vault.screenLocked || !Vault.exists) { Ui.say("Open Direct messages and unlock Chat first.", true); openPage("dms", {}); return }
+        Ui.ask("New group", "A name everyone in it sees, like Family or Kindred. You can change it later.", "", "Make it", t => {
+            const g = Chat.createGroup(t)
+            if (g === "") { Ui.say("Give the group a name.", true); return }
+            openPage("g:" + g, {})
+        }, false, true)
     }
     function stepSection(dir) {
         const i = cycle.indexOf(section)
@@ -107,6 +125,7 @@ Window {
         anchors.left: rail.right
         anchors.right: parent.right
         source: {
+            if (app.pageName.startsWith("g:")) return "GroupPage.qml"
             switch (app.pageName) {
             case "dms": return "ChatPage.qml"
             case "calls": return "CallsPage.qml"
@@ -123,10 +142,14 @@ Window {
     PromptBar {
         id: hints
         anchors.bottom: parent.bottom
+        z: callPage.visible || incomingCall.visible ? 38 : 0   // the call's buttons stay on show over it
         width: parent.width
         visible: !Theme.desktop || LocalSend.busy
-        status: app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
+        status: incomingCall.visible ? incomingCall.status : callPage.visible ? callPage.status
+              : app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
         prompts: {
+            if (incomingCall.visible) return incomingCall.prompts
+            if (callPage.visible) return callPage.prompts
             const lbrb = [{ key: "lbrb", label: "Sections" }]
             if (app.focusZone === "rail")
                 return lbrb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }])
@@ -139,6 +162,8 @@ Window {
     // ------------------------------------------------------------- overlays
     ListPicker { id: picker; z: 25 }
     TextPrompt { id: prompt; z: 30 }
+    CallPage { id: callPage; z: 36 }
+    IncomingCall { id: incomingCall; z: 37 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
 
@@ -210,9 +235,14 @@ Window {
         target: Chat
         function onNotice(text) { Ui.say(text) }
         function onArrived(name, text, key) {
-            if (Chat.openChat === key && app.pageName === "dms") return
+            if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : "New message. Open Direct messages to read it.")
         }
+    }
+    // Calls: how a call ended, as a toast.
+    Connections {
+        target: Calls
+        function onFinished(t) { Ui.say(t) }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen.
     Connections {
@@ -241,6 +271,8 @@ Window {
     function overlay() {
         if (updating.visible) return updating
         if (confirm.visible) return confirm
+        if (incomingCall.visible) return incomingCall
+        if (callPage.visible) return callPage
         if (prompt.visible) return prompt
         if (picker.visible) return picker
         return null
@@ -331,7 +363,13 @@ Window {
             { page: "dms", prompt: true, file: "09-write" },
             { page: "dms", hold: true, file: "10-confirm" },
             { page: "dms", zone: "messages", desktop: true, file: "11-desktop" },
-            { page: "settings", desktop: true, file: "12-desktop-settings" }
+            { page: "settings", desktop: true, file: "12-desktop-settings" },
+            { page: "g:tour-crew", file: "13-group" },
+            { page: "g:tour-crew", zone: "messages", desktop: true, file: "14-desktop-group" },
+            { page: "g:tour-crew", zone: "channels", groupOptions: true, file: "15-group-options" },
+            { page: "g:tour-crew", zone: "channels", voice: true, file: "16-voice-room" },
+            { page: "dms", folders: true, file: "17-folders" },
+            { page: "dms", rail: true, desktop: true, file: "18-desktop-rail" }
         ]
         interval: 1500
         repeat: true
@@ -343,6 +381,9 @@ Window {
             const args = { tour: true }
             if (s.section) args.section = s.section
             if (s.zone) args.zone = s.zone
+            if (s.groupOptions) args.groupOptions = true
+            if (s.voice) args.voice = true
+            if (s.folders) args.folders = true
             app.tourDesktop = !!s.desktop
             app.openPage(s.page, args)
             if (s.rail) app.focusRail()

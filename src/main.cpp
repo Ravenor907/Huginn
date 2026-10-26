@@ -4,6 +4,10 @@
 #include "direct.h"
 #include "chatcrypto.h"
 #include "chatwire.h"
+#include "call/callmanager.h"
+#include "call/callselftest.h"
+#include "call/callsignal.h"
+#include "groupwire.h"
 #include "ratchet.h"
 #include "ble.h"
 #include "bleframes.h"
@@ -12,12 +16,14 @@
 #include "schnorr.h"
 #include "vault.h"
 #include "voice.h"
-#include <QDBusInterface>
+#include "platform/notify.h"
+#include "platform/singleinstance.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSoundEffect>
 #include "settings.h"
 #include "system.h"
+#include "tor.h"
 #include "transfer.h"
 #include "updater.h"
 
@@ -26,6 +32,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
 #include <QQmlApplicationEngine>
@@ -72,7 +79,7 @@ int main(int argc, char *argv[])
     QCommandLineOption windowed(QStringLiteral("windowed"), QStringLiteral("Run in a window instead of full screen."));
     args.addOption(tour);
     args.addOption(windowed);
-    QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors and the message envelopes (for CI), then quit."), QStringLiteral("FILE"));
+    QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors, the message envelopes and the 0.6 groups (proto06-vectors.json next to FILE) (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(chatTest);
     QCommandLineOption ratchetTest(QStringLiteral("ratchet-selftest"), QStringLiteral("Check the message ratchet against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(ratchetTest);
@@ -82,13 +89,22 @@ int main(int argc, char *argv[])
     args.addOption(privacyTest);
     QCommandLineOption backupTest(QStringLiteral("backup-selftest"), QStringLiteral("Back up and restore a temporary chat folder (for CI), then quit."));
     args.addOption(backupTest);
+    QCommandLineOption torTest(QStringLiteral("tor-selftest"), QStringLiteral("Start Tor, make an onion address and send a message to it through Tor (for CI, needs internet), then quit."));
+    args.addOption(torTest);
+    QCommandLineOption callTest(QStringLiteral("call-selftest"), QStringLiteral("Check calls against the shared test vectors and an in-process loopback (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(callTest);
     args.process(app);
+    if (args.isSet(callTest))
+        return CallSelfTest::run(args.value(callTest)) ? 0 : 1;
     if (args.isSet(chatTest)) {
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
-        return a && b ? 0 : 1;
+        const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
+        return a && b && c ? 0 : 1;
     }
     if (args.isSet(backupTest))
         return Vault::backupSelfTest() ? 0 : 1;
+    if (args.isSet(torTest))
+        return Tor::selfTest(120) ? 0 : 1;
     if (args.isSet(ratchetTest))
         return Ratchet::selfTest(args.value(ratchetTest)) ? 0 : 1;
     if (args.isSet(nostrTest))
@@ -97,6 +113,11 @@ int main(int argc, char *argv[])
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
         return a && b && c ? 0 : 1;
     }
+
+    // One copy at a time: two would share the same Tor data and vault files.
+    auto *one = new SingleInstance(&app);
+    if (!args.isSet(tour) && !one->claim())
+        return 0;
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())
@@ -109,7 +130,6 @@ int main(int argc, char *argv[])
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || args.isSet(tour), &app);
     auto *gamepad = new Gamepad(&app);
     auto *transfer = new TransferServer(settings, &app);
-    auto *updater = new Updater(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
     Chat *chat = nullptr;
@@ -118,11 +138,15 @@ int main(int argc, char *argv[])
             return QByteArray();
         return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->username()},
                                          {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
-                                         {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
+                                         {QStringLiteral("app"), QStringLiteral("huginn")}, {QStringLiteral("onion"), chat->onion()}}).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
     if (args.isSet(tour) && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // CI screenshots: no lock to draw
+    // All internet traffic goes through Tor (bundled); nothing falls back to a direct connection.
+    // The onion key lives in the vault, so the onion service is added once the vault opens.
+    auto *tor = new Tor(vault, &app);
+    auto *updater = new Updater(settings, tor, &app);
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
     auto *nostr = new Nostr([vault] {
         if (vault->locked())
@@ -136,8 +160,20 @@ int main(int argc, char *argv[])
         }
         return secret;
     }, &app);
+    nostr->setTor(tor);
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    chat->setTor(tor);
     auto *voice = new Voice(chat, &app);
+    // Calls: everything they send and receive goes through Chat's sealing and routes.
+    auto *cs = new CallSignalHooks(&app);
+    cs->onSend = [chat](const QString &k, const QJsonObject &m) { chat->sendCall(k, m); };
+    cs->onSign = [chat](const QByteArray &b) { return chat->signWithChatKey(b); };
+    cs->onMyKey = [chat] { return chat->chatKey(); };
+    cs->onNameOf = [chat](const QString &k) { return chat->nameOf(k); };
+    cs->onCanCall = [chat](const QString &k) { return chat->canCall(k); };
+    cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
+    QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
+    auto *calls = new CallManager(cs, vault, &app);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new QSoundEffect(&app);
     sound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
@@ -160,8 +196,9 @@ int main(int argc, char *argv[])
         // and ask the relays for the inbox again so messages that came while locked are read now.
         QObject::connect(vault, &Vault::opened, nostr, [nostr, ble] { ble->sayHello(); nostr->reconnectNow(); nostr->resubscribe(); });
         QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
+        tor->start();
         nostr->setKeepAlive(true);
-        nostr->connectRelays();
+        nostr->connectRelays();   // waits for Tor
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
@@ -172,9 +209,7 @@ int main(int argc, char *argv[])
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
             const bool preview = chat->showPreview() && !vault->screenLocked();
-            QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"));
-            n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), 0u, QStringLiteral("io.github.ravenor907.Huginn"),
-                   preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"), QStringList(), QVariantMap(), 6000);
+            Platform::notify(preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"));
         }
     });
     auto *direct = new Direct(&app);
@@ -186,10 +221,15 @@ int main(int argc, char *argv[])
                 settings->nearbySharing() ? localSend->start() : localSend->stop();
         });
     }
-    // Sending or receiving keeps the handheld awake until it finishes.
-    QObject::connect(localSend, &LocalSend::progressChanged, system, [system, localSend] {
-        system->setKeepAwake(localSend->busy(), localSend->sending() ? QStringLiteral("Sending files") : QStringLiteral("Receiving files"));
-    });
+    // Sending, receiving or a call keeps the handheld awake until it finishes.
+    auto awake = [system, localSend, calls] {
+        if (calls->inCall())
+            system->setKeepAwake(true, QStringLiteral("In a call"));
+        else
+            system->setKeepAwake(localSend->busy(), localSend->sending() ? QStringLiteral("Sending files") : QStringLiteral("Receiving files"));
+    };
+    QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
+    QObject::connect(calls, &CallManager::changed, system, awake);
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
@@ -202,6 +242,8 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Voice", voice);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Tor", tor);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);

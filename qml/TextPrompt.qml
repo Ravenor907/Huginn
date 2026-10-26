@@ -8,7 +8,7 @@ Item {
     id: prompt
     property string title
     property string context
-    property string hint: "Type with Steam's keyboard, then press Enter"
+    property string hint: System.gameMode ? "Type with Steam's keyboard, then press Enter" : "Type, then press Enter"
     property string confirmText: "Done"
     property bool password: false
     property var acceptCallback: null

@@ -16,7 +16,8 @@ Rectangle {
     // Rows in the middle column: the two actions, then one per device.
     readonly property var rows: [{ kind: "pick", name: "Pick files to send", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "From Downloads, Documents, Pictures and more" },
                                  { kind: "clear", name: "Clear the list", detail: Transfer.sharedCount > 0 ? "Start over" : "Nothing picked yet" }]
-        .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, detail: (d.model ? d.model + " · " : "") + d.ip, type: d.type })))
+        .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, type: d.type,
+                                    detail: d.model ? d.model : d.app === "muninn" ? "Muninn" : d.app === "huginn" ? "Huginn" : d.type === "mobile" ? "Phone" : "Computer" })))
     readonly property var sharedNames: {
         const out = []
         const list = Transfer.shared
@@ -246,7 +247,8 @@ Rectangle {
                 spacing: Theme.px(6)
                 Text { width: parent.width; wrapMode: Text.WordWrap; text: Direct.on ? "Direct connect is on. Scan with the phone camera to join this device's Wi-Fi" : "No app on the phone? Scan this with its camera"; color: Direct.on ? Theme.accent : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
                 Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? Transfer.address.replace("http://", "") : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                // Never an address on screen: the camera opens the page, then the PIN lets it in.
+                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? "Opens a page from “" + LocalSend.alias + "”, then type the PIN" : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 Row {
                     visible: !Direct.on

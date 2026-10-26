@@ -24,7 +24,11 @@ public:
     // "auto", "handheld" or "desktop" (see Main.qml: Automatic picks desktop for a wide window with no controller in use).
     QString layout() const
     {
+#ifdef Q_OS_WIN
+        const QString v = value("layout", "desktop").toString();   // a Windows PC starts on the desktop layout
+#else
         const QString v = value("layout", "auto").toString();
+#endif
         return v == QLatin1String("handheld") || v == QLatin1String("desktop") ? v : QStringLiteral("auto");   // 0.5's "tv" is gone
     }
     QString uiSize() const { return value("uiSize", "100").toString(); }

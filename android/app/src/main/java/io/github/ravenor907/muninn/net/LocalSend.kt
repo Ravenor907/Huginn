@@ -304,7 +304,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         // claiming it with encryption off, which would skip the certificate check when sending.
         if (protocol != "https" && found[id]?.protocol == "https") return
         found[id] = Device(
-            id, o.optString("alias", ip), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
+            id, deviceName(o), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
             ip, o.optInt("port", PORT), protocol,
             o.optString("chatKey").ifEmpty { null }, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null },
         )
@@ -425,7 +425,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             total += inf.size
             map[k] = inf
         }
-        val alias = from.optString("alias", ip)
+        val alias = deviceName(from)
         val free = Received.freeBytes(context)
         if (total + 64L * 1024 * 1024 > free) {
             reply(out, 403)
@@ -615,9 +615,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
                     done(false, "Didn't send: whoever answered isn't the ${dev.alias} that was found earlier. Look again and pick it.")
                     return@execute
                 }
-                done(false, e.message?.takeIf { it.contains(dev.alias) } ?: "Couldn't reach ${dev.alias}. Is it on the same Wi-Fi with LocalSend, Huginn or Muninn open?")
+                done(false, e.message?.takeIf { it.contains(dev.alias) }?.let { ChatWire.noIp(it) } ?: "Couldn't reach ${dev.alias}. Is it on the same Wi-Fi with LocalSend, Huginn or Muninn open?")
             } catch (e: Exception) {
-                done(false, "Sending failed: ${e.message ?: e.javaClass.simpleName}")
+                done(false, "Sending to ${dev.alias} failed. Check it's on the same Wi-Fi and try again.")
             }
         }
     }
@@ -706,6 +706,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
         fun localAddress(): String? = lanInterfaces().firstNotNullOfOrNull { nif ->
             nif.inetAddresses.toList().filterIsInstance<Inet4Address>().firstOrNull { it.isSiteLocalAddress }?.hostAddress
+        }
+
+        /** What a device is called on screen: its own name (or model), never its network address. */
+        fun deviceName(o: JSONObject): String {
+            val alias = ChatWire.noIp(o.optString("alias").trim(), "").trim()
+            val model = ChatWire.noIp(o.optString("deviceModel").trim(), "").trim()
+            return alias.ifEmpty { model }.ifEmpty { "A nearby device" }.take(60)
         }
 
         fun size(b: Long): String = when {

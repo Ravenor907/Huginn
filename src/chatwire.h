@@ -6,12 +6,14 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <map>
 #include <utility>
 #include <vector>
 
 // How a chat message goes on the wire, the same as Muninn's net/Chat.kt:
-//  - Every envelope says "cap":"r1": this app can read ratchet messages.
+//  - Every envelope says "cap":"r1": this app can read ratchet messages. 0.5 apps test exactly
+//    that, so it never changes; from 0.6 "caps" lists everything this app can do ("r1 g1 c1").
 //  - v1: "nonce" + "data", sealed with the pair key (ChatCrypto::seal).
 //  - r1: "rh" {b, d, pn, n} (the ratchet header) + "data" (standard base64 of the ratchet
 //    ciphertext), for private-room messages to a contact whose app said "cap":"r1".
@@ -19,13 +21,19 @@
 namespace ChatWire
 {
 extern const char kCap[];   // "r1"
+// What this app can do, sent as "caps" (docs/protocol-0.6.md 1.1). Only what Huginn really does:
+// no k1 (kids' TV is Muninn only), or 0.6 peers would try it and fail.
+extern const char kCaps[];  // "r1 g1 c1"
 
-// The ratchet is for private-room payloads to a contact that said it can read it.
+// The ratchet is for private-room and group payloads to a contact (or group peer) that said it
+// can read it.
 bool useRatchet(const QString &room, bool contact, bool capable);
 bool isRatchet(const QJsonObject &o);
 bool saysCapable(const QJsonObject &o);
+// The "caps" tokens of an envelope; *present is false when it has none (a 0.5 app).
+QStringList capsOf(const QJsonObject &o, bool *present = nullptr);
 
-// Adds "cap" and seals plain into the envelope fields (room, fromKey, fromName, mailbox, id, ...).
+// Adds "cap" and "caps" and seals plain into the envelope fields (room, fromKey, fromName, mailbox, id, ...).
 // With a peer the ratchet is used and the peer moves on (save it before sending); when the
 // ratchet can't make a message, v1 is used instead.
 QJsonObject seal(QJsonObject fields, const QByteArray &sk, const QString &theirKey, const QByteArray &plain, Ratchet::Peer *peer,

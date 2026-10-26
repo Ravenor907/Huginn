@@ -151,7 +151,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
                 MButton("Erase everything", Modifier.weight(1f), Kind.Danger) {
                     Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings are deleted for good, and Muninn closes. Files you received stay.",
-                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                        "Hold to erase", danger = true, hold = true) { io.github.ravenor907.muninn.net.Tor.forget(app); app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
                 }
             }
         }

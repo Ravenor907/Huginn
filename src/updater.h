@@ -1,12 +1,16 @@
 #pragma once
 
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QObject>
+#include <QUrl>
 
 class Settings;
+class Tor;
 
 // Ally Hub-style updates from GitHub releases (tagged v0.3, v0.31...). Updates install the
-// release's Flatpak bundle for this user, then Huginn restarts.
+// release's Flatpak bundle for this user, then Huginn restarts. GitHub is only ever reached
+// through Tor: until Tor is ready, checking waits.
 class Updater : public QObject
 {
     Q_OBJECT
@@ -17,7 +21,7 @@ class Updater : public QObject
     Q_PROPERTY(bool autoUpdating READ autoUpdating NOTIFY changed)
 
 public:
-    explicit Updater(Settings *settings, QObject *parent = nullptr);
+    explicit Updater(Settings *settings, Tor *tor, QObject *parent = nullptr);
 
     bool busy() const { return m_busy; }
     bool available() const { return !m_latestTag.isEmpty() && newer(m_latest, m_current); }
@@ -39,8 +43,16 @@ Q_SIGNALS:
 
 private:
     void fetch(bool installAfter, bool autoMode = false);
+    // GitHub's API limits each address to 60 questions an hour, and Tor exits are shared: when it
+    // refuses, the "latest release" page (a redirect to the tag) says the same thing.
+    void fetchLatestPage(bool installAfter, bool autoMode);
+    void chosen(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
+    bool waitForTor(bool installAfter, bool autoMode);
+    QNetworkRequest request(const QUrl &url) const;
     void download(const QString &url, const QString &tag);
     Settings *m_settings;
+    Tor *m_tor;
+    QMetaObject::Connection m_waiting;
     QNetworkAccessManager m_net;
     QString m_current;
     QString m_latest;

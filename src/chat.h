@@ -17,6 +17,7 @@
 class Ble;
 class LocalSend;
 class Nostr;
+class Tor;
 class Vault;
 
 // Huginn's messaging, the same as Muninn's (net/Chat.kt) so the two work together:
@@ -30,6 +31,11 @@ class Vault;
 //  - Receipts (Sending, Sent, Delivered, Read), unsend, photos and voice messages in pieces.
 //  - Contacts whose app says "cap":"r1" get the message ratchet (forward secrecy) for private
 //    messages; everyone else, and the Nearby room, stays on the pair key (v1). See ChatWire.
+//  - Groups (0.6, chatgroups.cpp): a signed state per group, every message sealed separately to
+//    each member over that member's own session. See docs/protocol-0.6.md and GroupWire.
+//  - Contact folders: local only, never sent.
+//  - Over Tor (when it's running) the internet route tries their onion address first, and the
+//    Nostr relays become the mailbox for when they're offline.
 //  - Everything kept is encrypted in the Vault.
 class Chat : public QObject
 {
@@ -52,6 +58,14 @@ class Chat : public QObject
     Q_PROPERTY(QString myLink READ myLink NOTIFY changed)          // the code being shown (newLink makes one)
     Q_PROPERTY(qint64 linkExpires READ linkExpires NOTIFY changed)
     Q_PROPERTY(QString openChat MEMBER m_openChat NOTIFY changed)
+    Q_PROPERTY(QVariantList groups READ groups NOTIFY changed)
+    Q_PROPERTY(QVariantList groupInvites READ groupInvites NOTIFY changed)
+    Q_PROPERTY(QVariantList folders READ folders NOTIFY changed)
+    // Tor: torOn when Huginn has it at all; "Connecting privately 40%" until it's ready.
+    Q_PROPERTY(bool torOn READ torOn NOTIFY changed)
+    Q_PROPERTY(bool torReady READ torReady NOTIFY changed)
+    Q_PROPERTY(int torProgress READ torProgress NOTIFY changed)
+    Q_PROPERTY(QString netStatus READ netStatus NOTIFY changed)
 
 public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
@@ -83,6 +97,13 @@ public:
     QString mailbox() const;
     // A new code with an invite good for an hour: a leaked code stops working after that.
     Q_INVOKABLE QString newLink();
+    // Tor, from main.cpp. Messages for the onion address come in like those over Wi-Fi.
+    void setTor(Tor *tor);
+    QString onion() const;
+    bool torOn() const { return m_tor != nullptr; }
+    bool torReady() const;
+    int torProgress() const;
+    QString netStatus() const;
 
     // Messages
     Q_INVOKABLE QVariantList messagesWith(const QString &key) const;
@@ -134,16 +155,72 @@ public:
     Q_INVOKABLE bool isBlocked(const QString &key) const;
     Q_INVOKABLE void removeContact(const QString &key);
 
+    // What their app can do (the "caps" of their envelopes). Unknown until they send something
+    // from 0.6 or answer probeCaps (at most once an hour each).
+    Q_INVOKABLE bool capsKnown(const QString &key) const { return m_caps.contains(key); }
+    Q_INVOKABLE bool canGroup(const QString &key) const;
+    Q_INVOKABLE void probeCaps(const QString &key);
+
+    // Calls (docs/protocol-0.6.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
+    // room "call" and sends it on every route at once, never through the Outbox.
+    void sendCall(const QString &key, const QJsonObject &msg);
+    QByteArray signWithChatKey(const QByteArray &bytes) const;
+    bool canCall(const QString &key) const;     // contact or group peer, caps c1, not blocked
+    QString lanHost(const QString &key) const;  // the host of their Wi-Fi route, or ""
+
+    // Contact folders, only on this computer: [{id, name, count}].
+    QVariantList folders() const;
+    Q_INVOKABLE QString addFolder(const QString &name);
+    Q_INVOKABLE void renameFolder(const QString &id, const QString &name);
+    Q_INVOKABLE void deleteFolder(const QString &id);
+    Q_INVOKABLE void setInFolder(const QString &id, const QString &key, bool on);
+    Q_INVOKABLE QStringList foldersOf(const QString &key) const;
+
+    // Groups (chatgroups.cpp). Calls that can fail return what to tell the person, "" when done.
+    QVariantList groups() const;
+    QVariantList groupInvites() const;
+    Q_INVOKABLE QString createGroup(const QString &name);
+    Q_INVOKABLE QVariantMap groupInfo(const QString &g) const;
+    Q_INVOKABLE QVariantList groupMessages(const QString &g, const QString &ch) const;
+    Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text);
+    Q_INVOKABLE bool sendGroupPhoto(const QString &g, const QString &ch, const QString &path, bool hd);
+    Q_INVOKABLE void markGroupRead(const QString &g, const QString &ch);
+    Q_INVOKABLE void unsendGroup(const QString &g, const QString &id);
+    Q_INVOKABLE void deleteGroupMessage(const QString &g, const QString &id);
+    Q_INVOKABLE void retryGroup(const QString &g, const QString &id);
+    Q_INVOKABLE QString inviteToGroup(const QString &g, const QString &key);
+    Q_INVOKABLE QString groupCode(const QString &g);              // a code good for an hour, or ""
+    Q_INVOKABLE void copyText(const QString &text) const;
+    Q_INVOKABLE QVariantMap parseGroupCode(const QString &text) const;
+    Q_INVOKABLE QString joinWithCode(const QString &text);
+    Q_INVOKABLE QString acceptGroupInvite(const QString &g);
+    Q_INVOKABLE void declineGroupInvite(const QString &g);
+    Q_INVOKABLE QString renameGroup(const QString &g, const QString &name);
+    Q_INVOKABLE QString addChannel(const QString &g, const QString &name, bool voice);
+    Q_INVOKABLE QString renameChannel(const QString &g, const QString &ch, const QString &name);
+    Q_INVOKABLE QString removeChannel(const QString &g, const QString &ch);
+    Q_INVOKABLE QString setAdmin(const QString &g, const QString &key, bool on);
+    Q_INVOKABLE QString removeMember(const QString &g, const QString &key);
+    Q_INVOKABLE QString handOver(const QString &g, const QString &key);
+    Q_INVOKABLE QString leaveGroup(const QString &g);
+    Q_INVOKABLE void forgetGroup(const QString &g);
+
     static const int kMax = 2000;
-    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
+    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0,
+                        const QString &onion = QString());
+    static bool isOnion(const QString &o);
 
 Q_SIGNALS:
     void changed();
     void notice(const QString &text);
-    // A private message arrived: for the toast, sound and desktop notification.
+    // A message arrived: for the toast, sound and desktop notification. For a group message the
+    // key is "g:<group>:<channel>".
     void arrived(const QString &name, const QString &text, const QString &key);
+    // An authentic room "call" envelope from a contact or group peer (at most 30 in 10 s each).
+    void callMessage(const QString &fromKey, const QJsonObject &msg);
 
 private:
+    Q_SLOT void torChanged();
     void start();
     int receive(const QByteArray &body, const QString &via);
     int receiveEnvelope(const QJsonObject &o, const QString &via);
@@ -195,6 +272,65 @@ private:
     bool inviteOk(const QString &token) const;
     void saveInvites();
     QString mailboxOf(const QString &key) const;
+    QString onionOf(const QString &key) const;
+    bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
+    // Sends over the internet: their onion first when Tor is ready (then the relays only if that
+    // fails, or always with alsoMailbox), otherwise the relays. False when there's no way.
+    bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, bool alsoMailbox,
+                      std::function<void()> sent = nullptr);
+    void learnOnions();
+    void noteCaps(const QString &key, bool present, const QStringList &caps);
+    void loadFolders();
+    void saveFolders();
+
+    // ---- groups (chatgroups.cpp)
+    struct Group {
+        QJsonObject state;                  // the current accepted state
+        QList<QJsonObject> history;         // the last accepted states, oldest first
+        QVariantList messages;              // every channel's, each with "ch"
+        QHash<QString, int> unread;         // channel -> unread messages
+        QList<QJsonObject> held;            // messages from someone not in the state yet
+        QJsonObject lastOp;                 // my last change, re-done if it loses a conflict
+        bool removed = false, left = false;
+        qint64 since = 0;
+    };
+    struct GroupOut {                       // one member's copy of a group message, until they confirm
+        QString g, to, logical, room;
+        qint64 time = 0, next = 0;
+        int count = 0;
+    };
+    int receiveGroup(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &mailbox, const QString &via);
+    int receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &mailbox, const QString &via);
+    bool applyState(const QString &g, const QJsonObject &next, const QString &from, const QString &op);
+    void stateAccepted(const QString &g, const QJsonObject &old, bool first);
+    QString change(const QString &g, const QJsonObject &op);
+    QJsonObject nextState(const QString &g) const;
+    QString commit(const QString &g, QJsonObject next, const QJsonObject &op, const QStringList &alsoTo = QStringList());
+    void queueGroup(const QString &g, const QString &to, const QString &room, const QString &logical, const QByteArray &plain);
+    void queueGroupBodies(const QString &g, const QString &to, const QString &room, const QString &logical, const QList<QByteArray> &bodies);
+    void sendControl(const QString &g, const QString &to, QJsonObject msg);
+    void groupReceipt(const QString &g, const QString &to, const QStringList &ids, const QString &state);
+    void groupAttempt(const QString &envId);
+    void groupRetry();
+    void sendSync(const QString &g, const QString &to);
+    void sendStateTo(const QString &g, const QString &to);
+    void refreshGroupPeers();
+    void storeGroupMessage(const QString &g, const QVariantMap &m, bool notify);
+    bool gmsgKnown(const QString &id) const { return m_gidx.contains(id) || m_deleted.contains(id); }
+    void processHeld(const QString &g);
+    void groupNote(const QString &g, const QString &text);
+    QString groupName(const QString &g) const;
+    QString memberName(const QString &g, const QString &key) const;
+    QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs);
+    QList<QByteArray> groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs);
+    void updateGroupMessage(const QString &g, const QString &id, const std::function<void(QVariantMap &)> &f);
+    bool tokenOk(const QString &token, const QString &g) const;
+    int gmsgIn(const QString &g, const QString &from, const QString &name, const QString &via, const QJsonObject &p);
+    void loadGroups();
+    void saveGroups();
+    void saveGroupsSoon();
+    void saveGroupChats();
+    void pruneGroups(qint64 cutoff);
 
     LocalSend *m_net;
     Vault *m_vault;
@@ -225,10 +361,26 @@ private:
     // The sender's peer after a ratchet message opened, kept once the message is accepted.
     QString m_pendingKey;
     std::optional<Ratchet::Peer> m_pendingPeer;
-    // Who the message being handled proved to be from, and whether it said "cap":"r1".
+    // Who the message being handled proved to be from, whether it said "cap":"r1", and its "caps".
     QString m_openedFrom;
-    bool m_openedCap = false;
-    QHash<QString, QList<qint64>> m_recent, m_pieceTimes;
+    bool m_openedCap = false, m_openedHasCaps = false;
+    QStringList m_openedCaps;
+    QString m_openedOnion;   // "o" in an envelope that just opened: where they are reached over Tor
+    QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
+    QHash<QString, qint64> m_probed;                    // key -> last caps probe
+    QList<QVariantMap> m_folders;                       // {id, name, keys}
+    Tor *m_tor = nullptr;
+    QString m_lastOnion;
+    QHash<QString, Group> m_groups;
+    QHash<QString, QString> m_gidx;                     // group message id -> group
+    QHash<QString, QVariantMap> m_gpeers;               // members who aren't contacts: key -> {key, name, mailbox, onion}
+    QHash<QString, QVariantMap> m_ginvites;             // invites from contacts: group -> {g, from, fromName, name, count, inv}
+    QHash<QString, QVariantMap> m_joining;              // groups being joined: group -> {admin, adminName, mailbox, onion, token, name, since}
+    QHash<QString, QVariantMap> m_gtokens;              // my invites and group codes: token -> {g, x, for}
+    QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
+    QHash<QString, qint64> m_syncAsked;                 // group|key -> when
+    bool m_groupsDirty = false;
+    QHash<QString, QList<qint64>> m_recent, m_pieceTimes, m_recentGroup, m_recentCall;
     struct Tries { int count = 0; qint64 next = 0; };
     QHash<QString, Tries> m_tries;
     struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; };
