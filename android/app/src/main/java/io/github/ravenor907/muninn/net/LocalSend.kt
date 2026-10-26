@@ -36,17 +36,27 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 
 /**
  * LocalSend protocol v2 (github.com/localsend/protocol), so Muninn works with Huginn and with the
- * LocalSend apps: multicast discovery on 224.0.0.167:53317, an HTTP server on port 53317, and
+ * LocalSend apps: multicast discovery on 224.0.0.167:53317, an HTTPS server on port 53317, and
  * uploads to other devices. Every incoming transfer waits for the person to accept it.
+ *
+ * Encryption is LocalSend's HTTPS mode: our server uses our own self-signed certificate (see
+ * [Tls]) and we announce its SHA-256 as our fingerprint. When sending, the other device's
+ * certificate must have the fingerprint it announced, or nothing is sent.
  */
 class LocalSend(private val context: Context, val identity: Identity) {
+    /** Our certificate, made once and kept in the app's private files. Null only if it can't be made: then plain HTTP as before. */
+    private val tls: Tls? by lazy { Tls.load(File(context.filesDir, "tls")) }
+
+    /** What other devices know us by: our certificate's hash, or (without one) the old random id. */
+    val fingerprint: String get() = tls?.fingerprint ?: identity.fingerprint
+
     data class Device(
         val id: String, val alias: String, val model: String, val type: String,
         val ip: String, val port: Int, val protocol: String,
@@ -125,9 +135,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
         .put("version", "2.1")
         .put("deviceModel", "Muninn")
         .put("deviceType", "mobile")
-        .put("fingerprint", identity.fingerprint)
+        .put("fingerprint", fingerprint)
         .put("port", PORT)
-        .put("protocol", "http")
+        .put("protocol", if (tls != null) "https" else "http")
         .put("download", false)
         .put("chatApp", "muninn")
         .apply {
@@ -143,7 +153,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
         running = true
         _error.value = null
         try {
-            server = ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
+            val t = tls
+            server = if (t != null) {
+                (t.serverContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+                    // Ask for the sender's certificate but don't require it (older Huginn and Muninn have
+                    // none): when one is shown, the fingerprint the sender claims must match it.
+                    wantClientAuth = true
+                    reuseAddress = true
+                    bind(InetSocketAddress(PORT))
+                }
+            } else {
+                ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
+            }
         } catch (e: Exception) {
             _error.value = "Nearby sharing couldn't start. Is the LocalSend app running on this phone too? Close it and try again."
             running = false
@@ -230,12 +251,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 val p = DatagramPacket(buf, buf.size)
                 udp?.receive(p) ?: return
                 val o = JSONObject(String(p.data, 0, p.length))
-                if (o.optString("fingerprint") == identity.fingerprint) continue
+                val fp = o.optString("fingerprint")
+                if (Tls.same(fp, fingerprint)) continue   // our own announcement
                 val ip = p.address.hostAddress ?: continue
                 remember(o, ip, "https")
                 if (o.optBoolean("announce", o.optBoolean("announcement", false))) {
                     pool.execute {
-                        if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false)) {
+                        if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp)) {
                             val reply = info().put("announce", false).toString().toByteArray()
                             try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
                         }
@@ -247,8 +269,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
-    private fun register(ip: String, port: Int, protocol: String, scan: Boolean): Boolean = try {
-        val c = open("$protocol://$ip:$port$API/register", if (scan) 1500 else 5000)
+    /**
+     * [expected]: the fingerprint the device announced; its certificate must match. Empty for a
+     * scan, which can't know it yet: then the certificate it shows becomes its identity.
+     */
+    private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = try {
+        val c = open("$protocol://$ip:$port$API/register", if (scan) 1500 else 5000, expected.ifEmpty { null })
         c.requestMethod = "POST"
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
@@ -257,7 +283,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (ok) {
             val o = JSONObject(c.inputStream.bufferedReader().readText())
             if (!o.has("port")) o.put("port", port)
-            remember(o, ip, protocol)
+            // Over HTTPS the certificate is the device's identity, whatever the answer claims.
+            val proven = (c as? HttpsURLConnection)?.let { h ->
+                (h.serverCertificates.firstOrNull() as? X509Certificate)?.let { Tls.fingerprintOf(it) }
+            }
+            remember(o, ip, protocol, proven)
         }
         c.disconnect()
         ok
@@ -265,12 +295,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
         false
     }
 
-    private fun remember(o: JSONObject, ip: String, fallback: String) {
-        val id = o.optString("fingerprint")
-        if (id.isEmpty() || id == identity.fingerprint) return
+    /** [proven]: the fingerprint of a certificate the device actually showed us; it wins over what the message claims. */
+    private fun remember(o: JSONObject, ip: String, fallback: String, proven: String? = null) {
+        var id = proven ?: o.optString("fingerprint")
+        if (id.isEmpty() || Tls.same(id, fingerprint)) return
+        val protocol = o.optString("protocol", fallback)
+        if (protocol == "https") id = id.uppercase()   // certificate hashes: one spelling, so a device is listed once
+        // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
+        // claiming it with encryption off, which would skip the certificate check when sending.
+        if (protocol != "https" && found[id]?.protocol == "https") return
         found[id] = Device(
             id, o.optString("alias", ip), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
-            ip, o.optInt("port", PORT), o.optString("protocol", fallback),
+            ip, o.optInt("port", PORT), protocol,
             o.optString("chatKey").ifEmpty { null }, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null },
         )
         publish()
@@ -327,6 +363,23 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun handle(s: Socket) {
         s.soTimeout = 60_000
+        // The certificate the sender showed, if any (LocalSend apps and newer Huginn and Muninn do).
+        val peerFp: String? = if (s is SSLSocket) {
+            s.soTimeout = 15_000   // a stalled handshake shouldn't hold a thread for a minute
+            s.startHandshake()
+            s.soTimeout = 60_000
+            // Throws when the sender showed no certificate.
+            try { (s.session.peerCertificates.firstOrNull() as? X509Certificate)?.let { Tls.fingerprintOf(it) } } catch (_: Exception) { null }
+        } else null
+        // A sender that showed a certificate must claim that certificate's fingerprint, or it is
+        // pretending to be another device: answer, but don't list it (LocalSend does the same).
+        val learn = { o: JSONObject, ip: String ->
+            when {
+                peerFp == null -> remember(o, ip, "https")
+                Tls.same(o.optString("fingerprint"), peerFp) -> remember(o, ip, "https", peerFp)
+                else -> {}
+            }
+        }
         val input = BufferedInputStream(s.getInputStream(), 1 shl 16)
         val out = s.getOutputStream()
         val r = readRequest(input) ?: return
@@ -345,11 +398,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
         when (r.path) {
             "$API/register", "/api/localsend/v1/register" -> {
-                try { remember(JSONObject(text), ip, "https") } catch (_: Exception) {}
+                try { learn(JSONObject(text), ip) } catch (_: Exception) {}
                 reply(out, 200, info().toString())
             }
             "$API/info", "/api/localsend/v1/info" -> reply(out, 200, info().toString())
-            "$API/prepare-upload" -> prepare(text, ip, out)
+            "$API/prepare-upload" -> prepare(text, ip, out, learn)
             "$API/cancel" -> {
                 val sess = session
                 if (sess != null && r.query["sessionId"] == sess.id) endSession(false, "${sess.from} cancelled sending.")
@@ -359,11 +412,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
-    private fun prepare(text: String, ip: String, out: OutputStream) {
+    private fun prepare(text: String, ip: String, out: OutputStream, learn: (JSONObject, String) -> Unit) {
         if (session != null || pendingFiles != null) { reply(out, 409); return }
         val o = try { JSONObject(text) } catch (e: Exception) { reply(out, 400); return }
         val from = o.optJSONObject("info") ?: JSONObject()
-        remember(from, ip, "https")
+        learn(from, ip)
         val files = o.optJSONObject("files") ?: run { reply(out, 400); return }
         val map = LinkedHashMap<String, InFile>()
         var total = 0L
@@ -510,6 +563,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val total = list.sumOf { it.length() }
         _transfer.value = Transfer(true, true, "Waiting for ${dev.alias} to accept…", 0, total)
         NearbyService.hold(context, true)
+        // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
+        val expected = if (dev.protocol == "https") dev.id else null
         pool.execute {
             val base = "${dev.protocol}://${dev.ip}:${dev.port}$API"
             try {
@@ -520,7 +575,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                         .put("fileType", MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream")
                         .put("sha256", JSONObject.NULL).put("preview", JSONObject.NULL))
                 }
-                val c = open("$base/prepare-upload" + (pin?.let { "?pin=" + URLEncoder.encode(it, "UTF-8") } ?: ""), 5 * 60_000)
+                val c = open("$base/prepare-upload" + (pin?.let { "?pin=" + URLEncoder.encode(it, "UTF-8") } ?: ""), 5 * 60_000, expected)
                 sendConn = c
                 c.requestMethod = "POST"; c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json")
@@ -536,7 +591,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                             if (stopSend.get()) throw InterruptedException()
                             val f = list[i]
                             _transfer.update { it.copy(status = "Sending ${f.name} to ${dev.alias}…", total = accepted.sumOf { j -> list[j].length() }) }
-                            val u = open("$base/upload?sessionId=${enc(sid)}&fileId=f$i&token=${enc(tokens.getString("f$i"))}", 60_000)
+                            val u = open("$base/upload?sessionId=${enc(sid)}&fileId=f$i&token=${enc(tokens.getString("f$i"))}", 60_000, expected)
                             sendConn = u
                             u.requestMethod = "POST"; u.doOutput = true
                             u.setFixedLengthStreamingMode(f.length())
@@ -569,6 +624,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 }
             } catch (e: InterruptedException) {
                 done(false, "Sending stopped.")
+            } catch (e: javax.net.ssl.SSLHandshakeException) {
+                // Most likely the certificate check: whoever answered isn't the device that was found.
+                done(false, "Didn't send: ${dev.alias} didn't prove it's the same device that was found. Look again and pick it.")
             } catch (e: java.io.IOException) {
                 done(false, e.message?.takeIf { it.contains(dev.alias) } ?: "Couldn't reach ${dev.alias}. Is it on the same Wi-Fi with LocalSend, Huginn or Muninn open?")
             } catch (e: Exception) {
@@ -602,7 +660,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     /** A JSON POST to a device's extra routes (chat). Returns the status code, or -1. */
     fun post(dev: Device, path: String, json: String): Int = try {
-        val c = open("${dev.protocol}://${dev.ip}:${dev.port}$path", 6000)
+        val c = open("${dev.protocol}://${dev.ip}:${dev.port}$path", 6000, if (dev.protocol == "https") dev.id else null)
         c.requestMethod = "POST"; c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         c.outputStream.use { it.write(json.toByteArray()) }
@@ -615,32 +673,29 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
+    /**
+     * A connection to another device. Over HTTPS it shows our certificate (newer LocalSend apps
+     * require one) and only goes ahead if the device's certificate has the [expected] fingerprint
+     * (any certificate when null, for a scan).
+     */
+    private fun open(url: String, timeout: Int, expected: String?): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        if (c is HttpsURLConnection) {
+            c.sslSocketFactory = tls?.client(expected) ?: Tls.anonymousClient(expected)
+            c.hostnameVerifier = anyHost
+        }
+        c.connectTimeout = minOf(timeout, 4000)
+        c.readTimeout = timeout
+        return c
+    }
+
     companion object {
         const val PORT = 53317
         const val GROUP = "224.0.0.167"
         const val API = "/api/localsend/v2"
 
-        /** LocalSend apps use self-signed certificates, so certificate checks can't apply on a home network. */
-        private val trustAll: SSLContext by lazy {
-            SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf<TrustManager>(object : X509TrustManager {
-                    override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
-                    override fun checkServerTrusted(c: Array<X509Certificate>, a: String) {}
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                }), null)
-            }
-        }
-
-        fun open(url: String, timeout: Int): HttpURLConnection {
-            val c = URL(url).openConnection() as HttpURLConnection
-            if (c is HttpsURLConnection) {
-                c.sslSocketFactory = trustAll.socketFactory
-                c.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-            }
-            c.connectTimeout = minOf(timeout, 4000)
-            c.readTimeout = timeout
-            return c
-        }
+        /** Devices are reached by IP and certificates carry no names: the fingerprint check replaces the name check. */
+        private val anyHost = HostnameVerifier { _, _ -> true }
 
         /** Mobile-data interfaces (often on 10.x addresses, which look like a home network). */
         private val MOBILE = listOf("rmnet", "ccmni", "pdp", "clat", "v4-", "tun", "dummy", "ifb", "r_rmnet", "seth", "usb")
