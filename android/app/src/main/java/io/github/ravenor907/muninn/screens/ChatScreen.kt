@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.semantics.Role
 import io.github.ravenor907.muninn.net.Photos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

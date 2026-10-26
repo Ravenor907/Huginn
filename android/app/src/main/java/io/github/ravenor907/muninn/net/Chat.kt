@@ -183,7 +183,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Already here (or deleted here): a copy from another route, or a resend. */
     private fun known(peerKey: String, msgId: String) =
-        msgId in deleted || held[peerKey]?.containsKey(msgId) == true || _private.value[peerKey].orEmpty().any { it.id == msgId }
+        deleted.containsKey(msgId) || held[peerKey]?.containsKey(msgId) == true || _private.value[peerKey].orEmpty().any { it.id == msgId }
 
     private fun becomeContacts(peerKey: String) {
         val m = _met.value[peerKey] ?: return
@@ -220,7 +220,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (held[fromKey]?.containsKey(sentId) != true) receipt(fromKey, listOf(sentId), "delivered", mailbox)
             return 200 to "{}"
         }
-        if (room == "nearby" && sentId.isNotEmpty() && (sentId in deleted || _nearby.value.any { it.id == sentId })) return 200 to "{}"
+        if (room == "nearby" && sentId.isNotEmpty() && (deleted.containsKey(sentId) || _nearby.value.any { it.id == sentId })) return 200 to "{}"
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room.
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         if (room != "receipt") synchronized(q) {
@@ -631,7 +631,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** False if it's already there or was deleted here: copies from other routes are dropped. */
     private fun addPrivate(peer: String, m: Msg): Boolean = edit { map ->
         val list = map[peer].orEmpty()
-        if (m.id in deleted || list.any { it.id == m.id }) return@edit false
+        if (deleted.containsKey(m.id) || list.any { it.id == m.id }) return@edit false
         map[peer] = (list + m).takeLast(1000)
         true
     }
