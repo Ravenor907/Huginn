@@ -91,6 +91,8 @@ private data class ChatRow(val key: String, val name: String)
 /** Where a conversation is open: "" none, "nearby" the room, "code", "add", or a contact's key. */
 object ChatNav {
     var open by mutableStateOf("")
+    /** A code handed in from a scanned QR, waiting on Add someone. */
+    var incoming by mutableStateOf("")
     /** Scrolling a conversation hides the logo, Settings and tabs; back brings them back first. */
     var full by mutableStateOf(false)
 }
@@ -112,7 +114,7 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
             "nearby" -> NearbyRoom(app)
             "code" -> MyCode(app)
             "add" -> AddSomeone(app)
-            else -> Conversation(app, open)
+            else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
         return
     }
@@ -381,6 +383,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
                         val down = awaitFirstDown()
                         if (!voice.allowed()) { voice.ask(); return@awaitEachGesture }
                         dragged = 0f
+                        Voice.onLimit = { Voice.finish()?.let { (aac, ms) -> voice.send(aac, ms); Ui.say("5 minutes is the most: sent.") } }
                         if (!Voice.start(context)) { Ui.say("The microphone isn't available right now.", true); return@awaitEachGesture }
                         while (true) {
                             val ev = awaitPointerEvent()
@@ -388,6 +391,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
                             dragged = c.position.x - down.position.x
                             if (!c.pressed) break
                         }
+                        if (!Voice.recording.value) { dragged = 0f; return@awaitEachGesture }   // the 5-minute limit already sent it
                         if (dragged < -120f) { Voice.cancel(); Ui.say("Recording cancelled.") }
                         else Voice.finish()?.let { (aac, ms) -> voice.send(aac, ms) } ?: Ui.say("Hold the mic while you talk.")
                         dragged = 0f
@@ -405,12 +409,12 @@ private fun MyCode(app: Muninn) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Section("My code") { MButton("Back", icon = "back") { ChatNav.open = "" } }
         Text("Anyone with this code can message you from anywhere, as “${app.identity.username}”. Share it only with people you want to hear from.", style = Type.normal)
-        Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(code, 240) }
-        Text("Their Muninn can scan this with the phone's camera, or you can send it as a message:", style = Type.small)
+        Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(Contacts.link(code), 240) }
+        Text("They scan it with their phone's camera: it opens Muninn, or shows where to download it if they don't have it yet. Or send it as a message:", style = Type.small)
         Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Share code", Modifier.weight(1f), Kind.Accent, icon = "send") {
                 context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn. Open Muninn, tap Add someone and paste this:\n\n$code"), "Share your Muninn code"))
+                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first):\n${Contacts.link(code)}"), "Share your Muninn code"))
             }
             MButton("Copy", Modifier.weight(1f), icon = "copy") {
                 (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
@@ -425,7 +429,7 @@ private fun AddSomeone(app: Muninn) {
     val context = LocalContext.current
     var text by remember {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-        mutableStateOf(if (clip.contains(Contacts.PREFIX)) clip else "")
+        mutableStateOf(ChatNav.incoming.ifEmpty { if (clip.contains(Contacts.PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
     }
     val found = Contacts.parse(text)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {

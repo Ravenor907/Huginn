@@ -1,6 +1,7 @@
 package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -98,4 +99,76 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         }
     }
     ask?.let { AskDialog(it) }
+}
+
+/**
+ * Choose and confirm a lock: a 9-dot pattern (at least 4 dots) or a password (at least 4 characters).
+ * Used on first open (required) and for Settings › Change lock. [onCancel] null = can't skip.
+ */
+@Composable
+fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var usePattern by remember { mutableStateOf(true) }
+    var first by remember { mutableStateOf<List<Int>?>(null) }
+    var note by remember { mutableStateOf("") }
+    var pw1 by remember { mutableStateOf("") }
+    var pw2 by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    fun save(secret: String, pattern: Boolean) {
+        saving = true
+        scope.launch {
+            withContext(Dispatchers.Default) { app.vault.setPassword(secret, pattern) }
+            saving = false
+            Ui.say(if (pattern) "Pattern set. Don't forget it: it can't be recovered." else "Password set. Don't lose it: it can't be recovered.")
+            onDone()
+        }
+    }
+    Column {
+        androidx.compose.foundation.layout.Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Pattern", Modifier.weight(1f), if (usePattern) Kind.Accent else Kind.Normal) { usePattern = true; first = null; note = "" }
+            MButton("Password", Modifier.weight(1f), if (!usePattern) Kind.Accent else Kind.Normal) { usePattern = false; first = null; note = "" }
+        }
+        if (usePattern) {
+            Text(when {
+                saving -> "Saving…"
+                note.isNotEmpty() -> note
+                first == null -> "Draw a pattern: connect at least 4 dots."
+                else -> "Draw it again to confirm."
+            }, style = Type.normal.copy(color = if (note.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
+            Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                PatternPad(error = note.isNotEmpty(), enabled = !saving) { dots ->
+                    val f = first
+                    when {
+                        dots.size < 4 -> note = "Connect at least 4 dots."
+                        f == null -> { first = dots; note = "" }
+                        f != dots -> { first = null; note = "That didn't match. Start over." }
+                        else -> save(patternSecret(dots), true)
+                    }
+                }
+            }
+        } else {
+            Field(pw1, { pw1 = it }, "New password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+            Field(pw2, { pw2 = it }, "Type it again", Modifier.padding(top = 8.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+            if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+            MButton(if (saving) "Saving…" else "Save password", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw1.length >= 4 && pw1 == pw2 && !saving) { save(pw1, false) }
+        }
+        if (onCancel != null) MButton("Cancel", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
+    }
+}
+
+/** First open (and installs from before the lock was required): set a lock before anything else. */
+@Composable
+fun FirstLock(app: Muninn, done: () -> Unit) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()
+        .verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+        Brand {}
+        Column(Modifier.padding(16.dp)) {
+            Panel {
+                Text("Protect Muninn", style = Type.big)
+                Text("Muninn opens with your pattern or password. Everything it keeps (messages, photos, voice, contacts, keys) is encrypted with it: " +
+                    "without it, nobody can read them, not even Muninn. There's no way to recover it, so pick one you'll remember.", style = Type.normal)
+                LockSetup(app, onCancel = null) { done() }
+            }
+        }
+    }
 }

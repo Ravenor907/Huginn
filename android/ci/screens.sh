@@ -15,7 +15,7 @@ n=0
 for screen in chat send files usb settings; do
   n=$((n+1))
   adb shell am force-stop $PKG
-  adb shell am start -W -n $PKG/.MainActivity --es screen $screen >/dev/null
+  adb shell am start -W -n $PKG/.MainActivity --ez ci true --es screen $screen >/dev/null
   sleep 5
   adb exec-out screencap -p > "screens/0$n-$screen.png"
   if [ -z "$(adb shell pidof $PKG | tr -d '\r')" ]; then
@@ -28,10 +28,15 @@ done
 for extra in "chat demo" "screen contacts"; do
   n=$((n+1)); set -- $extra
   adb shell am force-stop $PKG
-  adb shell am start -W -n $PKG/.MainActivity --es $1 $2 >/dev/null
+  adb shell am start -W -n $PKG/.MainActivity --ez ci true --es $1 $2 >/dev/null
   sleep 5
   adb exec-out screencap -p > "screens/0$n-$2.png"
 done
+# A fresh install opens on "Protect Muninn" (a lock is required).
+adb shell am force-stop $PKG
+adb shell am start -W -n $PKG/.MainActivity >/dev/null
+sleep 5
+adb exec-out screencap -p > "screens/0$((n+1))-first-lock.png"
 if adb logcat -d | grep -q "FATAL EXCEPTION"; then
   msg=$(adb logcat -d | grep -A20 "FATAL EXCEPTION" | head -30 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
   echo "::error title=Crash in logcat::$msg"

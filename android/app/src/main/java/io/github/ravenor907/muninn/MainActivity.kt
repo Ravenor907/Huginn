@@ -43,6 +43,8 @@ import io.github.ravenor907.muninn.screens.ChatNav
 import io.github.ravenor907.muninn.screens.ChatScreen
 import io.github.ravenor907.muninn.screens.ContactsScreen
 import io.github.ravenor907.muninn.screens.LockScreen
+import io.github.ravenor907.muninn.screens.FirstLock
+import androidx.compose.runtime.remember
 import io.github.ravenor907.muninn.screens.FilesScreen
 import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.Share
@@ -68,6 +70,8 @@ class MainActivity : ComponentActivity() {
     private var storageOk by mutableStateOf(true)
     /** Password set and Muninn was away long enough: ask for it before showing anything. */
     private var uiLocked by mutableStateOf(false)
+    /** Test builds only: the emulator screenshots open screens without setting a lock. */
+    private val ciSkip get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && intent?.getBooleanExtra("ci", false) == true
     private var awaySince = 0L
     private var netStarted = false
 
@@ -117,6 +121,7 @@ class MainActivity : ComponentActivity() {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         intent?.getStringExtra("screen")?.let { tab = it }   // CI screenshots open each tab
         openChat(intent)
+        openAdd(intent)
         handleShare(intent)
         setContent { MuninnTheme { Root() } }
     }
@@ -125,7 +130,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleShare(intent)
         openChat(intent)
+        openAdd(intent)
         intent.getStringExtra("screen")?.let { tab = it }
+    }
+
+    /** A scanned contact QR opened Muninn: go to Add someone with the code filled in. */
+    private fun openAdd(i: Intent?) {
+        val d = i?.data ?: return
+        if (d.scheme != "muninn" || d.host != "add") return
+        val body = d.path?.trim('/')?.takeIf { it.isNotEmpty() } ?: return
+        ChatNav.incoming = io.github.ravenor907.muninn.net.Contacts.PREFIX + body
+        tab = "chat"; ChatNav.open = "add"
     }
 
     /** A message notification was tapped: open that conversation. */
@@ -154,7 +169,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         app.visible = true
         if (app.vault.hasPassword && awaySince > 0 && System.currentTimeMillis() - awaySince >= app.identity.lockAfter) uiLocked = true
-        if (app.ready.value) app.nostr.connect()
+        app.listen()   // relays (with reconnect) and the Wi-Fi side
     }
 
     override fun onStop() {
@@ -223,6 +238,9 @@ class MainActivity : ComponentActivity() {
     private fun Root() {
         val ready by app.ready.collectAsState()
         if (!ready || uiLocked) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet() } }; return }
+        // A lock is required: on first open (or from a version before it was), set one before anything else.
+        var locked by remember { mutableStateOf(app.vault.hasPassword || ciSkip) }
+        if (!locked) { FirstLock(app) { locked = true }; return }
         val request by app.net.request.collectAsState()
         val offer by app.closeFiles.pendingOffer.collectAsState()
         val ask by Ui.ask.collectAsState()

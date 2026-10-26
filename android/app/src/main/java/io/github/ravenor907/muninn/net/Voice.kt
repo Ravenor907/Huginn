@@ -29,19 +29,21 @@ object Voice {
     /** Recording right now. */
     val recording = MutableStateFlow(false)
 
+    /** Called when the 5-minute limit stops the recording by itself (the screen then sends it). */
+    var onLimit: (() -> Unit)? = null
+    @Volatile private var limitHit = false
+
     fun start(context: Context): Boolean {
         stopPlaying()
         cancel()
+        limitHit = false
+        var r: MediaRecorder? = null
+        var readSide: android.os.ParcelFileDescriptor? = null
+        var writeSide: android.os.ParcelFileDescriptor? = null
         return try {
-            val (readSide, writeSide) = android.os.ParcelFileDescriptor.createPipe()
-            val buf = ByteArrayOutputStream()
-            val t = Thread {
-                try { android.os.ParcelFileDescriptor.AutoCloseInputStream(readSide).use { ins ->
-                    val b = ByteArray(8192)
-                    while (true) { val n = ins.read(b); if (n < 0) break; synchronized(buf) { if (buf.size() < MAX_BYTES) buf.write(b, 0, n) } }
-                } } catch (_: Exception) {}
-            }.apply { isDaemon = true; start() }
-            val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
+            val p = android.os.ParcelFileDescriptor.createPipe()
+            readSide = p[0]; writeSide = p[1]
+            r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
             r.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             r.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
@@ -49,13 +51,30 @@ object Voice {
             r.setAudioSamplingRate(44_100)
             r.setAudioEncodingBitRate(32_000)
             r.setMaxDuration(MAX_MS)
+            r.setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) { limitHit = true; onLimit?.invoke() } }
             r.setOutputFile(writeSide.fileDescriptor)
             r.prepare()
+            val buf = ByteArrayOutputStream()
+            val rs = readSide
+            val t = Thread {
+                try { android.os.ParcelFileDescriptor.AutoCloseInputStream(rs).use { ins ->
+                    val b = ByteArray(8192)
+                    while (true) { val n = ins.read(b); if (n < 0) break; synchronized(buf) { if (buf.size() < MAX_BYTES) buf.write(b, 0, n) } }
+                } } catch (_: Exception) {}
+            }.apply { isDaemon = true; start() }
+            readSide = null   // the thread owns it now
             r.start()
             recorder = r; pipe = writeSide; captured = buf; reader = t
             started = System.currentTimeMillis(); recording.value = true
             true
-        } catch (e: Exception) { cancel(); false }
+        } catch (e: Exception) {
+            // Let go of the microphone and the pipe, or later recordings fail.
+            try { r?.release() } catch (_: Exception) {}
+            try { writeSide?.close() } catch (_: Exception) {}
+            try { readSide?.close() } catch (_: Exception) {}
+            recorder = null; pipe = null; recording.value = false
+            false
+        }
     }
 
     fun elapsed(): Long = if (recording.value) System.currentTimeMillis() - started else 0
@@ -64,7 +83,7 @@ object Voice {
     fun finish(): Pair<ByteArray, Int>? {
         val r = recorder ?: return null
         val ms = (System.currentTimeMillis() - started).toInt().coerceAtMost(MAX_MS)
-        val ok = try { r.stop(); true } catch (e: Exception) { false }
+        val ok = try { r.stop(); true } catch (e: Exception) { limitHit }   // already stopped at the limit: keep it
         r.release(); recorder = null; recording.value = false
         try { pipe?.close() } catch (_: Exception) {}
         pipe = null

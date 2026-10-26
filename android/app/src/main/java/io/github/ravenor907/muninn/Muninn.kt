@@ -60,11 +60,12 @@ class Muninn : Application() {
         updater = Updater(this, identity)
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
             deleteNotificationChannel("messages")   // 0.32 and older: no vibration set
+            deleteNotificationChannel("chat")       // test builds: sound not set
             createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "New messages. Pops up on screen, vibrates and plays a sound."
                 enableVibration(true); vibrationPattern = BUZZ
                 // The raven call: Muninn's own message sound.
-                setSound(android.net.Uri.parse("android.resource://$packageName/${R.raw.raven_message}"),
+                setSound(android.net.Uri.parse("android.resource://$packageName/raw/raven_message"),
                     android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
                         .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                 enableLights(true)
@@ -124,7 +125,7 @@ class Muninn : Application() {
         val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVibrate(BUZZ).setOnlyAlertOnce(false)
+            .setVibrate(BUZZ).setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
     }
@@ -139,7 +140,7 @@ class Muninn : Application() {
     }
 
     companion object {
-        const val MESSAGES = "chat"
+        const val MESSAGES = "raven_messages"
         val BUZZ = longArrayOf(0, 140, 90, 140)
     }
 }

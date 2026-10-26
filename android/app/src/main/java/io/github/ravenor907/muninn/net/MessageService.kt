@@ -44,7 +44,13 @@ class MessageService : Service() {
             if (Build.VERSION.SDK_INT >= 34) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
             else if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             else startForeground(ID, n)
-        } catch (e: Exception) { stopSelf(); return START_NOT_STICKY }
+        } catch (e: Exception) {
+            // Android must see startForeground after startForegroundService, or it closes the app.
+            try { startForeground(ID, n) } catch (_: Exception) {}
+            try { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+            stopSelf(); return START_NOT_STICKY
+        }
+        if (!app.identity.stayConnected) { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
         running = true
         app.listen()
         return START_STICKY   // if Android stops it for memory, it comes back

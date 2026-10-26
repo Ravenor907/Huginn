@@ -108,61 +108,9 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         }
         Section("Lock")
         Panel {
-            Text(if (hasPw) "Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn."
-                else "Optional. With a password or pattern, Muninn's messages, contacts and keys can't be read without it. There's no way to recover it.", style = Type.normal)
-            if (editingPw) Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton("Password", Modifier.weight(1f), if (!usePattern) Kind.Accent else Kind.Normal) { usePattern = false; firstPattern = null; patternNote = "" }
-                MButton("Pattern", Modifier.weight(1f), if (usePattern) Kind.Accent else Kind.Normal) { usePattern = true; firstPattern = null; patternNote = "" }
-            }
-            if (editingPw && usePattern) {
-                Text(when {
-                    patternNote.isNotEmpty() -> patternNote
-                    firstPattern == null -> "Draw a pattern: connect at least 4 dots. 6 or more is much harder to guess."
-                    else -> "Draw it again to confirm."
-                }, style = Type.normal.copy(color = if (patternNote.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
-                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    io.github.ravenor907.muninn.ui.PatternPad(error = patternNote.isNotEmpty()) { dots ->
-                        val first = firstPattern
-                        when {
-                            dots.size < 4 -> patternNote = "Connect at least 4 dots."
-                            first == null -> { firstPattern = dots; patternNote = "" }
-                            first != dots -> { firstPattern = null; patternNote = "That didn't match. Start over." }
-                            else -> scope.launch {
-                                withContext(Dispatchers.Default) { app.vault.setPassword(io.github.ravenor907.muninn.ui.patternSecret(dots), pattern = true) }
-                                hasPw = app.vault.hasPassword; editingPw = false; firstPattern = null; patternNote = ""
-                                Ui.say("Pattern set. Don't forget it: it can't be recovered.")
-                            }
-                        }
-                    }
-                }
-                MButton("Cancel", Modifier.fillMaxWidth()) { editingPw = false; firstPattern = null; patternNote = "" }
-            } else if (editingPw) {
-                Field(pw1, { pw1 = it }, "New password", Modifier.padding(top = 10.dp), secret = true,
-                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
-                Field(pw2, { pw2 = it }, "Type it again", Modifier.padding(top = 8.dp), secret = true,
-                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
-                if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("Cancel", Modifier.weight(1f)) { editingPw = false; pw1 = ""; pw2 = "" }
-                    MButton("Save password", Modifier.weight(1f), Kind.Accent, enabled = pw1.length >= 4 && pw1 == pw2) {
-                        val p = pw1
-                        scope.launch {
-                            withContext(Dispatchers.Default) { app.vault.setPassword(p, pattern = false) }
-                            hasPw = app.vault.hasPassword; editingPw = false; pw1 = ""; pw2 = ""
-                            Ui.say("Password set. Don't lose it: it can't be recovered.")
-                        }
-                    }
-                }
-            } else {
-                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton(if (hasPw) "Change lock" else "Set a lock", Modifier.weight(1f), Kind.Accent) { editingPw = true; usePattern = app.vault.usesPattern }
-                    if (hasPw) MButton("Remove", Modifier.weight(1f)) {
-                        Ui.sure(Ask("Remove the lock?", "Muninn will open without one. Your data stays encrypted with this phone's key store.", "Remove") {
-                            app.vault.setPassword(null); hasPw = app.vault.hasPassword
-                        })
-                    }
-                }
-            }
+            Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
+            if (editingPw) LockSetup(app, onCancel = { editingPw = false }) { hasPw = app.vault.hasPassword; editingPw = false }
+            else MButton("Change lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { editingPw = true }
             if (hasPw) {
                 Text("Lock again after Muninn is in the background for", style = Type.small, modifier = Modifier.padding(top = 10.dp))
                 Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

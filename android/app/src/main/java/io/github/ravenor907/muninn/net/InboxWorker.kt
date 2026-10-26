@@ -12,9 +12,9 @@ class InboxWorker(context: Context, params: WorkerParameters) : Worker(context, 
         if (app.visible || MessageService.running) return Result.success()   // already listening
         MessageService.start(app)   // allowed again once Muninn may run in the background
         // Locked with a password: only says "New message"; nothing is opened until it's unlocked.
-        app.nostr.connect()
+        app.nostr.connect()   // (no keepAlive: this short check closes again)
         Thread.sleep(20_000)
-        if (!app.visible && !MessageService.running) app.nostr.disconnect()
+        if (!app.visible && !MessageService.running && !app.nostr.keepAlive) app.nostr.disconnect()
         return Result.success()
     }
 }

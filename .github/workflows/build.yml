@@ -226,6 +226,24 @@ jobs:
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-muninn
 
 
+
+  site:
+    name: Add page (GitHub Pages)
+    # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
   release:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.

@@ -555,7 +555,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")); any = true; markSent(m, "close") }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
             any = true
-            bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (rank(it.state) < 3) it.copy(state = "delivered", via = "wifi", failed = false) else it } }
+            bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 3) it.copy(state = "delivered", via = "wifi", failed = false) else it } }
         }
         backupMailbox(m)?.let { nostr.publish(it, Base64.getEncoder().encodeToString(body.toByteArray())); any = true; markSent(m, "internet") }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
@@ -571,7 +571,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         close.endpointFor(m.peerKey)?.let { ep -> parts.forEach { close.send(ep, JSONObject(it.toString()).put("t", "msg")) }; any = true; markSent(m, "close") }
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d ->
             any = true
-            bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
+            bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
         }
         val mailbox = backupMailbox(m)
         if (mailbox != null && (!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES) {
@@ -581,7 +581,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
-    private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
+    private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
 
     /** Runs every second: anything of mine not yet delivered (and under a day old) is tried again. */
     private fun retryLoop() {
@@ -590,6 +590,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         for ((_, list) in _private.value) for (m in list) {
             if (m.mine && m.state == "unsending") {
                 val t = tries.getOrPut(m.id) { Tries(1, now + RETRY[0]) }
+                // About a day of tries; after that stop (their app may be too old to answer).
+                if (t.count > 300) { update(m.peerKey, m.id) { it.copy(state = "unsent") }; tries.remove(m.id); continue }
                 if (now >= t.next) { t.next = now + RETRY[0]; bg { attemptUnsend(m) } }
                 continue
             }

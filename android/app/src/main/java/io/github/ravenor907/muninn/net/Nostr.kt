@@ -59,9 +59,12 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     // ------------------------------------------------------------------ relays
 
-    fun connect() {
-        for (url in relays) {
-            if (sockets.containsKey(url)) continue
+    fun connect() { for (url in relays) open(url) }
+
+    /** One socket per relay, never two: only opens if there isn't one already. */
+    private fun open(url: String) {
+        synchronized(sockets) {
+            if (sockets.containsKey(url)) return
             sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url))
         }
     }
@@ -69,14 +72,16 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
     /** The network came back: drop dead connections and connect again now. */
     fun reconnectNow() {
         if (!keepAlive && sockets.isEmpty()) return
-        retries.clear()
-        for (url in relays) if (live[url] != true) { sockets.remove(url)?.cancel(); sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url)) }
+        for (url in relays) if (live[url] != true) {
+            synchronized(sockets) { sockets.remove(url)?.cancel() }
+            retries.remove(url)
+            open(url)
+        }
     }
 
     fun disconnect() {
         keepAlive = false
-        sockets.values.forEach { it.close(1000, null) }
-        sockets.clear()
+        synchronized(sockets) { sockets.values.forEach { it.close(1000, null) }; sockets.clear() }
         live.clear()
         _connected.value = 0
     }
@@ -90,7 +95,9 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     private inner class Listener(val url: String) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            retries.remove(url)
+            if (sockets[url] !== webSocket) { webSocket.cancel(); return }   // replaced meanwhile
+            // Only reset the back-off once it has stayed up a minute (a relay that accepts and drops at once).
+            timer.schedule({ if (sockets[url] === webSocket && live[url] == true) retries.remove(url) }, 60, java.util.concurrent.TimeUnit.SECONDS)
             live[url] = true
             _connected.value = live.size
             subscribe(webSocket)
@@ -112,26 +119,33 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
             }
         }
 
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = gone()
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = gone()
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = gone(webSocket)
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); gone(webSocket) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = gone(webSocket)
 
-        private fun gone() {
-            sockets.remove(url)
+        /** Only the current socket for this relay counts; an old one closing changes nothing. */
+        private fun gone(webSocket: WebSocket) {
+            synchronized(sockets) { if (!sockets.remove(url, webSocket)) return }
             live.remove(url)
             _connected.value = live.size
             if (!keepAlive) return
             // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
             val n = (retries[url] ?: 0) + 1
             retries[url] = n
-            timer.schedule({ if (keepAlive && !sockets.containsKey(url)) sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url)) },
+            timer.schedule({ if (keepAlive) open(url) },
                 minOf(60L, 1L shl minOf(n, 6)), java.util.concurrent.TimeUnit.SECONDS)
         }
     }
+
+    /** Events already announced while locked (not opened yet): say "New message" once, not per relay. */
+    private val announced = HashSet<String>()
 
     private fun handle(ev: JSONObject) {
         val id = ev.optString("id")
         // The same event comes from every relay at once: only one copy is handled at a time.
         synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
+        val locked = secretHex() == null
+        if (locked && synchronized(seen) { !announced.add(id) }) { synchronized(seen) { working.remove(id) }; return }
         try {
             // Only trust what the event's own signature covers.
             if (idOf(ev) != id || !Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig")))) return
