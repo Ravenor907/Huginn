@@ -1,6 +1,7 @@
 package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,6 +61,9 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var hasPw by remember { mutableStateOf(app.vault.hasPassword) }
     var lockAfter by remember { mutableStateOf(id.lockAfter) }
     var editingPw by remember { mutableStateOf(false) }
+    var usePattern by remember { mutableStateOf(app.vault.usesPattern) }
+    var firstPattern by remember { mutableStateOf<List<Int>?>(null) }
+    var patternNote by remember { mutableStateOf("") }
     var pw1 by remember { mutableStateOf("") }
     var pw2 by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -102,11 +106,37 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
-        Section("Password")
+        Section("Lock")
         Panel {
-            Text(if (hasPw) "Muninn asks for your password to open. Without it, nothing it keeps can be read, even by Muninn."
-                else "Optional. With a password, Muninn's messages, contacts and keys can't be read without it. There's no way to recover it.", style = Type.normal)
-            if (editingPw) {
+            Text(if (hasPw) "Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn."
+                else "Optional. With a password or pattern, Muninn's messages, contacts and keys can't be read without it. There's no way to recover it.", style = Type.normal)
+            if (editingPw) Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Password", Modifier.weight(1f), if (!usePattern) Kind.Accent else Kind.Normal) { usePattern = false; firstPattern = null; patternNote = "" }
+                MButton("Pattern", Modifier.weight(1f), if (usePattern) Kind.Accent else Kind.Normal) { usePattern = true; firstPattern = null; patternNote = "" }
+            }
+            if (editingPw && usePattern) {
+                Text(when {
+                    patternNote.isNotEmpty() -> patternNote
+                    firstPattern == null -> "Draw a pattern: connect at least 4 dots. 6 or more is much harder to guess."
+                    else -> "Draw it again to confirm."
+                }, style = Type.normal.copy(color = if (patternNote.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
+                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    io.github.ravenor907.muninn.ui.PatternPad(error = patternNote.isNotEmpty()) { dots ->
+                        val first = firstPattern
+                        when {
+                            dots.size < 4 -> patternNote = "Connect at least 4 dots."
+                            first == null -> { firstPattern = dots; patternNote = "" }
+                            first != dots -> { firstPattern = null; patternNote = "That didn't match. Start over." }
+                            else -> scope.launch {
+                                withContext(Dispatchers.Default) { app.vault.setPassword(io.github.ravenor907.muninn.ui.patternSecret(dots), pattern = true) }
+                                hasPw = app.vault.hasPassword; editingPw = false; firstPattern = null; patternNote = ""
+                                Ui.say("Pattern set. Don't forget it: it can't be recovered.")
+                            }
+                        }
+                    }
+                }
+                MButton("Cancel", Modifier.fillMaxWidth()) { editingPw = false; firstPattern = null; patternNote = "" }
+            } else if (editingPw) {
                 Field(pw1, { pw1 = it }, "New password", Modifier.padding(top = 10.dp), secret = true,
                     keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
                 Field(pw2, { pw2 = it }, "Type it again", Modifier.padding(top = 8.dp), secret = true,
@@ -117,7 +147,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                     MButton("Save password", Modifier.weight(1f), Kind.Accent, enabled = pw1.length >= 4 && pw1 == pw2) {
                         val p = pw1
                         scope.launch {
-                            withContext(Dispatchers.Default) { app.vault.setPassword(p) }
+                            withContext(Dispatchers.Default) { app.vault.setPassword(p, pattern = false) }
                             hasPw = app.vault.hasPassword; editingPw = false; pw1 = ""; pw2 = ""
                             Ui.say("Password set. Don't lose it: it can't be recovered.")
                         }
@@ -125,9 +155,9 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
             } else {
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton(if (hasPw) "Change password" else "Set a password", Modifier.weight(1f), Kind.Accent) { editingPw = true }
+                    MButton(if (hasPw) "Change lock" else "Set a lock", Modifier.weight(1f), Kind.Accent) { editingPw = true; usePattern = app.vault.usesPattern }
                     if (hasPw) MButton("Remove", Modifier.weight(1f)) {
-                        Ui.sure(Ask("Remove the password?", "Muninn will open without one. Your data stays encrypted with this phone's key store.", "Remove") {
+                        Ui.sure(Ask("Remove the lock?", "Muninn will open without one. Your data stays encrypted with this phone's key store.", "Remove") {
                             app.vault.setPassword(null); hasPw = app.vault.hasPassword
                         })
                     }

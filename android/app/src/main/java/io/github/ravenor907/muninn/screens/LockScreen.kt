@@ -27,6 +27,10 @@ import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
+import io.github.ravenor907.muninn.ui.PatternPad
+import io.github.ravenor907.muninn.ui.patternSecret
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.LaunchedEffect
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.Dispatchers
@@ -42,12 +46,26 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     var wrong by remember { mutableStateOf(false) }
     val ask by Ui.ask.collectAsState()
     val scope = rememberCoroutineScope()
-    fun tryIt() {
+    val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
+    val pattern = remember { app.vault.usesPattern }
+    // After every 5 wrong tries, wait 30 seconds (kept across restarts), so guessing is slow.
+    var waitUntil by remember { mutableStateOf(prefs.getLong("lockUntil", 0L)) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(waitUntil) { while (System.currentTimeMillis() < waitUntil) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(500) }; now = System.currentTimeMillis() }
+    val waiting = now < waitUntil
+    fun tryIt(secret: String = pw) {
+        if (waiting || busy) return
         busy = true; wrong = false
         scope.launch {
-            val ok = withContext(Dispatchers.Default) { app.vault.unlock(pw) }   // the key stretching takes a moment
+            val ok = withContext(Dispatchers.Default) { app.vault.unlock(secret) }   // the key stretching takes a moment
             busy = false
-            if (ok) { pw = ""; done(true) } else wrong = true
+            if (ok) { pw = ""; prefs.edit().putInt("lockFails", 0).apply(); done(true) }
+            else {
+                wrong = true
+                val fails = prefs.getInt("lockFails", 0) + 1
+                prefs.edit().putInt("lockFails", fails).apply()
+                if (fails % 5 == 0) { waitUntil = System.currentTimeMillis() + 30_000; prefs.edit().putLong("lockUntil", waitUntil).apply() }
+            }
         }
     }
     Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()) {
@@ -55,11 +73,22 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
-                Text("Type your password. Your messages, contacts and keys stay encrypted until you do.", style = Type.normal)
-                Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
-                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
-                if (wrong) Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-                MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy) { tryIt() }
+                Text(if (pattern) "Draw your pattern. Your messages, contacts and keys stay encrypted until you do."
+                    else "Type your password. Your messages, contacts and keys stay encrypted until you do.", style = Type.normal)
+                if (pattern) {
+                    Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        PatternPad(error = wrong, enabled = !waiting && !busy) { dots -> tryIt(patternSecret(dots)) }
+                    }
+                } else {
+                    Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
+                        keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+                }
+                when {
+                    waiting -> Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                    busy -> Text("Opening…", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
+                    wrong -> Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                }
+                if (!pattern) MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
             }
             Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
             MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {

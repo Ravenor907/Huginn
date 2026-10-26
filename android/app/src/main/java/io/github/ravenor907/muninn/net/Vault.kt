@@ -32,6 +32,8 @@ class Vault(private val context: Context) {
     val locked: StateFlow<Boolean> = _locked.asStateFlow()
 
     val hasPassword: Boolean get() = read()?.optString("mode") == "password"
+    /** The lock is a drawn pattern rather than a typed password. */
+    val usesPattern: Boolean get() = read()?.optString("kind") == "pattern"
 
     /** Opens without a password when none is set. Returns false if a password is needed. */
     fun openDefault(): Boolean {
@@ -67,18 +69,18 @@ class Vault(private val context: Context) {
     }
 
     /** Sets, changes or (with null) removes the password. Must be unlocked. */
-    fun setPassword(password: String?) {
+    fun setPassword(password: String?, pattern: Boolean = false) {
         val k = dataKey ?: return
-        store(k, password)
+        store(k, password, pattern)
     }
 
-    private fun store(k: ByteArray, password: String?) {
+    private fun store(k: ByteArray, password: String?, pattern: Boolean = false) {
         val o = JSONObject()
         if (password.isNullOrEmpty()) {
             o.put("mode", "keystore").put("wrapped", Crypto.b64(Crypto.seal(systemKey(), k)))
         } else {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            o.put("mode", "password").put("salt", Crypto.b64(salt)).put("rounds", ROUNDS)
+            o.put("mode", "password").put("kind", if (pattern) "pattern" else "text").put("salt", Crypto.b64(salt)).put("rounds", ROUNDS)
                 .put("wrapped", Crypto.b64(Crypto.seal(Crypto.derive(password, salt, ROUNDS), k)))
         }
         val tmp = File(keyFile.path + ".tmp")
