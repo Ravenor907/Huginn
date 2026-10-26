@@ -34,8 +34,25 @@ class PrivacyTest {
         assert(!a.contentEquals(Vault.Crypto.derive("wrong horse", salt, 1000)))
     }
 
+    /** A tiny JPEG layout: SOI, APP0 (JFIF), APP1 (EXIF with "GPS"), COM, DQT, SOS + data, EOI. */
+    private fun fakeJpeg(body: Int): ByteArray {
+        fun seg(m: Int, payload: ByteArray) = byteArrayOf(0xFF.toByte(), m.toByte(), ((payload.size + 2) shr 8).toByte(), (payload.size + 2).toByte()) + payload
+        val sos = byteArrayOf(0xFF.toByte(), 0xDA.toByte(), 0, 2) + ByteArray(body) { 0x11 } + byteArrayOf(0xFF.toByte(), 0xD9.toByte())
+        return byteArrayOf(0xFF.toByte(), 0xD8.toByte()) + seg(0xE0, "JFIF".toByteArray()) + seg(0xE1, "Exif GPS 37.7N".toByteArray()) +
+            seg(0xFE, "my comment".toByteArray()) + seg(0xDB, ByteArray(65) { 1 }) + sos
+    }
+
+    @Test fun photoMetadataIsRemoved() {
+        val clean = io.github.ravenor907.muninn.net.Photos.scrub(fakeJpeg(100))!!
+        val text = String(clean, Charsets.ISO_8859_1)
+        assert(!text.contains("GPS") && !text.contains("my comment"))
+        assert(text.contains("JFIF"))                                   // the picture's own header stays
+        assertEquals(fakeJpeg(100).size - (4 + 14) - (4 + 10), clean.size)
+        assertNull(io.github.ravenor907.muninn.net.Photos.scrub(byteArrayOf(1, 2, 3, 4)))
+    }
+
     @Test fun photoPiecesRoundTrip() {
-        val jpeg = ByteArray(50_000) { (it * 7).toByte() }.also { it[0] = 0xFF.toByte(); it[1] = 0xD8.toByte() }
+        val jpeg = io.github.ravenor907.muninn.net.Photos.scrub(fakeJpeg(50_000))!!
         val parts = io.github.ravenor907.muninn.net.Photos.split(jpeg)
         assertEquals(4, parts.size)
         assert(parts.all { it.size <= io.github.ravenor907.muninn.net.Photos.PIECE })

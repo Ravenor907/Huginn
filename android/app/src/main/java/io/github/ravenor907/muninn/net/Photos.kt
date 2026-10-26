@@ -32,7 +32,7 @@ object Photos {
             var sample = 1
             while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= side) sample *= 2
             val raw = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
-            raw?.let { encode(upright(context, uri, scale(it, side)), if (hd) HD_BYTES else NORMAL_BYTES) }
+            raw?.let { scrub(encode(upright(context, uri, scale(it, side)), if (hd) HD_BYTES else NORMAL_BYTES)) }
         }
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
@@ -72,6 +72,32 @@ object Photos {
         }
     }
 
+    /**
+     * Removes every metadata block from a JPEG without touching the picture: EXIF (location, camera,
+     * time), XMP, ICC and maker notes (APP1 to APP15) and comments. Run on photos we send and on
+     * every photo we receive, so nothing extra survives even if the other phone didn't scrub it.
+     * Null if it isn't a well-formed JPEG.
+     */
+    fun scrub(b: ByteArray): ByteArray? {
+        if (b.size < 4 || b[0] != 0xFF.toByte() || b[1] != 0xD8.toByte()) return null
+        val out = ByteArrayOutputStream(b.size)
+        out.write(0xFF); out.write(0xD8)
+        var i = 2
+        while (i + 4 <= b.size) {
+            if (b[i] != 0xFF.toByte()) return null
+            val marker = b[i + 1].toInt() and 0xFF
+            if (marker == 0xFF) { i++; continue }                       // fill byte
+            if (marker == 0xDA) { out.write(b, i, b.size - i); return out.toByteArray() }   // the picture itself, to the end
+            if (marker == 0xD9) { out.write(0xFF); out.write(0xD9); return out.toByteArray() }
+            val len = ((b[i + 2].toInt() and 0xFF) shl 8) or (b[i + 3].toInt() and 0xFF)
+            if (len < 2 || i + 2 + len > b.size) return null
+            val metadata = marker in 0xE1..0xEF || marker == 0xFE
+            if (!metadata) out.write(b, i, 2 + len)
+            i += 2 + len
+        }
+        return null
+    }
+
     fun split(data: ByteArray): List<ByteArray> = (data.indices step PIECE).map { data.copyOfRange(it, minOf(it + PIECE, data.size)) }
 
     /** Null unless it's a JPEG of a sensible size. */
@@ -79,6 +105,6 @@ object Photos {
         val out = ByteArrayOutputStream()
         parts.forEach { out.write(it) }
         val b = out.toByteArray()
-        return if (b.size in 3..(MAX_PIECES * PIECE) && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()) b else null
+        return if (b.size in 3..(MAX_PIECES * PIECE)) scrub(b) else null
     }
 }
