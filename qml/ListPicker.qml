@@ -1,61 +1,25 @@
 import QtQuick
 import Huginn
 
-// "Copy to…", "Move to…", "Extract to…": pick where things go without setting up the other pane.
-// Sections: the other pane, recent places, Places, emulator ROM folders and game folders.
+// A list to choose from, in sections: message options, pictures and files to send, backups.
 Item {
     id: picker
     property string title
-    property var entries: []          // flat list: { header } or { name, detail, url }
+    property var entries: []          // flat list: { header } or { name, detail, url, icon }
     property int current: 0
     property var callback: null
 
     visible: false
     anchors.fill: parent
 
-    function open(t, firstChoices, cb) {
-        title = t
-        callback = cb
-        const out = []
-        const seen = {}
-        const add = (e) => { if (!e.url || seen[e.url]) return; seen[e.url] = true; out.push(e) }
-        if (firstChoices.length) {
-            out.push({ header: "Quick" })
-            firstChoices.forEach(add)
-        }
-        const recent = Settings.recentDestinations
-        if (recent.length) {
-            out.push({ header: "Recent" })
-            recent.forEach(u => add({ name: System.prettyPath(u), detail: "", url: u }))
-        }
-        out.push({ header: "Places" })
-        Places.list.forEach(p => { if (p.kind === "folder" && !p.url.startsWith("trash:")) add({ name: p.name, detail: "", url: p.url }) })
-        const roms = Places.romFolders()
-        if (roms.length) {
-            out.push({ header: "ROM folders" })
-            roms.forEach(add)
-        }
-        const games = Places.gameFolders()
-        if (games.length) {
-            out.push({ header: "Game folders (for mods)" })
-            games.forEach(add)
-        }
-        entries = out
-        remember = true
-        current = out.findIndex(e => !e.header)
-        visible = true
-        list.positionViewAtIndex(current, ListView.Beginning)
-    }
-    // A plain list instead of destinations: sections = [{ header, items: [{ name, detail, url }] }].
-    property bool remember: true
+    // sections = [{ header, items: [{ name, detail, url, icon }] }].
     function openList(t, sections, cb) {
         title = t
         callback = cb
-        remember = false
         const out = []
         sections.forEach(sec => {
             if (!sec.items.length) return
-            out.push({ header: sec.header })
+            if (sec.header) out.push({ header: sec.header })   // an untitled section is just its rows
             sec.items.forEach(e => out.push(e))
         })
         entries = out
@@ -67,8 +31,6 @@ Item {
         const e = entries[current]
         if (!e || e.header) return
         visible = false
-        if (remember) Settings.rememberDestination(e.url)
-        remember = true
         if (callback) callback(e.url)
     }
     function close() { visible = false }
@@ -81,6 +43,7 @@ Item {
         // Headers mark sections; land on the first entry of the next or previous one.
         const headers = []
         entries.forEach((e, i) => { if (e.header) headers.push(i) })
+        if (!headers.length) return
         let here = 0
         headers.forEach((h, k) => { if (h < current) here = k })
         const target = Math.max(0, Math.min(headers.length - 1, here + dir))
@@ -154,7 +117,7 @@ Item {
                         anchors.leftMargin: Theme.px(14)
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Theme.px(14)
-                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "folder"; color: Theme.textMuted }
+                        Icon { visible: !!modelData.icon; anchors.verticalCenter: parent.verticalCenter; name: modelData.icon || "file"; color: Theme.textMuted }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             text: modelData.name || ""
@@ -163,11 +126,14 @@ Item {
                             font.pixelSize: Theme.fs(19)
                             font.weight: Font.Medium
                             elide: Text.ElideMiddle
-                            width: list.width - Theme.px(260)
+                            width: list.width - Theme.px(modelData.detail ? 300 : 60)
                         }
                     }
                     Text {
                         anchors.right: parent.right
+                        width: Theme.px(240)
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                         anchors.rightMargin: Theme.px(14)
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.detail || ""

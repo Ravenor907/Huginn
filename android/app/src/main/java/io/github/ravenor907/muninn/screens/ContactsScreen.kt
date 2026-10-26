@@ -1,6 +1,8 @@
 package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,9 +22,12 @@ import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 
-/** Settings › Contacts: everyone you're in touch with or met close by, and the blocked list. Blocking lives here, not in chats. */
+/**
+ * The Contacts tab: everyone you're in touch with or met close by, and the blocked list. Blocking lives
+ * here, not in chats. [back]: shows a Back button (null in the tab, where the header names the page).
+ */
 @Composable
-fun ContactsScreen(app: Muninn, back: () -> Unit) {
+fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
     val contacts by app.chat.contacts.all.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
@@ -34,7 +39,8 @@ fun ContactsScreen(app: Muninn, back: () -> Unit) {
     val active = people.filter { it.key !in blocked }.sortedBy { it.name.lowercase() }
     val off = blocked.map { k -> people.firstOrNull { it.key == k } ?: P(k, app.chat.nameOf(k), "", false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Section("Contacts") { MButton("Back", icon = "back") { back() } }
+        if (back != null) Section("Contacts") { MButton("Back", icon = "back") { back() } }
+        else Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.weight(1f)) {
             if (active.isEmpty()) item { Text("Nobody yet. People you chat with show up here.", style = Type.normal) }
             items(active, key = { "a" + it.key }) { p ->

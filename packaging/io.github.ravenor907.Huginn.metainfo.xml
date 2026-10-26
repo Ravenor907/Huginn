@@ -2,21 +2,20 @@
 <component type="desktop-application">
   <id>io.github.ravenor907.Huginn</id>
   <name>Huginn</name>
-  <summary>A controller-first file explorer for SteamOS Game Mode</summary>
+  <summary>Private chat and file sharing, built for a controller</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <developer id="io.github.ravenor907">
     <name>Ravenor907</name>
   </developer>
   <description>
-    <p>Huginn is a file explorer built for handhelds and the couch. Every action works from a controller,
-    text is typed with Steam's own keyboard, and the layout grows for a TV when docked.</p>
+    <p>Huginn is an end-to-end encrypted chat and file sharing app for handhelds and the desktop. Every action works
+    from a controller, text is typed with Steam's own keyboard, and the layout tightens up for a mouse and keyboard.</p>
     <ul>
-      <li>Two panes, an action wheel, and trash with undo</li>
-      <li>Steam folders shown by game name, with saves, Proton prefix and shader cache in one place</li>
-      <li>Phone transfer over your home network with a QR code and PIN</li>
-      <li>Ventoy install and update, image writing and USB formatting</li>
-      <li>Archive browsing and extraction, image and text previews, network shares</li>
+      <li>Private messages with a fresh key for every message, over Bluetooth, Wi-Fi or the internet</li>
+      <li>Photos and voice messages, read receipts, nicknames and key change warnings</li>
+      <li>File sharing with Muninn and the LocalSend app, plus a QR code and PIN page for any phone</li>
+      <li>A chat lock, panic lock and encrypted backups</li>
     </ul>
   </description>
   <launchable type="desktop-id">io.github.ravenor907.Huginn.desktop</launchable>

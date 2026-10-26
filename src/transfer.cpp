@@ -16,6 +16,8 @@
 #include <QTcpSocket>
 #include <QTimer>
 #include <QUrlQuery>
+#include <QStringList>
+#include <QVariantMap>
 
 namespace
 {
@@ -374,7 +376,7 @@ a.dl{display:flex;justify-content:space-between;color:#E4E1DA;text-decoration:no
 <h1>HUGINN</h1><p>Files you send go straight to your handheld.</p>
 <label class="pick">Tap to choose files<br><b>or drop them here</b><input id="f" type="file" multiple></label>
 <div id="up"></div>
-<h2>FROM HUGINN</h2><div id="shared"><p>Nothing yet. On the handheld, pick files and choose To phone.</p></div>
+<h2>FROM HUGINN</h2><div id="shared"><p>Nothing yet. In Huginn, open Files and choose Pick files to send.</p></div>
 </main><script>
 const up=document.getElementById('up');
 function send(files){let q=[...files];const next=()=>{const f=q.shift();if(!f)return;

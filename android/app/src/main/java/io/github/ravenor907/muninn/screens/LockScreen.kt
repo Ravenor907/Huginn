@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -84,7 +85,8 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             while (taps.isNotEmpty() && t - taps.first() > 5_000) taps.removeFirst()
             if (taps.size >= 10) { taps.clear(); showErase = true }
         })
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Scrolls, so with larger size and text settings the pad and buttons can always be reached.
+        Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
                 Text(if (pattern) "Draw your pattern. Your messages, contacts and keys stay encrypted until you do."

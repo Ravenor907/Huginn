@@ -1,6 +1,5 @@
 package io.github.ravenor907.muninn.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -64,19 +63,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 val Corner = RoundedCornerShape(4.dp)
 
 /**
- * One slim row: the raven, the MUNINN wordmark, then [trailing] (icon-only buttons). The wordmark takes
+ * One slim row: the raven, the MUNINN wordmark (or a tab's [title]), then [trailing] (icon-only buttons). The wordmark takes
  * only the space left beside the buttons and shrinks to fit it, so the two never collide.
  * [onLogo]: taps on the raven (the lock screen counts them). No ripple and nothing announced.
  */
 @Composable
-fun Brand(onLogo: (() -> Unit)? = null, trailing: @Composable RowScope.() -> Unit = {}) {
+fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", trailing: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         val tap by androidx.compose.runtime.rememberUpdatedState(onLogo)
         val logo = Modifier.size(30.dp).then(if (onLogo != null) Modifier.pointerInput(Unit) { detectTapGestures(onTap = { tap?.invoke() }) } else Modifier)
         Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = logo)
         Spacer(Modifier.width(10.dp))
-        FitLine("MUNINN", Type.title, Modifier.weight(1f))
+        FitLine(title, Type.title, Modifier.weight(1f))
         trailing()
     }
 }
@@ -296,5 +295,3 @@ fun HoldButton(text: String, onDone: () -> Unit) {
 
 private fun Modifier.matchParentSizeCompat(fraction: Float) = this.fillMaxWidth(fraction).height(48.dp)
 
-/** A shared border for chips like "Ventoy 1.1 · Secure Boot on". */
-val ChipBorder = BorderStroke(1.dp, Palette.lineMuted)

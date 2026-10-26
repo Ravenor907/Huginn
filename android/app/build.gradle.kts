@@ -78,8 +78,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
-    implementation("org.apache.commons:commons-compress:1.27.1") // bzip2 for SteamOS images
-    implementation("org.tukaani:xz:1.10") // .xz images
     implementation("com.google.zxing:core:3.5.3") // QR codes for Direct connect
     implementation("com.google.android.gms:play-services-nearby:19.3.0") // close by: Bluetooth and Wi-Fi Direct
     implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+

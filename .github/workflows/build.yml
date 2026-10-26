@@ -11,28 +11,6 @@ permissions:
   contents: write
 
 jobs:
-  drive-helper:
-    name: Drive helper tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: Ravenor907/Handheld-Forge
-          ref: 010576ae680b458a74bbcaa2617269890d0e509a
-          path: forge
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Ventoy update keeps images and Secure Boot setting
-        run: HUGINN_FORGE_PATH=$PWD/forge python helper/test_drivetool.py -v
-      - name: Windows installer layout (FAT32 and exFAT) passes fsck and mounts
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq dosfstools exfatprogs
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
-          sudo modprobe vfat || true; sudo modprobe exfat || true
-          sudo HUGINN_FORGE_PATH=$PWD/forge "$(which python)" -c "import sys" && sudo env HUGINN_FORGE_PATH=$PWD/forge PATH="$(dirname "$(which python)"):$PATH" sh helper/test-windows-layout.sh
-
   flatpak:
     name: Flatpak
     runs-on: ubuntu-latest
@@ -103,24 +81,6 @@ jobs:
           dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
           dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
           dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
-      - name: Windows setup file is valid and has every choice
-        shell: bash
-        run: |
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --unattend-sample > unattend.xml
-          cat unattend.xml
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          ns = {"u": "urn:schemas-microsoft-com:unattend"}
-          root = ET.parse("unattend.xml").getroot()
-          text = open("unattend.xml").read()
-          passes = [s.get("pass") for s in root.findall("u:settings", ns)]
-          assert passes == ["windowsPE", "specialize", "oobeSystem"], passes
-          for needle in ["BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck", "BypassNRO", "<ProtectYourPC>3</ProtectYourPC>",
-                         "<Name>Player</Name>", "logonpasswordchg", "<PreventDeviceEncryption>true</PreventDeviceEncryption>",
-                         "<SystemLocale>", "processorArchitecture=\"amd64\""]:
-              assert needle in text, needle
-          print("unattend.xml OK")
-          PY
       - name: Draw the project banner (both ravens)
         if: always()
         shell: bash
@@ -259,7 +219,7 @@ jobs:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
-    needs: [drive-helper, flatpak, muninn, muninn-screens]
+    needs: [flatpak, muninn, muninn-screens]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

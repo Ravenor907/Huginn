@@ -1,22 +1,28 @@
 import QtQuick
 import Huginn
 
+// Settings: sections in the middle column, their rows in the main column.
 Rectangle {
     id: page
     color: Theme.ground
+    // False while the controller focus is on the rail, so only one thing looks focused.
+    readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int section: 0
     property int row: 0
     property bool inSection: false
     function setArgs(a) { if (a.section) { section = a.section; inSection = true; row = 1 } }
 
-    readonly property var sections: ["General", "Chat", "Browser", "Safety", "Updates", "About"]
+    readonly property var sections: ["General", "Chat", "Updates", "About"]
+    readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Sections" }]
+                                             : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+    readonly property string status: "Changes save as you go"
 
     // Each row: { kind: "segmented"|"toggle"|"accent"|"button", title, note, ... }
     readonly property var rows: {
         switch (section) {
         case 0: return [
-            { kind: "segmented", key: "layout", title: "Layout", note: "Auto picks the TV layout when docked to a big screen",
-              options: [{ value: "auto", label: "Auto" }, { value: "handheld", label: "Handheld" }, { value: "tv", label: "TV" }] },
+            { kind: "segmented", key: "layout", title: "Layout", note: "Desktop is smaller, for a mouse and keyboard. Automatic uses it in a wide window when no controller is in use",
+              options: [{ value: "handheld", label: "Handheld" }, { value: "desktop", label: "Desktop" }, { value: "auto", label: "Automatic" }] },
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
               options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
             { kind: "segmented", key: "textSize", title: "Text size", note: "Just the text, on top of Size",
@@ -24,8 +30,7 @@ Rectangle {
             { kind: "toggle", key: "highContrast", title: "High contrast", note: "White text on black, stronger outlines and focus" },
             { kind: "toggle", key: "colorBlind", title: "Color-blind friendly", note: "Warnings in amber instead of red; status always says it in words" },
             { kind: "toggle", key: "reduceMotion", title: "Reduce motion", note: "No sliding or fading" },
-            { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
-            { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Phones and PCs with the free LocalSend app can find this handheld. You accept every transfer on screen" },
+            { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Muninn and the free LocalSend app on phones and PCs can find this device. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
         case 1: return [
@@ -46,77 +51,82 @@ Rectangle {
             { kind: "button", key: "eraseChat", title: "Erase everything in Chat", note: "Messages, photos, voice, contacts, keys and the lock. Huginn closes", label: "Erase" }
         ]
         case 2: return [
-            { kind: "segmented", key: "sortMode", title: "Sort folders by", note: "Each pane can also switch with the left stick click",
-              options: [{ value: "name", label: "Name" }, { value: "newest", label: "Newest" }, { value: "size", label: "Size" }] },
-            { kind: "toggle", key: "showSize", title: "File size", note: "How big each file is" },
-            { kind: "toggle", key: "showCount", title: "Items in folders", note: "How many things are inside each folder (counted on this device only)" },
-            { kind: "toggle", key: "showModified", title: "Last modified", note: "Today, Yesterday, or the date" },
-            { kind: "toggle", key: "showType", title: "File type", note: "Like PNG image or Zip archive" }
-        ]
-        case 3: return [
-            { kind: "toggle", key: "protectLibrary", title: "Protect game library", note: "Blocks deleting, moving or renaming game installs from the browser" },
-            { kind: "toggle", key: "confirmDelete", title: "Ask before moving to trash", note: "Trash can be undone either way" },
-            { kind: "toggle", key: "ventoySecureBoot", title: "Ventoy with Secure Boot support", note: "On: the first boot asks you to enroll Ventoy's key once" },
-            { kind: "button", key: "removeRule", title: "USB access rule", note: Usb.rawReady ? "Installed: Huginn can open USB drives without a password" : "Not installed: set it up from USB Tools in Desktop Mode",
-              label: "Remove", enabled: Usb.rawReady && !System.gameMode }
-        ]
-        case 4: return [
             { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts.",
               label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy }
         ]
         default: return [
-            { kind: "info", title: "Huginn " + System.version, note: "A controller-first file explorer for SteamOS. Made by Ravenor907." },
-            { kind: "info", title: "Drive tools", note: "Ventoy install and image writing come from Handheld Forge, so both apps share one tested installer." },
+            { kind: "info", title: "Huginn " + System.version, note: "Private chat and file sharing, built for a controller. Made by Ravenor907." },
             { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." },
             { kind: "button", key: "exit", title: "Exit Huginn", note: "Closes Huginn. In Game Mode you land back in Steam.", label: "Exit" }
         ]
         }
     }
 
-    PageHeader {
-        id: header
-        width: parent.width
-        title: "Settings"
-        Text { text: "Huginn " + System.version; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
-    }
-    Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
-
-    Column {
-        id: nav
-        anchors.top: divider.bottom
-        anchors.topMargin: Theme.px(14)
-        anchors.left: parent.left
-        anchors.leftMargin: Theme.px(14)
-        width: Theme.px(224)
-        spacing: Theme.px(2)
-        Repeater {
-            model: page.sections
-            Rectangle {
-                readonly property bool on: index === page.section
-                width: nav.width; height: Theme.px(44); radius: Theme.radius
-                color: on ? (page.inSection ? "#1D1C19" : Theme.focusFill) : "transparent"
-                border.width: on && !page.inSection ? Theme.focusWidth : 0
-                border.color: Theme.accent
-                Row {
-                    anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.px(14)
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(7); height: width; rotation: 45; color: parent.parent.on ? Theme.accent : "transparent"; border.width: parent.parent.on ? 0 : 1; border.color: Theme.ornament }
-                    Text { text: modelData; color: parent.parent.on ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
+    // ------------------------------------------------------------- middle column: sections
+    Rectangle {
+        id: middle
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: Theme.px(270)
+        color: Theme.column
+        PageHeader { id: header; width: parent.width; title: "Settings" }
+        Column {
+            id: nav
+            anchors.top: header.bottom
+            anchors.topMargin: Theme.px(10)
+            x: Theme.px(10)
+            width: parent.width - Theme.px(20)
+            spacing: Theme.px(3)
+            Repeater {
+                model: page.sections
+                Rectangle {
+                    readonly property bool on: index === page.section
+                    width: nav.width; height: Theme.px(46); radius: Theme.px(10)
+                    color: on ? Theme.tile : navHover.hovered ? Theme.raised : "transparent"
+                    border.width: on && page.active && !page.inSection ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.PageTab
+                    Accessible.name: modelData
+                    Row {
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(14); anchors.verticalCenter: parent.verticalCenter
+                        spacing: Theme.px(14)
+                        Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(7); height: width; rotation: 45; color: parent.parent.on ? Theme.accent : "transparent"; border.width: parent.parent.on ? 0 : 1; border.color: Theme.ornament }
+                        Text { text: modelData; color: parent.parent.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
+                    }
+                    HoverHandler { id: navHover }
+                    TapHandler { onTapped: { page.section = index; page.row = 0; page.inSection = false } }
                 }
-                TapHandler { onTapped: { page.section = index; page.row = 0; page.inSection = false } }
             }
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Theme.px(14)
+            x: Theme.px(20)
+            text: "Huginn " + System.version
+            color: Theme.textMuted
+            font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
     }
 
+    PageHeader {
+        id: rowsHead
+        anchors.left: middle.right
+        anchors.right: parent.right
+        carved: false
+        title: page.sections[page.section] || ""
+    }
+
+    // ------------------------------------------------------------- main column: rows
     // The rows scroll so the focused one is always on screen (Chat has more than fit).
     Flickable {
         id: rowsView
-        anchors.top: nav.top
-        anchors.left: nav.right
-        anchors.leftMargin: Theme.px(4)
+        anchors.top: rowsHead.bottom
+        anchors.topMargin: Theme.px(14)
+        anchors.left: middle.right
+        anchors.leftMargin: Theme.px(20)
         anchors.right: parent.right
-        anchors.rightMargin: Theme.px(28)
-        anchors.bottom: bar.top
+        anchors.rightMargin: Theme.px(20)
+        anchors.bottom: parent.bottom
         anchors.bottomMargin: Theme.px(10)
         contentWidth: width
         contentHeight: rowsCol.implicitHeight
@@ -130,7 +140,7 @@ Rectangle {
                 id: rowRepeater
                 model: page.rows
                 Rectangle {
-                    readonly property bool focused: page.inSection && page.row === index
+                    readonly property bool focused: page.active && page.inSection && page.row === index
                     width: parent.width
                     height: Math.max(Theme.px(72), texts.implicitHeight + Theme.px(24))
                     radius: Theme.radius
@@ -219,19 +229,9 @@ Rectangle {
     onRowChanged: Qt.callLater(showRow)
     onSectionChanged: rowsView.contentY = 0
 
-    PromptBar {
-        id: bar
-        anchors.bottom: parent.bottom
-        width: parent.width
-        status: "Changes save as you go"
-        prompts: [{ key: "a", label: "Change" }, { key: "b", label: "Back" }, { key: "lbrb", label: "Sections" }]
-        onPrompt: k => page.handleButton(k === "lbrb" ? "rb" : k)
-    }
-
     // Anything that closes or restarts Huginn checks first that it won't cut off a job.
     function running() {
-        if (Usb.busy) return "A USB drive is being written. Closing now leaves it unusable until you start over."
-        if (FileOps.busy) return FileOps.status + " Closing now stops it partway."
+        if (LocalSend.busy) return LocalSend.status + " Closing now stops it partway."
         return ""
     }
     // Where a toggle's value lives.
@@ -287,7 +287,6 @@ Rectangle {
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Every conversation on this computer is deleted. Contacts stay.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
         else if (key === "eraseChat") Ui.sure("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes. Your files and other settings stay.",
                                               "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
-        else if (key === "removeRule") Usb.removeRule()
         else if (key === "check") {
             if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", "Huginn restarts to update. " + job, "Update anyway", () => Updater.install(), true, true)
@@ -312,31 +311,27 @@ Rectangle {
         } else if (r.kind === "button" && dir === 0 && r.enabled !== false) press(r.key)
     }
 
+    // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
-        switch (b) {
-        case "lb": section = (section + sections.length - 1) % sections.length; row = 0; return true
-        case "rb": section = (section + 1) % sections.length; row = 0; return true
-        }
         if (!inSection) {
             switch (b) {
-            case "up": section = Math.max(0, section - 1); break
-            case "down": section = Math.min(sections.length - 1, section + 1); break
-            case "a": case "right": inSection = true; row = 0; break
-            case "b": Ui.closePage(); break
+            case "up": section = Math.max(0, section - 1); return true
+            case "down": section = Math.min(sections.length - 1, section + 1); return true
+            case "a": case "right": inSection = true; row = 0; return true
             }
-            return true
+            return false
         }
         switch (b) {
-        case "up": row = Math.max(0, row - 1); break
-        case "down": row = Math.min(rows.length - 1, row + 1); break
-        case "a": change(0); break
+        case "up": row = Math.max(0, row - 1); return true
+        case "down": row = Math.min(rows.length - 1, row + 1); return true
+        case "a": change(0); return true
         case "left":
             if (rows[row] && (rows[row].kind === "segmented" || rows[row].kind === "accent")) change(-1)
             else inSection = false
-            break
-        case "right": change(1); break
-        case "b": inSection = false; break
+            return true
+        case "right": change(1); return true
+        case "b": inSection = false; return true
         }
-        return true
+        return false
     }
 }

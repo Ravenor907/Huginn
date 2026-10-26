@@ -42,12 +42,6 @@ private const val DAY = 86_400_000L
 
 @Composable
 fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
-    var showContacts by remember { mutableStateOf(false) }
-    if (showContacts) {
-        androidx.activity.compose.BackHandler { showContacts = false }
-        ContactsScreen(app) { showContacts = false }
-        return
-    }
     val id = app.identity
     var receipts by remember { mutableStateOf(id.readReceipts) }
     var name by remember { mutableStateOf(id.username) }
@@ -69,7 +63,6 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var pw2 by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-        MButton("Contacts", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "user") { showContacts = true }
         Section("Notifications")
         Panel {
             val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -182,7 +175,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 Field(device, { device = it.take(40) }, "Muninn on my phone", Modifier.weight(1f))
                 MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = device.isNotBlank() && device != id.deviceName) { id.deviceName = device; app.net.announce(); Ui.say("Saved.") }
             }
-            Text("Received files go to ${id.receiveFolder.absolutePath.removePrefix("/storage/emulated/0/")}", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+            Text("Received files go to ${io.github.ravenor907.muninn.net.Received.place(androidx.compose.ui.platform.LocalContext.current)}.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
         }
         Section("Accessibility")
         Panel {
@@ -214,6 +207,6 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
         }
         Section("About")
-        Text("Muninn ${app.updater.current}: Huginn's phone companion. Send and receive with LocalSend, chat, files and USB drives. Made by Ravenor907. GPL-3.0; drive tools from Handheld Forge.", style = Type.small, modifier = Modifier.padding(bottom = 24.dp))
+        Text("Muninn ${app.updater.current}: private chat and file sharing, Huginn's phone companion. Sends and receives with LocalSend. Made by Ravenor907. GPL-3.0.", style = Type.small, modifier = Modifier.padding(bottom = 24.dp))
     }
 }

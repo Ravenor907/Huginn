@@ -13,6 +13,8 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QStringList>
+#include <QVariantMap>
 
 namespace
 {

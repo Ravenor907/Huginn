@@ -8,10 +8,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus Concurrent WebSockets Bluetooth Multimedia)
-find_package(KF6CoreAddons REQUIRED)
-find_package(KF6KIO REQUIRED)
-find_package(KF6Archive REQUIRED)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
 find_package(KF6Prison REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -24,16 +21,8 @@ qt_add_executable(huginn
     src/settings.cpp src/settings.h
     src/system.cpp src/system.h
     src/gamepad.cpp src/gamepad.h
-    src/foldermodel.cpp src/foldermodel.h
-    src/fileops.cpp src/fileops.h
-    src/places.cpp src/places.h
-    src/steam.cpp src/steam.h
-    src/archivemodel.cpp src/archivemodel.h
     src/transfer.cpp src/transfer.h
-    src/network.cpp src/network.h
-    src/usb.cpp src/usb.h
     src/updater.cpp src/updater.h
-    src/storage.cpp src/storage.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.cpp src/direct.h
@@ -65,32 +54,21 @@ qt_add_qml_module(huginn
         qml/Theme.qml
         qml/Ui.qml
         qml/Icon.qml
-        qml/Divider.qml
         qml/PageHeader.qml
         qml/PromptKey.qml
         qml/PromptBar.qml
         qml/HButton.qml
         qml/ToggleSwitch.qml
         qml/Segmented.qml
-        qml/FileRow.qml
-        qml/FilePane.qml
-        qml/ActionWheel.qml
         qml/TextPrompt.qml
         qml/ConfirmDialog.qml
         qml/Toast.qml
-        qml/BrowserPage.qml
-        qml/GamesPage.qml
-        qml/UsbPage.qml
-        qml/TransferPage.qml
-        qml/NetworkPage.qml
-        qml/SettingsPage.qml
-        qml/PreviewPage.qml
-        qml/ArchivePage.qml
-        qml/StoragePage.qml
-        qml/DestinationPicker.qml
-        qml/HomePage.qml
-        qml/RecentPage.qml
+        qml/ListPicker.qml
+        qml/Rail.qml
         qml/ChatPage.qml
+        qml/FilesPage.qml
+        qml/CallsPage.qml
+        qml/SettingsPage.qml
         qml/ContactsPage.qml
         qml/LockPanel.qml
         qml/PatternPad.qml
@@ -101,9 +79,8 @@ qt_add_qml_module(huginn
 )
 
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
-foreach(f IN ITEMS Main Theme Ui Icon Divider PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented FileRow FilePane
-                   ActionWheel TextPrompt ConfirmDialog Toast BrowserPage GamesPage UsbPage TransferPage NetworkPage
-                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage ChatPage
+foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
+                   TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
@@ -115,16 +92,15 @@ foreach(font IN LISTS HUGINN_FONTS)
 endforeach()
 
 target_link_libraries(huginn PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::DBus Qt6::Concurrent
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::DBus
     Qt6::WebSockets Qt6::Bluetooth Qt6::Multimedia
-    KF6::CoreAddons KF6::KIOCore KF6::KIOWidgets KF6::Archive KF6::Prison
+    KF6::Prison
     PkgConfig::SDL2
     OpenSSL::Crypto
 )
 
 include(GNUInstallDirs)
 install(TARGETS huginn RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS helper/huginn-drivetool DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
 install(FILES packaging/io.github.ravenor907.Huginn.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/io.github.ravenor907.Huginn.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 install(FILES packaging/io.github.ravenor907.Huginn-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME io.github.ravenor907.Huginn.png)

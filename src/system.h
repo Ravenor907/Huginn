@@ -3,18 +3,18 @@
 #include <QObject>
 #include <QUrl>
 #include <QVariantList>
-#include <QVariantMap>
 
 class QQuickWindow;
 class Settings;
 
-// Small helpers QML needs: the Steam keyboard, Game Mode and TV detection, file details,
-// text previews, and the screenshot tour that CI runs.
+// Small helpers QML needs: the Steam keyboard, Game Mode detection, the layout density, files
+// to share, and the screenshot tour that CI runs.
 class System : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool gameMode READ gameMode CONSTANT)
-    Q_PROPERTY(bool tvLayout READ tvLayout NOTIFY layoutChanged)
+    // Desktop density (smaller, for a mouse and keyboard). Main.qml decides from Settings.layout.
+    Q_PROPERTY(bool desktop READ desktop WRITE setDesktop NOTIFY layoutChanged)
     Q_PROPERTY(double uiScale READ uiScale NOTIFY layoutChanged)
     Q_PROPERTY(bool windowed READ windowed CONSTANT)
     Q_PROPERTY(QString version READ version CONSTANT)
@@ -26,10 +26,10 @@ public:
     static QString formatSize(qint64 bytes);
     static QString displayPath(const QUrl &url);
     static bool inFlatpak();
-    static int runHost(const QStringList &args, QByteArray *out = nullptr, const QByteArray &input = {}, int timeoutMs = 30000);
 
     bool gameMode() const { return m_gameMode; }
-    bool tvLayout() const;
+    bool desktop() const { return m_desktop; }
+    void setDesktop(bool on);
     double uiScale() const;
     bool windowed() const { return m_windowed; }
     QString version() const;
@@ -37,27 +37,12 @@ public:
 
     Q_INVOKABLE void showSteamKeyboard();
     Q_INVOKABLE void hideSteamKeyboard();
-    Q_INVOKABLE QString kindOf(const QUrl &url) const;
-    Q_INVOKABLE QVariantMap fileInfo(const QUrl &url) const;
-    Q_INVOKABLE QString readText(const QUrl &url, int maxBytes) const;
-    Q_INVOKABLE QVariantMap readLines(const QUrl &url) const;
-    Q_INVOKABLE QString writeLines(const QUrl &url, const QStringList &lines) const;
-    Q_INVOKABLE QVariantList imagesBeside(const QUrl &url) const;
-    Q_INVOKABLE QVariantList sampleImages();
-    Q_INVOKABLE QString sampleText();
-    Q_INVOKABLE QVariantList newestDownloads(int limit) const;
-    Q_INVOKABLE QVariantList driveSummary() const;
-    // { present, percent, charging } from the first battery the kernel reports.
-    Q_INVOKABLE QVariantMap battery() const;
-    // Ask the system not to dim or sleep while a long job runs (copies, USB writes, transfers).
+    // The newest files in Downloads, Documents, Pictures, Videos and Music, for sending:
+    // [{ header, items: [{ name, detail, url, icon }] }], ready for the list picker.
+    Q_INVOKABLE QVariantList sendableFiles(int perFolder) const;
+    // Ask the system not to dim or sleep while files are being sent or received.
     void setKeepAwake(bool on, const QString &reason);
-    Q_INVOKABLE QUrl homeUrl() const;
-    Q_INVOKABLE QUrl downloadsUrl() const;
     Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }
-    Q_INVOKABLE QUrl parentUrl(const QUrl &url) const;
-    Q_INVOKABLE QString parentPath(const QUrl &url) const;
-    Q_INVOKABLE QString fileName(const QVariant &url) const;
-    Q_INVOKABLE QString prettyPath(const QVariant &url) const { return displayPath(QUrl(url.toString())); }
     Q_INVOKABLE void grab(QQuickWindow *window, const QString &name);
     Q_INVOKABLE void tourFinished();
 
@@ -75,4 +60,5 @@ private:
     QString m_tourDir;
     bool m_windowed;
     bool m_gameMode;
+    bool m_desktop = false;
 };

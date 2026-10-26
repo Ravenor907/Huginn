@@ -80,13 +80,13 @@ import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
-import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
@@ -103,6 +103,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import io.github.ravenor907.muninn.ui.IconAction
@@ -121,8 +122,10 @@ object ChatNav {
     var incoming by mutableStateOf("")
     /** The + menu on the chat list (Add someone, My code) is showing. */
     var menu by mutableStateOf(false)
-    /** From this width on, the chat list stays beside the conversation; narrower, a conversation takes the whole screen. */
+    /** From this width on, Muninn uses the tablet layout (rail, chat list, conversation); narrower, a conversation takes the whole screen. */
     val WIDE = 600.dp
+    /** True while the tablet layout is showing: the list stays beside the conversation, so no back arrow. */
+    var wide by mutableStateOf(false)
 }
 
 private fun routeText(r: String) = when (r) {
@@ -180,30 +183,51 @@ private fun unreadCount(msgs: List<Chat.Msg>): Int {
     return maxOf(n, 1)
 }
 
+/** Phones: the chat list, or one conversation (or My code / Add someone) over the whole screen. */
 @Composable
 fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     val open = ChatNav.open
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
-        // Tablets and wide screens: the chat list stays beside the conversation.
-        val wide = maxWidth >= ChatNav.WIDE
-        if (open.isNotEmpty()) BackHandler { ChatNav.open = "" }
+    Box(Modifier.fillMaxSize()) {
         when {
-            open == "code" -> MyCode(app)
-            open == "add" -> AddSomeone(app)
-            !wide && open == "nearby" -> NearbyRoom(app)
-            !wide && open.isNotEmpty() -> androidx.compose.runtime.key(open) { Conversation(app, open) }
-            !wide -> ChatList(app, onAllowNearby)
-            else -> Row(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(0.42f)) { ChatList(app, onAllowNearby) }
-                Box(Modifier.weight(0.58f)) {
-                    when (open) {
-                        "" -> Text("Pick a chat on the left.", style = Type.normal, modifier = Modifier.align(Alignment.Center))
-                        "nearby" -> NearbyRoom(app)
-                        else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
-                    }
-                }
-            }
+            open.isEmpty() -> ChatList(app, onAllowNearby)
+            else -> ChatMain(app)
         }
+    }
+}
+
+/** Tablets: the middle column, the list of direct messages. */
+@Composable
+fun ChatColumn(app: Muninn, onAllowNearby: () -> Unit = {}) = ChatList(app, onAllowNearby)
+
+/** Tablets: the main column, and phones once a chat is open: the open conversation, or a note to pick one. */
+@Composable
+fun ChatMain(app: Muninn) {
+    val open = ChatNav.open
+    Box(Modifier.fillMaxSize()) {
+        if (open.isNotEmpty()) BackHandler { ChatNav.open = "" }
+        when (open) {
+            "" -> Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                MIcon("chat", Palette.textFaint, 40.dp)
+                Text("Pick a chat on the left.", style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 12.dp))
+            }
+            "code" -> MyCode(app)
+            "add" -> AddSomeone(app)
+            "nearby" -> NearbyRoom(app)
+            else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
+        }
+    }
+}
+
+/** The slim top bar for a full-screen page: back arrow and a title, then a hairline. */
+@Composable
+private fun PageBar(title: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconAction("back", "Back to chats", Palette.text, size = 24.dp) { ChatNav.open = "" }
+            Spacer(Modifier.width(6.dp))
+            Text(title, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics { heading() })
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
     }
 }
 
@@ -410,7 +434,9 @@ private fun ThreadBar(name: String, status: String, statusIcon: String, statusTi
     var showMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction("back", "Back to chats", Palette.text, size = 24.dp) { ChatNav.open = "" }
+            // Tablets keep the chat list beside the conversation, so there's nothing to go back to.
+            if (!ChatNav.wide) IconAction("back", "Back to chats", Palette.text, size = 24.dp) { ChatNav.open = "" }
+            else Spacer(Modifier.width(12.dp))
             Row(Modifier.weight(1f).heightIn(min = 52.dp).clip(RoundedCornerShape(8.dp))
                 .clickable(role = Role.Button, onClickLabel = "Chat details") { showMenu = true }.padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -686,22 +712,29 @@ private fun MyCode(app: Muninn) {
     var code by remember { mutableStateOf(app.chat.myCode()) }
     var left by remember { mutableStateOf(0L) }
     LaunchedEffect(code) { while (true) { left = Contacts.expires(code) - System.currentTimeMillis(); kotlinx.coroutines.delay(10_000) } }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Section("My code") { MButton("Back", icon = "back") { ChatNav.open = "" } }
-        Text("Anyone with this code can reach you as “${app.identity.username}” for the next hour. After that it stops working, so a leaked code can't be used to spam you. People who already have you keep working.", style = Type.normal)
-        Text(if (left > 0) "Good for ${(left + 59_999) / 60_000} more minutes" else "This code has expired",
-            style = Type.small.copy(color = if (left > 0) Palette.accent else Palette.danger), modifier = Modifier.padding(top = 6.dp))
-        Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(Contacts.link(code), 240) }
-        Text("They scan it with their phone's camera: it opens Muninn, or shows where to download it if they don't have it yet. Or send it as a message:", style = Type.small)
-        MButton("New code", Modifier.fillMaxWidth().padding(top = 10.dp)) { code = app.chat.myCode() }
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton("Share code", Modifier.weight(1f), Kind.Accent, icon = "send") {
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first). The link works for an hour:\n${Contacts.link(code)}"), "Share your Muninn code"))
-            }
-            MButton("Copy", Modifier.weight(1f), icon = "copy") {
-                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
-                Ui.say("Code copied.")
+    Column(Modifier.fillMaxSize()) {
+        PageBar("My code")
+        // Scrolls, so with larger size and text settings the buttons can always be reached.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            // The code fits the width and at most 40% of the height, so it never pushes the buttons far away.
+            val qr = minOf(maxWidth - 32.dp - 20.dp, maxHeight * 0.4f, 260.dp).coerceAtLeast(120.dp)
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                Text("Anyone with this code can reach you as “${app.identity.username}” for the next hour. After that it stops working, so a leaked code can't be used to spam you. People who already have you keep working.",
+                    style = Type.normal, modifier = Modifier.padding(top = 12.dp))
+                Text(if (left > 0) "Good for ${(left + 59_999) / 60_000} more minutes" else "This code has expired",
+                    style = Type.small.copy(color = if (left > 0) Palette.accent else Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(Contacts.link(code), qr) }
+                Text("They scan it with their phone's camera: it opens Muninn, or shows where to download it if they don't have it yet. Or send it as a message:", style = Type.small)
+                MButton("Share link", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, icon = "send") {
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first). The link works for an hour:\n${Contacts.link(code)}"), "Share your Muninn code"))
+                }
+                MButton("Copy", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "copy") {
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
+                    Ui.say("Code copied.")
+                }
+                MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -715,30 +748,34 @@ private fun AddSomeone(app: Muninn) {
         mutableStateOf(ChatNav.incoming.ifEmpty { if (clip.contains(Contacts.PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
     }
     val found = Contacts.parse(text)
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Section("Add someone") { MButton("Back", icon = "back") { ChatNav.open = "" } }
-        Text("Paste the code they sent you (it starts with MUNINN1). Someone close by? They show up under Around you, no code needed.", style = Type.normal)
-        Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
-        when {
-            text.isBlank() -> {}
-            found == null -> Text("That isn't a Muninn code. Ask them to tap My code › Share code.", style = Type.small.copy(color = Palette.danger))
-            Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has expired (they last an hour). Ask them for a new one.", style = Type.small.copy(color = Palette.danger))
-            found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
-            else -> {
-                Text("Found: ${found.name}", style = Type.big)
-                // Someone already here with a different key: adding this is a key change, so say it first.
-                val replaces = app.chat.keyChangeFor(found)
-                replaces?.let { old ->
-                    Text("You already have ${old.shown} with a different security key. If you add this code, check the code with them before trusting new messages.",
-                        style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-                }
-                MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
-                    app.chat.addContact(found)
-                    // A key change has its own warning (from Chat): don't cover it.
-                    if (replaces == null) Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
-                    ChatNav.open = found.chatKey
+    Column(Modifier.fillMaxSize().imePadding()) {
+        PageBar("Add someone")
+        // Scrolls, so the Add button stays reachable with larger size and text settings or the keyboard up.
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+            Text("Paste the code they sent you (it starts with MUNINN1). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
+            Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
+            when {
+                text.isBlank() -> {}
+                found == null -> Text("That isn't a Muninn code. Ask them to tap My code › Share link.", style = Type.small.copy(color = Palette.danger))
+                Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has expired (they last an hour). Ask them for a new one.", style = Type.small.copy(color = Palette.danger))
+                found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
+                else -> {
+                    Text("Found: ${found.name}", style = Type.big)
+                    // Someone already here with a different key: adding this is a key change, so say it first.
+                    val replaces = app.chat.keyChangeFor(found)
+                    replaces?.let { old ->
+                        Text("You already have ${old.shown} with a different security key. If you add this code, check the code with them before trusting new messages.",
+                            style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                    }
+                    MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+                        app.chat.addContact(found)
+                        // A key change has its own warning (from Chat): don't cover it.
+                        if (replaces == null) Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
+                        ChatNav.open = found.chatKey
+                    }
                 }
             }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

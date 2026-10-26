@@ -3,7 +3,6 @@ package io.github.ravenor907.muninn.net
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.os.StatFs
 import android.webkit.MimeTypeMap
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,7 +12,6 @@ import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -69,7 +67,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     data class Request(val from: String, val count: Int, val size: Long, val names: String)
 
-    data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean)
+    /** A transfer in the Files tab's Recent list. [sent]: going out (else coming in). */
+    data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean, val sent: Boolean = false)
 
     data class Transfer(
         val active: Boolean = false, val sending: Boolean = false, val status: String = "",
@@ -114,7 +113,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         @Volatile var received = 0L
         @Volatile var done = false
         @Volatile var failed = false
-        @Volatile var savedAs: File? = null
+        @Volatile var savedAs: Received.Target? = null
     }
     private class Session(val id: String, val from: String, val ip: String, val files: Map<String, InFile>) {
         @Volatile var touched = System.currentTimeMillis()
@@ -427,8 +426,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             map[k] = inf
         }
         val alias = from.optString("alias", ip)
-        val dir = identity.receiveFolder.also { it.mkdirs() }
-        val free = try { StatFs(dir.absolutePath).availableBytes } catch (e: Exception) { Long.MAX_VALUE }
+        val free = Received.freeBytes(context)
         if (total + 64L * 1024 * 1024 > free) {
             reply(out, 403)
             messages.tryEmit(false to "$alias tried to send ${size(total)}, but there's only ${size(free)} free. Free up space and try again.")
@@ -465,15 +463,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val f = sess.files[r.query["fileId"]]
         if (r.query["sessionId"] != sess.id) { reply(out, 409); return }
         if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
-        val target = savePath(f.name)
-        target.parentFile?.mkdirs()
+        // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg").
+        val target = try { Received.create(context, f.name) } catch (e: Exception) { null }
         f.savedAs = target
         f.received = 0
         f.failed = false
         val md = if (f.sha != null) MessageDigest.getInstance("SHA-256") else null
         var ok = false
-        try {
-            FileOutputStream(target).use { fo ->
+        if (target != null) try {
+            target.out.use { fo ->
                 val buf = ByteArray(1 shl 18)
                 var left = length
                 while (left > 0) {
@@ -491,19 +489,21 @@ class LocalSend(private val context: Context, val identity: Identity) {
         } catch (e: Exception) {
             ok = false
         }
-        if (ok && md != null && md.digest().joinToString("") { "%02x".format(it) } != f.sha!!.lowercase()) {
-            target.delete(); f.failed = true; reply(out, 422)
+        if (target == null) {
+            f.failed = true; reply(out, 500)
+        } else if (ok && md != null && md.digest().joinToString("") { "%02x".format(it) } != f.sha!!.lowercase()) {
+            target.discard(); f.failed = true; reply(out, 422)
         } else if (!ok) {
-            target.delete(); f.failed = true; f.received = 0
+            target.discard(); f.failed = true; f.received = 0
         } else {
-            f.done = true; reply(out, 200)
+            target.finish(); f.done = true; reply(out, 200)
         }
         progressIn(sess)
         if (sess.files.values.all { it.done || it.failed }) {
             val done = sess.files.values.count { it.done }
             val failed = sess.files.values.any { it.failed }
             endSession(!failed, if (failed) "$done of ${sess.files.size} files from ${sess.from} arrived. Send the rest again."
-                else "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${identity.receiveFolder.name}.")
+                else "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${Received.place(context)}.")
         }
     }
 
@@ -516,7 +516,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun InFile.toItem() = Item(
         savedAs?.name ?: name.substringAfterLast('/'),
-        when { done -> "Done"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
+        when { done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
         if (size > 0) received.toFloat() / size else if (done) 1f else 0f, failed,
     )
 
@@ -526,30 +526,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val s = session ?: return
         session = null
         s.files.values.forEach { f ->
-            if (!f.done) f.savedAs?.delete()
-            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "Done" else "Didn't arrive", failed = !f.done))
-            f.savedAs?.takeIf { f.done }?.let { Recent.add(context, it) }
+            if (!f.done) f.savedAs?.discard()
+            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "From ${s.from} · saved to ${Received.place(context)}" else "From ${s.from} · didn't arrive", failed = !f.done))
         }
         while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
         _transfer.value = Transfer()
         NearbyService.hold(context, false)
         messages.tryEmit(ok to message)
-    }
-
-    /** Keeps folders a sender included ("Photos/a.jpg"), never lets a name climb out of the folder. */
-    private fun savePath(name: String): File {
-        val parts = name.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }.ifEmpty { listOf("from-phone") }
-        val dir = File(identity.receiveFolder, parts.dropLast(1).joinToString("/"))
-        val file = parts.last()
-        var target = File(dir, file)
-        var n = 1
-        while (target.exists()) {
-            val base = file.substringBeforeLast('.', file)
-            val ext = if (file.contains('.')) "." + file.substringAfterLast('.') else ""
-            target = File(dir, "$base ($n)$ext"); n++
-        }
-        return target
     }
 
     // ------------------------------------------------------------------ sending
@@ -613,6 +597,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                             }
                             u.disconnect()
                         }
+                        logSent(accepted.map { list[it].name }, dev.alias)
                         done(true, "Sent ${if (accepted.size == 1) "1 file" else "${accepted.size} files"} to ${dev.alias}.")
                     }
                     204 -> done(true, "${dev.alias} already has these files.")
@@ -643,8 +628,17 @@ class LocalSend(private val context: Context, val identity: Identity) {
         NearbyService.hold(context, active)
     }
     fun closeProgress(done: Long, total: Long) = _transfer.update { it.copy(done = done, total = total) }
-    fun closeItem(name: String, ok: Boolean) {
-        history.add(0, Item(name, if (ok) "Done" else "Didn't arrive", if (ok) 1f else 0f, !ok))
+    fun closeItem(name: String, ok: Boolean, from: String = "") {
+        val what = if (ok) "saved to ${Received.place(context)}" else "didn't arrive"
+        history.add(0, Item(name, if (from.isEmpty()) what.replaceFirstChar { it.uppercase() } else "From $from · $what", if (ok) 1f else 0f, !ok))
+        while (history.size > 30) history.removeAt(history.size - 1)
+        _items.value = history.toList()
+    }
+
+    /** Files that went out, for the Recent list. */
+    fun logSent(names: List<String>, to: String) {
+        names.forEach { history.add(0, Item(it, "To $to · sent", 1f, false, sent = true)) }
+        while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
     }
 

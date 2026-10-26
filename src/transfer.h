@@ -15,7 +15,7 @@ class Settings;
 
 // Phone transfer: a tiny web server on the home network, only while the screen is open.
 // The phone opens the page (QR code or address), types the 4-digit PIN, and sends files.
-// Files picked with "To phone" show up on the same page for download.
+// Files picked in Files (Pick files to send) show up on the same page for download.
 class TransferServer : public QObject
 {
     Q_OBJECT

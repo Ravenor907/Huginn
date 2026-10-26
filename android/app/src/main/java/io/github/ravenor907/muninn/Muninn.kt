@@ -66,6 +66,7 @@ class Muninn : Application() {
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
             deleteNotificationChannel("messages")   // 0.32 and older: no vibration set
             deleteNotificationChannel("chat")       // test builds: sound not set
+            deleteNotificationChannel("forge")      // 0.5 and older: USB drive writing
             createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "New messages. Pops up on screen, vibrates and plays a sound."
                 enableVibration(true); vibrationPattern = BUZZ
@@ -80,6 +81,7 @@ class Muninn : Application() {
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
         if (vault.openDefault()) start()
+        dropOldTools()
         // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
         try {
             getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
@@ -110,6 +112,20 @@ class Muninn : Application() {
         ready.value = true
         // Messages that came while locked were only announced: ask the relays for them again now.
         nostr.resubscribe()
+    }
+
+    /**
+     * 0.6 dropped the USB drive tools and the file browser. Clear what they left behind once:
+     * downloaded system images (often several GB), their settings, and the recent files list.
+     */
+    private fun dropOldTools() {
+        val p = getSharedPreferences("muninn", MODE_PRIVATE)
+        if (p.getBoolean("oldToolsGone", false)) return
+        Thread {
+            try { java.io.File(getExternalFilesDir(null) ?: filesDir, "iso").deleteRecursively() } catch (_: Exception) {}
+            try { deleteSharedPreferences("forge") } catch (_: Exception) {}
+            p.edit().remove("recent").remove("receiveFolder").putBoolean("oldToolsGone", true).apply()
+        }.start()
     }
 
     private var listening = false

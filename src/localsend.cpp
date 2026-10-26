@@ -19,6 +19,8 @@
 #include <QTcpSocket>
 #include <QUrlQuery>
 #include <QUuid>
+#include <QStringList>
+#include <QVariantMap>
 
 namespace
 {
@@ -703,8 +705,6 @@ void LocalSend::endSession(bool ok, const QString &message)
         else if (!f.savedAs.isEmpty() || f.failed)
             m_history << QVariantMap{{QStringLiteral("name"), QFileInfo(f.name).fileName()}, {QStringLiteral("status"), QStringLiteral("Didn't arrive")},
                                      {QStringLiteral("failed"), true}, {QStringLiteral("fraction"), 0.0}};
-        if (f.done)
-            m_settings->rememberFile(QUrl::fromLocalFile(f.savedAs).toString());
     }
     // Close any upload still streaming and drop its partial file. Abort after the loop: aborting
     // removes the connection from m_conns.
@@ -840,7 +840,7 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
     }
     if (m_send.files.isEmpty()) {
         m_send = {};
-        Q_EMIT finished(false, QStringLiteral("Pick some files first: in the browser, open the Y menu and choose To phone."));
+        Q_EMIT finished(false, QStringLiteral("Pick some files first: in Files, choose Pick files to send."));
         return;
     }
     m_send.active = true;

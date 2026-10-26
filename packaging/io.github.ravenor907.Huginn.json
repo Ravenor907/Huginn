@@ -11,13 +11,8 @@
         "--socket=fallback-x11",
         "--device=all",
         "--filesystem=host",
-        "--system-talk-name=org.freedesktop.UDisks2",
         "--system-talk-name=org.freedesktop.NetworkManager",
         "--talk-name=org.freedesktop.Flatpak",
-        "--talk-name=org.kde.kiod6",
-        "--talk-name=org.kde.kpasswdserver6",
-        "--talk-name=org.kde.kded6",
-        "--talk-name=org.freedesktop.secrets",
         "--talk-name=org.freedesktop.ScreenSaver",
         "--talk-name=org.freedesktop.Notifications",
         "--socket=pulseaudio",
@@ -34,58 +29,6 @@
         "*.la"
     ],
     "modules": [
-        {
-            "name": "libssh",
-            "buildsystem": "cmake-ninja",
-            "builddir": true,
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://www.libssh.org/files/0.12/libssh-0.12.0.tar.xz",
-                    "sha256": "1a6af424d8327e5eedef4e5fe7f5b924226dd617ac9f3de80f217d82a36a7121",
-                    "x-checker-data": {
-                        "type": "anitya",
-                        "project-id": 1729,
-                        "stable-only": true,
-                        "url-template": "https://www.libssh.org/files/$major.$minor/libssh-$version.tar.xz"
-                    }
-                }
-            ]
-        },
-        {
-            "name": "kio-extras",
-            "buildsystem": "cmake-ninja",
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://download.kde.org/stable/release-service/26.04.3/src/kio-extras-26.04.3.tar.xz",
-                    "sha256": "8448075fdedd1e5ae43b865337f5ac3ca39037726dd0deaa061797fa84d31d63",
-                    "x-checker-data": {
-                        "type": "anitya",
-                        "project-id": 8763,
-                        "stable-only": true,
-                        "url-template": "https://download.kde.org/stable/release-service/$version/src/kio-extras-$version.tar.xz"
-                    }
-                }
-            ]
-        },
-        {
-            "name": "handheld-forge-drive-code",
-            "buildsystem": "simple",
-            "build-commands": [
-                "install -d /app/lib/huginn/forge",
-                "cp -r handheld_forge /app/lib/huginn/forge/",
-                "rm -f /app/lib/huginn/forge/handheld_forge/gui.py",
-                "install -Dm644 LICENSE /app/share/licenses/io.github.ravenor907.Huginn/handheld-forge-LICENSE"
-            ],
-            "sources": [
-                {
-                    "type": "git",
-                    "url": "https://github.com/Ravenor907/Handheld-Forge.git",
-                    "commit": "010576ae680b458a74bbcaa2617269890d0e509a"
-                }
-            ]
-        },
         {
             "name": "huginn",
             "buildsystem": "cmake-ninja",
