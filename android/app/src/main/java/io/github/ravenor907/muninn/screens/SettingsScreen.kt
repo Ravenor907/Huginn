@@ -61,9 +61,9 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         Section("Privacy")
         Panel {
             Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)
-            Text("Delete messages after", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            Text("Delete messages after a", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(0L to "Never", DAY to "1 day", 7 * DAY to "1 week", 30 * DAY to "1 month").forEach { (ms, label) ->
+                listOf(0L to "Never", DAY to "Day", 7 * DAY to "Week", 30 * DAY to "Month").forEach { (ms, label) ->
                     MButton(label, Modifier.weight(1f), if (deleteAfter == ms) Kind.Accent else Kind.Normal) {
                         deleteAfter = ms; id.deleteAfter = ms; app.chat.prune()
                     }
