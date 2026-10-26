@@ -8,12 +8,16 @@
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QObject>
 #include <QPointer>
+#include <QSslServer>
 #include <QTcpServer>
 #include <QTimer>
 #include <QUdpSocket>
 #include <QVariantList>
+
+#include "tls.h"
 
 class QFile;
 class QNetworkReply;
@@ -23,8 +27,10 @@ class Settings;
 // Nearby sharing that speaks the LocalSend protocol (v2), so the free LocalSend app on a phone,
 // tablet or PC finds the handheld by itself and sends or receives with no codes to type.
 // Discovery: UDP multicast 224.0.0.167:53317 plus a scan of the home network.
-// Receiving: a small HTTP server on port 53317; every incoming transfer is accepted on screen.
-// Sending: HTTP(S) to the other device, which asks its owner to accept.
+// Receiving: a small HTTPS server on port 53317 with our own self-signed certificate, whose
+// SHA-256 is the fingerprint we announce; every incoming transfer is accepted on screen.
+// Sending: HTTPS to the other device (HTTP only for devices that have encryption off), checking
+// that its certificate matches the fingerprint it announced.
 class LocalSend : public QObject
 {
     Q_OBJECT
@@ -43,7 +49,7 @@ class LocalSend : public QObject
 public:
     explicit LocalSend(Settings *settings, QObject *parent = nullptr);
 
-    bool running() const { return m_server.isListening(); }
+    bool running() const { return m_secure ? m_tlsServer.isListening() : m_plainServer.isListening(); }
     QString error() const { return m_error; }
     QString alias() const { return m_alias; }
     QVariantList devices() const;
@@ -86,8 +92,13 @@ public:
     QList<Peer> chatPeers() const;
     QString baseFor(const QString &chatKey) const;
     void announce();
+    // For chat's own requests to a peer's base URL: peerRequest() adds our certificate, and
+    // pinReply() aborts the reply if the peer's certificate isn't the one it announced.
+    QNetworkRequest peerRequest(const QUrl &url) const;
+    void pinReply(QNetworkReply *r);
 private:
     struct Conn {
+        QString peerFp;   // fingerprint of the certificate the client showed, if any
         QByteArray head;
         bool headDone = false;
         QString method, path;
@@ -130,9 +141,12 @@ private:
 
     QJsonObject info(bool withAnnounce, bool announce) const;
     void onDatagrams();
-    void remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback);
-    void registerWith(const QString &ip, int port, const QString &protocol, bool scan);
-    void onConnection();
+    void remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback, const QString &provenFp = {});
+    void registerWith(const QString &ip, int port, const QString &protocol, bool scan, const QString &expected = {});
+    QNetworkRequest makeRequest(const QUrl &url, const QString &expected) const;
+    void pin(QNetworkReply *r, const QString &expected);
+    QString expectedFor(const QUrl &url) const;
+    void onConnection(QTcpServer *server);
     void onData(QTcpSocket *s);
     void route(QTcpSocket *s, Conn &c);
     void onBody(QTcpSocket *s, Conn &c);
@@ -144,7 +158,10 @@ private:
     static QString lanAddress();
 
     Settings *m_settings;
-    QTcpServer m_server;
+    Tls::Identity m_tls;
+    bool m_secure = false;      // false only if no certificate could be made: then plain HTTP as before
+    QSslServer m_tlsServer;
+    QTcpServer m_plainServer;
     QUdpSocket m_udp;
     QNetworkAccessManager m_net;
     QHash<QTcpSocket *, Conn> m_conns;
