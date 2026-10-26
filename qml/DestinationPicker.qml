@@ -41,15 +41,34 @@ Item {
             games.forEach(add)
         }
         entries = out
+        remember = true
         current = out.findIndex(e => !e.header)
         visible = true
         list.positionViewAtIndex(current, ListView.Beginning)
+    }
+    // A plain list instead of destinations: sections = [{ header, items: [{ name, detail, url }] }].
+    property bool remember: true
+    function openList(t, sections, cb) {
+        title = t
+        callback = cb
+        remember = false
+        const out = []
+        sections.forEach(sec => {
+            if (!sec.items.length) return
+            out.push({ header: sec.header })
+            sec.items.forEach(e => out.push(e))
+        })
+        entries = out
+        current = out.findIndex(e => !e.header)
+        visible = true
+        list.positionViewAtIndex(Math.max(0, current), ListView.Beginning)
     }
     function pick() {
         const e = entries[current]
         if (!e || e.header) return
         visible = false
-        Settings.rememberDestination(e.url)
+        if (remember) Settings.rememberDestination(e.url)
+        remember = true
         if (callback) callback(e.url)
     }
     function close() { visible = false }

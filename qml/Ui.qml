@@ -14,6 +14,7 @@ QtObject {
     function openPage(name, args) { main.openPage(name, args || {}) }
     function closePage() { main.closePage() }
     function pick(title, quick, cb) { picker.open(title, quick, cb) }
+    function pickFrom(title, sections, cb) { picker.openList(title, sections, cb) }
     function say(text, bad) { if (toast) toast.show(text, bad) }
     function ask(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) { prompt.open(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) }
     function sure(title, message, confirmText, cb, hold, danger, onCancel, tag) { confirm.open(title, message, confirmText, cb, hold, danger, onCancel, tag) }

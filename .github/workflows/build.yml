@@ -26,6 +26,10 @@ jobs:
           python-version: "3.12"
       - name: Ventoy update keeps images and Secure Boot setting
         run: HUGINN_FORGE_PATH=$PWD/forge python helper/test_drivetool.py -v
+      - name: Windows installer layout (FAT32 and exFAT) passes fsck and mounts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq dosfstools exfatprogs
+          sudo HUGINN_FORGE_PATH=$PWD/forge "$(which python)" -c "import sys" && sudo env HUGINN_FORGE_PATH=$PWD/forge PATH="$(dirname "$(which python)"):$PATH" sh helper/test-windows-layout.sh
 
   flatpak:
     name: Flatpak
@@ -92,6 +96,24 @@ jobs:
           fi
           ls tour/*.png
           exit $code
+      - name: Windows setup file is valid and has every choice
+        shell: bash
+        run: |
+          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --unattend-sample > unattend.xml
+          cat unattend.xml
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ns = {"u": "urn:schemas-microsoft-com:unattend"}
+          root = ET.parse("unattend.xml").getroot()
+          text = open("unattend.xml").read()
+          passes = [s.get("pass") for s in root.findall("u:settings", ns)]
+          assert passes == ["windowsPE", "specialize", "oobeSystem"], passes
+          for needle in ["BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck", "BypassNRO", "<ProtectYourPC>3</ProtectYourPC>",
+                         "<Name>Player</Name>", "logonpasswordchg", "<PreventDeviceEncryption>true</PreventDeviceEncryption>",
+                         "<SystemLocale>", "processorArchitecture=\"amd64\""]:
+              assert needle in text, needle
+          print("unattend.xml OK")
+          PY
       - name: Publish screenshots to the ci-tour branch
         if: always() && github.event_name == 'push'
         shell: bash

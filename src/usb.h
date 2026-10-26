@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <memory>
 #include <atomic>
 
@@ -57,6 +58,16 @@ public:
     Q_INVOKABLE QVariantMap checksumFor(const QString &imageUrl) const;
     Q_INVOKABLE void verifyImage(const QString &imageUrl, const QString &expected);
     Q_INVOKABLE void cancelCheck();
+
+    // What an image is: { windows, label, arm, compressed }. Windows installers can't be copied
+    // byte for byte; they're laid out the way Rufus does it (see writeWindows).
+    Q_INVOKABLE QVariantMap imageInfo(const QString &imageUrl) const;
+    // Rufus-style Windows installer. options: bypass, noOnline, user, regional, noData, noBitlocker.
+    Q_INVOKABLE void writeWindows(const QString &id, const QString &isoUrl, const QVariantMap &options);
+    // Valve's SteamOS recovery image: downloaded (cached) and written.
+    Q_INVOKABLE void writeSteamOS(const QString &id);
+    Q_INVOKABLE QString defaultUser() const;
+    static QString unattendXml(const QVariantMap &options, bool arm);
     bool checking() const { return m_checking; }
     double checkProgress() const { return m_checkProgress; }
 
@@ -79,6 +90,13 @@ private:
     bool unmountAll(const Drive &d, QString *error);
     int openDevice(const QString &block, QString *error);
     void runHelper(const Drive &d, const QStringList &args, const QString &doneText);
+    // Runs after the helper instead of finishing the job (ok, error text).
+    std::function<void(bool, const QString &)> m_then;
+    void windowsCopy(const QString &id, const QString &loop, const QString &isoDir, const QVariantMap &options, bool split, bool arm);
+    void finishWindows(const QString &loop, const QString &isoDir);
+    std::shared_ptr<std::atomic<qint64>> m_jobDone;
+    std::shared_ptr<std::atomic<qint64>> m_jobTotal;
+    QTimer m_jobTimer;
     void begin(const QString &status);
     void end(bool ok, const QString &message);
     QString ensureMounted(const Part &p) const;

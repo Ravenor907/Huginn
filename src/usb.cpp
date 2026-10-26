@@ -1,4 +1,7 @@
 #include "usb.h"
+#include <QLocale>
+#include <QTimeZone>
+#include <QThread>
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QCryptographicHash>
@@ -273,9 +276,15 @@ void UsbManager::refresh()
         QString mount;
         if (ventoy)
             mount = ensureMounted(*data);
-        else
+        else {
             for (const Part &p : d.parts)
                 if (!p.mounts.isEmpty()) { mount = p.mounts.first(); break; }
+            // Open a plain drive so files can be copied onto it from USB Tools.
+            if (mount.isEmpty())
+                for (const Part &p : d.parts)
+                    if (!p.type.isEmpty() && p.type != QLatin1String("swap") && !(mount = ensureMounted(p)).isEmpty())
+                        break;
+        }
 
         QVariantList images;
         double used = -1;
@@ -316,7 +325,7 @@ void UsbManager::refresh()
     QVariantList isos;
     const QDir dl(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
     const QFileInfoList files = dl.entryInfoList({QStringLiteral("*.iso"), QStringLiteral("*.img"), QStringLiteral("*.img.xz"),
-                                                 QStringLiteral("*.img.bz2"), QStringLiteral("*.img.gz")},
+                                                 QStringLiteral("*.img.bz2"), QStringLiteral("*.img.gz"), QStringLiteral("*.img.zip"), QStringLiteral("*.raw")},
                                                 QDir::Files, QDir::Time);
     for (const QFileInfo &fi : files)
         isos << QVariantMap{{QStringLiteral("name"), fi.fileName()},
@@ -446,7 +455,7 @@ void UsbManager::runHelper(const Drive &d, const QStringList &args, const QStrin
             const QJsonObject o = QJsonDocument::fromJson(p->readLine()).object();
             if (o.contains(QStringLiteral("stage"))) {
                 static const QHash<QString, QString> words = {
-                    {QStringLiteral("lookup"), QStringLiteral("Checking for the newest Ventoy…")},
+                    {QStringLiteral("lookup"), QStringLiteral("Checking for the newest version…")},
                     {QStringLiteral("download"), QStringLiteral("Downloading…")},
                     {QStringLiteral("verify"), QStringLiteral("Checking the download…")},
                     {QStringLiteral("write"), QStringLiteral("Writing to the drive…")},
@@ -474,6 +483,12 @@ void UsbManager::runHelper(const Drive &d, const QStringList &args, const QStrin
             why = QString::fromUtf8(p->readAllStandardError()).trimmed().split(QLatin1Char('\n')).value(0);
         // Let udisks see the new partitions.
         call(d.block, kBlock, QStringLiteral("Rescan"), {quiet()});
+        if (m_then) {
+            auto then = m_then;
+            m_then = nullptr;
+            then(ok, ok ? QString() : (why.isEmpty() ? QStringLiteral("The drive job stopped unexpectedly.") : why));
+            return;
+        }
         end(ok, ok ? m_doneText : (why.isEmpty() ? QStringLiteral("The drive job stopped unexpectedly.") : why));
         QTimer::singleShot(1500, this, &UsbManager::refresh);
     });
@@ -544,9 +559,17 @@ void UsbManager::formatDrive(const QString &id)
         c.setArguments({QVariant::fromValue<qulonglong>(1ULL << 20), QVariant::fromValue<qulonglong>(0), QStringLiteral("0x07"), QString(),
                         quiet(), QStringLiteral("exfat"), fsOpts});
         auto *w2 = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(c, 900000), this);
-        connect(w2, &QDBusPendingCallWatcher::finished, this, [this, w2] {
+        connect(w2, &QDBusPendingCallWatcher::finished, this, [this, w2, d] {
             w2->deleteLater();
-            end(!w2->isError(), w2->isError() ? w2->error().message() : QStringLiteral("Formatted as exFAT. It works on Windows, Mac and Linux."));
+            const QString done = QStringLiteral("Formatted as exFAT. It works on Windows, Mac and Linux.");
+            if (w2->isError() && rawReady()) {
+                // SteamOS doesn't always ship exFAT tools; Huginn can format it itself.
+                m_status = QStringLiteral("Formatting…");
+                Q_EMIT progressChanged();
+                runHelper(d, {QStringLiteral("format")}, done);
+                return;
+            }
+            end(!w2->isError(), w2->isError() ? w2->error().message() + QStringLiteral(" Doing the one-time setup lets Huginn format it itself.") : done);
             QTimer::singleShot(1000, this, &UsbManager::refresh);
         });
     });
@@ -570,6 +593,8 @@ void UsbManager::eject(const QString &id)
 
 void UsbManager::cancel()
 {
+    if (m_checkStop)
+        m_checkStop->store(true);
     if (m_helper)
         ::kill(m_helper->processId(), SIGTERM);
 }
@@ -665,4 +690,351 @@ void UsbManager::cancelCheck()
 {
     if (m_checkStop)
         m_checkStop->store(true);
+}
+
+// ---------------------------------------------------------------- SteamOS and Windows
+
+void UsbManager::writeSteamOS(const QString &id)
+{
+    const Drive *d = find(id);
+    if (!d || m_busy)
+        return;
+    begin(QStringLiteral("Getting ready…"));
+    runHelper(*d, {QStringLiteral("steamos")},
+              QStringLiteral("SteamOS recovery drive is ready. Boot from it and choose Re-image to reinstall SteamOS."));
+}
+
+QVariantMap UsbManager::imageInfo(const QString &imageUrl) const
+{
+    const QString path = QUrl(imageUrl).isLocalFile() ? QUrl(imageUrl).toLocalFile() : imageUrl;
+    QVariantMap out{{QStringLiteral("windows"), false}, {QStringLiteral("label"), QString()}, {QStringLiteral("arm"), false}};
+    const QString lower = path.toLower();
+    out.insert(QStringLiteral("compressed"), lower.endsWith(QLatin1String(".bz2")) || lower.endsWith(QLatin1String(".xz"))
+                                                 || lower.endsWith(QLatin1String(".gz")) || lower.endsWith(QLatin1String(".zip")));
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly) || !f.seek(32768))
+        return out;
+    const QByteArray pvd = f.read(2048);
+    if (pvd.size() < 72 || pvd.mid(1, 5) != "CD001")
+        return out;
+    const QString label = QString::fromLatin1(pvd.mid(40, 32)).trimmed();
+    out.insert(QStringLiteral("label"), label);
+    // Microsoft's media labels: CCCOMA_X64FRE_EN-US_DV9 (Windows 11), CPBA_X64FRE..., CENA_X64FREV...,
+    // CCSA_X64FRE..., ESD-ISO from the Media Creation Tool.
+    static const QRegularExpression win(QStringLiteral("^(CCCOMA|CPBA|CCSA|CENA|CPRA|CCBA|J_CCSA|CES_|SSS_|IR[0-9]|GRMC|ESD-ISO)|(X64|X86|A64)FRE"),
+                                        QRegularExpression::CaseInsensitiveOption);
+    bool windows = win.match(label).hasMatch();
+    if (!windows) {
+        // Some ISOs are renamed or relabeled: a Windows installer always boots from \efi\microsoft.
+        windows = lower.contains(QLatin1String("win")) && (lower.contains(QLatin1String("10")) || lower.contains(QLatin1String("11")));
+    }
+    out.insert(QStringLiteral("windows"), windows);
+    out.insert(QStringLiteral("arm"), label.contains(QLatin1String("A64"), Qt::CaseInsensitive) || lower.contains(QLatin1String("arm64")));
+    return out;
+}
+
+QString UsbManager::defaultUser() const
+{
+    QString u = qEnvironmentVariable("USER");
+    if (u.isEmpty() || u == QLatin1String("deck") || u == QLatin1String("root"))
+        u = QStringLiteral("Player");
+    return u;
+}
+
+QString UsbManager::unattendXml(const QVariantMap &o, bool arm)
+{
+    // Mirrors what Rufus writes for its "Customize Windows installation?" choices.
+    const QString arch = arm ? QStringLiteral("arm64") : QStringLiteral("amd64");
+    const QString attrs = QStringLiteral(" processorArchitecture=\"%1\" language=\"neutral\" publicKeyToken=\"31bf3856ad364e35\" versionScope=\"nonSxS\" "
+                                         "xmlns:wcm=\"http://schemas.microsoft.com/WMIConfig/2002/State\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"").arg(arch);
+    auto component = [&](const QString &name, const QString &body) {
+        return QStringLiteral("    <component name=\"%1\"%2>\n%3    </component>\n").arg(name, attrs, body);
+    };
+    auto esc = [](QString s) { return s.replace(QLatin1Char('&'), QLatin1String("&amp;")).replace(QLatin1Char('<'), QLatin1String("&lt;"))
+                                       .replace(QLatin1Char('>'), QLatin1String("&gt;")).replace(QLatin1Char('"'), QLatin1String("&quot;")); };
+    QString xml = QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<unattend xmlns=\"urn:schemas-microsoft-com:unattend\">\n");
+
+    // windowsPE: skip the hardware checks (TPM, Secure Boot, RAM) before Setup looks at them.
+    QString pe = QStringLiteral("      <UserData>\n        <ProductKey>\n          <Key />\n        </ProductKey>\n      </UserData>\n");
+    if (o.value(QStringLiteral("bypass")).toBool()) {
+        pe += QStringLiteral("      <RunSynchronous>\n");
+        int n = 1;
+        for (const char *key : {"BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck"})
+            pe += QStringLiteral("        <RunSynchronousCommand wcm:action=\"add\">\n          <Order>%1</Order>\n"
+                                 "          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v %2 /t REG_DWORD /d 1 /f</Path>\n"
+                                 "        </RunSynchronousCommand>\n").arg(n++).arg(QLatin1String(key));
+        pe += QStringLiteral("      </RunSynchronous>\n");
+    }
+    xml += QStringLiteral("  <settings pass=\"windowsPE\">\n") + component(QStringLiteral("Microsoft-Windows-Setup"), pe) + QStringLiteral("  </settings>\n");
+
+    // specialize: allow finishing setup without a Microsoft account.
+    if (o.value(QStringLiteral("noOnline")).toBool()) {
+        const QString spec = QStringLiteral("      <RunSynchronous>\n        <RunSynchronousCommand wcm:action=\"add\">\n          <Order>1</Order>\n"
+                                            "          <Path>reg add \"HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\OOBE\" /v BypassNRO /t REG_DWORD /d 1 /f</Path>\n"
+                                            "        </RunSynchronousCommand>\n      </RunSynchronous>\n");
+        xml += QStringLiteral("  <settings pass=\"specialize\">\n") + component(QStringLiteral("Microsoft-Windows-Deployment"), spec) + QStringLiteral("  </settings>\n");
+    }
+
+    // oobeSystem: privacy questions, time zone, local account, language, BitLocker.
+    QString shell;
+    if (o.value(QStringLiteral("noData")).toBool())
+        shell += QStringLiteral("      <OOBE>\n        <HideEULAPage>true</HideEULAPage>\n        <ProtectYourPC>3</ProtectYourPC>\n      </OOBE>\n");
+    const bool regional = o.value(QStringLiteral("regional")).toBool();
+    if (regional) {
+        const QByteArray win = QTimeZone::ianaIdToWindowsId(QTimeZone::systemTimeZoneId());
+        if (!win.isEmpty())
+            shell += QStringLiteral("      <TimeZone>%1</TimeZone>\n").arg(QString::fromLatin1(win));
+    }
+    QString user = o.value(QStringLiteral("user")).toString().trimmed();
+    user.replace(QRegularExpression(QStringLiteral("[\\\\/\\[\\]:;|=,+*?<>\"@]")), QStringLiteral("_"));
+    user = user.left(20);
+    static const QStringList reserved{QStringLiteral("administrator"), QStringLiteral("guest"), QStringLiteral("defaultaccount"), QStringLiteral("system"),
+                                      QStringLiteral("none"), QStringLiteral("local"), QStringLiteral("user"), QStringLiteral("users")};
+    if (reserved.contains(user.toLower()))
+        user.clear();
+    if (!user.isEmpty()) {
+        // Starts with no password (Rufus's encoded empty one); Windows asks for a new one at first sign-in.
+        shell += QStringLiteral("      <UserAccounts>\n        <LocalAccounts>\n          <LocalAccount wcm:action=\"add\">\n"
+                                "            <Name>%1</Name>\n            <DisplayName>%1</DisplayName>\n            <Group>Administrators;Power Users</Group>\n"
+                                "            <Password>\n              <Value>UABhAHMAcwB3AG8AcgBkAA==</Value>\n              <PlainText>false</PlainText>\n"
+                                "            </Password>\n          </LocalAccount>\n        </LocalAccounts>\n      </UserAccounts>\n").arg(esc(user));
+        shell += QStringLiteral("      <FirstLogonCommands>\n"
+                                "        <SynchronousCommand wcm:action=\"add\">\n          <Order>1</Order>\n"
+                                "          <CommandLine>net user &quot;%1&quot; /logonpasswordchg:yes</CommandLine>\n        </SynchronousCommand>\n"
+                                "        <SynchronousCommand wcm:action=\"add\">\n          <Order>2</Order>\n"
+                                "          <CommandLine>net accounts /maxpwage:unlimited</CommandLine>\n        </SynchronousCommand>\n"
+                                "      </FirstLogonCommands>\n").arg(esc(user));
+    }
+    QString oobe;
+    if (!shell.isEmpty())
+        oobe += component(QStringLiteral("Microsoft-Windows-Shell-Setup"), shell);
+    if (regional) {
+        QString loc = QLocale::system().name().replace(QLatin1Char('_'), QLatin1Char('-'));
+        if (!loc.contains(QLatin1Char('-')))
+            loc = QStringLiteral("en-US");   // "C" or a bare language: Windows needs a full tag
+        oobe += component(QStringLiteral("Microsoft-Windows-International-Core"),
+                          QStringLiteral("      <InputLocale>%1</InputLocale>\n      <SystemLocale>%1</SystemLocale>\n      <UserLocale>%1</UserLocale>\n"
+                                         "      <UILanguage>%1</UILanguage>\n      <UILanguageFallback>en-US</UILanguageFallback>\n").arg(loc));
+    }
+    if (o.value(QStringLiteral("noBitlocker")).toBool()) {
+        oobe += component(QStringLiteral("Microsoft-Windows-SecureStartup-FilterDriver"), QStringLiteral("      <PreventDeviceEncryption>true</PreventDeviceEncryption>\n"));
+        oobe += component(QStringLiteral("Microsoft-Windows-EnhancedStorage-Adm"), QStringLiteral("      <TCGSecurityActivationDisabled>1</TCGSecurityActivationDisabled>\n"));
+    }
+    if (!oobe.isEmpty())
+        xml += QStringLiteral("  <settings pass=\"oobeSystem\">\n") + oobe + QStringLiteral("  </settings>\n");
+    xml += QStringLiteral("</unattend>\n");
+    return xml;
+}
+
+void UsbManager::writeWindows(const QString &id, const QString &isoUrl, const QVariantMap &options)
+{
+    const Drive *found = find(id);
+    if (!found || m_busy)
+        return;
+    const Drive d = *found;
+    const QString iso = QUrl(isoUrl).isLocalFile() ? QUrl(isoUrl).toLocalFile() : isoUrl;
+    const bool arm = imageInfo(isoUrl).value(QStringLiteral("arm")).toBool();
+    begin(QStringLiteral("Opening the Windows ISO…"));
+
+    // 1. Open the ISO through udisks (read-only loop device) so the kernel reads its UDF file system.
+    struct Opened { QString loop, dir, error; qint64 total = 0, boot = 0; bool split = false; };
+    auto *w = new QFutureWatcher<Opened>(this);
+    connect(w, &QFutureWatcher<Opened>::finished, this, [this, w, d, options, arm] {
+        const Opened o = w->result();
+        w->deleteLater();
+        if (!o.error.isEmpty()) {
+            finishWindows(o.loop, o.dir);
+            end(false, o.error);
+            return;
+        }
+        const qint64 needed = (o.split ? o.boot + o.total : o.total) + (512LL << 20);
+        if (d.size > 0 && d.size < needed) {
+            finishWindows(o.loop, o.dir);
+            end(false, QStringLiteral("This Windows version needs a drive of at least %1. This one is %2.")
+                           .arg(System::formatSize(needed), System::formatSize(d.size)));
+            return;
+        }
+        // 2. Lay out the drive: one FAT32 partition, or FAT32 + exFAT when install.wim is over 4 GB.
+        const qint64 bootMb = o.split ? ((o.boot + (512LL << 20)) >> 20) : 0;
+        m_status = QStringLiteral("Preparing the drive…");
+        Q_EMIT progressChanged();
+        const QString id = d.id, loop = o.loop, dir = o.dir;
+        const bool split = o.split;
+        m_then = [this, id, loop, dir, options, split, arm](bool ok, const QString &why) {
+            if (!ok) {
+                finishWindows(loop, dir);
+                end(false, why);
+                return;
+            }
+            windowsCopy(id, loop, dir, options, split, arm);
+        };
+        runHelper(d, {QStringLiteral("windows-layout"), QStringLiteral("--boot-mb"), QString::number(bootMb)},
+                  QString());
+    });
+    w->setFuture(QtConcurrent::run([iso]() -> Opened {
+        Opened o;
+        QFile f(iso);
+        if (!f.open(QIODevice::ReadOnly)) {
+            o.error = QStringLiteral("Couldn't open the ISO file.");
+            return o;
+        }
+        QDBusMessage m = QDBusMessage::createMethodCall(kService, QStringLiteral("/org/freedesktop/UDisks2/Manager"),
+                                                        QStringLiteral("org.freedesktop.UDisks2.Manager"), QStringLiteral("LoopSetup"));
+        QVariantMap opts = quiet();
+        opts.insert(QStringLiteral("read-only"), true);
+        m.setArguments({QVariant::fromValue(QDBusUnixFileDescriptor(f.handle())), opts});
+        const QDBusMessage r = QDBusConnection::systemBus().call(m, QDBus::Block, 30000);
+        if (r.type() == QDBusMessage::ErrorMessage || r.arguments().isEmpty()) {
+            o.error = QStringLiteral("Couldn't open the ISO: %1").arg(r.errorMessage());
+            return o;
+        }
+        o.loop = pathOf(r.arguments().first());
+        QVariantMap ro = quiet();
+        ro.insert(QStringLiteral("options"), QStringLiteral("ro"));
+        for (int i = 0; i < 40 && o.dir.isEmpty(); ++i) {
+            const QDBusMessage mr = call(o.loop, kFs, QStringLiteral("Mount"), {ro});
+            if (mr.type() == QDBusMessage::ReplyMessage && !mr.arguments().isEmpty())
+                o.dir = mr.arguments().first().toString();
+            else if (mr.errorName().contains(QLatin1String("AlreadyMounted")))
+                o.dir = mr.errorMessage().section(QLatin1Char('`'), 1, 1);
+            else
+                QThread::msleep(250);
+        }
+        if (o.dir.isEmpty() || !QFileInfo::exists(o.dir + QStringLiteral("/sources"))) {
+            o.error = o.dir.isEmpty() ? QStringLiteral("Couldn't read the ISO's files.")
+                                      : QStringLiteral("This ISO doesn't look like a Windows installer (no sources folder).");
+            return o;
+        }
+        QDirIterator it(o.dir, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            const qint64 sz = it.fileInfo().size();
+            o.total += sz;
+            if (sz > 4LL * 1024 * 1024 * 1024 - 1)
+                o.split = true;
+            else
+                o.boot += sz;
+        }
+        return o;
+    }));
+}
+
+void UsbManager::windowsCopy(const QString &id, const QString &loop, const QString &isoDir, const QVariantMap &options, bool split, bool arm)
+{
+    m_status = QStringLiteral("Copying Windows files…");
+    m_progress = 0;
+    Q_EMIT progressChanged();
+    m_jobDone = std::make_shared<std::atomic<qint64>>(0);
+    m_checkStop = std::make_shared<std::atomic<bool>>(false);
+    auto done = m_jobDone;
+    auto stop = m_checkStop;
+    m_jobTimer.setInterval(250);
+    connect(&m_jobTimer, &QTimer::timeout, this, [this] {
+        if (m_jobDone && m_jobTotal && m_jobTotal->load() > 0) {
+            m_progress = double(m_jobDone->load()) / m_jobTotal->load();
+            Q_EMIT progressChanged();
+        }
+    }, Qt::UniqueConnection);
+    m_jobTotal = std::make_shared<std::atomic<qint64>>(0);
+    m_jobTimer.start();
+    const QString xml = unattendXml(options, arm);
+    const bool wantXml = options.value(QStringLiteral("bypass")).toBool() || options.value(QStringLiteral("noOnline")).toBool()
+                         || !options.value(QStringLiteral("user")).toString().trimmed().isEmpty() || options.value(QStringLiteral("regional")).toBool()
+                         || options.value(QStringLiteral("noData")).toBool() || options.value(QStringLiteral("noBitlocker")).toBool();
+    const UsbManager *self = this;
+    auto totalOut = m_jobTotal;
+    auto *w = new QFutureWatcher<QString>(this);
+    connect(w, &QFutureWatcher<QString>::finished, this, [this, w, loop, isoDir] {
+        const QString err = w->result();
+        w->deleteLater();
+        m_jobTimer.stop();
+        finishWindows(loop, isoDir);
+        const bool stopped = m_checkStop && m_checkStop->load();
+        end(err.isEmpty(), stopped ? QStringLiteral("Stopped. The drive needs to be made again before it boots.")
+                           : err.isEmpty() ? QStringLiteral("Windows installer is ready. Boot the PC from it and Setup starts.") : err);
+        QTimer::singleShot(1000, this, &UsbManager::refresh);
+    });
+    w->setFuture(QtConcurrent::run([self, id, isoDir, split, xml, wantXml, done, stop, totalOut]() -> QString {
+        // 3. Find and open the new partitions.
+        QString bootDir, dataDir;
+        QList<QString> blocks;
+        for (int i = 0; i < 40 && (bootDir.isEmpty() || (split && dataDir.isEmpty())); ++i) {
+            QThread::msleep(500);
+            for (const Drive &d : self->scan(nullptr)) {
+                if (d.id != id)
+                    continue;
+                for (const Part &p : d.parts) {
+                    QString *slot = p.label == QLatin1String("WINSETUP") ? &bootDir : p.label == QLatin1String("WININSTALL") ? &dataDir : nullptr;
+                    if (!slot || !slot->isEmpty())
+                        continue;
+                    *slot = self->ensureMounted(p);
+                    if (!slot->isEmpty())
+                        blocks << p.block;
+                }
+            }
+        }
+        if (bootDir.isEmpty() || (split && dataDir.isEmpty()))
+            return QStringLiteral("The new partitions didn't open. Unplug the drive, plug it back in and try again.");
+
+        // 4. Copy: everything that fits FAT32 to the boot partition; with a big install.wim, the
+        //    whole ISO also goes to the exFAT partition, where Windows Setup finds it.
+        constexpr qint64 kLimit = 4LL * 1024 * 1024 * 1024 - 1;
+        struct Job { QString from, to; qint64 size; };
+        QList<Job> jobs;
+        QDirIterator it(isoDir, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+        qint64 total = 0;
+        while (it.hasNext()) {
+            it.next();
+            const QString rel = QDir(isoDir).relativeFilePath(it.filePath());
+            const qint64 sz = it.fileInfo().size();
+            if (sz <= kLimit) {
+                jobs.append({it.filePath(), bootDir + QLatin1Char('/') + rel, sz});
+                total += sz;
+            }
+            if (split) {
+                jobs.append({it.filePath(), dataDir + QLatin1Char('/') + rel, sz});
+                total += sz;
+            }
+        }
+        totalOut->store(total);
+        QByteArray buf(8 * 1024 * 1024, Qt::Uninitialized);
+        for (const Job &j : std::as_const(jobs)) {
+            QDir().mkpath(QFileInfo(j.to).absolutePath());
+            QFile in(j.from), out(j.to);
+            if (!in.open(QIODevice::ReadOnly))
+                return QStringLiteral("Couldn't read %1 from the ISO.").arg(QFileInfo(j.from).fileName());
+            if (!out.open(QIODevice::WriteOnly))
+                return QStringLiteral("Couldn't write %1 to the drive.").arg(QFileInfo(j.to).fileName());
+            while (!in.atEnd()) {
+                if (stop->load())
+                    return QStringLiteral("Stopped.");
+                const qint64 n = in.read(buf.data(), buf.size());
+                if (n < 0 || out.write(buf.constData(), n) != n)
+                    return QStringLiteral("Writing %1 failed. Is the drive full or failing?").arg(QFileInfo(j.to).fileName());
+                done->fetch_add(n);
+            }
+            out.close();
+        }
+        if (wantXml) {
+            QFile x(bootDir + QStringLiteral("/autounattend.xml"));
+            if (!x.open(QIODevice::WriteOnly) || x.write(xml.toUtf8()) < 0)
+                return QStringLiteral("Couldn't write the setup choices (autounattend.xml).");
+        }
+        // 5. Close the partitions so everything is on the drive before it's unplugged.
+        for (const QString &b : std::as_const(blocks)) {
+            const QDBusMessage r = call(b, kFs, QStringLiteral("Unmount"), {quiet()}, 600000);
+            if (r.type() == QDBusMessage::ErrorMessage)
+                return QStringLiteral("Finishing the drive failed: %1").arg(r.errorMessage());
+        }
+        return {};
+    }));
+}
+
+void UsbManager::finishWindows(const QString &loop, const QString &isoDir)
+{
+    if (loop.isEmpty())
+        return;
+    if (!isoDir.isEmpty())
+        call(loop, kFs, QStringLiteral("Unmount"), {quiet()});
+    call(loop, QStringLiteral("org.freedesktop.UDisks2.Loop"), QStringLiteral("Delete"), {quiet()});
 }

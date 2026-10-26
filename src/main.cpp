@@ -14,6 +14,7 @@
 #include "usb.h"
 
 #include <QApplication>
+#include <cstdio>
 #include <QCommandLineParser>
 #include <QDirIterator>
 #include <QFont>
@@ -60,7 +61,15 @@ int main(int argc, char *argv[])
     QCommandLineOption windowed(QStringLiteral("windowed"), QStringLiteral("Run in a window instead of full screen."));
     args.addOption(tour);
     args.addOption(windowed);
+    QCommandLineOption unattend(QStringLiteral("unattend-sample"), QStringLiteral("Print the Windows setup file with every choice on (for CI), then quit."));
+    args.addOption(unattend);
     args.process(app);
+    if (args.isSet(unattend)) {
+        const QVariantMap all{{QStringLiteral("bypass"), true}, {QStringLiteral("noOnline"), true}, {QStringLiteral("user"), QStringLiteral("Player")},
+                              {QStringLiteral("regional"), true}, {QStringLiteral("noData"), true}, {QStringLiteral("noBitlocker"), true}};
+        fputs(UsbManager::unattendXml(all, false).toUtf8().constData(), stdout);
+        return 0;
+    }
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())

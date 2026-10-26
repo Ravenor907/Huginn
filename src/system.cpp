@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
+#include <QSet>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
@@ -347,10 +348,18 @@ QVariantMap System::battery() const
 QVariantList System::driveSummary() const
 {
     QVariantList out;
+    // SteamOS mounts the card in more than one place, so count each device once, at its
+    // /run/media mount (the same rule the Storage screen uses).
     QStringList roots{QDir::homePath()};
-    for (const QStorageInfo &s : QStorageInfo::mountedVolumes())
-        if (s.isValid() && s.isReady() && QString::fromUtf8(s.device()).contains(QLatin1String("mmcblk")))
-            roots << s.rootPath();
+    QSet<QByteArray> seen{QStorageInfo(QDir::homePath()).device()};
+    for (const QStorageInfo &s : QStorageInfo::mountedVolumes()) {
+        if (!s.isValid() || !s.isReady() || !s.rootPath().startsWith(QLatin1String("/run/media/")))
+            continue;
+        if (!QString::fromUtf8(s.device()).contains(QLatin1String("mmcblk")) || seen.contains(s.device()))
+            continue;
+        seen.insert(s.device());
+        roots << s.rootPath();
+    }
     for (const QString &r : roots) {
         const QStorageInfo si(r);
         if (si.bytesTotal() <= 0)
