@@ -74,6 +74,13 @@ class Muninn : Application() {
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
         if (vault.openDefault()) start()
+        // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
+        try {
+            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) { nostr.reconnectNow() }
+            })
+        } catch (_: Exception) {}
+        io.github.ravenor907.muninn.net.MessageService.start(this)
         // Every 15 minutes (Android's shortest), check the internet inbox even when Muninn is closed.
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<InboxWorker>(15, TimeUnit.MINUTES).build())
@@ -94,6 +101,19 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+    }
+
+    private var listening = false
+
+    /** Stay reachable: the relays always (even locked, to say "New message"), and the Wi-Fi side once open. */
+    @Synchronized
+    fun listen() {
+        nostr.keepAlive = true
+        nostr.connect()
+        if (!ready.value || listening) return
+        listening = true
+        net.start()
+        net.refresh()
     }
 
     /** Privacy first: unless the person allows previews, a notification says only "New message". */

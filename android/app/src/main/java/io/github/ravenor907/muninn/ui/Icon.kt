@@ -61,6 +61,9 @@ object Icons {
         "mute" to "M4 9h4l5-4v14l-5-4H4z M16 9l5 6 M21 9l-5 6",
         "close" to "M5 5l14 14 M19 5L5 19",
         "plus" to "M12 5v14 M5 12h14",
+        "mic" to "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3",
+        "play" to "M7 4l13 8-13 8z",
+        "pause" to "M7 4v16 M17 4v16",
     )
 }
 

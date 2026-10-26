@@ -38,7 +38,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** A photo's id (stored encrypted in photos/); text is empty then. */
                    val photo: String = "",
                    /** Unsent: who took it back ("You" on the sender's phone, their name on the other). */
-                   val unsent: String = "")
+                   val unsent: String = "",
+                   /** A voice message: its length in ms (the sound itself is stored like a photo, under [photo]). */
+                   val voice: Int = 0)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false)
@@ -181,7 +183,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val m = list.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() } ?: return@edit false
             if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
             target = m
-            map[peerKey] = list.map { if (it.id == msgId) it.copy(text = "", photo = "", unsent = "You", state = "unsending", failed = false) else it }
+            map[peerKey] = list.map { if (it.id == msgId) it.copy(text = "", photo = "", voice = 0, unsent = "You", state = "unsending", failed = false) else it }
             true
         }
         val m = target ?: return
@@ -328,7 +330,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     found = true
                     if (m.unsent.isNotEmpty()) return@edit false
                     if (m.photo.isNotEmpty()) File(photosDir, m.photo).delete()
-                    map[fromKey] = list.map { if (it.id == gone) it.copy(text = "", photo = "", unsent = name) else it }
+                    map[fromKey] = list.map { if (it.id == gone) it.copy(text = "", photo = "", voice = 0, unsent = name) else it }
                     true
                 }
                 // Not here yet (still on its way): make sure it never shows.
@@ -370,13 +372,18 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun photo(photoId: String): ByteArray? = vault.readBytes(File(photosDir, photoId))
 
-    fun sendPhoto(peerKey: String, jpeg: ByteArray) {
+    fun sendPhoto(peerKey: String, jpeg: ByteArray) = sendBlob(peerKey, jpeg, 0)
+
+    /** A recorded voice message (AAC, no container, so nothing but sound). */
+    fun sendVoice(peerKey: String, aac: ByteArray, ms: Int) = sendBlob(peerKey, aac, ms.coerceAtLeast(1))
+
+    private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int) {
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
         val msgId = UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, msgId), jpeg)
-        val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId)
+        val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId, voice = voiceMs)
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
@@ -395,6 +402,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val s = ChatCrypto.sealBytes(key, part)
             JSONObject().put("room", "photo").put("fromKey", id.publicKey).put("fromName", id.username).put("fromId", id.fingerprint)
                 .put("mailbox", nostr.publicKey).put("id", m.id).put("i", i).put("n", parts.size).put("nonce", s.nonce).put("data", s.data)
+                .apply { if (m.voice > 0) put("kind", "voice").put("ms", m.voice) }
         }
     }
 
@@ -424,15 +432,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (inc.parts.any { it == null }) return 200 to "{}"
             incoming.remove(msgId)
         }
-        val jpeg = Photos.join(inc.parts.map { it!! }) ?: return 400 to "{}"
+        val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
+        val joined = inc.parts.map { it!! }
+        val jpeg = (if (voiceMs > 0) Voice.check(joined) else Photos.join(joined)) ?: return 400 to "{}"
         vault.writeBytes(File(photosDir, msgId), jpeg)
         if (contact == null) {
             val m = _met.value[fromKey]
             putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
         } else if (mailbox != null && contact.mailbox != mailbox) contacts.put(contact.copy(mailbox = mailbox))
-        if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId))) {
+        if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId, voice = voiceMs))) {
             _unread.update { it + fromKey }
-            arrivals.tryEmit(Triple(contact?.name ?: name, "Photo", fromKey))
+            arrivals.tryEmit(Triple(contact?.name ?: name, if (voiceMs > 0) "Voice message" else "Photo", fromKey))
         }
         receipt(fromKey, listOf(msgId), "delivered", mailbox)
         return 200 to "{}"
@@ -700,11 +710,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
-            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent)) }
+            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent).put("voice", it.voice)) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
         Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
-            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"))
+            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"))
     }
 
     private fun save() = synchronized(lock) {

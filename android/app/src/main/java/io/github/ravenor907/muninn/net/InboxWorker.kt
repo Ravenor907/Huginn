@@ -9,11 +9,12 @@ import io.github.ravenor907.muninn.Muninn
 class InboxWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
         val app = applicationContext as Muninn
-        if (app.visible) return Result.success()
+        if (app.visible || MessageService.running) return Result.success()   // already listening
+        MessageService.start(app)   // allowed again once Muninn may run in the background
         // Locked with a password: only says "New message"; nothing is opened until it's unlocked.
         app.nostr.connect()
         Thread.sleep(20_000)
-        if (!app.visible) app.nostr.disconnect()
+        if (!app.visible && !MessageService.running) app.nostr.disconnect()
         return Result.success()
     }
 }

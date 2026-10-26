@@ -65,6 +65,11 @@ class Identity(context: Context, private val vault: Vault) {
     /** The Nostr secret (internet inbox). */
     fun nostrSecret(): String = secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }
 
+    /** Stay connected in the background so messages arrive right away (an ongoing, silent notification). */
+    var stayConnected: Boolean
+        get() = prefs.getBoolean("stayConnected", true)
+        set(v) = prefs.edit().putBoolean("stayConnected", v).apply()
+
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
     var readReceipts: Boolean

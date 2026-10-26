@@ -65,6 +65,27 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         MButton("Contacts", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "user") { showContacts = true }
+        Section("Notifications")
+        Panel {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            var stay by remember { mutableStateOf(id.stayConnected) }
+            var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
+            androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
+            ToggleRow("Get messages right away", "Stays connected while Muninn is closed (a small silent “Listening” notification). Off: checks about every 15 minutes", stay) {
+                stay = it; id.stayConnected = it
+                if (it) io.github.ravenor907.muninn.net.MessageService.start(ctx) else io.github.ravenor907.muninn.net.MessageService.stop(ctx)
+            }
+            if (stay && !free) {
+                Text("Android's battery saver can still pause Muninn while the phone sleeps, so messages arrive late.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                MButton("Let Muninn run in the background", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
+            } else if (stay) Text("Muninn can run in the background. Messages arrive as they're sent.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                try {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
+                } catch (_: Exception) {}
+            }
+        }
         Section("Privacy")
         Panel {
             Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)

@@ -32,6 +32,10 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
     private val working = HashSet<String>()
     private val outbox = mutableListOf<String>()        // events waiting for a relay
     private val subId = "muninn-" + UUID.randomUUID().toString().take(8)
+    /** Reconnect by itself when a relay drops (set while Muninn is listening for messages). */
+    @Volatile var keepAlive = false
+    private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private val retries = ConcurrentHashMap<String, Int>()
 
     /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
     var onEnvelope: ((String) -> Boolean)? = null
@@ -62,7 +66,15 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
         }
     }
 
+    /** The network came back: drop dead connections and connect again now. */
+    fun reconnectNow() {
+        if (!keepAlive && sockets.isEmpty()) return
+        retries.clear()
+        for (url in relays) if (live[url] != true) { sockets.remove(url)?.cancel(); sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url)) }
+    }
+
     fun disconnect() {
+        keepAlive = false
         sockets.values.forEach { it.close(1000, null) }
         sockets.clear()
         live.clear()
@@ -78,6 +90,7 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     private inner class Listener(val url: String) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            retries.remove(url)
             live[url] = true
             _connected.value = live.size
             subscribe(webSocket)
@@ -106,6 +119,12 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
             sockets.remove(url)
             live.remove(url)
             _connected.value = live.size
+            if (!keepAlive) return
+            // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
+            val n = (retries[url] ?: 0) + 1
+            retries[url] = n
+            timer.schedule({ if (keepAlive && !sockets.containsKey(url)) sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url)) },
+                minOf(60L, 1L shl minOf(n, 6)), java.util.concurrent.TimeUnit.SECONDS)
         }
     }
 

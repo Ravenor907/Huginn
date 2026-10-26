@@ -139,9 +139,8 @@ class MainActivity : ComponentActivity() {
     private fun startNet() {
         if (netStarted) return
         netStarted = true
-        app.net.start()
-        app.net.refresh()
-        app.nostr.connect()
+        app.listen()
+        io.github.ravenor907.muninn.net.MessageService.start(this)
         askClose()
     }
 
@@ -238,12 +237,14 @@ class MainActivity : ComponentActivity() {
         }
         LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
 
+        // A conversation being scrolled gets the whole screen (ChatNav.full).
+        val full = tab == "chat" && ChatNav.open.isNotEmpty() && ChatNav.full
         Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
-            Brand {
+            androidx.compose.animation.AnimatedVisibility(!full) { Brand {
                 if (app.vault.hasPassword) MButton("Lock", Modifier.padding(end = 8.dp)) { uiLocked = true }
                 MButton("Settings", kind = if (tab == "settings") Kind.Accent else Kind.Normal, icon = "gear") { tab = if (tab == "settings") "chat" else "settings" }
-            }
-            if (up.ready && tab != "settings") Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable { tab = "settings" }.padding(10.dp)) {
+            } }
+            if (up.ready && tab != "settings" && !full) Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable { tab = "settings" }.padding(10.dp)) {
                 Text("Muninn ${up.latest} is ready. Tap to install.", style = Type.small.copy(color = Palette.accent))
             }
             if (!storageOk && (tab == "files" || tab == "send" || tab == "usb")) {
@@ -268,7 +269,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().background(Palette.groundDeep).padding(vertical = 6.dp)) {
+            if (!full) Row(Modifier.fillMaxWidth().background(Palette.groundDeep).padding(vertical = 6.dp)) {
                 listOf("chat" to ("chat" to "Chat"), "send" to ("send" to "Send"), "files" to ("folder" to "Files"), "usb" to ("usb" to "USB")).forEach { (id, v) ->
                     val on = tab == id
                     Column(Modifier.weight(1f).clickable(role = Role.Tab) { tab = id }.padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {

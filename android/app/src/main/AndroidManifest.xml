@@ -34,6 +34,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
@@ -71,6 +75,18 @@
             android:name=".forge.ForgeService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|dataSync" />
+        <service
+            android:name=".net.MessageService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging|dataSync" />
+        <receiver
+            android:name=".net.StartAtBoot"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".net.NearbyService"
             android:exported="false"

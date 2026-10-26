@@ -23,6 +23,13 @@ import io.github.ravenor907.muninn.net.Photos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import io.github.ravenor907.muninn.net.Voice
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -82,7 +89,11 @@ import java.util.Date
 private data class ChatRow(val key: String, val name: String)
 
 /** Where a conversation is open: "" none, "nearby" the room, "code", "add", or a contact's key. */
-object ChatNav { var open by mutableStateOf("") }
+object ChatNav {
+    var open by mutableStateOf("")
+    /** Scrolling a conversation hides the logo, Settings and tabs; back brings them back first. */
+    var full by mutableStateOf(false)
+}
 
 private fun routeText(r: String) = when (r) {
     "close" -> "Close by (Bluetooth)"
@@ -136,6 +147,15 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
             }
             if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger),
                 modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(top = 8.dp, bottom = 4.dp))
+            // Messages only arrive right away if Android lets Muninn run in the background.
+            val ctx = LocalContext.current
+            var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
+            LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
+            if (app.identity.stayConnected && !free) Panel(Modifier.padding(top = 8.dp)) {
+                Text("Get messages right away", style = Type.big)
+                Text("Android's battery saver pauses Muninn while the phone sleeps, so messages and their notifications arrive late. Allow Muninn to run in the background to fix that.", style = Type.small)
+                MButton("Allow", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
+            }
         }
         if (requests.isNotEmpty()) item { Section("Wants to chat") }
         items(requests, key = { "r" + it.peerKey }) { r ->
@@ -161,7 +181,7 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
             val r = app.chat.route(c.key)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    Line(c.name, last?.let { if (it.unsent.isNotEmpty()) "Message deleted" else if (it.photo.isNotEmpty()) (if (it.mine) "You sent a photo" else "Photo") else it.text } ?: routeText(r), icon = routeIcon(r),
+                    Line(c.name, last?.let { if (it.unsent.isNotEmpty()) "Message deleted" else if (it.voice > 0) (if (it.mine) "You sent a voice message" else "Voice message") else if (it.photo.isNotEmpty()) (if (it.mine) "You sent a photo" else "Photo") else it.text } ?: routeText(r), icon = routeIcon(r),
                         trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.key }
                 }
                 if (c.key in unread || app.chat.shouldAskKeep(c.key)) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
@@ -210,6 +230,9 @@ private fun NearbyRoom(app: Muninn) {
 
 @Composable
 private fun Conversation(app: Muninn, key: String) {
+    // First back: bring the logo and tabs back. Second back: the chat list (the outer handler).
+    BackHandler(enabled = ChatNav.full) { ChatNav.full = false }
+    DisposableEffect(key) { onDispose { ChatNav.full = false } }
     val convos by app.chat.conversations.collectAsState()
     val c = app.chat.contacts.get(key)
     val met by app.chat.met.collectAsState()
@@ -236,6 +259,10 @@ private fun Conversation(app: Muninn, key: String) {
     var preparing by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
+    val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        Ui.say(if (ok) "Ready. Hold the mic to record." else "Voice messages need the microphone. Muninn only listens while you hold the button.", !ok)
+    }
+    DisposableEffect(Unit) { onDispose { Voice.stopPlaying(); Voice.cancel() } }
     fun sendPhoto(uri: Uri, hd: Boolean) {
         preparing = true
         scope.launch {
@@ -270,7 +297,14 @@ private fun Conversation(app: Muninn, key: String) {
                 MButton("Not now", Modifier.weight(1f)) { app.chat.notNow(key) }
             }
         } else if (c == null && m?.iSaid == true) Text("You said yes to keeping in touch. Waiting for $name.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
-        LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
+        // Scrolling by hand gives the conversation the whole screen.
+        val hide = remember { object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (source == androidx.compose.ui.input.nestedscroll.NestedScrollSource.UserInput && kotlin.math.abs(available.y) > 6f) ChatNav.full = true
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        } }
+        LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp).nestedScroll(hide), state = list) {
             items(msgs, key = { it.id }) { m ->
                 Bubble(m, showName = false, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null, onTap = { viewing = m }) {
                     when {
@@ -308,18 +342,59 @@ private fun Conversation(app: Muninn, key: String) {
         }
         Composer(text, { text = it }, "Message $name", onPhoto = {
             pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-        }) { app.chat.sendPrivate(key, text); text = "" }
+        }, voice = VoiceHooks(
+            allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
+            ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
+            send = { aac, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVoice(key, aac, ms) } },
+        )) { app.chat.sendPrivate(key, text); text = "" }
     }
 }
 
+private class VoiceHooks(val allowed: () -> Boolean, val ask: () -> Unit, val send: (ByteArray, Int) -> Unit)
+
 @Composable
-private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, onSend: () -> Unit) {
+private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, voice: VoiceHooks? = null, onSend: () -> Unit) {
+    val context = LocalContext.current
+    val recording by Voice.recording.collectAsState()
+    var dragged by remember { mutableStateOf(0f) }
+    var shown by remember { mutableStateOf(0L) }
+    LaunchedEffect(recording) { while (recording) { shown = Voice.elapsed(); kotlinx.coroutines.delay(200) } }
+    if (voice != null && recording) {
+        // Recording: hold the mic, let go to send, slide left to cancel.
+        Row(Modifier.padding(bottom = 8.dp).fillMaxWidth().background(Palette.dangerFill, Corner).padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).background(Palette.danger, CircleShape))
+            Text("  ${Voice.length(shown.toInt())}", style = Type.big)
+            Spacer(Modifier.weight(1f))
+            Text(if (dragged < -120f) "Let go to cancel" else "‹ Slide left to cancel", style = Type.small.copy(color = if (dragged < -120f) Palette.danger else Palette.textSoft))
+        }
+    }
     Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onPhoto != null) Box(Modifier.size(44.dp).clickable(role = Role.Button, onClickLabel = "Send a photo") { onPhoto() }, contentAlignment = Alignment.Center) {
             MIcon("image", Palette.accent, 26.dp)
         }
         Field(text, { onText(it.take(Chat.MAX)) }, hint, Modifier.weight(1f), single = false)
-        MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { onSend() }
+        if (voice != null && text.isBlank()) {
+            Box(Modifier.padding(start = 8.dp).size(48.dp).background(if (recording) Palette.danger else Palette.accentFill, CircleShape)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        if (!voice.allowed()) { voice.ask(); return@awaitEachGesture }
+                        dragged = 0f
+                        if (!Voice.start(context)) { Ui.say("The microphone isn't available right now.", true); return@awaitEachGesture }
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val c = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            dragged = c.position.x - down.position.x
+                            if (!c.pressed) break
+                        }
+                        if (dragged < -120f) { Voice.cancel(); Ui.say("Recording cancelled.") }
+                        else Voice.finish()?.let { (aac, ms) -> voice.send(aac, ms) } ?: Ui.say("Hold the mic while you talk.")
+                        dragged = 0f
+                    }
+                }.semantics { contentDescription = "Hold to record a voice message" },
+                contentAlignment = Alignment.Center) { MIcon("mic", if (recording) Palette.ground else Palette.accent, 24.dp) }
+        } else MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { onSend() }
     }
 }
 
@@ -380,13 +455,15 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, photo: (() -> ByteArray?)? = 
         val longNow by rememberUpdatedState(onLong)
         Column(
             Modifier.widthIn(max = 300.dp).background(if (m.mine) Palette.accentFill else Palette.panel, Corner)
-                .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null) tapNow() }, onLongPress = { longNow() }) }.padding(10.dp),
+                .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null && m.voice == 0) tapNow() }, onLongPress = { longNow() }) }.padding(10.dp),
         ) {
             if (showName && !m.mine) Text(m.name, style = Type.small.copy(color = Palette.accent))
-            if (m.unsent.isNotEmpty()) {
+            if (m.unsent.isEmpty() && m.voice > 0 && photo != null) {
+                VoiceNote(m, photo)
+            } else if (m.unsent.isNotEmpty()) {
                 Text(if (m.mine) "Message deleted by you" else "Message deleted by ${m.unsent}",
                     style = Type.normal.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic))
-            } else if (photo != null) {
+            } else if (photo != null && m.voice == 0) {
                 val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo(), 720) } }
                 Box(Modifier.size(240.dp, 180.dp).background(Palette.groundDeep, Corner), contentAlignment = Alignment.Center) {
                     bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(Corner)) }
@@ -461,3 +538,25 @@ private fun savePhoto(context: Context, bytes: ByteArray): Boolean = try {
     val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
     uri != null && context.contentResolver.openOutputStream(uri)?.use { it.write(bytes); true } == true
 } catch (e: Exception) { false }
+
+/** A voice message: play/pause, how far along, and its length. Plays from memory only. */
+@Composable
+private fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?) {
+    val playing by Voice.playing.collectAsState()
+    val progress by Voice.progress.collectAsState()
+    val mine = playing == m.id
+    LaunchedEffect(mine) { while (mine) { Voice.tick(); kotlinx.coroutines.delay(100) } }
+    val scope = rememberCoroutineScope()
+    Row(Modifier.width(240.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).background(Palette.groundDeep, CircleShape).clickable(role = Role.Button, onClickLabel = if (mine) "Pause" else "Play") {
+            if (mine) Voice.stopPlaying()
+            else scope.launch { val b = withContext(Dispatchers.IO) { sound() }; if (b != null) Voice.play(m.id, b) else Ui.say("This voice message can't be played.", true) }
+        }, contentAlignment = Alignment.Center) { MIcon(if (mine) "pause" else "play", Palette.accent, 20.dp) }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Box(Modifier.fillMaxWidth().height(4.dp).background(Palette.line)) {
+                Box(Modifier.fillMaxWidth(if (mine) progress.coerceIn(0f, 1f) else 0f).height(4.dp).background(Palette.accent))
+            }
+            Text("Voice message · ${Voice.length(m.voice)}", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
