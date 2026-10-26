@@ -6,6 +6,7 @@
 #include "chat.h"
 #include "direct.h"
 #include "chatcrypto.h"
+#include "ratchet.h"
 #include "ble.h"
 #include "bleframes.h"
 #include "nostr.h"
@@ -79,6 +80,8 @@ int main(int argc, char *argv[])
     args.addOption(unattend);
     QCommandLineOption chatTest(QStringLiteral("chat-selftest"), QStringLiteral("Check the chat encryption against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(chatTest);
+    QCommandLineOption ratchetTest(QStringLiteral("ratchet-selftest"), QStringLiteral("Check the message ratchet against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(ratchetTest);
     QCommandLineOption nostrTest(QStringLiteral("nostr-selftest"), QStringLiteral("Check the Nostr signatures against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(nostrTest);
     QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing and Bluetooth framing (for CI), then quit."));
@@ -86,6 +89,8 @@ int main(int argc, char *argv[])
     args.process(app);
     if (args.isSet(chatTest))
         return ChatCrypto::selfTest(args.value(chatTest)) ? 0 : 1;
+    if (args.isSet(ratchetTest))
+        return Ratchet::selfTest(args.value(ratchetTest)) ? 0 : 1;
     if (args.isSet(nostrTest))
         return Nostr::selfTest(args.value(nostrTest)) ? 0 : 1;
     if (args.isSet(privacyTest)) {
