@@ -20,7 +20,10 @@ import java.util.concurrent.Executors
  *  3. Anywhere: Nostr relays, for contacts (people met nearby or who shared a code).
  * Rooms:
  *  - Nearby: public, for everyone close by or on the same Wi-Fi. Usernames, no codes.
- *  - Private: one contact. Sealed end to end with the chat keys whichever way it travels.
+ *  - Private: one person. Sealed end to end with the chat keys whichever way it travels.
+ *    Anyone close by can message straight away, no asking. After 10 messages, or once they're
+ *    out of range, both get "Keep in touch?"; when both say yes they become contacts and can
+ *    message from anywhere (the internet route is only for contacts).
  * One message format everywhere: { room, fromKey, fromName, mailbox, nonce, data }.
  */
 class Chat(private val context: Context, private val net: LocalSend, private val close: Close, private val nostr: Nostr, val contacts: Contacts,
@@ -29,6 +32,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long,
                    val failed: Boolean = false, val via: String = "")
+    /** Someone met close by who isn't a contact (yet). */
+    data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
+                   val verified: Boolean = false)
     data class Request(val peerKey: String, val name: String, val code: String, val mailbox: String?, val viaInternet: Boolean)
 
     private val _nearby = MutableStateFlow<List<Msg>>(emptyList())
@@ -37,17 +43,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val conversations: StateFlow<Map<String, List<Msg>>> = _private.asStateFlow()
     private val _requests = MutableStateFlow<List<Request>>(emptyList())
     val requests: StateFlow<List<Request>> = _requests.asStateFlow()
+    private val _met = MutableStateFlow<Map<String, Met>>(emptyMap())
+    val met: StateFlow<Map<String, Met>> = _met.asStateFlow()
     private val _unread = MutableStateFlow<Set<String>>(emptySet())
     val unread: StateFlow<Set<String>> = _unread.asStateFlow()
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** A private message arrived (name, text, key) — for notifications while Muninn is in the background. */
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
 
+    private val unsentKeeps = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val held = ConcurrentHashMap<String, MutableList<Msg>>()
     private val recent = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val pool = Executors.newFixedThreadPool(4)
     private val store = File(context.filesDir, "chats.json")
     private val nearbyStore = File(context.filesDir, "nearby.json")
+    private val metStore = File(context.filesDir, "met.json")
 
     init {
         load()
@@ -55,6 +65,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         id.trusted().forEach { (k, n) -> if (contacts.get(k) == null) contacts.put(Contacts.Contact(k, n, null, true)) }
         net.extraRoute = { method, path, body, _ -> if (method == "POST" && path == PATH) receive(body, "wifi") else null }
         close.onMessage = { _, o -> if (o.optString("t") == "msg") receive(o.toString(), "close") }
+        // Someone said yes while out of range: say it again when they're back.
+        pool.execute { while (true) { Thread.sleep(30_000); resendKeeps() } }
         nostr.onEnvelope = { content ->
             try { receive(String(Base64.getDecoder().decode(content)), "internet"); true } catch (_: Exception) { true }
         }
@@ -72,6 +84,63 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
 
     fun isContact(peerKey: String) = contacts.get(peerKey) != null
+
+    fun nameOf(peerKey: String): String = contacts.get(peerKey)?.name ?: _met.value[peerKey]?.name
+        ?: close.list.value.firstOrNull { it.chatKey == peerKey }?.name
+        ?: net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { it.chatName ?: it.alias } ?: "Someone"
+
+    /** Opening a chat with someone close by: no asking, just start. */
+    fun meet(peerKey: String, name: String) {
+        if (isContact(peerKey) || _met.value.containsKey(peerKey)) return
+        putMet(peerKey, Met(name, close.list.value.firstOrNull { it.chatKey == peerKey }?.mailbox))
+    }
+
+    /** "Keep in touch?" should show: 10 messages in, or they've gone out of range. */
+    fun shouldAskKeep(peerKey: String): Boolean {
+        val m = _met.value[peerKey] ?: return false
+        if (isContact(peerKey) || m.dismissed || m.iSaid) return false
+        return m.theySaid || _private.value[peerKey].orEmpty().size >= KEEP_AFTER || route(peerKey).isEmpty()
+    }
+
+    fun keepInTouch(peerKey: String) {
+        val m = _met.value[peerKey] ?: return
+        putMet(peerKey, m.copy(iSaid = true, dismissed = false))
+        pool.execute {
+            val body = envelope("keep", peerKey, "yes", UUID.randomUUID().toString())
+            if (!deliver(peerKey, body, m.mailbox)) unsentKeeps.add(peerKey) else return@execute
+            notices.tryEmit("Couldn't reach ${m.name} yet. Muninn will say yes again when you're close.")
+        }
+        if (m.theySaid) becomeContacts(peerKey)
+        else notices.tryEmit("Asked ${m.name}. Once they say yes too, you can message from anywhere.")
+    }
+
+    /** Both screens showed the same code. */
+    fun verify(peerKey: String, name: String) {
+        contacts.get(peerKey)?.let { contacts.put(it.copy(verified = true)); return }
+        putMet(peerKey, (_met.value[peerKey] ?: Met(name, null)).copy(verified = true))
+    }
+
+    fun isVerified(peerKey: String) = contacts.get(peerKey)?.verified == true || _met.value[peerKey]?.verified == true
+
+    fun notNow(peerKey: String) { _met.value[peerKey]?.let { putMet(peerKey, it.copy(dismissed = true)) } }
+
+    /** Mute, and delete the conversation. */
+    fun block(peerKey: String) {
+        id.setMuted(peerKey, true)
+        _met.value = _met.value - peerKey; saveMet()
+        _requests.value = _requests.value.filterNot { it.peerKey == peerKey }
+        deleteConversation(peerKey)
+        mute(peerKey, true)
+    }
+
+    private fun becomeContacts(peerKey: String) {
+        val m = _met.value[peerKey] ?: return
+        contacts.put(Contacts.Contact(peerKey, m.name, m.mailbox, verified = m.verified))
+        _met.value = _met.value - peerKey; saveMet()
+        notices.tryEmit("You and ${m.name} are in touch. Message each other from anywhere.")
+    }
+
+    private fun putMet(k: String, m: Met) { _met.value = _met.value + (k to m); saveMet() }
 
     /** How a contact can be reached right now: "close", "wifi", "internet" or "". */
     fun route(peerKey: String): String = when {
@@ -115,7 +184,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         _unread.value = _unread.value + fromKey
                         arrivals.tryEmit(Triple(c.name, text, fromKey))
                     }
+                } else if (fromKey in id.muted()) {
+                    return 200 to "{}"
+                } else if (via != "internet" || _met.value.containsKey(fromKey)) {
+                    // Close by or on the same Wi-Fi (or someone met that way): no asking first.
+                    val m = _met.value[fromKey]
+                    putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
+                    if (_private.value[fromKey].orEmpty().none { it.id == msgId }) {
+                        addPrivate(fromKey, msg)
+                        _unread.value = _unread.value + fromKey
+                        arrivals.tryEmit(Triple(name, text, fromKey))
+                    }
                 } else {
+                    // A code shared some other way: they already have this phone's code, so ask.
                     held.getOrPut(fromKey) { mutableListOf() }.add(msg)
                     if (_requests.value.none { it.peerKey == fromKey }) {
                         _requests.value = _requests.value + Request(fromKey, name, ChatCrypto.pairingCode(key), mailbox, via == "internet")
@@ -123,6 +204,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         arrivals.tryEmit(Triple(name, "Wants to chat with you", fromKey))
                     }
                 }
+            }
+            "keep" -> {
+                if (isContact(fromKey)) return 200 to "{}"
+                val m = _met.value[fromKey] ?: if (via != "internet") Met(name, mailbox) else return 403 to "{}"
+                if (text != "yes" || m.theySaid) return 200 to "{}"
+                putMet(fromKey, m.copy(theySaid = true, mailbox = mailbox ?: m.mailbox))
+                if (m.iSaid) becomeContacts(fromKey)
+                else { notices.tryEmit("$name wants to keep in touch"); arrivals.tryEmit(Triple(name, "Wants to keep in touch", fromKey)) }
             }
             else -> return 400 to "{}"
         }
@@ -178,23 +267,30 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun sendPrivate(peerKey: String, text: String) {
         val t = text.trim().take(MAX)
         if (t.isEmpty()) return
-        val c = contacts.get(peerKey) ?: return
+        val name = nameOf(peerKey)
+        if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
         val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r)
         addPrivate(peerKey, mine)
         pool.execute {
-            val body = envelope("private", peerKey, t, mine.id)
-            val ok = when (r) {
-                "close" -> close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); true } ?: false
-                "wifi" -> net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { net.post(it, PATH, body.toString()) == 200 } ?: false
-                "internet" -> { nostr.publish(c.mailbox!!, Base64.getEncoder().encodeToString(body.toString().toByteArray())); true }
-                else -> false
-            }
+            val ok = deliver(peerKey, envelope("private", peerKey, t, mine.id), contacts.get(peerKey)?.mailbox)
             if (!ok) {
                 replace(peerKey, mine.copy(failed = true))
-                notices.tryEmit(if (r.isEmpty()) "${c.name} can't be reached: they're not nearby and have no internet mailbox yet." else "${c.name} didn't get that. Try again.")
+                notices.tryEmit(when {
+                    r.isNotEmpty() -> "$name didn't get that. Try again."
+                    isContact(peerKey) -> "$name can't be reached: they're not nearby and have no internet mailbox yet."
+                    else -> "$name is out of range. Say yes to Keep in touch to message from anywhere."
+                })
             }
         }
+    }
+
+    /** Best route first. The internet needs a mailbox: contacts, or a "keep in touch" answer. */
+    private fun deliver(peerKey: String, body: JSONObject, mailbox: String?): Boolean {
+        close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); return true }
+        net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { if (net.post(it, PATH, body.toString()) == 200) return true }
+        if (mailbox != null) { nostr.publish(mailbox, Base64.getEncoder().encodeToString(body.toString().toByteArray())); return true }
+        return false
     }
 
     private fun envelope(room: String, theirKey: String, text: String, msgId: String): JSONObject {
@@ -264,6 +360,18 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val o = JSONObject(); _private.value.forEach { (k, v) -> o.put(k, toJson(v)) }
         vault.write(store, o.toString())
     }
+    private fun resendKeeps() {
+        unsentKeeps.filter { route(it).isNotEmpty() }.forEach { k ->
+            if (deliver(k, envelope("keep", k, "yes", UUID.randomUUID().toString()), null)) unsentKeeps.remove(k)
+        }
+    }
+
+    private fun saveMet() {
+        val o = JSONObject()
+        _met.value.forEach { (k, m) -> o.put(k, JSONObject().put("n", m.name).put("p", m.mailbox ?: "").put("i", m.iSaid).put("t", m.theySaid).put("d", m.dismissed).put("v", m.verified)) }
+        try { vault.write(metStore, o.toString()) } catch (_: Exception) {}
+    }
+
     private fun saveNearby() = vault.write(nearbyStore, toJson(_nearby.value).toString())
 
     private fun load() {
@@ -271,6 +379,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             vault.read(store)?.let { text ->
                 val o = JSONObject(text)
                 _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
+            }
+            vault.read(metStore)?.let { text ->
+                val o = JSONObject(text)
+                _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
+                    Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v")) } }
             }
             if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
             prune()
@@ -280,5 +393,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     companion object {
         const val PATH = "/api/huginn/v1/message"
         const val MAX = 2000
+        const val KEEP_AFTER = 10
     }
 }

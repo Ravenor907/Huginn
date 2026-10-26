@@ -56,6 +56,8 @@ import io.github.ravenor907.muninn.ui.Ui
 import java.text.DateFormat
 import java.util.Date
 
+private data class ChatRow(val key: String, val name: String)
+
 /** Where a conversation is open: "" none, "nearby" the room, "code", "add", or a contact's key. */
 object ChatNav { var open by mutableStateOf("") }
 
@@ -88,12 +90,17 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     val wifi by app.net.devices.collectAsState()
     val closeError by app.close.error.collectAsState()
     val nostrUp by app.nostr.connected.collectAsState()
+    val met by app.chat.met.collectAsState()
     // Everyone reachable right now: close by first, then the same Wi-Fi. (key, name, route)
     val around = buildList {
         close.filter { it.connected && it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.name, "close")) }
         wifi.filter { it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.chatName ?: it.alias, "wifi")) }
     }.distinctBy { it.first }
-    val strangers = around.filter { !app.chat.isContact(it.first) }
+    // Close-by people already chatting with (not contacts yet) sit with the chats.
+    val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() }
+        val chatRows = (contacts.map { ChatRow(it.chatKey, it.name) } +
+        met.filter { (k, _) -> !convos[k].isNullOrEmpty() && !app.chat.isContact(k) }.map { (k, m) -> ChatRow(k, m.name) })
+        .sortedByDescending { convos[it.key]?.lastOrNull()?.time ?: 0L }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
@@ -123,29 +130,24 @@ fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
         item {
             Line("Nearby room", if (app.identity.nearbyChat) "${around.size} around you · you're “${app.identity.username}”" else "Off", icon = "network") { ChatNav.open = "nearby" }
         }
-        val sorted = contacts.sortedByDescending { convos[it.chatKey]?.lastOrNull()?.time ?: 0L }
-        items(sorted, key = { "c" + it.chatKey }) { c ->
-            val last = convos[c.chatKey]?.lastOrNull()
-            val r = app.chat.route(c.chatKey)
+        items(chatRows, key = { "c" + it.key }) { c ->
+            val last = convos[c.key]?.lastOrNull()
+            val r = app.chat.route(c.key)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     Line(c.name, last?.text ?: routeText(r), icon = routeIcon(r),
-                        trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.chatKey }
+                        trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.key }
                 }
-                if (c.chatKey in unread) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
+                if (c.key in unread || app.chat.shouldAskKeep(c.key)) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
             }
         }
-        if (contacts.isEmpty()) item {
-            Text("No contacts yet. Meet someone nearby, or swap codes with Add someone and My code. After that you can message them from anywhere.",
+        if (chatRows.isEmpty()) item {
+            Text("No chats yet. Tap anyone under Around you to message them, no asking needed. To message someone far away, swap codes with Add someone and My code.",
                 style = Type.normal, modifier = Modifier.padding(vertical = 8.dp))
         }
         if (strangers.isNotEmpty()) item { Section("Around you") }
         items(strangers, key = { "s" + it.first }) { (k, name, r) ->
-            Line(name, "${routeText(r)} · tap to add", icon = routeIcon(r)) {
-                Ui.sure(Ask("Add $name?", "Code: ${app.chat.codeWith(k)}\n\nTheir screen shows the same code when your first message arrives. " +
-                    "Only add them if it matches. Then you can message each other from anywhere.", "It matches",
-                    onConfirm = { app.chat.addNearbyPerson(k, name); ChatNav.open = k }))
-            }
+            Line(name, "${routeText(r)} · tap to message", icon = routeIcon(r)) { app.chat.meet(k, name); ChatNav.open = k }
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
@@ -182,22 +184,44 @@ private fun NearbyRoom(app: Muninn) {
 private fun Conversation(app: Muninn, key: String) {
     val convos by app.chat.conversations.collectAsState()
     val c = app.chat.contacts.get(key)
+    val met by app.chat.met.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // redraw when they become a contact
+    val m = met[key]
+    val name = c?.name ?: m?.name ?: app.chat.nameOf(key)
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.size) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
     val route = app.chat.route(key)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
-        Section(c?.name ?: "Chat") { MButton("Back", icon = "back") { ChatNav.open = "" } }
+        Section(name) { MButton("Back", icon = "back") { ChatNav.open = "" } }
         Row(verticalAlignment = Alignment.CenterVertically) {
             MIcon(routeIcon(route), Palette.accent, 18.dp)
-            Text("  ${routeText(route)} · end-to-end encrypted${if (c?.verified == true) " · verified" else ""}", style = Type.small)
+            Text("  ${routeText(route)} · end-to-end encrypted · ${if (app.chat.isVerified(key)) "verified" else "not verified"}", style = Type.small, modifier = Modifier.weight(1f))
         }
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!app.chat.isVerified(key)) MButton("Check code", Modifier.weight(1f)) {
+                Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
+                    "It matches", onConfirm = { app.chat.verify(key, name) }))
+            }
+            MButton("Block", Modifier.weight(1f), Kind.Danger) {
+                Ui.sure(Ask("Block $name?", "You won't get their messages, and this conversation is deleted. Unblock any time in Settings.", "Block", danger = true,
+                    onConfirm = { app.chat.block(key); ChatNav.open = "" }))
+            }
+        }
+        if (c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(top = 8.dp)) {
+            Text(if (m.theySaid) "$name wants to keep in touch" else "Keep in touch with $name?", style = Type.big)
+            Text("If you both say yes, you can message each other from anywhere, not just close by.", style = Type.small)
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Yes", Modifier.weight(1f), Kind.Accent) { app.chat.keepInTouch(key) }
+                MButton("Not now", Modifier.weight(1f)) { app.chat.notNow(key) }
+            }
+        } else if (c == null && m?.iSaid == true) Text("You said yes to keeping in touch. Waiting for $name.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m -> Bubble(m, showName = false) {} }
         }
         if (msgs.isEmpty()) Text("No messages yet.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
-        Composer(text, { text = it }, "Message ${c?.name ?: ""}") { app.chat.sendPrivate(key, text); text = "" }
+        Composer(text, { text = it }, "Message $name") { app.chat.sendPrivate(key, text); text = "" }
     }
 }
 

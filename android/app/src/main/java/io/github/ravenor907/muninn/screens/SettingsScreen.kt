@@ -139,7 +139,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name != id.username) { id.username = name; app.net.announce(); Ui.say("You're “${id.username}” now.") }
             }
             ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
-            if (muted.isNotEmpty()) MButton("Unmute everyone (${muted.size})", Modifier.fillMaxWidth().padding(top = 6.dp)) { muted.forEach { id.setMuted(it, false) }; muted = id.muted() }
+            if (muted.isNotEmpty()) MButton("Unblock and unmute everyone (${muted.size})", Modifier.fillMaxWidth().padding(top = 6.dp)) { muted.forEach { id.setMuted(it, false) }; muted = id.muted() }
         }
         Section("This phone")
         Panel {
