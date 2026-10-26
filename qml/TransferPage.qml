@@ -19,7 +19,7 @@ Rectangle {
         width: parent.width
         title: "Phone Transfer"
         subtitle: !Settings.nearbySharing ? "Nearby sharing is off in Settings"
-                : LocalSend.running ? "Shows up in LocalSend as “" + LocalSend.alias + "”" : LocalSend.error
+                : LocalSend.running ? "Shows up in LocalSend as “" + LocalSend.alias + "”" : (LocalSend.error || "Starting nearby sharing…")
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
 
@@ -104,7 +104,7 @@ Rectangle {
                 width: deviceList.width
                 wrapMode: Text.WordWrap
                 text: !Settings.nearbySharing ? "Turn on Nearby sharing in Settings › General to use LocalSend."
-                    : !LocalSend.running ? LocalSend.error
+                    : !LocalSend.running ? (LocalSend.error || "Nearby sharing is starting…")
                     : LocalSend.scanning ? "Looking for devices on your Wi-Fi…"
                     : "No devices yet. Open the free LocalSend app on your phone, on the same Wi-Fi, then press Look again. It shows this handheld as “" + LocalSend.alias + "”."
                 color: Theme.textSoft

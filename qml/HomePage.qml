@@ -355,7 +355,7 @@ Rectangle {
             compact: true
             icon: "phone"
             title: "Phone Transfer"
-            detail: "Scan, enter PIN, send"
+            detail: "Send and receive with LocalSend"
         }
         Tile {
             index: 5
