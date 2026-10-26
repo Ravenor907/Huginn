@@ -37,7 +37,7 @@ Rectangle {
                 height: Theme.px(108)
                 radius: Theme.radius + 1
                 color: on ? Theme.panel : Theme.panelLow
-                border.width: on ? Theme.focusWidth : 1
+                border.width: 1
                 border.color: on ? Theme.accent : Theme.line
                 Column {
                     anchors.fill: parent
@@ -117,7 +117,7 @@ Rectangle {
         id: bar
         anchors.bottom: parent.bottom
         width: parent.width
-        status: "Everything goes to the trash first, so you can still undo"
+        status: "Clearing moves things to the trash first. Emptying the trash is for good."
         prompts: [{ key: "a", label: "Do it" }, { key: "lbrb", label: "Drives" }, { key: "x", label: "Measure again" }, { key: "b", label: "Back" }]
         onPrompt: k => page.handleButton(k === "lbrb" ? "rb" : k)
     }

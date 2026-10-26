@@ -17,7 +17,8 @@ Rectangle {
     onUrlChanged: loadText()
     function loadText() {
         line = 0
-        if (!isText) { textLines = []; return }
+        // Ask directly: the isText binding may not have caught up with the new url yet.
+        if (System.kindOf(url) !== "text") { textLines = []; editable = false; return }
         const r = System.readLines(url)
         textLines = r.lines
         editable = r.editable
@@ -39,7 +40,8 @@ Rectangle {
     function setArgs(a) {
         if (a.tour) { siblings = System.sampleImages(); url = siblings.length ? siblings[0] : ""; return }
         url = a.url
-        siblings = System.imagesBeside(a.url)
+        // Pictures flip through their folder; a text file stands alone.
+        siblings = System.kindOf(a.url) === "text" ? [a.url.toString()] : System.imagesBeside(a.url)
         index = Math.max(0, siblings.indexOf(a.url.toString()))
     }
     function go(d) {
