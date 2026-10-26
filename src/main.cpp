@@ -125,8 +125,7 @@ int main(int argc, char *argv[])
         if (!chat || !chat->ready())
             return QByteArray();
         return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->username()},
-                                         {QStringLiteral("chatKey"), chat->parseCode(chat->myCode()).value(QStringLiteral("key")).toString()},
-                                         {QStringLiteral("mailbox"), chat->parseCode(chat->myCode()).value(QStringLiteral("mailbox")).toString()},
+                                         {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
                                          {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);

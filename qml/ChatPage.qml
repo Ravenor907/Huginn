@@ -279,7 +279,13 @@ Rectangle {
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(12)
                 Text { text: "My code"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "They scan this with their phone's camera: it opens Muninn, or shows where to download it. Anyone with it can message you from anywhere as “" + Chat.username + "”."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: "They scan this with their phone's camera: it opens Muninn, or shows where to download it. It works for an hour, so a leaked code can't be used to spam you; people who already have you keep working."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                Text {
+                    property real now: Date.now()
+                    Timer { interval: 10000; repeat: true; running: page.showCode; onTriggered: parent.now = Date.now() }
+                    text: Chat.linkExpires > now ? "Good for " + Math.ceil((Chat.linkExpires - now) / 60000) + " more minutes · X: new code" : "This code has expired · X: new code"
+                    color: Chat.linkExpires > now ? Theme.accent : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: Theme.px(300); height: width; color: Theme.text
@@ -318,6 +324,7 @@ Rectangle {
             const c = Chat.parseCode(t)
             if (!c.key) { Ui.say("That isn't a Muninn code. Ask them for My code › Share code.", true); return }
             if (c.mine) { Ui.say("That's your own code.", true); return }
+            if (c.expired) { Ui.say("That code has expired (they last an hour). Ask them for a new one.", true); return }
             Chat.addContact(t)
             Ui.say(c.name + " added. Say hi: they'll get it wherever they are.")
             openKey = c.key; zone = "messages"
@@ -328,7 +335,7 @@ Rectangle {
         if (!e) return
         switch (e.kind) {
         case "add": addSomeone(); return
-        case "code": showCode = true; return
+        case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; zone = "messages"; return
         case "request":
             Ui.sure(e.name + " wants to chat", "They have your code. Only accept if you know who it is.", "Accept",
@@ -373,7 +380,8 @@ Rectangle {
     function handleButton(b) {
         if (lock.visible) { lock.handleButton(b); return true }
         if (showCode) {
-            if (b === "a") { Chat.copyLink(); Ui.say("Link copied.") }
+            if (b === "a") { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") }
+            else if (b === "x") Chat.newLink()
             else if (b === "b") showCode = false
             return true
         }

@@ -80,6 +80,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val nearbyStore = File(context.filesDir, "nearby.json")
     private val metStore = File(context.filesDir, "met.json")
     private val photosDir = File(context.filesDir, "photos")
+    /** Invites handed out in my codes (token to expiry ms): declared before init, which loads them. */
+    private val invites = HashMap<String, Long>()
+    private val invitesStore = File(context.filesDir, "invites.json")
 
     init {
         load()
@@ -93,7 +96,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         bg { while (true) { Thread.sleep(30_000); try { resendKeeps() } catch (_: Exception) {} } }
         retrier.execute { while (true) { Thread.sleep(1_000); try { retryLoop() } catch (_: Exception) {} } }
         nostr.onEnvelope = { content ->
-            try { receive(String(Base64.getDecoder().decode(content)), "internet"); true } catch (_: Exception) { true }
+            try { unwrap(content)?.let { receive(it, "internet") }; true } catch (_: Exception) { true }
         }
         // Auto-delete: check every minute for messages past the chosen age.
         bg { while (true) { Thread.sleep(60_000); try { prune() } catch (_: Exception) {} } }
@@ -103,7 +106,38 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun hello(): JSONObject = JSONObject().put("name", id.username).put("chatKey", id.publicKey).put("mailbox", nostr.publicKey)
         .put("device", id.deviceName)
 
-    fun myCode(): String = Contacts.code(id.username, id.publicKey, nostr.publicKey)
+    /** A new code each time it's shown, with an invite good for an hour. */
+    fun myCode(): String {
+        val token = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        val until = System.currentTimeMillis() + INVITE_MS
+        synchronized(invites) {
+            invites[token] = until
+            invites.entries.removeIf { it.value < System.currentTimeMillis() }
+            saveInvites()
+        }
+        return Contacts.code(id.username, id.publicKey, nostr.publicKey, token, until)
+    }
+
+    private fun saveInvites() { try { vault.write(invitesStore, JSONObject(invites as Map<*, *>).toString()) } catch (_: Exception) {} }
+    private fun inviteOk(token: String): Boolean = token.isNotEmpty() && synchronized(invites) { (invites[token] ?: 0L) > System.currentTimeMillis() }
+
+    /** Over the internet the whole message is sealed to their chat key with a one-off key, so relays
+     *  see only which inbox it's for: not who sent it, not their name. */
+    private fun wrap(peerKey: String, body: String): String {
+        val eph = ChatCrypto.newKeyPair()
+        val key = ChatCrypto.sharedKey(eph.private, eph.public, ChatCrypto.publicFrom(peerKey))
+        val s = ChatCrypto.sealBytes(key, body.toByteArray())
+        val o = JSONObject().put("e", ChatCrypto.b64(eph.public.encoded)).put("n", s.nonce).put("d", s.data)
+        return Base64.getEncoder().encodeToString(o.toString().toByteArray())
+    }
+
+    private fun unwrap(content: String): String? {
+        val raw = String(Base64.getDecoder().decode(content))
+        val o = JSONObject(raw)
+        if (!o.has("e")) return raw   // from a version before sealing
+        val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(o.getString("e")))
+        return ChatCrypto.openBytes(key, ChatCrypto.Sealed(o.getString("n"), o.getString("d")))?.let { String(it) }
+    }
 
     fun codeWith(peerKey: String): String =
         ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
@@ -203,7 +237,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
         ble.send(m.peerKey, body)
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d -> bg { net.post(d, PATH, body) } }
-        (contacts.get(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox)?.let { nostr.publish(it, Base64.getEncoder().encodeToString(body.toByteArray())) }
+        (contacts.get(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox)?.let { nostr.publish(it, wrap(m.peerKey, body)) }
     }
 
     fun deleteNearbyMessage(msgId: String) {
@@ -295,6 +329,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         arrivals.tryEmit(Triple(name, text, fromKey))
                     }
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
+                } else if (!inviteOk(o.optString("invite"))) {
+                    // From far away with no valid invite (an old or leaked code): dropped quietly.
+                    return 403 to "{}"
                 } else {
                     // A code shared some other way: they already have this phone's code, so ask.
                     held.getOrPut(fromKey) { java.util.Collections.synchronizedMap(LinkedHashMap()) }.putIfAbsent(msgId, msg)
@@ -568,7 +605,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             any = true
             bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 3) it.copy(state = "delivered", via = "wifi", failed = false) else it } }
         }
-        backupMailbox(m)?.let { nostr.publish(it, Base64.getEncoder().encodeToString(body.toByteArray())); any = true; markSent(m, "internet") }
+        backupMailbox(m)?.let { nostr.publish(it, wrap(m.peerKey, body)); any = true; markSent(m, "internet") }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
@@ -590,7 +627,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         val mailbox = backupMailbox(m)
         if (mailbox != null && (!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES) {
-            parts.forEach { nostr.publish(mailbox, Base64.getEncoder().encodeToString(it.toString().toByteArray())) }
+            parts.forEach { nostr.publish(mailbox, wrap(m.peerKey, it.toString())) }
             any = true; markSent(m, "internet")
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
@@ -634,7 +671,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); return "close" }
         if (ble.send(peerKey, body.toString())) return "close"
         net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { if (net.post(it, PATH, body.toString()) == 200) return "wifi" }
-        if (mailbox != null) { nostr.publish(mailbox, Base64.getEncoder().encodeToString(body.toString().toByteArray())); return "internet" }
+        if (mailbox != null) { nostr.publish(mailbox, wrap(peerKey, body.toString())); return "internet" }
         return ""
     }
 
@@ -660,6 +697,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val s = ChatCrypto.seal(key, text)
         return JSONObject().put("room", room).put("fromKey", id.publicKey).put("fromName", id.username).put("fromId", id.fingerprint)
             .put("mailbox", nostr.publicKey).put("id", msgId).put("nonce", s.nonce).put("data", s.data)
+            // The invite from their code, until they accept: proves they handed it out within the hour.
+            .apply { contacts.get(theirKey)?.invite?.let { put("invite", it) } }
     }
 
     // ------------------------------------------------------------------ keeping
@@ -760,6 +799,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val o = JSONObject(text)
                 _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
             }
+            vault.read(invitesStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
             vault.read(metStore)?.let { text ->
                 val o = JSONObject(text)
                 _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
@@ -775,6 +815,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val PATH = "/api/huginn/v1/message"
         const val MAX = 2000
         const val KEEP_AFTER = 10
+        const val INVITE_MS = 60 * 60_000L
         const val DAY = 86_400_000L
         /** Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min. */
         val RETRY = longArrayOf(5_000, 10_000, 20_000, 60_000, 300_000)

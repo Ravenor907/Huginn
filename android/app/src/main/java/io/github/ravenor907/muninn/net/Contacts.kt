@@ -11,10 +11,12 @@ import java.io.File
 /**
  * People this phone can message from anywhere. A contact is added by meeting nearby (and checking
  * the 6-digit code) or by sharing a contact code, which carries the name, the chat key and the
- * Nostr mailbox:  MUNINN1:<base64url of {"n":name,"k":chatKey,"p":mailbox}>
+ * Nostr mailbox:  MUNINN1:<base64url of {"n":name,"k":chatKey,"p":mailbox,"i":invite,"x":expires}>
+ * The invite is good for an hour: after that a leaked code can't be used to reach someone
+ * who isn't already in touch (their phone drops messages without a valid invite).
  */
 class Contacts(context: Context, private val vault: Vault) {
-    data class Contact(val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean)
+    data class Contact(val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null)
 
     private val file = File(context.filesDir, "contacts.json")
     private val _all = MutableStateFlow(load())
@@ -27,7 +29,7 @@ class Contacts(context: Context, private val vault: Vault) {
         val old = get(c.chatKey)
         // Never downgrade: a verified contact stays verified, a known mailbox is kept.
         val merged = if (old == null) c else c.copy(verified = c.verified || old.verified, mailbox = c.mailbox ?: old.mailbox,
-            name = c.name.ifBlank { old.name })
+            name = c.name.ifBlank { old.name }, invite = c.invite ?: old.invite)
         _all.value = _all.value.filterNot { it.chatKey == c.chatKey } + merged
         save()
     }
@@ -40,13 +42,13 @@ class Contacts(context: Context, private val vault: Vault) {
 
     private fun save() {
         val a = JSONArray()
-        _all.value.forEach { a.put(JSONObject().put("k", it.chatKey).put("n", it.name).put("p", it.mailbox ?: "").put("v", it.verified)) }
+        _all.value.forEach { a.put(JSONObject().put("k", it.chatKey).put("n", it.name).put("p", it.mailbox ?: "").put("v", it.verified).put("i", it.invite ?: "")) }
         vault.write(file, a.toString())
     }
 
     private fun load(): List<Contact> = try {
         val a = JSONArray(vault.read(file) ?: return emptyList())
-        (0 until a.length()).map { a.getJSONObject(it) }.map { Contact(it.getString("k"), it.getString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("v")) }
+        (0 until a.length()).map { a.getJSONObject(it) }.map { Contact(it.getString("k"), it.getString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("v"), it.optString("i").ifEmpty { null }) }
     } catch (e: Exception) { emptyList() }
 
     companion object {
@@ -56,9 +58,18 @@ class Contacts(context: Context, private val vault: Vault) {
         const val PAGE = "https://ravenor907.github.io/Huginn/add/#"
         fun link(code: String) = PAGE + code
 
-        fun code(name: String, chatKey: String, mailbox: String): String {
-            val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox).toString()
+        fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
+            val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
+                .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
             return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
+        }
+
+        /** When the code's invite runs out (ms), or 0 for older codes without one. */
+        fun expires(text: String): Long {
+            val i = text.indexOf(PREFIX)
+            if (i < 0) return 0
+            val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
+            return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optLong("x") * 1000 } catch (e: Exception) { 0 }
         }
 
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
@@ -71,7 +82,8 @@ class Contacts(context: Context, private val vault: Vault) {
                 val key = o.getString("k")
                 ChatCrypto.publicFrom(key)   // must be a real key
                 // Whoever gave you their code is who they say: the code itself carries their key.
-                Contact(key, o.optString("n").take(40).ifBlank { "Someone" }, o.optString("p").takeIf { it.length == 64 }, verified = true)
+                Contact(key, o.optString("n").take(40).ifBlank { "Someone" }, o.optString("p").takeIf { it.length == 64 }, verified = true,
+                    invite = o.optString("i").ifEmpty { null })
             } catch (e: Exception) { null }
         }
     }

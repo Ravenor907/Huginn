@@ -43,8 +43,8 @@ class Chat : public QObject
     Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY changed)
     Q_PROPERTY(qint64 deleteAfter READ deleteAfter WRITE setDeleteAfter NOTIFY changed)
     Q_PROPERTY(int internet READ internet NOTIFY changed)
-    Q_PROPERTY(QString myCode READ myCode NOTIFY changed)
-    Q_PROPERTY(QString myLink READ myLink NOTIFY changed)
+    Q_PROPERTY(QString myLink READ myLink NOTIFY changed)          // the code being shown (newLink makes one)
+    Q_PROPERTY(qint64 linkExpires READ linkExpires NOTIFY changed)
     Q_PROPERTY(QString openChat MEMBER m_openChat NOTIFY changed)
 
 public:
@@ -71,8 +71,12 @@ public:
     qint64 deleteAfter() const { return m_settings.value(QStringLiteral("chat/deleteAfter"), 0).toLongLong(); }
     void setDeleteAfter(qint64 v) { m_settings.setValue(QStringLiteral("chat/deleteAfter"), v); prune(); Q_EMIT changed(); }
     int internet() const;
-    QString myCode() const;
-    QString myLink() const;
+    QString myLink() const { return m_link; }
+    qint64 linkExpires() const { return m_linkExpires; }
+    QString chatKey() const { return myKey(); }
+    QString mailbox() const;
+    // A new code with an invite good for an hour: a leaked code stops working after that.
+    Q_INVOKABLE QString newLink();
 
     // Messages
     Q_INVOKABLE QVariantList messagesWith(const QString &key) const { return m_private.value(key); }
@@ -115,7 +119,7 @@ public:
     Q_INVOKABLE void removeContact(const QString &key);
 
     static const int kMax = 2000;
-    static QString code(const QString &name, const QString &chatKey, const QString &mailbox);
+    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
 
 Q_SIGNALS:
     void changed();
@@ -152,6 +156,10 @@ private:
     void load();
     QByteArray keyWith(const QString &theirKey) const;
     QString myKey() const { return QString::fromLatin1(m_pub.toBase64()); }
+    QString wrap(const QString &peerKey, const QByteArray &body) const;
+    QByteArray unwrap(const QString &content) const;
+    bool inviteOk(const QString &token) const;
+    void saveInvites();
     QString mailboxOf(const QString &key) const;
 
     LocalSend *m_net;
@@ -170,7 +178,10 @@ private:
     QHash<QString, QVariantMap> m_met;                 // key -> {name, mailbox, iSaid, theySaid, dismissed, verified}
     QHash<QString, QVariantMap> m_held;                // key -> {id -> message}, waiting on a request
     QHash<QString, QVariantMap> m_requests;            // key -> {key, name, code, mailbox}
-    QHash<QString, qint64> m_deleted;                  // ids deleted here (two days): late copies stay gone
+    QHash<QString, qint64> m_deleted;
+    QHash<QString, qint64> m_invites;                  // invites in my codes: token -> expiry ms
+    QString m_link;
+    qint64 m_linkExpires = 0;                  // ids deleted here (two days): late copies stay gone
     QSet<QString> m_unread, m_unsentKeeps;
     QHash<QString, QList<qint64>> m_recent, m_pieceTimes;
     struct Tries { int count = 0; qint64 next = 0; };

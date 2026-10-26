@@ -422,16 +422,21 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
 @Composable
 private fun MyCode(app: Muninn) {
     val context = LocalContext.current
-    val code = remember { app.chat.myCode() }
+    var code by remember { mutableStateOf(app.chat.myCode()) }
+    var left by remember { mutableStateOf(0L) }
+    LaunchedEffect(code) { while (true) { left = Contacts.expires(code) - System.currentTimeMillis(); kotlinx.coroutines.delay(10_000) } }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Section("My code") { MButton("Back", icon = "back") { ChatNav.open = "" } }
-        Text("Anyone with this code can message you from anywhere, as “${app.identity.username}”. Share it only with people you want to hear from.", style = Type.normal)
+        Text("Anyone with this code can reach you as “${app.identity.username}” for the next hour. After that it stops working, so a leaked code can't be used to spam you. People who already have you keep working.", style = Type.normal)
+        Text(if (left > 0) "Good for ${(left + 59_999) / 60_000} more minutes" else "This code has expired",
+            style = Type.small.copy(color = if (left > 0) Palette.accent else Palette.danger), modifier = Modifier.padding(top = 6.dp))
         Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(Contacts.link(code), 240) }
         Text("They scan it with their phone's camera: it opens Muninn, or shows where to download it if they don't have it yet. Or send it as a message:", style = Type.small)
-        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MButton("New code", Modifier.fillMaxWidth().padding(top = 10.dp)) { code = app.chat.myCode() }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Share code", Modifier.weight(1f), Kind.Accent, icon = "send") {
                 context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first):\n${Contacts.link(code)}"), "Share your Muninn code"))
+                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first). The link works for an hour:\n${Contacts.link(code)}"), "Share your Muninn code"))
             }
             MButton("Copy", Modifier.weight(1f), icon = "copy") {
                 (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
@@ -456,6 +461,7 @@ private fun AddSomeone(app: Muninn) {
         when {
             text.isBlank() -> {}
             found == null -> Text("That isn't a Muninn code. Ask them to tap My code › Share code.", style = Type.small.copy(color = Palette.danger))
+            Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has expired (they last an hour). Ask them for a new one.", style = Type.small.copy(color = Palette.danger))
             found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
             else -> {
                 Text("Found: ${found.name}", style = Type.big)

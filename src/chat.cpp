@@ -108,7 +108,9 @@ void Chat::start()
     connect(m_ble, &Ble::changed, this, &Chat::changed);
     connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changed);
     m_nostr->onEnvelope = [this](const QString &content) {
-        receive(QByteArray::fromBase64(content.toLatin1()), QStringLiteral("internet"));
+        const QByteArray body = unwrap(content);
+        if (!body.isEmpty())
+            receive(body, QStringLiteral("internet"));
         return true;
     };
     m_retry.setInterval(1000);
@@ -166,14 +168,66 @@ void Chat::setKeepNearby(bool v)
 
 int Chat::internet() const { return m_nostr->connected(); }
 
-QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox)
+QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires)
 {
-    const QJsonObject o{{QStringLiteral("n"), name}, {QStringLiteral("k"), chatKey}, {QStringLiteral("p"), mailbox}};
+    QJsonObject o{{QStringLiteral("n"), name}, {QStringLiteral("k"), chatKey}, {QStringLiteral("p"), mailbox}};
+    if (!invite.isEmpty()) {
+        o.insert(QStringLiteral("i"), invite);
+        o.insert(QStringLiteral("x"), double(expires / 1000));
+    }
     return kPrefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
 
-QString Chat::myCode() const { return m_ready ? code(username(), myKey(), m_nostr->publicKey()) : QString(); }
-QString Chat::myLink() const { return m_ready ? kPage + myCode() : QString(); }
+QString Chat::mailbox() const { return m_nostr->publicKey(); }
+
+QString Chat::newLink()
+{
+    if (!m_ready)
+        return QString();
+    const QString token = QUuid::createUuid().toString(QUuid::Id128).left(16);
+    m_linkExpires = now() + 3600000;
+    m_invites.insert(token, m_linkExpires);
+    for (auto it = m_invites.begin(); it != m_invites.end();)
+        it = it.value() < now() ? m_invites.erase(it) : std::next(it);
+    saveInvites();
+    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires);
+    Q_EMIT changed();
+    return m_link;
+}
+
+void Chat::saveInvites()
+{
+    QJsonObject o;
+    for (auto it = m_invites.begin(); it != m_invites.end(); ++it)
+        o.insert(it.key(), double(it.value()));
+    m_vault->write(QStringLiteral("invites.json"), QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+bool Chat::inviteOk(const QString &token) const { return !token.isEmpty() && m_invites.value(token, 0) > now(); }
+
+// Over the internet the whole message is sealed to their chat key with a one-off key, so relays
+// see only which inbox it's for: not who sent it, not their name. The same as Muninn's wrap().
+QString Chat::wrap(const QString &peerKey, const QByteArray &body) const
+{
+    const ChatCrypto::KeyPair eph = ChatCrypto::newKeyPair();
+    const QByteArray key = ChatCrypto::sharedKey(eph.privateDer, eph.publicDer, QByteArray::fromBase64(peerKey.toLatin1()));
+    QByteArray nonce, data;
+    ChatCrypto::seal(key, body, &nonce, &data);
+    const QJsonObject o{{QStringLiteral("e"), b64(eph.publicDer)}, {QStringLiteral("n"), b64(nonce)}, {QStringLiteral("d"), b64(data)}};
+    return b64(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+QByteArray Chat::unwrap(const QString &content) const
+{
+    const QByteArray raw = QByteArray::fromBase64(content.toLatin1());
+    const QJsonObject o = QJsonDocument::fromJson(raw).object();
+    if (!o.contains(QStringLiteral("e")))
+        return raw;   // from a version before sealing
+    bool ok = false;
+    const QByteArray plain = ChatCrypto::open(keyWith(o.value(QStringLiteral("e")).toString()), QByteArray::fromBase64(o.value(QStringLiteral("n")).toString().toLatin1()),
+                                              QByteArray::fromBase64(o.value(QStringLiteral("d")).toString().toLatin1()), &ok);
+    return ok ? plain : QByteArray();
+}
 
 QVariantMap Chat::parseCode(const QString &text) const
 {
@@ -194,19 +248,22 @@ QVariantMap Chat::parseCode(const QString &text) const
     if (name.isEmpty())
         name = QStringLiteral("Someone");
     const QString mailbox = o.value(QStringLiteral("p")).toString();
+    const qint64 expires = qint64(o.value(QStringLiteral("x")).toDouble()) * 1000;
     return {{QStringLiteral("key"), key}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox.size() == 64 ? mailbox : QString()},
-            {QStringLiteral("mine"), key == myKey()}};
+            {QStringLiteral("mine"), key == myKey()}, {QStringLiteral("invite"), o.value(QStringLiteral("i")).toString()},
+            {QStringLiteral("expired"), expires > 0 && expires < now()}};
 }
 
 void Chat::addContact(const QString &text)
 {
     const QVariantMap c = parseCode(text);
-    if (c.isEmpty() || c.value(QStringLiteral("mine")).toBool())
+    if (c.isEmpty() || c.value(QStringLiteral("mine")).toBool() || c.value(QStringLiteral("expired")).toBool())
         return;
     const QString key = str(c, "key");
     // Whoever gave you their code is who they say: the code itself carries their key.
     m_contacts.insert(key, {{QStringLiteral("key"), key}, {QStringLiteral("name"), c.value(QStringLiteral("name"))},
-                            {QStringLiteral("mailbox"), c.value(QStringLiteral("mailbox"))}, {QStringLiteral("verified"), true}});
+                            {QStringLiteral("mailbox"), c.value(QStringLiteral("mailbox"))}, {QStringLiteral("verified"), true},
+                            {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}});
     m_met.remove(key);
     saveContacts();
     saveMet();
@@ -476,6 +533,8 @@ int Chat::receive(const QByteArray &body, const QString &via)
                 Q_EMIT arrived(name, text, fromKey);
             }
             receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
+        } else if (!inviteOk(o.value(QStringLiteral("invite")).toString())) {
+            return 403;   // from far away with no valid invite (an old or leaked code): dropped quietly
         } else {
             // Someone with this computer's code, from far away: ask first.
             m_held[fromKey].insert(msgId, message(msgId, fromKey, name, text, false, via));
@@ -786,9 +845,14 @@ QJsonObject Chat::envelope(const QString &room, const QString &theirKey, const Q
 {
     QByteArray nonce, data;
     ChatCrypto::seal(keyWith(theirKey), plain, &nonce, &data);
-    return {{QStringLiteral("room"), room}, {QStringLiteral("fromKey"), myKey()}, {QStringLiteral("fromName"), username()},
-            {QStringLiteral("mailbox"), m_nostr->publicKey()}, {QStringLiteral("id"), msgId},
-            {QStringLiteral("nonce"), b64(nonce)}, {QStringLiteral("data"), b64(data)}};
+    QJsonObject o{{QStringLiteral("room"), room}, {QStringLiteral("fromKey"), myKey()}, {QStringLiteral("fromName"), username()},
+                  {QStringLiteral("mailbox"), m_nostr->publicKey()}, {QStringLiteral("id"), msgId},
+                  {QStringLiteral("nonce"), b64(nonce)}, {QStringLiteral("data"), b64(data)}};
+    // The invite from their code, until they accept: proves they handed it out within the hour.
+    const QString invite = str(m_contacts.value(theirKey), "invite");
+    if (!invite.isEmpty())
+        o.insert(QStringLiteral("invite"), invite);
+    return o;
 }
 
 void Chat::post(const QString &base, const QJsonObject &body, std::function<void(int)> done)
@@ -817,7 +881,7 @@ QString Chat::deliver(const QString &key, const QJsonObject &body, const QString
         return QStringLiteral("wifi");
     }
     if (!mailbox.isEmpty()) {
-        m_nostr->publish(mailbox, b64(json));
+        m_nostr->publish(mailbox, wrap(key, json));
         return QStringLiteral("internet");
     }
     return QString();
@@ -943,7 +1007,7 @@ void Chat::attempt(const QString &key, const QString &id)
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
     if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
         for (const QJsonObject &b : bodies)
-            m_nostr->publish(mailbox, b64(QJsonDocument(b).toJson(QJsonDocument::Compact)));
+            m_nostr->publish(mailbox, wrap(key, QJsonDocument(b).toJson(QJsonDocument::Compact)));
         any = true;
         markSent(QStringLiteral("internet"));
     }
@@ -1085,7 +1149,7 @@ void Chat::attemptUnsend(const QString &key, const QString &id)
         post(base, body);
     const QString box = mailboxOf(key);
     if (!box.isEmpty())
-        m_nostr->publish(box, b64(QJsonDocument(body).toJson(QJsonDocument::Compact)));
+        m_nostr->publish(box, wrap(key, QJsonDocument(body).toJson(QJsonDocument::Compact)));
 }
 
 // ------------------------------------------------------------------ keeping
@@ -1288,6 +1352,9 @@ void Chat::load()
     const QJsonArray contacts = QJsonDocument::fromJson(m_vault->read(QStringLiteral("contacts.json"))).array();
     for (const QJsonValue &c : contacts)
         m_contacts.insert(c.toObject().value(QStringLiteral("key")).toString(), c.toObject().toVariantMap());
+    const QJsonObject inv = QJsonDocument::fromJson(m_vault->read(QStringLiteral("invites.json"))).object();
+    for (auto it = inv.begin(); it != inv.end(); ++it)
+        m_invites.insert(it.key(), qint64(it.value().toDouble()));
     const QJsonObject del = QJsonDocument::fromJson(m_vault->read(QStringLiteral("deleted.json"))).object();
     for (auto it = del.begin(); it != del.end(); ++it)
         m_deleted.insert(it.key(), qint64(it.value().toDouble()));
