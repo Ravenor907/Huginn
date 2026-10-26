@@ -58,6 +58,9 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     val direct by app.direct.state.collectAsState()
     val browser = remember { BrowserState(Files.downloads) }
     var picking by remember { mutableStateOf(false) }
+    var showDirect by remember { mutableStateOf(false) }
+    val closePeers by app.close.list.collectAsState()
+    val close = closePeers.filter { it.connected }
     androidx.compose.runtime.LaunchedEffect(Share.pending.size) {
         if (Share.pending.isNotEmpty()) { browser.picked.addAll(Share.pending.filterNot { browser.picked.contains(it) }); Share.pending.clear(); picking = true }
     }
@@ -70,14 +73,23 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
         picking = false
     }
 
+    fun sendClose(p: io.github.ravenor907.muninn.net.Close.Peer) {
+        val files = browser.picked.flatMap { if (it.isDirectory) it.walkTopDown().filter { f -> f.isFile }.toList() else listOf(it) }
+        if (files.isEmpty()) { picking = true; Ui.say("Pick files to send, then choose ${p.name}."); return }
+        app.closeFiles.send(p, files)
+        browser.picked.clear()
+        picking = false
+    }
+
     if (picking) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             Section("Pick files to send") { MButton("Done", kind = Kind.Accent) { picking = false } }
             FileBrowser(browser, Modifier.weight(1f))
             if (browser.picked.isNotEmpty()) {
                 Text("Send to:", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+                close.take(4).forEach { p -> Line(p.name, "Close by", icon = "phone") { sendClose(p) } }
                 devices.take(4).forEach { d -> Line(d.alias, d.model.ifEmpty { d.ip }, icon = if (d.type == "mobile") "phone" else "network") { sendTo(d) } }
-                if (devices.isEmpty()) Text("No devices nearby yet. Go back and press Look again.", style = Type.small)
+                if (devices.isEmpty() && close.isEmpty()) Text("No devices nearby yet. Go back and press Look again.", style = Type.small)
             }
         }
         return
@@ -94,13 +106,26 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                     if (transfer.sending) MButton("Stop sending", Modifier.padding(top = 8.dp)) { app.net.cancelSend() }
                 }
             }
-            Section("Nearby") { MButton(if (scanning) "Looking…" else "Look again", enabled = !scanning) { app.net.refresh() } }
+            MButton(if (browser.picked.isEmpty()) "Pick files to send" else "${browser.picked.size} picked · change", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "send") { picking = true }
+            Section("Send to") { MButton(if (scanning) "Looking…" else "Look again", enabled = !scanning) { app.net.refresh() } }
             if (error != null) Text(error!!, style = Type.normal.copy(color = Palette.danger))
-            if (devices.isEmpty() && error == null) Text(
-                "No devices yet. Open Huginn, Muninn or the free LocalSend app on another device on the same Wi-Fi, then press Look again. " +
-                    "Not on the same Wi-Fi? Use Direct connect below. This phone shows up as “${app.identity.deviceName}”.",
+            if (devices.isEmpty() && close.isEmpty() && error == null) Text(
+                "Nobody yet. Phones with Muninn close by show up on their own. Devices with Huginn or LocalSend show up when they're on the same Wi-Fi. " +
+                    "This phone shows up as “${app.identity.deviceName}”.",
                 style = Type.normal,
             )
+        }
+        items(close, key = { "close-" + it.endpoint }) { p ->
+            Panel(Modifier.padding(bottom = 8.dp), onClick = { sendClose(p) }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MIcon("phone", Palette.accent, 28.dp)
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(p.name, style = Type.big)
+                        Text("Muninn · close by, no Wi-Fi needed", style = Type.small)
+                    }
+                    Text("Send", style = Type.small.copy(color = Palette.accent))
+                }
+            }
         }
         items(devices, key = { it.id }) { d ->
             Panel(Modifier.padding(bottom = 8.dp), onClick = { sendTo(d) }) {
@@ -115,9 +140,9 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
         }
         item {
-            MButton(if (browser.picked.isEmpty()) "Pick files to send" else "${browser.picked.size} picked · change", Modifier.fillMaxWidth().padding(top = 4.dp), Kind.Accent, icon = "send") { picking = true }
-            Section("Direct connect")
-            Panel {
+            if (!showDirect && !direct.on) MButton("Huginn or LocalSend not showing up? No Wi-Fi?", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "wifi") { showDirect = true }
+            if (showDirect || direct.on) Section("Direct connect")
+            if (showDirect || direct.on) Panel {
                 if (!direct.on) {
                     Text("No shared Wi-Fi? Muninn can make a private hotspot (no internet, no data used). The other phone scans the code with its camera to join, then sending and chat work as usual.", style = Type.normal)
                     if (direct.error != null) Text(direct.error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))

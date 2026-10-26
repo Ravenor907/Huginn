@@ -38,7 +38,10 @@ import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.files.Files
 import io.github.ravenor907.muninn.forge.Jobs
 import io.github.ravenor907.muninn.net.LocalSend
+import android.view.WindowManager
+import io.github.ravenor907.muninn.screens.ChatNav
 import io.github.ravenor907.muninn.screens.ChatScreen
+import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FilesScreen
 import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.Share
@@ -60,8 +63,16 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val app get() = application as Muninn
-    private var tab by mutableStateOf("send")
+    private var tab by mutableStateOf("chat")
     private var storageOk by mutableStateOf(true)
+    /** Password set and Muninn was away long enough: ask for it before showing anything. */
+    private var uiLocked by mutableStateOf(false)
+    private var awaySince = 0L
+    private var netStarted = false
+
+    private val closePermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) app.close.start { app.chat.hello() }
+    }
 
     private val directPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted.values.all { it }) app.direct.start()
@@ -72,12 +83,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        app.net.start()
-        app.net.refresh()
-        app.updater.check()
+        secure()
+        if (app.ready.value) startNet()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         intent?.getStringExtra("screen")?.let { tab = it }   // CI screenshots open each tab
+        openChat(intent)
         handleShare(intent)
         setContent { MuninnTheme { Root() } }
     }
@@ -85,14 +96,60 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
+        openChat(intent)
         intent.getStringExtra("screen")?.let { tab = it }
+    }
+
+    /** A message notification was tapped: open that conversation. */
+    private fun openChat(i: Intent?) {
+        val key = i?.getStringExtra("chat") ?: return
+        tab = "chat"
+        ChatNav.open = if (key == "inbox") "" else key
+    }
+
+    /** Wi-Fi, close-by (Bluetooth) and internet: started once the vault is open. */
+    private fun startNet() {
+        if (netStarted) return
+        netStarted = true
+        app.net.start()
+        app.net.refresh()
+        app.updater.check()
+        app.nostr.connect()
+        val perms = when {
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES)
+            Build.VERSION.SDK_INT >= 31 -> arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+            else -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) app.close.start { app.chat.hello() }
+        else closePermission.launch(perms)
+    }
+
+    /** "Block screenshots": also hides Muninn's screen in recent apps. */
+    fun secure() {
+        if (app.identity.secureScreen) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        app.visible = true
+        if (app.vault.hasPassword && awaySince > 0 && System.currentTimeMillis() - awaySince >= app.identity.lockAfter) uiLocked = true
+        if (app.ready.value) app.nostr.connect()
+    }
+
+    override fun onStop() {
+        app.visible = false
+        awaySince = System.currentTimeMillis()
+        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
         storageOk = hasStorage()
         Jobs.setVisible(true)
-        app.net.announce()
+        if (app.ready.value) app.net.announce()
     }
 
     override fun onPause() {
@@ -140,7 +197,10 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Root() {
+        val ready by app.ready.collectAsState()
+        if (!ready || uiLocked) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet() } }; return }
         val request by app.net.request.collectAsState()
+        val offer by app.closeFiles.pendingOffer.collectAsState()
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()
         val up by app.updater.state.collectAsState()
@@ -153,7 +213,8 @@ class MainActivity : ComponentActivity() {
 
         Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
             Brand {
-                MButton("Settings", kind = if (tab == "settings") Kind.Accent else Kind.Normal, icon = "gear") { tab = if (tab == "settings") "send" else "settings" }
+                if (app.vault.hasPassword) MButton("Lock", Modifier.padding(end = 8.dp)) { uiLocked = true }
+                MButton("Settings", kind = if (tab == "settings") Kind.Accent else Kind.Normal, icon = "gear") { tab = if (tab == "settings") "chat" else "settings" }
             }
             if (up.ready && tab != "settings") Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable { tab = "settings" }.padding(10.dp)) {
                 Text("Muninn ${up.latest} is ready. Tap to install.", style = Type.small.copy(color = Palette.accent))
@@ -167,11 +228,11 @@ class MainActivity : ComponentActivity() {
             }
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    "chat" -> ChatScreen(app)
+                    "send" -> TransferScreen(app) { startDirect() }
                     "files" -> FilesScreen(app) { files -> Share.pending.addAll(files); tab = "send" }
                     "usb" -> UsbScreen()
-                    "settings" -> SettingsScreen(app)
-                    else -> TransferScreen(app) { startDirect() }
+                    "settings" -> SettingsScreen(app) { secure() }
+                    else -> ChatScreen(app)
                 }
                 toast?.let { (text, bad) ->
                     Box(Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().background(if (bad) Palette.dangerFill else Palette.raised).clickable { Ui.toast.value = null }.padding(14.dp)) {
@@ -180,7 +241,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Row(Modifier.fillMaxWidth().background(Palette.groundDeep).padding(vertical = 6.dp)) {
-                listOf("send" to ("send" to "Send"), "chat" to ("chat" to "Chat"), "files" to ("folder" to "Files"), "usb" to ("usb" to "USB")).forEach { (id, v) ->
+                listOf("chat" to ("chat" to "Chat"), "send" to ("send" to "Send"), "files" to ("folder" to "Files"), "usb" to ("usb" to "USB")).forEach { (id, v) ->
                     val on = tab == id
                     Column(Modifier.weight(1f).clickable(role = Role.Tab) { tab = id }.padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         MIcon(v.first, if (on) Palette.accent else Palette.textMuted, 24.dp)
@@ -198,6 +259,16 @@ class MainActivity : ComponentActivity() {
                 text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${app.identity.receiveFolder.name}.", style = Type.normal) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { app.net.accept() } },
                 dismissButton = { MButton("Decline") { app.net.decline() } },
+            )
+        }
+        offer?.let { r ->
+            AlertDialog(
+                onDismissRequest = { app.closeFiles.decline() },
+                containerColor = Palette.panel,
+                title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
+                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${app.identity.receiveFolder.name}.", style = Type.normal) },
+                confirmButton = { MButton("Accept", kind = Kind.Accent) { app.closeFiles.accept() } },
+                dismissButton = { MButton("Decline") { app.closeFiles.decline() } },
             )
         }
         ask?.let { AskDialog(it) }

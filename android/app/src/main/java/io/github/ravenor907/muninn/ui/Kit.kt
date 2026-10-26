@@ -129,11 +129,13 @@ fun ToggleRow(title: String, detail: String, on: Boolean, onChange: (Boolean) ->
 }
 
 @Composable
-fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, single: Boolean = true, keyboard: KeyboardOptions = KeyboardOptions.Default) {
+fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, single: Boolean = true, keyboard: KeyboardOptions = KeyboardOptions.Default,
+          secret: Boolean = false) {
     Box(modifier.fillMaxWidth().clip(Corner).background(Palette.groundDeep).border(1.dp, Palette.lineMuted, Corner).padding(12.dp)) {
         if (value.isEmpty()) Text(hint, style = Type.normal.copy(color = Palette.textFaint))
         BasicTextField(value, onChange, singleLine = single, keyboardOptions = keyboard, textStyle = Type.normal.copy(color = Palette.text),
-            cursorBrush = SolidColor(Palette.accent), modifier = Modifier.fillMaxWidth())
+            cursorBrush = SolidColor(Palette.accent), modifier = Modifier.fillMaxWidth(),
+            visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None)
     }
 }
 

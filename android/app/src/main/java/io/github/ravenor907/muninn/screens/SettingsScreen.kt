@@ -27,9 +27,19 @@ import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.ToggleRow
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
+import io.github.ravenor907.muninn.ui.Ask
+import io.github.ravenor907.muninn.ui.Palette
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.KeyboardType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private const val DAY = 86_400_000L
 
 @Composable
-fun SettingsScreen(app: Muninn) {
+fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val id = app.identity
     var name by remember { mutableStateOf(id.username) }
     var device by remember { mutableStateOf(id.deviceName) }
@@ -38,10 +48,90 @@ fun SettingsScreen(app: Muninn) {
     var channel by remember { mutableStateOf(id.channel) }
     var muted by remember { mutableStateOf(id.muted()) }
     val up by app.updater.state.collectAsState()
+    var deleteAfter by remember { mutableStateOf(id.deleteAfter) }
+    var preview by remember { mutableStateOf(id.showPreview) }
+    var secure by remember { mutableStateOf(id.secureScreen) }
+    var hasPw by remember { mutableStateOf(app.vault.hasPassword) }
+    var lockAfter by remember { mutableStateOf(id.lockAfter) }
+    var editingPw by remember { mutableStateOf(false) }
+    var pw1 by remember { mutableStateOf("") }
+    var pw2 by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+        Section("Privacy")
+        Panel {
+            Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)
+            Text("Delete messages after", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0L to "Never", DAY to "1 day", 7 * DAY to "1 week", 30 * DAY to "1 month").forEach { (ms, label) ->
+                    MButton(label, Modifier.weight(1f), if (deleteAfter == ms) Kind.Accent else Kind.Normal) {
+                        deleteAfter = ms; id.deleteAfter = ms; app.chat.prune()
+                    }
+                }
+            }
+            Text("Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            ToggleRow("Show message text in notifications", "Off: notifications only say “New message”", preview) { preview = it; id.showPreview = it }
+            ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
+        }
+        Section("Password")
+        Panel {
+            Text(if (hasPw) "Muninn asks for your password to open. Without it, nothing it keeps can be read, even by Muninn."
+                else "Optional. With a password, Muninn's messages, contacts and keys can't be read without it. There's no way to recover it.", style = Type.normal)
+            if (editingPw) {
+                Field(pw1, { pw1 = it }, "New password", Modifier.padding(top = 10.dp), secret = true,
+                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+                Field(pw2, { pw2 = it }, "Type it again", Modifier.padding(top = 8.dp), secret = true,
+                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+                if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton("Cancel", Modifier.weight(1f)) { editingPw = false; pw1 = ""; pw2 = "" }
+                    MButton("Save password", Modifier.weight(1f), Kind.Accent, enabled = pw1.length >= 4 && pw1 == pw2) {
+                        val p = pw1
+                        scope.launch {
+                            withContext(Dispatchers.Default) { app.vault.setPassword(p) }
+                            hasPw = app.vault.hasPassword; editingPw = false; pw1 = ""; pw2 = ""
+                            Ui.say("Password set. Don't lose it: it can't be recovered.")
+                        }
+                    }
+                }
+            } else {
+                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton(if (hasPw) "Change password" else "Set a password", Modifier.weight(1f), Kind.Accent) { editingPw = true }
+                    if (hasPw) MButton("Remove", Modifier.weight(1f)) {
+                        Ui.sure(Ask("Remove the password?", "Muninn will open without one. Your data stays encrypted with this phone's key store.", "Remove") {
+                            app.vault.setPassword(null); hasPw = app.vault.hasPassword
+                        })
+                    }
+                }
+            }
+            if (hasPw) {
+                Text("Lock again after Muninn is in the background for", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min").forEach { (ms, label) ->
+                        MButton(label, Modifier.weight(1f), if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
+                    }
+                }
+                Text("While locked, messages from the internet still arrive as “New message” and open once you unlock.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+        Section("Erase")
+        Panel {
+            Text("Delete every message on this phone, or erase everything Muninn keeps (messages, contacts, keys and settings).", style = Type.normal)
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Delete all messages", Modifier.weight(1f)) {
+                    Ui.sure(Ask("Delete all messages?", "Every conversation on this phone is deleted. Contacts stay.", "Hold to delete", danger = true, hold = true) {
+                        app.chat.deleteAll(); Ui.say("All messages deleted.")
+                    })
+                }
+                MButton("Erase everything", Modifier.weight(1f), Kind.Danger) {
+                    Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings are deleted for good, and Muninn closes. Files you received stay.",
+                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                }
+            }
+        }
         Section("Nearby chat")
         Panel {
-            ToggleRow("Nearby chat", "Everyone on the same Wi-Fi with Huginn or Muninn can see and message you", nearby) {
+            ToggleRow("Nearby chat", "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you", nearby) {
                 nearby = it; id.nearbyChat = it; app.net.announce()
             }
             Text("Your name in Nearby chat", style = Type.small, modifier = Modifier.padding(top = 8.dp))
@@ -49,7 +139,7 @@ fun SettingsScreen(app: Muninn) {
                 Field(name, { name = it.take(24) }, "A name, not your real one", Modifier.weight(1f))
                 MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name != id.username) { id.username = name; app.net.announce(); Ui.say("You're “${id.username}” now.") }
             }
-            ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
+            ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
             if (muted.isNotEmpty()) MButton("Unmute everyone (${muted.size})", Modifier.fillMaxWidth().padding(top = 6.dp)) { muted.forEach { id.setMuted(it, false) }; muted = id.muted() }
         }
         Section("This phone")

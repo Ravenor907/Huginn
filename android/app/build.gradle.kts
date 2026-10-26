@@ -81,6 +81,9 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.27.1") // bzip2 for SteamOS images
     implementation("org.tukaani:xz:1.10") // .xz images
     implementation("com.google.zxing:core:3.5.3") // QR codes for Direct connect
+    implementation("com.google.android.gms:play-services-nearby:19.3.0") // close by: Bluetooth and Wi-Fi Direct
+    implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
+    implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // org.json is a stub in unit tests

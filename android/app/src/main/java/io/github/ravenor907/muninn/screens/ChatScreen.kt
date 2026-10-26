@@ -1,21 +1,28 @@
 package io.github.ravenor907.muninn.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,15 +33,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Chat
+import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.Corner
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.Line
 import io.github.ravenor907.muninn.ui.MButton
+import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Section
@@ -43,114 +54,204 @@ import io.github.ravenor907.muninn.ui.Ui
 import java.text.DateFormat
 import java.util.Date
 
+/** Where a conversation is open: "" none, "nearby" the room, "code", "add", or a contact's key. */
+object ChatNav { var open by mutableStateOf("") }
+
+private fun routeText(r: String) = when (r) {
+    "close" -> "Close by (Bluetooth)"
+    "wifi" -> "Same Wi-Fi"
+    "internet" -> "Over the internet"
+    else -> "Not reachable right now"
+}
+private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet" -> "network"; else -> "user" }
+
 @Composable
 fun ChatScreen(app: Muninn) {
-    var tab by remember { mutableStateOf(0) }      // 0 Nearby, 1 Private
-    var open by remember { mutableStateOf<Pair<String, String>?>(null) }   // private conversation: key, name
-    val requests by app.chat.requests.collectAsState()
-
-    if (open != null) {
-        BackHandler { open = null }
-        Conversation(app, open!!.first, open!!.second) { open = null }
+    val open = ChatNav.open
+    if (open.isNotEmpty()) {
+        BackHandler { ChatNav.open = "" }
+        when (open) {
+            "nearby" -> NearbyRoom(app)
+            "code" -> MyCode(app)
+            "add" -> AddSomeone(app)
+            else -> Conversation(app, open)
+        }
         return
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton("Nearby", Modifier.weight(1f), if (tab == 0) Kind.Accent else Kind.Normal, icon = "chat") { tab = 0 }
-            MButton(if (requests.isEmpty()) "Private" else "Private (${requests.size})", Modifier.weight(1f), if (tab == 1) Kind.Accent else Kind.Normal, icon = "lock") { tab = 1 }
+    val contacts by app.chat.contacts.all.collectAsState()
+    val convos by app.chat.conversations.collectAsState()
+    val requests by app.chat.requests.collectAsState()
+    val unread by app.chat.unread.collectAsState()
+    val close by app.close.list.collectAsState()
+    val wifi by app.net.devices.collectAsState()
+    val closeError by app.close.error.collectAsState()
+    val nostrUp by app.nostr.connected.collectAsState()
+    // Everyone reachable right now: close by first, then the same Wi-Fi. (key, name, route)
+    val around = buildList {
+        close.filter { it.connected && it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.name, "close")) }
+        wifi.filter { it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.chatName ?: it.alias, "wifi")) }
+    }.distinctBy { it.first }
+    val strangers = around.filter { !app.chat.isContact(it.first) }
+
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        item {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Add someone", Modifier.weight(1f), Kind.Accent, icon = "plus") { ChatNav.open = "add" }
+                MButton("My code", Modifier.weight(1f), icon = "user") { ChatNav.open = "code" }
+            }
+            if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 8.dp))
         }
-        if (tab == 0) Nearby(app, Modifier.weight(1f)) else PrivateList(app, Modifier.weight(1f)) { k, n -> open = k to n }
+        if (requests.isNotEmpty()) item { Section("Wants to chat") }
+        items(requests, key = { "r" + it.peerKey }) { r ->
+            Panel(Modifier.padding(bottom = 8.dp)) {
+                Text("${r.name} wants to chat", style = Type.big)
+                if (r.viaInternet) Text("They have your code. Only accept if you know who it is.", style = Type.small)
+                else {
+                    Text("Code: ${r.code}", style = Type.title.copy(color = Palette.accent), modifier = Modifier.padding(vertical = 6.dp))
+                    Text("Accept if their screen shows the same code.", style = Type.small)
+                }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton("Accept", kind = Kind.Accent) { app.chat.acceptRequest(r); ChatNav.open = r.peerKey }
+                    MButton("Decline") { app.chat.declineRequest(r) }
+                }
+            }
+        }
+        item { Section("Chats") { Text(if (nostrUp > 0) "Internet: connected" else "Internet: offline", style = Type.small) } }
+        item {
+            Line("Nearby room", if (app.identity.nearbyChat) "${around.size} around you · you're “${app.identity.username}”" else "Off", icon = "network") { ChatNav.open = "nearby" }
+        }
+        val sorted = contacts.sortedByDescending { convos[it.chatKey]?.lastOrNull()?.time ?: 0L }
+        items(sorted, key = { "c" + it.chatKey }) { c ->
+            val last = convos[c.chatKey]?.lastOrNull()
+            val r = app.chat.route(c.chatKey)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    Line(c.name, last?.text ?: routeText(r), icon = routeIcon(r),
+                        trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { ChatNav.open = c.chatKey }
+                }
+                if (c.chatKey in unread) Box(Modifier.size(10.dp).background(Palette.accent, CircleShape))
+            }
+        }
+        if (contacts.isEmpty()) item {
+            Text("No contacts yet. Meet someone nearby, or swap codes with Add someone and My code. After that you can message them from anywhere.",
+                style = Type.normal, modifier = Modifier.padding(vertical = 8.dp))
+        }
+        if (strangers.isNotEmpty()) item { Section("Around you") }
+        items(strangers, key = { "s" + it.first }) { (k, name, r) ->
+            Line(name, "${routeText(r)} · tap to add", icon = routeIcon(r)) {
+                Ui.sure(Ask("Add $name?", "Code: ${app.chat.codeWith(k)}\n\nTheir screen shows the same code when your first message arrives. " +
+                    "Only add them if it matches. Then you can message each other from anywhere.", "It matches",
+                    onConfirm = { app.chat.addNearbyPerson(k, name); ChatNav.open = k }))
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
 @Composable
-private fun Nearby(app: Muninn, modifier: Modifier) {
+private fun NearbyRoom(app: Muninn) {
     val msgs by app.chat.nearby.collectAsState()
-    val devices by app.net.devices.collectAsState()
     var text by remember { mutableStateOf("") }
     var on by remember { mutableStateOf(app.identity.nearbyChat) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
-    val people = devices.count { it.canChat && it.chatName != null }
-    Column(modifier.imePadding()) {
-        Section("Nearby chat") { Text(if (on) "You're “${app.identity.username}” · $people here" else "Off", style = Type.small) }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
+        Section("Nearby room") { MButton("Back", icon = "back") { ChatNav.open = "" } }
         if (!on) {
-            Text("Nearby chat is off, so nobody can see or message you here. Turn it back on in Settings.", style = Type.normal)
+            Text("Nearby chat is off, so nobody can see or message you here.", style = Type.normal)
             MButton("Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { app.identity.nearbyChat = true; on = true; app.net.announce() }
             return@Column
         }
-        Text("Everyone on this Wi-Fi with Huginn or Muninn sees what you post here. Hold a message to mute that person.", style = Type.small)
+        Text("Everyone close by or on this Wi-Fi with Muninn or Huginn sees this. You're “${app.identity.username}”. Hold a message to mute someone.", style = Type.small)
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m ->
                 Bubble(m, showName = true) {
-                    if (!m.mine) Ui.sure(Ask("Mute ${m.name}?", "You won't see their Nearby messages. Unmute any time in Settings.", "Mute", onConfirm = { app.chat.mute(m.peerKey, true) }))
+                    if (!m.mine) Ui.sure(Ask("Mute ${m.name}?", "You won't see their messages here. Unmute any time in Settings.", "Mute", onConfirm = { app.chat.mute(m.peerKey, true) }))
                 }
             }
         }
-        if (msgs.isEmpty()) Text(if (people == 0) "Nobody else is here yet." else "Say hello.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Field(text, { text = it.take(Chat.MAX) }, "Message everyone nearby", Modifier.weight(1f), single = false)
-            MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { app.chat.sendNearby(text); text = "" }
-        }
+        if (msgs.isEmpty()) Text("Say hello.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
+        Composer(text, { text = it }, "Message everyone nearby") { app.chat.sendNearby(text); text = "" }
     }
 }
 
 @Composable
-private fun PrivateList(app: Muninn, modifier: Modifier, onOpen: (String, String) -> Unit) {
-    val requests by app.chat.requests.collectAsState()
+private fun Conversation(app: Muninn, key: String) {
     val convos by app.chat.conversations.collectAsState()
-    val devices by app.net.devices.collectAsState()
-    LazyColumn(modifier) {
-        if (requests.isNotEmpty()) item { Section("Wants to chat") }
-        items(requests, key = { "r" + it.peerKey }) { r ->
-            Panel(Modifier.padding(bottom = 8.dp)) {
-                Text("${r.name} wants to chat privately", style = Type.big)
-                Text("Code: ${r.code}", style = Type.title.copy(color = Palette.accent), modifier = Modifier.padding(vertical = 6.dp))
-                Text("Accept only if their screen shows the same code.", style = Type.small)
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("Codes match", kind = Kind.Accent) { app.chat.acceptPair(r) }
-                    MButton("Decline") { app.chat.declinePair(r) }
-                }
-            }
-        }
-        item { Section("Conversations") }
-        val keys = convos.keys.toList()
-        if (keys.isEmpty()) item { Text("None yet. Pick someone below to start.", style = Type.normal) }
-        items(keys, key = { "c$it" }) { k ->
-            val last = convos[k]?.lastOrNull()
-            val name = app.identity.trusted()[k] ?: devices.firstOrNull { it.chatKey == k }?.alias ?: "Someone"
-            Line(name, last?.text ?: "", icon = "user", trailing = last?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.time)) } ?: "") { onOpen(k, name) }
-        }
-        item { Section("Nearby with Huginn or Muninn") }
-        val chatters = devices.filter { it.canChat }
-        if (chatters.isEmpty()) item { Text("Nobody nearby. Private chat works on the same Wi-Fi or over Direct connect.", style = Type.normal) }
-        items(chatters, key = { "d" + it.id }) { d ->
-            Line(d.alias, if (app.chat.isTrusted(d.chatKey!!)) "Verified" else "Not verified yet", icon = if (d.type == "mobile") "phone" else "network") {
-                val key = d.chatKey
-                if (app.chat.isTrusted(key)) onOpen(key, d.alias)
-                else Ui.sure(Ask("Check this code with ${d.alias}", "Code: ${app.chat.codeWith(key)}\n\nTheir screen shows the same code when your first message arrives. " +
-                    "Only continue if it matches. That's how you know nobody is in between.", "It matches", onConfirm = { onOpen(key, d.alias) }))
-            }
-        }
-    }
-}
-
-@Composable
-private fun Conversation(app: Muninn, key: String, name: String, onBack: () -> Unit) {
-    val convos by app.chat.conversations.collectAsState()
+    val c = app.chat.contacts.get(key)
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.size) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    val route = app.chat.route(key)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
-        Section(name) { MButton("Back", icon = "back") { onBack() } }
-        Text("Private and verified: only you two can read this.", style = Type.small)
+        Section(c?.name ?: "Chat") { MButton("Back", icon = "back") { ChatNav.open = "" } }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            MIcon(routeIcon(route), Palette.accent, 18.dp)
+            Text("  ${routeText(route)} · end-to-end encrypted${if (c?.verified == true) " · verified" else ""}", style = Type.small)
+        }
         LazyColumn(Modifier.weight(1f).padding(vertical = 8.dp), state = list) {
             items(msgs, key = { it.id }) { m -> Bubble(m, showName = false) {} }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Field(text, { text = it.take(Chat.MAX) }, "Message $name", Modifier.weight(1f), single = false)
-            MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { app.chat.sendPrivate(key, name, text); text = "" }
+        if (msgs.isEmpty()) Text("No messages yet.", style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
+        Composer(text, { text = it }, "Message ${c?.name ?: ""}") { app.chat.sendPrivate(key, text); text = "" }
+    }
+}
+
+@Composable
+private fun Composer(text: String, onText: (String) -> Unit, hint: String, onSend: () -> Unit) {
+    Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Field(text, { onText(it.take(Chat.MAX)) }, hint, Modifier.weight(1f), single = false)
+        MButton("Send", Modifier.padding(start = 8.dp), Kind.Accent, enabled = text.isNotBlank()) { onSend() }
+    }
+}
+
+@Composable
+private fun MyCode(app: Muninn) {
+    val context = LocalContext.current
+    val code = remember { app.chat.myCode() }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Section("My code") { MButton("Back", icon = "back") { ChatNav.open = "" } }
+        Text("Anyone with this code can message you from anywhere, as “${app.identity.username}”. Share it only with people you want to hear from.", style = Type.normal)
+        Box(Modifier.fillMaxWidth().padding(vertical = 14.dp), contentAlignment = Alignment.Center) { Qr(code, 240) }
+        Text("Their Muninn can scan this with the phone's camera, or you can send it as a message:", style = Type.small)
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Share code", Modifier.weight(1f), Kind.Accent, icon = "send") {
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn. Open Muninn, tap Add someone and paste this:\n\n$code"), "Share your Muninn code"))
+            }
+            MButton("Copy", Modifier.weight(1f), icon = "copy") {
+                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
+                Ui.say("Code copied.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddSomeone(app: Muninn) {
+    val context = LocalContext.current
+    var text by remember {
+        val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+        mutableStateOf(if (clip.contains(Contacts.PREFIX)) clip else "")
+    }
+    val found = Contacts.parse(text)
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Section("Add someone") { MButton("Back", icon = "back") { ChatNav.open = "" } }
+        Text("Paste the code they sent you (it starts with MUNINN1). Someone close by? They show up under Around you, no code needed.", style = Type.normal)
+        Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
+        when {
+            text.isBlank() -> {}
+            found == null -> Text("That isn't a Muninn code. Ask them to tap My code › Share code.", style = Type.small.copy(color = Palette.danger))
+            found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
+            else -> {
+                Text("Found: ${found.name}", style = Type.big)
+                MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+                    app.chat.addContact(found)
+                    Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
+                    ChatNav.open = found.chatKey
+                }
+            }
         }
     }
 }

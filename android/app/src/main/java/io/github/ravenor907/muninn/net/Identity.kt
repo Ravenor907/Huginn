@@ -9,7 +9,8 @@ import java.util.UUID
 import kotlin.random.Random
 
 /** Who this phone is to other devices, and the person's choices. Kept in SharedPreferences. */
-class Identity(context: Context) {
+class Identity(context: Context, private val vault: Vault) {
+    private val secrets = java.io.File(context.filesDir, "secrets.json")
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
 
     /** Random and stable: LocalSend uses it to tell devices apart and to skip itself. */
@@ -44,18 +45,47 @@ class Identity(context: Context) {
         get() = File(prefs.getString("receiveFolder", null) ?: Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath)
         set(v) = prefs.edit().putString("receiveFolder", v.absolutePath).apply()
 
+    /** Secret keys, kept only in the encrypted vault (moved there from older versions' settings). */
+    private fun secret(name: String, make: () -> String): String {
+        val o = vault.read(secrets)?.let { org.json.JSONObject(it) } ?: org.json.JSONObject()
+        o.optString(name).ifEmpty { null }?.let { return it }
+        val v = prefs.getString(name, null) ?: make()
+        o.put(name, v)
+        vault.write(secrets, o.toString())
+        prefs.edit().remove(name).apply()
+        return v
+    }
+
     /** This device's chat key pair, made once. */
     val keys: KeyPair by lazy {
-        val priv = prefs.getString("chatPriv", null)
-        val pub = prefs.getString("chatPub", null)
-        if (priv != null && pub != null) {
-            KeyPair(ChatCrypto.publicFrom(pub), ChatCrypto.privateFrom(priv))
-        } else {
-            ChatCrypto.newKeyPair().also {
-                prefs.edit().putString("chatPriv", ChatCrypto.b64(it.private.encoded)).putString("chatPub", ChatCrypto.b64(it.public.encoded)).apply()
-            }
+        var pub = prefs.getString("chatPub", null)
+        val priv = secret("chatPriv") {
+            ChatCrypto.newKeyPair().let { kp -> pub = ChatCrypto.b64(kp.public.encoded); ChatCrypto.b64(kp.private.encoded) }
         }
+        prefs.edit().putString("chatPub", pub).apply()
+        KeyPair(ChatCrypto.publicFrom(pub!!), ChatCrypto.privateFrom(priv))
     }
+
+    /** The Nostr secret (internet inbox). */
+    fun nostrSecret(): String = secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }
+
+    // ---- privacy
+    /** Delete messages older than this (milliseconds); 0 keeps them. */
+    var deleteAfter: Long
+        get() = prefs.getLong("deleteAfter", 0L)
+        set(v) = prefs.edit().putLong("deleteAfter", v).apply()
+    /** Notifications say only "New message" unless this is on. */
+    var showPreview: Boolean
+        get() = prefs.getBoolean("showPreview", false)
+        set(v) = prefs.edit().putBoolean("showPreview", v).apply()
+    /** Blocks screenshots and hides Muninn's screen in recent apps. */
+    var secureScreen: Boolean
+        get() = prefs.getBoolean("secureScreen", false)
+        set(v) = prefs.edit().putBoolean("secureScreen", v).apply()
+    /** With a password: ask again after Muninn has been in the background this long (ms). */
+    var lockAfter: Long
+        get() = prefs.getLong("lockAfter", 60_000L)
+        set(v) = prefs.edit().putLong("lockAfter", v).apply()
     val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
 
     // Private chats: a device is trusted once both people saw the same code. Stored as key -> name.

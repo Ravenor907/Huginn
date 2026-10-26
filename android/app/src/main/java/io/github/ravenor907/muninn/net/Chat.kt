@@ -8,59 +8,88 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
- * Texting between Huginn and Muninn, over the LocalSend port.
- *  - Nearby: a public room for everyone on the same network with either app. Usernames only,
- *    no codes. Each copy is sealed for its recipient, so other devices on the Wi-Fi can't read it,
- *    but everyone in the room can.
- *  - Private: one person to another. The first time, both screens show the same 6-digit code;
- *    once both people confirm it, nobody else can read or fake their messages.
- * Wire format (both apps): POST /api/huginn/v1/message
- *   { room: "nearby"|"private", fromKey, fromName, fromId, nonce, data }
+ * Muninn's messaging. Three ways to reach someone, picked automatically, best first:
+ *  1. Close by: Bluetooth / Wi-Fi Direct (Close), no network needed.
+ *  2. Same Wi-Fi: the LocalSend port (also how Huginn chats).
+ *  3. Anywhere: Nostr relays, for contacts (people met nearby or who shared a code).
+ * Rooms:
+ *  - Nearby: public, for everyone close by or on the same Wi-Fi. Usernames, no codes.
+ *  - Private: one contact. Sealed end to end with the chat keys whichever way it travels.
+ * One message format everywhere: { room, fromKey, fromName, mailbox, nonce, data }.
  */
-class Chat(private val context: Context, private val net: LocalSend) {
+class Chat(private val context: Context, private val net: LocalSend, private val close: Close, private val nostr: Nostr, val contacts: Contacts,
+           private val vault: Vault) {
     private val id get() = net.identity
 
-    data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long, val failed: Boolean = false)
-    data class PairRequest(val peerKey: String, val name: String, val code: String)
+    data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long,
+                   val failed: Boolean = false, val via: String = "")
+    data class Request(val peerKey: String, val name: String, val code: String, val mailbox: String?, val viaInternet: Boolean)
 
     private val _nearby = MutableStateFlow<List<Msg>>(emptyList())
     val nearby: StateFlow<List<Msg>> = _nearby.asStateFlow()
     private val _private = MutableStateFlow<Map<String, List<Msg>>>(emptyMap())
     val conversations: StateFlow<Map<String, List<Msg>>> = _private.asStateFlow()
-    private val _requests = MutableStateFlow<List<PairRequest>>(emptyList())
-    val requests: StateFlow<List<PairRequest>> = _requests.asStateFlow()
+    private val _requests = MutableStateFlow<List<Request>>(emptyList())
+    val requests: StateFlow<List<Request>> = _requests.asStateFlow()
+    private val _unread = MutableStateFlow<Set<String>>(emptySet())
+    val unread: StateFlow<Set<String>> = _unread.asStateFlow()
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** A private message arrived (name, text, key) — for notifications while Muninn is in the background. */
+    val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
 
-    private val held = ConcurrentHashMap<String, MutableList<Msg>>()   // private messages waiting on a code
-    private val recent = ConcurrentHashMap<String, ArrayDeque<Long>>()  // per sender, for the rate limit
+    private val held = ConcurrentHashMap<String, MutableList<Msg>>()
+    private val recent = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val pool = Executors.newFixedThreadPool(4)
     private val store = File(context.filesDir, "chats.json")
     private val nearbyStore = File(context.filesDir, "nearby.json")
 
     init {
         load()
-        net.extraRoute = { method, path, body, ip -> if (method == "POST" && path == PATH) receive(body, ip) else null }
+        // Devices trusted before contacts existed become contacts.
+        id.trusted().forEach { (k, n) -> if (contacts.get(k) == null) contacts.put(Contacts.Contact(k, n, null, true)) }
+        net.extraRoute = { method, path, body, _ -> if (method == "POST" && path == PATH) receive(body, "wifi") else null }
+        close.onMessage = { _, o -> if (o.optString("t") == "msg") receive(o.toString(), "close") }
+        nostr.onEnvelope = { content ->
+            try { receive(String(Base64.getDecoder().decode(content)), "internet"); true } catch (_: Exception) { true }
+        }
+        // Auto-delete: check every minute for messages past the chosen age.
+        pool.execute { while (true) { Thread.sleep(60_000); prune() } }
     }
+
+    /** What close-by phones learn about this one. */
+    fun hello(): JSONObject = JSONObject().put("name", id.username).put("chatKey", id.publicKey).put("mailbox", nostr.publicKey)
+        .put("device", id.deviceName)
+
+    fun myCode(): String = Contacts.code(id.username, id.publicKey, nostr.publicKey)
 
     fun codeWith(peerKey: String): String =
         ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
 
-    fun isTrusted(peerKey: String) = id.trusted().containsKey(peerKey)
+    fun isContact(peerKey: String) = contacts.get(peerKey) != null
+
+    /** How a contact can be reached right now: "close", "wifi", "internet" or "". */
+    fun route(peerKey: String): String = when {
+        close.endpointFor(peerKey) != null -> "close"
+        net.devices.value.any { it.chatKey == peerKey } -> "wifi"
+        contacts.get(peerKey)?.mailbox != null -> "internet"
+        else -> ""
+    }
 
     // ------------------------------------------------------------------ receiving
 
-    private fun receive(body: String, ip: String): Pair<Int, String> {
+    private fun receive(body: String, via: String): Pair<Int, String> {
         val o = try { JSONObject(body) } catch (e: Exception) { return 400 to "{}" }
         val fromKey = o.optString("fromKey")
         val name = o.optString("fromName").take(40).ifEmpty { "Someone" }
         if (fromKey.isEmpty() || fromKey == id.publicKey) return 400 to "{}"
-        // No more than 5 messages in 10 seconds from anyone: nobody can flood the room.
         val now = System.currentTimeMillis()
+        // No more than 5 messages in 10 seconds from anyone: nobody can flood a room.
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
@@ -69,20 +98,29 @@ class Chat(private val context: Context, private val net: LocalSend) {
         }
         val key = try { ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(fromKey)) } catch (e: Exception) { return 400 to "{}" }
         val text = ChatCrypto.open(key, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data")))?.take(MAX) ?: return 403 to "{}"
-        val msg = Msg(UUID.randomUUID().toString(), fromKey, name, text, false, now)
+        val msgId = o.optString("id").ifEmpty { UUID.randomUUID().toString() }
+        val msg = Msg(msgId, fromKey, name, text, false, now, via = via)
+        val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         when (o.optString("room")) {
             "nearby" -> {
-                if (!id.nearbyChat) return 403 to "{}"
-                if (fromKey !in id.muted()) addNearby(msg)
+                if (!id.nearbyChat || via == "internet") return 403 to "{}"
+                if (fromKey !in id.muted() && _nearby.value.none { it.id == msgId }) addNearby(msg)
             }
             "private" -> {
-                if (isTrusted(fromKey)) {
-                    addPrivate(fromKey, msg)
+                val c = contacts.get(fromKey)
+                if (c != null) {
+                    if (mailbox != null && c.mailbox != mailbox) contacts.put(c.copy(mailbox = mailbox))
+                    if (_private.value[fromKey].orEmpty().none { it.id == msgId }) {
+                        addPrivate(fromKey, msg)
+                        _unread.value = _unread.value + fromKey
+                        arrivals.tryEmit(Triple(c.name, text, fromKey))
+                    }
                 } else {
                     held.getOrPut(fromKey) { mutableListOf() }.add(msg)
                     if (_requests.value.none { it.peerKey == fromKey }) {
-                        _requests.value = _requests.value + PairRequest(fromKey, name, ChatCrypto.pairingCode(key))
-                        notices.tryEmit("$name wants to chat privately")
+                        _requests.value = _requests.value + Request(fromKey, name, ChatCrypto.pairingCode(key), mailbox, via == "internet")
+                        notices.tryEmit("$name wants to chat")
+                        arrivals.tryEmit(Triple(name, "Wants to chat with you", fromKey))
                     }
                 }
             }
@@ -91,17 +129,26 @@ class Chat(private val context: Context, private val net: LocalSend) {
         return 200 to "{}"
     }
 
-    /** Both screens showed the same code: trust them and show what they already sent. */
-    fun acceptPair(r: PairRequest) {
-        id.trust(r.peerKey, r.name)
+    fun acceptRequest(r: Request) {
+        contacts.put(Contacts.Contact(r.peerKey, r.name, r.mailbox, verified = !r.viaInternet))
         _requests.value = _requests.value.filterNot { it.peerKey == r.peerKey }
         held.remove(r.peerKey)?.forEach { addPrivate(r.peerKey, it) }
     }
 
-    fun declinePair(r: PairRequest) {
+    fun declineRequest(r: Request) {
         _requests.value = _requests.value.filterNot { it.peerKey == r.peerKey }
         held.remove(r.peerKey)
     }
+
+    fun addContact(c: Contacts.Contact) = contacts.put(c)
+
+    /** Someone close by or on the Wi-Fi, after both screens showed the same code. */
+    fun addNearbyPerson(chatKey: String, name: String) {
+        val mailbox = close.list.value.firstOrNull { it.chatKey == chatKey }?.mailbox
+        contacts.put(Contacts.Contact(chatKey, name, mailbox, verified = true))
+    }
+
+    fun markRead(peerKey: String) { _unread.value = _unread.value - peerKey }
 
     // ------------------------------------------------------------------ sending
 
@@ -110,37 +157,51 @@ class Chat(private val context: Context, private val net: LocalSend) {
         if (t.isEmpty() || !id.nearbyChat) return
         val mine = Msg(UUID.randomUUID().toString(), id.publicKey, id.username, t, true, System.currentTimeMillis())
         addNearby(mine)
-        val people = net.devices.value.filter { it.canChat && it.chatName != null && it.chatKey !in id.muted() }
+        val muted = id.muted()
         pool.execute {
             var reached = 0
-            for (d in people) if (deliver(d, "nearby", t) == 200) reached++
-            if (people.isNotEmpty() && reached == 0) notices.tryEmit("Nobody in Nearby got that. Check you're on the same Wi-Fi.")
+            val done = mutableSetOf<String>()
+            for (p in close.list.value) {
+                val k = p.chatKey ?: continue
+                if (!p.connected || k in muted || !done.add(k)) continue
+                close.send(p.endpoint, envelope("nearby", k, t, mine.id).put("t", "msg")); reached++
+            }
+            for (d in net.devices.value) {
+                val k = d.chatKey ?: continue
+                if (d.chatName == null || k in muted || !done.add(k)) continue
+                if (net.post(d, PATH, envelope("nearby", k, t, mine.id).toString()) == 200) reached++
+            }
+            if (reached == 0) notices.tryEmit("Nobody nearby got that yet. They need Muninn or Huginn open close by or on the same Wi-Fi.")
         }
     }
 
-    /** Only call once the person has confirmed the code (see codeWith). */
-    fun sendPrivate(peerKey: String, name: String, text: String) {
+    fun sendPrivate(peerKey: String, text: String) {
         val t = text.trim().take(MAX)
         if (t.isEmpty()) return
-        if (!isTrusted(peerKey)) id.trust(peerKey, name)
-        val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis())
+        val c = contacts.get(peerKey) ?: return
+        val r = route(peerKey)
+        val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r)
         addPrivate(peerKey, mine)
         pool.execute {
-            val dev = net.devices.value.firstOrNull { it.chatKey == peerKey }
-            val code = if (dev == null) -1 else deliver(dev, "private", t)
-            if (code != 200) {
+            val body = envelope("private", peerKey, t, mine.id)
+            val ok = when (r) {
+                "close" -> close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); true } ?: false
+                "wifi" -> net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { net.post(it, PATH, body.toString()) == 200 } ?: false
+                "internet" -> { nostr.publish(c.mailbox!!, Base64.getEncoder().encodeToString(body.toString().toByteArray())); true }
+                else -> false
+            }
+            if (!ok) {
                 replace(peerKey, mine.copy(failed = true))
-                notices.tryEmit(if (dev == null) "$name isn't nearby right now." else "$name didn't get that. Try again.")
+                notices.tryEmit(if (r.isEmpty()) "${c.name} can't be reached: they're not nearby and have no internet mailbox yet." else "${c.name} didn't get that. Try again.")
             }
         }
     }
 
-    private fun deliver(d: LocalSend.Device, room: String, text: String): Int {
-        val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(d.chatKey ?: return -1))
+    private fun envelope(room: String, theirKey: String, text: String, msgId: String): JSONObject {
+        val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(theirKey))
         val s = ChatCrypto.seal(key, text)
-        val body = JSONObject().put("room", room).put("fromKey", id.publicKey).put("fromName", if (room == "nearby") id.username else id.deviceName)
-            .put("fromId", id.fingerprint).put("nonce", s.nonce).put("data", s.data)
-        return net.post(d, PATH, body.toString())
+        return JSONObject().put("room", room).put("fromKey", id.publicKey).put("fromName", id.username).put("fromId", id.fingerprint)
+            .put("mailbox", nostr.publicKey).put("id", msgId).put("nonce", s.nonce).put("data", s.data)
     }
 
     // ------------------------------------------------------------------ keeping
@@ -152,9 +213,23 @@ class Chat(private val context: Context, private val net: LocalSend) {
 
     fun clearNearby() { _nearby.value = emptyList(); nearbyStore.delete() }
 
-    fun deleteConversation(peerKey: String) {
-        _private.value = _private.value - peerKey
-        save()
+    fun deleteConversation(peerKey: String) { _private.value = _private.value - peerKey; save() }
+
+    /** Removes messages older than the person's "Delete messages after" choice. */
+    fun prune() {
+        val age = id.deleteAfter
+        if (age <= 0) return
+        val cutoff = System.currentTimeMillis() - age
+        val n = _nearby.value.filter { it.time >= cutoff }
+        if (n.size != _nearby.value.size) { _nearby.value = n; if (id.keepNearbyHistory) saveNearby() }
+        val map = _private.value.mapValues { (_, v) -> v.filter { it.time >= cutoff } }
+        if (map.values.sumOf { it.size } != _private.value.values.sumOf { it.size }) { _private.value = map; save() }
+    }
+
+    /** Erases every conversation on this phone. */
+    fun deleteAll() {
+        _private.value = emptyMap(); _nearby.value = emptyList()
+        save(); nearbyStore.delete()
     }
 
     private fun addNearby(m: Msg) {
@@ -177,25 +252,28 @@ class Chat(private val context: Context, private val net: LocalSend) {
     }
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
-        list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine).put("time", it.time).put("failed", it.failed)) }
+        list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
+            .put("time", it.time).put("failed", it.failed).put("via", it.via)) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
-        Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"), it.optBoolean("failed"))
+        Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
+            it.optBoolean("failed"), it.optString("via"))
     }
 
     @Synchronized private fun save() {
         val o = JSONObject(); _private.value.forEach { (k, v) -> o.put(k, toJson(v)) }
-        store.writeText(o.toString())
+        vault.write(store, o.toString())
     }
-    private fun saveNearby() = nearbyStore.writeText(toJson(_nearby.value).toString())
+    private fun saveNearby() = vault.write(nearbyStore, toJson(_nearby.value).toString())
 
     private fun load() {
         try {
-            if (store.exists()) {
-                val o = JSONObject(store.readText())
+            vault.read(store)?.let { text ->
+                val o = JSONObject(text)
                 _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
             }
-            if (id.keepNearbyHistory && nearbyStore.exists()) _nearby.value = fromJson(JSONArray(nearbyStore.readText()))
+            if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
+            prune()
         } catch (_: Exception) {}
     }
 

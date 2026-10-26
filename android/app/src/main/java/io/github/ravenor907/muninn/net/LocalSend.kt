@@ -68,6 +68,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val fraction get() = if (total > 0) done.toFloat() / total else 0f
     }
 
+    /** This phone's Nostr mailbox, so Wi-Fi contacts can keep chatting from anywhere. */
+    var mailbox: String? = null
+
     /** Extra routes (chat) served on the same port. Returns (status, json body) or null. */
     var extraRoute: ((method: String, path: String, body: String, ip: String) -> Pair<Int, String>?)? = null
 
@@ -129,6 +132,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         .put("chatApp", "muninn")
         .apply {
             put("chatKey", identity.publicKey)
+            mailbox?.let { put("mailbox", it) }
             if (identity.nearbyChat) put("chatName", identity.username)
         }
 
@@ -151,10 +155,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
             lock = wifi.createMulticastLock("muninn").apply { setReferenceCounted(false); acquire() }
             udp = MulticastSocket(PORT).apply {
                 reuseAddress = true
-                for (nif in NetworkInterface.getNetworkInterfaces()) {
-                    if (nif.isUp && !nif.isLoopback && nif.supportsMulticast() && nif.inetAddresses.toList().any { it is Inet4Address }) {
-                        try { joinGroup(InetSocketAddress(GROUP, PORT), nif) } catch (_: Exception) {}
-                    }
+                for (nif in lanInterfaces()) {
+                    try { joinGroup(InetSocketAddress(GROUP, PORT), nif) } catch (_: Exception) {}
                 }
             }
             pool.execute { udpLoop() }
@@ -188,7 +190,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
     fun announce() {
         val msg = info().put("announce", true).toString().toByteArray()
         pool.execute {
-            try { udp?.send(DatagramPacket(msg, msg.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
+            // Send on each Wi-Fi interface: left alone, Android sends multicast out the mobile-data
+            // connection, where nobody is listening.
+            val sock = udp ?: return@execute
+            for (nif in lanInterfaces()) {
+                try {
+                    sock.networkInterface = nif
+                    sock.send(DatagramPacket(msg, msg.size, InetAddress.getByName(GROUP), PORT))
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -567,6 +577,17 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
+    // Close-by (Bluetooth / Wi-Fi Direct) transfers report here, so every screen shows them the same way.
+    fun closeStatus(active: Boolean, sending: Boolean, status: String, total: Long) {
+        _transfer.value = if (active) Transfer(true, sending, status, 0, total) else Transfer()
+        NearbyService.hold(context, active)
+    }
+    fun closeProgress(done: Long, total: Long) = _transfer.update { it.copy(done = done, total = total) }
+    fun closeItem(name: String, ok: Boolean) {
+        history.add(0, Item(name, if (ok) "Done" else "Didn't arrive", if (ok) 1f else 0f, !ok))
+        _items.value = history.toList()
+    }
+
     fun cancelSend() {
         stopSend.set(true)
         try { sendConn?.disconnect() } catch (_: Exception) {}
@@ -621,14 +642,20 @@ class LocalSend(private val context: Context, val identity: Identity) {
             return c
         }
 
-        fun localAddress(): String? = try {
-            NetworkInterface.getNetworkInterfaces().toList()
-                .filter { it.isUp && !it.isLoopback }
-                .flatMap { it.inetAddresses.toList() }
-                .filterIsInstance<Inet4Address>()
-                .map { it.hostAddress!! }
-                .firstOrNull { it.startsWith("192.168.") || it.startsWith("10.") || Regex("^172\\.(1[6-9]|2\\d|3[01])\\.").containsMatchIn(it) }
-        } catch (e: Exception) { null }
+        /** Mobile-data interfaces (often on 10.x addresses, which look like a home network). */
+        private val MOBILE = listOf("rmnet", "ccmni", "pdp", "clat", "v4-", "tun", "dummy", "ifb", "r_rmnet", "seth", "usb")
+
+        /** Wi-Fi, a hotspot or wired: the interfaces where Huginn, Muninn and LocalSend can be. */
+        fun lanInterfaces(): List<NetworkInterface> = try {
+            NetworkInterface.getNetworkInterfaces().toList().filter { nif ->
+                nif.isUp && !nif.isLoopback && nif.supportsMulticast() && MOBILE.none { nif.name.startsWith(it) } &&
+                    nif.inetAddresses.toList().any { it is Inet4Address && it.isSiteLocalAddress }
+            }.sortedBy { if (it.name.startsWith("wlan")) 0 else 1 }
+        } catch (e: Exception) { emptyList() }
+
+        fun localAddress(): String? = lanInterfaces().firstNotNullOfOrNull { nif ->
+            nif.inetAddresses.toList().filterIsInstance<Inet4Address>().firstOrNull { it.isSiteLocalAddress }?.hostAddress
+        }
 
         fun size(b: Long): String = when {
             b >= 1L shl 30 -> "%.1f GB".format(b / 1073741824.0)
