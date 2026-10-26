@@ -104,7 +104,7 @@ Item {
             text: picker.title.toUpperCase()
             color: Theme.text
             font.family: Theme.display
-            font.pixelSize: Theme.px(20)
+            font.pixelSize: Theme.fs(20)
             font.weight: Font.Bold
             font.letterSpacing: Theme.px(2)
         }
@@ -135,7 +135,7 @@ Item {
                     text: modelData.header ? modelData.header.toUpperCase() : ""
                     color: Theme.textMuted
                     font.family: Theme.display
-                    font.pixelSize: Theme.px(14)
+                    font.pixelSize: Theme.fs(14)
                     font.weight: Font.DemiBold
                     font.letterSpacing: 2
                 }
@@ -160,7 +160,7 @@ Item {
                             text: modelData.name || ""
                             color: Theme.text
                             font.family: Theme.body
-                            font.pixelSize: Theme.px(19)
+                            font.pixelSize: Theme.fs(19)
                             font.weight: Font.Medium
                             elide: Text.ElideMiddle
                             width: list.width - Theme.px(260)
@@ -173,7 +173,7 @@ Item {
                         text: modelData.detail || ""
                         color: Theme.textMuted
                         font.family: Theme.body
-                        font.pixelSize: Theme.px(15)
+                        font.pixelSize: Theme.fs(15)
                     }
                     TapHandler { onTapped: { picker.current = index; picker.pick() } }
                 }

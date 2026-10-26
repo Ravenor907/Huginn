@@ -12,6 +12,10 @@ class Settings : public QObject
     Q_PROPERTY(QString layout READ layout WRITE setLayout NOTIFY changed)
     Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed)
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY changed)
+    Q_PROPERTY(QString textSize READ textSize WRITE setTextSize NOTIFY changed)
+    Q_PROPERTY(bool highContrast READ highContrast WRITE setHighContrast NOTIFY changed)
+    Q_PROPERTY(bool colorBlind READ colorBlind WRITE setColorBlind NOTIFY changed)
+    Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
     Q_PROPERTY(bool showHidden READ showHidden WRITE setShowHidden NOTIFY changed)
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool protectLibrary READ protectLibrary WRITE setProtectLibrary NOTIFY changed)
@@ -34,6 +38,10 @@ public:
     QString layout() const { return value("layout", "auto").toString(); }
     QString uiSize() const { return value("uiSize", "100").toString(); }
     QString accent() const { return value("accent", "gold").toString(); }
+    QString textSize() const { return value("textSize", "100").toString(); }
+    bool highContrast() const { return value("highContrast", false).toBool(); }
+    bool colorBlind() const { return value("colorBlind", false).toBool(); }
+    bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
     bool showHidden() const { return value("showHidden", false).toBool(); }
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
     bool protectLibrary() const { return value("protectLibrary", true).toBool(); }
@@ -57,6 +65,10 @@ public:
     void setLayout(const QString &v) { set("layout", v); }
     void setUiSize(const QString &v) { set("uiSize", v); }
     void setAccent(const QString &v) { set("accent", v); }
+    void setTextSize(const QString &v) { set("textSize", v); }
+    void setHighContrast(bool v) { set("highContrast", v); }
+    void setColorBlind(bool v) { set("colorBlind", v); }
+    void setReduceMotion(bool v) { set("reduceMotion", v); }
     void setShowHidden(bool v) { set("showHidden", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setProtectLibrary(bool v) { set("protectLibrary", v); }

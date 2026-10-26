@@ -73,14 +73,14 @@ Rectangle {
         Row {
             anchors.left: parent.left; anchors.leftMargin: Theme.px(28); anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.px(16)
-            Text { text: page.info.name || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold }
-            Text { text: page.info.summary || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(15) }
+            Text { text: page.info.name || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
+            Text { text: page.info.summary || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
         }
         Text {
             anchors.right: parent.right; anchors.rightMargin: Theme.px(28); anchors.verticalCenter: parent.verticalCenter
             visible: page.siblings.length > 1
             text: (page.index + 1) + " OF " + page.siblings.length
-            color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(16); font.weight: Font.DemiBold; font.letterSpacing: 1.5
+            color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold; font.letterSpacing: 1.5
         }
     }
 
@@ -141,7 +141,7 @@ Rectangle {
                         text: index + 1
                         color: Theme.textFaint
                         font.family: "monospace"
-                        font.pixelSize: Theme.px(14)
+                        font.pixelSize: Theme.fs(14)
                     }
                     Text {
                         id: lineText
@@ -151,7 +151,7 @@ Rectangle {
                         text: modelData.length ? modelData : " "
                         color: Theme.text
                         font.family: "monospace"
-                        font.pixelSize: Theme.px(16)
+                        font.pixelSize: Theme.fs(16)
                         textFormat: Text.PlainText
                     }
                     TapHandler { onTapped: { if (page.line === index) page.editLine(); else page.line = index } }
@@ -176,14 +176,14 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: Theme.px(20)
             spacing: Theme.px(14)
-            Text { text: "DETAILS"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
+            Text { text: "DETAILS"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
             Repeater {
                 model: page.info.rows || []
                 Column {
                     spacing: 2
                     width: parent.width
-                    Text { text: modelData.k; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(13) }
-                    Text { width: parent.width; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; text: modelData.v; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(17) }
+                    Text { text: modelData.k; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { width: parent.width; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; text: modelData.v; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
                 }
             }
         }

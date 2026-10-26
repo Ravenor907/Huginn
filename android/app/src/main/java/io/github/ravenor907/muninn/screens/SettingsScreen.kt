@@ -158,6 +158,26 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             Text("Received files go to ${id.receiveFolder.absolutePath.removePrefix("/storage/emulated/0/")}", style = Type.small, modifier = Modifier.padding(top = 8.dp))
         }
+        Section("Accessibility")
+        Panel {
+            val A = io.github.ravenor907.muninn.ui.Access
+            Text("Size of everything", style = Type.normal.copy(color = Palette.text))
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0.85f to "Smaller", 1f to "Normal", 1.15f to "Larger", 1.3f to "Largest").forEach { (v, label) ->
+                    MButton(label, Modifier.weight(1f), if (A.size == v) Kind.Accent else Kind.Normal) { A.size = v; id.uiSize = v }
+                }
+            }
+            Text("Text size", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(1f to "Normal", 1.15f to "Large", 1.3f to "Larger", 1.5f to "Largest").forEach { (v, label) ->
+                    MButton(label, Modifier.weight(1f), if (A.text == v) Kind.Accent else Kind.Normal) { A.text = v; id.textSize = v }
+                }
+            }
+            Text("Text size adds to your phone's own font size setting.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            ToggleRow("High contrast", "White text on black, stronger outlines", A.contrast) { A.contrast = it; id.highContrast = it }
+            ToggleRow("Color-blind friendly", "Warnings in amber instead of red; status always says it in words", A.colorBlind) { A.colorBlind = it; id.colorBlind = it }
+            ToggleRow("Reduce motion", "No sliding or fading", A.reduceMotion) { A.reduceMotion = it; id.reduceMotion = it }
+        }
         Section("Updates")
         Panel {
             Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal)

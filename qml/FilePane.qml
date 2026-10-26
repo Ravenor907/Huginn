@@ -33,7 +33,7 @@ Rectangle {
             text: pane.model ? pane.model.title : ""
             color: pane.active ? Theme.accent : Theme.textSoft
             font.family: Theme.body
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
             font.weight: Font.DemiBold
         }
         Text {
@@ -44,7 +44,7 @@ Rectangle {
             text: !pane.model ? "" : pane.model.loading ? "Loading…" : pane.model.summary
             color: Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(14)
+            font.pixelSize: Theme.fs(14)
         }
     }
 
@@ -81,7 +81,7 @@ Rectangle {
         text: pane.model && pane.model.error ? pane.model.error : "This folder is empty"
         color: Theme.textMuted
         font.family: Theme.body
-        font.pixelSize: Theme.px(17)
+        font.pixelSize: Theme.fs(17)
     }
 
     // After going up a folder, land on the folder we came out of.

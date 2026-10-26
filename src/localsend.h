@@ -145,7 +145,7 @@ private:
     void remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback, const QString &provenFp = {});
     void registerWith(const QString &ip, int port, const QString &protocol, bool scan, const QString &expected = {});
     QNetworkRequest makeRequest(const QUrl &url, const QString &expected) const;
-    void pin(QNetworkReply *r, const QString &expected);
+    void checkPeer(QNetworkReply *r, const QString &expected);
     QString expectedFor(const QUrl &url) const;
     void onConnection(QTcpServer *server);
     void onData(QTcpSocket *s);

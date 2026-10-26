@@ -30,7 +30,7 @@ Rectangle {
         text: btn.text
         color: btn.kind === "accent" ? Theme.accent : btn.kind === "danger" ? Theme.danger : Theme.text
         font.family: Theme.body
-        font.pixelSize: Theme.px(btn.fontSize)
+        font.pixelSize: Theme.fs(btn.fontSize)
         font.weight: Font.DemiBold
     }
     TapHandler { enabled: btn.enabled; onTapped: btn.clicked() }

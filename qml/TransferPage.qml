@@ -46,7 +46,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "NEARBY"
                 color: Theme.accent
-                font.family: Theme.display; font.pixelSize: Theme.px(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
+                font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
             }
             HButton {
                 anchors.right: parent.right
@@ -93,8 +93,8 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: Theme.px(16)
                         anchors.verticalCenter: parent.verticalCenter
-                        Text { width: parent.width; elide: Text.ElideRight; text: modelData.alias; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold }
-                        Text { width: parent.width; elide: Text.ElideRight; text: (modelData.model ? modelData.model + " · " : "") + modelData.ip; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                        Text { width: parent.width; elide: Text.ElideRight; text: modelData.alias; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
+                        Text { width: parent.width; elide: Text.ElideRight; text: (modelData.model ? modelData.model + " · " : "") + modelData.ip; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                     }
                     TapHandler { onTapped: { page.current = index; page.sendTo() } }
                 }
@@ -109,7 +109,7 @@ Rectangle {
                     : "No devices yet. Open the free LocalSend app on your phone, on the same Wi-Fi, then press Look again. It shows this handheld as “" + LocalSend.alias + "”."
                 color: Theme.textSoft
                 font.family: Theme.body
-                font.pixelSize: Theme.px(17)
+                font.pixelSize: Theme.fs(17)
                 lineHeight: 1.1
             }
         }
@@ -127,7 +127,7 @@ Rectangle {
                 : "To send from here, pick files in the browser, open the Y menu and choose To phone. To receive, send from LocalSend on the phone and accept on this screen."
             color: Transfer.sharedCount > 0 ? Theme.accent : Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(15)
+            font.pixelSize: Theme.fs(15)
             font.weight: Transfer.sharedCount > 0 ? Font.DemiBold : Font.Normal
         }
     }
@@ -145,7 +145,7 @@ Rectangle {
             id: inHead
             text: "RECEIVED"
             color: Theme.text
-            font.family: Theme.display; font.pixelSize: Theme.px(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
+            font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
         }
         Text {
             anchors.right: parent.right
@@ -153,7 +153,7 @@ Rectangle {
             text: "Saved in " + Transfer.saveName
             color: Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(14)
+            font.pixelSize: Theme.fs(14)
         }
         Column {
             id: inList
@@ -178,8 +178,8 @@ Rectangle {
                         spacing: Theme.px(8)
                         Item {
                             width: parent.width; height: Theme.px(20)
-                            Text { width: parent.width - st.width - 12; elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16); font.weight: Font.Medium }
-                            Text { id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                            Text { width: parent.width - st.width - 12; elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.Medium }
+                            Text { id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                         }
                         Rectangle {
                             width: parent.width; height: Theme.px(5); radius: 1; color: Theme.line
@@ -193,7 +193,7 @@ Rectangle {
                 width: inList.width
                 wrapMode: Text.WordWrap
                 text: "Nothing yet. Files show up here as they arrive."
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(15)
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
         }
 
@@ -229,15 +229,15 @@ Rectangle {
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: Direct.on ? "Direct connect is on. Scan with the phone camera to join Huginn's Wi-Fi" : "No LocalSend app? Scan this with the phone camera"; color: Direct.on ? Theme.accent : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16); font.weight: Font.DemiBold }
-                Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(16) }
-                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? Transfer.address.replace("http://", "") : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(17) }
-                Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: Direct.on ? "Direct connect is on. Scan with the phone camera to join Huginn's Wi-Fi" : "No LocalSend app? Scan this with the phone camera"; color: Direct.on ? Theme.accent : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? Transfer.address.replace("http://", "") : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
+                Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 Row {
                     visible: !Direct.on
                     spacing: Theme.px(10)
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: "PIN"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(15) }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: Transfer.pin; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.px(24); font.weight: Font.Bold; font.letterSpacing: Theme.px(6) }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: "PIN"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { anchors.verticalCenter: parent.verticalCenter; text: Transfer.pin; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.fs(24); font.weight: Font.Bold; font.letterSpacing: Theme.px(6) }
                 }
             }
         }

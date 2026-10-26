@@ -86,7 +86,7 @@ Item {
                     text: prompt.title.toUpperCase()
                     color: Theme.textMuted
                     font.family: Theme.display
-                    font.pixelSize: Theme.px(17)
+                    font.pixelSize: Theme.fs(17)
                     font.weight: Font.DemiBold
                     font.letterSpacing: Theme.px(2)
                 }
@@ -98,7 +98,7 @@ Item {
                     text: prompt.context
                     color: Theme.textMuted
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(14)
+                    font.pixelSize: Theme.fs(14)
                 }
             }
             TextField {
@@ -111,7 +111,7 @@ Item {
                 selectedTextColor: Theme.text
                 echoMode: prompt.password ? TextInput.Password : TextInput.Normal
                 font.family: Theme.body
-                font.pixelSize: Theme.px(28)
+                font.pixelSize: Theme.fs(28)
                 font.weight: Font.Medium
                 inputMethodHints: Qt.ImhNoPredictiveText
                 background: Rectangle {
@@ -133,7 +133,7 @@ Item {
                     text: prompt.hint
                     color: Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(16)
+                    font.pixelSize: Theme.fs(16)
                 }
                 HButton { id: cancelBtn; text: "Cancel"; implicitHeight: Theme.px(44); fontSize: 16; onClicked: prompt.cancel() }
                 HButton { id: okBtn; text: prompt.confirmText; kind: "accent"; implicitHeight: Theme.px(44); fontSize: 16; onClicked: prompt.accept() }

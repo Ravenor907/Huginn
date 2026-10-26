@@ -19,6 +19,11 @@ Rectangle {
               options: [{ value: "auto", label: "Auto" }, { value: "handheld", label: "Handheld" }, { value: "tv", label: "TV" }] },
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
               options: [{ value: "85", label: "Smaller" }, { value: "100", label: "Normal" }, { value: "120", label: "Larger" }, { value: "140", label: "Largest" }] },
+            { kind: "segmented", key: "textSize", title: "Text size", note: "Just the text, on top of Size",
+              options: [{ value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
+            { kind: "toggle", key: "highContrast", title: "High contrast", note: "White text on black, stronger outlines and focus" },
+            { kind: "toggle", key: "colorBlind", title: "Color-blind friendly", note: "Warnings in amber instead of red; status always says it in words" },
+            { kind: "toggle", key: "reduceMotion", title: "Reduce motion", note: "No sliding or fading" },
             { kind: "toggle", key: "showHidden", title: "Show hidden files", note: "Dot files and folders like .steam" },
             { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Phones and PCs with the free LocalSend app can find this handheld. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
@@ -68,7 +73,7 @@ Rectangle {
         id: header
         width: parent.width
         title: "Settings"
-        Text { text: "Huginn " + System.version; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(16) }
+        Text { text: "Huginn " + System.version; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
 
@@ -92,7 +97,7 @@ Rectangle {
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter
                     spacing: Theme.px(14)
                     Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(7); height: width; rotation: 45; color: parent.parent.on ? Theme.accent : "transparent"; border.width: parent.parent.on ? 0 : 1; border.color: Theme.ornament }
-                    Text { text: modelData; color: parent.parent.on ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
+                    Text { text: modelData; color: parent.parent.on ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
                 }
                 TapHandler { onTapped: { page.section = index; page.row = 0; page.inSection = false } }
             }
@@ -124,8 +129,8 @@ Rectangle {
                     anchors.rightMargin: Theme.px(20)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Theme.px(2)
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold }
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
+                    Text { width: parent.width; wrapMode: Text.WordWrap; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 }
                 Item {
                     id: control

@@ -56,6 +56,10 @@ class Muninn : Application() {
         super.onCreate()
         vault = Vault(this)
         identity = Identity(this, vault)
+        io.github.ravenor907.muninn.ui.Access.apply {
+            size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
+            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion
+        }
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
         direct = Direct(this)
         updater = Updater(this, identity)

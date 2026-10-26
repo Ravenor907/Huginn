@@ -82,6 +82,7 @@ import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
+import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
 import java.text.DateFormat
 import java.util.Date
@@ -108,16 +109,32 @@ private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wif
 @Composable
 fun ChatScreen(app: Muninn, onAllowNearby: () -> Unit = {}) {
     val open = ChatNav.open
-    if (open.isNotEmpty()) {
-        BackHandler { ChatNav.open = "" }
-        when (open) {
-            "nearby" -> NearbyRoom(app)
-            "code" -> MyCode(app)
-            "add" -> AddSomeone(app)
-            else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Tablets and wide screens: the chat list stays beside the conversation.
+        val wide = maxWidth >= 600.dp
+        if (open.isNotEmpty()) BackHandler { ChatNav.open = "" }
+        when {
+            open == "code" -> MyCode(app)
+            open == "add" -> AddSomeone(app)
+            !wide && open == "nearby" -> NearbyRoom(app)
+            !wide && open.isNotEmpty() -> androidx.compose.runtime.key(open) { Conversation(app, open) }
+            !wide -> ChatList(app, onAllowNearby)
+            else -> Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(0.42f)) { ChatList(app, onAllowNearby) }
+                Box(Modifier.weight(0.58f)) {
+                    when (open) {
+                        "" -> Text("Pick a chat on the left.", style = Type.normal, modifier = Modifier.align(Alignment.Center))
+                        "nearby" -> NearbyRoom(app)
+                        else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
+                    }
+                }
+            }
         }
-        return
     }
+}
+
+@Composable
+private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val contacts by app.chat.contacts.all.collectAsState()
     val convos by app.chat.conversations.collectAsState()
     val requests by app.chat.requests.collectAsState()
@@ -207,7 +224,7 @@ private fun NearbyRoom(app: Muninn) {
     var text by remember { mutableStateOf("") }
     var on by remember { mutableStateOf(app.identity.nearbyChat) }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.lastOrNull()?.id) { if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).imePadding()) {
         Section("Nearby room") { MButton("Back", icon = "back") { ChatNav.open = "" } }
         if (!on) {
@@ -244,7 +261,7 @@ private fun Conversation(app: Muninn, key: String) {
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     // Redraw as they come into or go out of range (route, and when to ask "Keep in touch?").
     @Suppress("UNUSED_VARIABLE") val closeNow by app.close.list.collectAsState()
     @Suppress("UNUSED_VARIABLE") val wifiNow by app.net.devices.collectAsState()

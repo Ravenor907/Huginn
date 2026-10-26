@@ -62,7 +62,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             text: page.browsingAll ? "ALL FILES" : "DOWNLOADS"
             color: page.zone === "files" ? Theme.accent : Theme.textSoft
-            font.family: Theme.display; font.pixelSize: Theme.px(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
+            font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2.5)
         }
         HButton {
             anchors.right: parent.right
@@ -119,7 +119,7 @@ Rectangle {
                         Text {
                             width: parent.width; elide: Text.ElideRight
                             text: page.drive ? page.drive.title : "No USB drive"
-                            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold
+                            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold
                         }
                         Text {
                             width: parent.width; elide: Text.ElideRight
@@ -127,7 +127,7 @@ Rectangle {
                                 : (page.drive.ventoy ? "Ventoy " + page.drive.ventoyVersion + (page.drive.secureBoot ? ", Secure Boot on" : "") + " · " : "")
                                   + page.drive.usage + (Usb.drives.length > 1 ? "   (LB / RB: " + (page.driveIndex + 1) + " of " + Usb.drives.length + ")" : "")
                             wrapMode: page.drive ? Text.NoWrap : Text.WordWrap
-                            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14)
+                            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                         }
                     }
                 }
@@ -146,7 +146,7 @@ Rectangle {
             text: System.gameMode
                 ? "Writing and Ventoy need a one-time setup in Desktop Mode (it asks for your password once). Copying files works now."
                 : "Writing and Ventoy need a one-time setup: press One-time setup and enter your password once."
-            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.px(14)
+            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
 
         Repeater {
@@ -173,12 +173,12 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: Theme.px(14)
                 spacing: Theme.px(8)
-                Text { width: parent.width; elide: Text.ElideRight; text: Usb.checking ? "Checking the download… " + Math.round(Usb.checkProgress * 100) + "%" : Usb.status + (Usb.busy && Usb.progress > 0 ? "  " + Math.round(Usb.progress * 100) + "%" : ""); color: Usb.failed && !Usb.checking ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(17); font.weight: Font.DemiBold }
+                Text { width: parent.width; elide: Text.ElideRight; text: Usb.checking ? "Checking the download… " + Math.round(Usb.checkProgress * 100) + "%" : Usb.status + (Usb.busy && Usb.progress > 0 ? "  " + Math.round(Usb.progress * 100) + "%" : ""); color: Usb.failed && !Usb.checking ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
                 Rectangle {
                     width: parent.width; height: Theme.px(6); radius: 1; color: Theme.line
                     Rectangle { width: parent.width * (Usb.checking ? Usb.checkProgress : Usb.progress); height: parent.height; color: Theme.accent }
                 }
-                Text { width: parent.width; elide: Text.ElideRight; text: Usb.log; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(13) }
+                Text { width: parent.width; elide: Text.ElideRight; text: Usb.log; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
         }
     }
@@ -217,8 +217,8 @@ Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                 anchors.margins: Theme.px(24)
                 spacing: Theme.px(8)
-                Text { text: "CUSTOMIZE WINDOWS INSTALLATION?"; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.px(20); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: System.fileName(winDialog.iso) + " is a Windows installer. Huginn makes it the way Rufus does. Pick what Windows Setup should skip:"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(16) }
+                Text { text: "CUSTOMIZE WINDOWS INSTALLATION?"; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.fs(20); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: System.fileName(winDialog.iso) + " is a Windows installer. Huginn makes it the way Rufus does. Pick what Windows Setup should skip:"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 Item { width: 1; height: Theme.px(4) }
                 Repeater {
                     model: winDialog.rows
@@ -250,7 +250,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             elide: Text.ElideRight
                             text: modelData.label + (modelData.user && parent.on ? "   (X to change the name)" : "")
-                            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(17)
+                            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
                         }
                         TapHandler { onTapped: { winDialog.row = index; winDialog.toggle() } }
                     }

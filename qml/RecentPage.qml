@@ -59,8 +59,8 @@ Rectangle {
                 anchors.right: whenText.left
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
-                Text { width: parent.width; elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.Medium }
-                Text { width: parent.width; elide: Text.ElideLeft; text: System.prettyPath(modelData.folder); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { width: parent.width; elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Medium }
+                Text { width: parent.width; elide: Text.ElideLeft; text: System.prettyPath(modelData.folder); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
             Text {
                 id: whenText
@@ -70,7 +70,7 @@ Rectangle {
                 text: modelData.when
                 color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.px(15)
+                font.pixelSize: Theme.fs(15)
             }
             TapHandler { onTapped: { page.current = index; page.open() } }
         }
@@ -84,7 +84,7 @@ Rectangle {
         text: "Nothing yet. Files you open, copy or move show up here."
         color: Theme.textMuted
         font.family: Theme.body
-        font.pixelSize: Theme.px(17)
+        font.pixelSize: Theme.fs(17)
     }
 
     PromptBar {

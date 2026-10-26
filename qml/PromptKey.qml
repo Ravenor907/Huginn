@@ -29,7 +29,7 @@ Item {
                 text: Gamepad.glyph(root.key)
                 color: Theme.text
                 font.family: Theme.body
-                font.pixelSize: Theme.px(13)
+                font.pixelSize: Theme.fs(13)
                 font.weight: Font.DemiBold
             }
         }
@@ -38,7 +38,7 @@ Item {
             text: root.label
             color: Theme.text
             font.family: Theme.body
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
         }
     }
     TapHandler { onTapped: root.activated() }

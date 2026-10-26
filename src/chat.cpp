@@ -793,10 +793,12 @@ QJsonObject Chat::envelope(const QString &room, const QString &theirKey, const Q
 
 void Chat::post(const QString &base, const QJsonObject &body, std::function<void(int)> done)
 {
-    QNetworkRequest req(QUrl(base + kPath));
+    // The same certificate pinning as file transfers: only the device that announced itself.
+    QNetworkRequest req = m_net->peerRequest(QUrl(base + kPath));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(6000);
     QNetworkReply *r = m_http.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    m_net->pinReply(r);
     connect(r, &QNetworkReply::finished, this, [r, done] {
         r->deleteLater();
         if (done)

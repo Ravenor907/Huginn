@@ -61,7 +61,7 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
     connect(&m_plainServer, &QTcpServer::newConnection, this, [this] { onConnection(&m_plainServer); });
     connect(&m_udp, &QUdpSocket::readyRead, this, &LocalSend::onDatagrams);
     // Peers' certificates are self-signed, so the usual checks can't apply; makeRequest() turns them
-    // off and pin() checks the fingerprint instead. This stays for any error that still comes up.
+    // off and checkPeer() checks the fingerprint instead. This stays for any error that still comes up.
     connect(&m_net, &QNetworkAccessManager::sslErrors, this, [](QNetworkReply *r, const QList<QSslError> &) { r->ignoreSslErrors(); });
 
     m_announceTimer.setInterval(60000);
@@ -169,7 +169,7 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected)
         return req;
     QSslConfiguration c = QSslConfiguration::defaultConfiguration();
     // Peers' certificates are self-signed, so there's no authority to check them against;
-    // pin() compares the fingerprint instead.
+    // checkPeer() compares the fingerprint instead.
     c.setPeerVerifyMode(QSslSocket::VerifyNone);
     // Peers are addressed by IP, and the name below is not a real host name: send none.
     c.setSslOption(QSsl::SslOptionDisableServerNameIndication, true);
@@ -187,7 +187,7 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected)
     return req;
 }
 
-void LocalSend::pin(QNetworkReply *r, const QString &expected)
+void LocalSend::checkPeer(QNetworkReply *r, const QString &expected)
 {
     // Runs right after the handshake, before anything is sent: Qt documents aborting here as the
     // way to refuse a peer. The fingerprint seen is kept for scans, which have nothing to expect yet.
@@ -210,7 +210,7 @@ QNetworkRequest LocalSend::peerRequest(const QUrl &url) const
 
 void LocalSend::pinReply(QNetworkReply *r)
 {
-    pin(r, expectedFor(r->request().url()));
+    checkPeer(r, expectedFor(r->request().url()));
 }
 
 // ------------------------------------------------------------------ start and stop
@@ -290,7 +290,7 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(scan ? 2500 : 5000);
     QNetworkReply *r = m_net.post(req, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
-    pin(r, pinTo);
+    checkPeer(r, pinTo);
     connect(r, &QNetworkReply::finished, this, [this, r, ip, port, protocol, scan] {
         r->deleteLater();
         const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
@@ -855,7 +855,7 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
     req.setTransferTimeout(5 * 60 * 1000);   // the other person has to tap Accept
     QNetworkReply *r = m_net.post(req, QJsonDocument(QJsonObject{{QStringLiteral("info"), info(false, false)}, {QStringLiteral("files"), files}})
                                            .toJson(QJsonDocument::Compact));
-    pin(r, m_send.expected);
+    checkPeer(r, m_send.expected);
     m_send.reply = r;
     connect(r, &QNetworkReply::finished, this, [this, r, pin, deviceId] {
         r->deleteLater();
@@ -937,7 +937,7 @@ void LocalSend::uploadNext()
     req.setTransferTimeout(60000);   // no progress for a minute means the connection is gone
     QNetworkReply *r = m_net.post(req, file);
     file->setParent(r);
-    pin(r, m_send.expected);
+    checkPeer(r, m_send.expected);
     m_send.reply = r;
     connect(r, &QNetworkReply::uploadProgress, this, [this, r](qint64 sent, qint64) {
         if (m_send.reply != r)
@@ -979,7 +979,7 @@ void LocalSend::cancelSend()
         QNetworkRequest req = makeRequest(QUrl(m_send.base + QStringLiteral("/cancel?sessionId=") + m_send.sessionId), m_send.expected);
         req.setTransferTimeout(3000);
         QNetworkReply *c = m_net.post(req, QByteArray());
-        pin(c, m_send.expected);
+        checkPeer(c, m_send.expected);
         connect(c, &QNetworkReply::finished, c, &QObject::deleteLater);
     }
     if (m_send.reply)

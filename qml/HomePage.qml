@@ -78,8 +78,8 @@ Rectangle {
             }
             Column {
                 anchors.verticalCenter: parent.verticalCenter
-                Text { text: "HUGINN"; color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.px(24); font.weight: Font.Bold; font.letterSpacing: Theme.px(4) }
-                Text { text: "ᚺᚢᚷᛁᚾᚾ"; color: "#8E897F"; font.family: Theme.runic; font.pixelSize: Theme.px(13); font.letterSpacing: Theme.px(6) }
+                Text { text: "HUGINN"; color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(24); font.weight: Font.Bold; font.letterSpacing: Theme.px(4) }
+                Text { text: "ᚺᚢᚷᛁᚾᚾ"; color: "#8E897F"; font.family: Theme.runic; font.pixelSize: Theme.fs(13); font.letterSpacing: Theme.px(6) }
             }
         }
         HButton {
@@ -102,7 +102,7 @@ Rectangle {
             text: page.drives.map(d => d.name + " " + d.freeText + " free").join("   ·   ")
             color: Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
         }
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
@@ -167,7 +167,7 @@ Rectangle {
                             text: modelData.name
                             color: parent.on ? Theme.text : Theme.textSoft
                             font.family: Theme.body
-                            font.pixelSize: Theme.px(17)
+                            font.pixelSize: Theme.fs(17)
                             font.weight: parent.on ? Font.DemiBold : Font.Normal
                         }
                         Text {
@@ -178,7 +178,7 @@ Rectangle {
                             text: modelData.when
                             color: Theme.textMuted
                             font.family: Theme.body
-                            font.pixelSize: Theme.px(14)
+                            font.pixelSize: Theme.fs(14)
                         }
                         TapHandler { onTapped: { page.tile = 0; page.row = index; page.activate() } }
                     }
@@ -190,7 +190,7 @@ Rectangle {
                     text: "Nothing in Downloads yet. Files you download in Desktop Mode or send from your phone show up here."
                     color: Theme.textMuted
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(16)
+                    font.pixelSize: Theme.fs(16)
                 }
             }
             Column {
@@ -203,7 +203,7 @@ Rectangle {
                     text: "Move to… lists your ROM folders and game folders, so each file lands where it belongs."
                     color: Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(15)
+                    font.pixelSize: Theme.fs(15)
                 }
                 Row {
                     spacing: Theme.px(10)
@@ -232,8 +232,8 @@ Rectangle {
                         Item {
                             width: parent.width
                             height: Theme.px(22)
-                            Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16) }
-                            Text { anchors.right: parent.right; text: modelData.freeText + " of " + modelData.totalText + " free"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(15) }
+                            Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                            Text { anchors.right: parent.right; text: modelData.freeText + " of " + modelData.totalText + " free"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                         }
                         Rectangle {
                             width: parent.width; height: Theme.px(8); color: Theme.line
@@ -250,7 +250,7 @@ Rectangle {
                     text: full.map(d => d.name + " is " + Math.round(d.usedFraction * 100) + "% full").join(", ") + ". Press A to free up space."
                     color: Theme.danger
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(15)
+                    font.pixelSize: Theme.fs(15)
                     font.weight: Font.DemiBold
                 }
                 Text {
@@ -259,7 +259,7 @@ Rectangle {
                     text: page.shaderBytes > 0 ? "Shader caches use " + System.sizeText(page.shaderBytes) : page.shaderBytes === 0 ? "No shader caches yet" : Storage.measuring ? "Measuring shader caches…" : ""
                     color: Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(15)
+                    font.pixelSize: Theme.fs(15)
                 }
             }
         }
@@ -279,7 +279,7 @@ Rectangle {
                     text: Games.count > 0 ? Games.count + " installed" : Games.loading ? "Looking…" : "No games found"
                     color: Theme.text
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(26)
+                    font.pixelSize: Theme.fs(26)
                     font.weight: Font.DemiBold
                 }
                 Text {
@@ -288,7 +288,7 @@ Rectangle {
                     text: "Saves, Proton prefixes and shader caches, by game name"
                     color: Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(15)
+                    font.pixelSize: Theme.fs(15)
                 }
             }
         }
@@ -338,7 +338,7 @@ Rectangle {
                             text: modelData.all ? "All files ▸" : modelData.name
                             color: parent.on ? Theme.text : modelData.all ? Theme.textMuted : Theme.textSoft
                             font.family: Theme.body
-                            font.pixelSize: Theme.px(modelData.all ? 15 : 16)
+                            font.pixelSize: Theme.fs(modelData.all ? 15 : 16)
                         }
                         TapHandler { onTapped: { page.tile = 3; page.row = index; page.activate() } }
                     }
@@ -436,7 +436,7 @@ Rectangle {
             text: t.title.toUpperCase()
             color: t.on ? Theme.accent : Theme.textMuted
             font.family: Theme.display
-            font.pixelSize: Theme.px(14)
+            font.pixelSize: Theme.fs(14)
             font.weight: Font.Bold
             font.letterSpacing: Theme.px(2.5)
         }
@@ -457,7 +457,7 @@ Rectangle {
             text: t.link
             color: t.on ? Theme.accent : Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(14)
+            font.pixelSize: Theme.fs(14)
         }
         Row {
             visible: t.compact
@@ -471,8 +471,8 @@ Rectangle {
             Column {
                 anchors.verticalCenter: parent.verticalCenter
                 width: parent.width - Theme.px(50)
-                Text { width: parent.width; elide: Text.ElideRight; text: t.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(20); font.weight: Font.DemiBold }
-                Text { width: parent.width; elide: Text.ElideRight; text: t.detail; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { width: parent.width; elide: Text.ElideRight; text: t.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20); font.weight: Font.DemiBold }
+                Text { width: parent.width; elide: Text.ElideRight; text: t.detail; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
         TapHandler {

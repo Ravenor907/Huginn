@@ -114,8 +114,8 @@ Rectangle {
                 anchors.left: ico.right; anchors.leftMargin: Theme.px(12)
                 anchors.right: dot.left; anchors.rightMargin: Theme.px(8)
                 anchors.verticalCenter: parent.verticalCenter
-                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.DemiBold }
-                Text { width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "request" ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.DemiBold }
+                Text { width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "request" ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
             Rectangle {
                 id: dot
@@ -157,8 +157,8 @@ Rectangle {
             Column {
                 id: keepCol
                 x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
-                Text { text: Chat.theySaidKeep(page.openKey) ? page.openName + " wants to keep in touch" : "Keep in touch with " + page.openName + "?"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.DemiBold }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "If you both say yes, you can message each other from anywhere. Start: Yes · Select: Not now"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { text: Chat.theySaidKeep(page.openKey) ? page.openName + " wants to keep in touch" : "Keep in touch with " + page.openName + "?"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.DemiBold }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: "If you both say yes, you can message each other from anywhere. Start: Yes · Select: Not now"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
 
@@ -188,7 +188,7 @@ Rectangle {
                         x: Theme.px(14); y: Theme.px(9)
                         width: parent.width - Theme.px(28)
                         spacing: Theme.px(4)
-                        Text { visible: !modelData.mine && page.openKey === ""; text: modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.px(14); font.weight: Font.DemiBold }
+                        Text { visible: !modelData.mine && page.openKey === ""; text: modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
                         Image {
                             visible: !!modelData.photo && !modelData.voice && !modelData.unsent
                             width: Theme.px(260); height: Theme.px(190)
@@ -206,7 +206,7 @@ Rectangle {
                                     width: Theme.px(180); height: Theme.px(4); color: Theme.line
                                     Rectangle { width: parent.width * (Voice.playing === modelData.id ? Voice.progress : 0); height: parent.height; color: Theme.accent }
                                 }
-                                Text { text: "Voice message · " + Voice.length(modelData.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(13) }
+                                Text { text: "Voice message · " + Voice.length(modelData.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                             }
                         }
                         Text {
@@ -215,13 +215,13 @@ Rectangle {
                             width: parent.width; wrapMode: Text.Wrap
                             text: modelData.unsent ? (modelData.mine ? "Message deleted by you" : "Message deleted by " + modelData.unsent) : modelData.text
                             font.italic: !!modelData.unsent
-                            color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18)
+                            color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18)
                         }
                         Text {
                             id: meta
                             text: page.clock(modelData.time) + page.status(modelData)
                             color: modelData.failed ? Theme.danger : modelData.state === "read" && modelData.mine ? Theme.accent : Theme.textFaint
-                            font.family: Theme.body; font.pixelSize: Theme.px(13)
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
                         }
                     }
                     TapHandler { onTapped: { page.zone = "messages"; page.sel = index; page.options() } }
@@ -237,7 +237,7 @@ Rectangle {
             text: page.openKey === "" ? (Chat.nearbyOn ? (Chat.nearbyCount === 0 ? "Nobody else is here yet. Open Muninn on a phone close by or on this Wi-Fi." : "Say hello. Press A to write.")
                                                        : "Nearby chat is off. Turn it on in Settings › Chat.")
                                       : "No messages yet. Press A to write, hold Y to talk, RB for a picture."
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(17)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(17)
         }
 
         // A photo full size.
@@ -260,7 +260,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 x: Theme.px(16); spacing: Theme.px(12)
                 Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                Text { text: Voice.length(Voice.elapsed) + "   Let go of Y to send · B to cancel"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18) }
+                Text { text: Voice.length(Voice.elapsed) + "   Let go of Y to send · B to cancel"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18) }
             }
         }
     }
@@ -278,14 +278,14 @@ Rectangle {
                 id: codeCol
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(12)
-                Text { text: "My code"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(22); font.weight: Font.DemiBold }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "They scan this with their phone's camera: it opens Muninn, or shows where to download it. Anyone with it can message you from anywhere as “" + Chat.username + "”."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(16) }
+                Text { text: "My code"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: "They scan this with their phone's camera: it opens Muninn, or shows where to download it. Anyone with it can message you from anywhere as “" + Chat.username + "”."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: Theme.px(300); height: width; color: Theme.text
                     Image { anchors.fill: parent; anchors.margins: Theme.px(14); smooth: false; source: page.showCode ? "image://qr/" + encodeURIComponent(Chat.myLink) : "" }
                 }
-                Text { width: parent.width; text: "A: copy the link · B: close"; horizontalAlignment: Text.AlignHCenter; color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { width: parent.width; text: "A: copy the link · B: close"; horizontalAlignment: Text.AlignHCenter; color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
         TapHandler { onTapped: page.showCode = false }

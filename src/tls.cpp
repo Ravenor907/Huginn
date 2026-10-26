@@ -112,7 +112,7 @@ Tls::Identity fromPem(const QByteArray &keyPem, const QByteArray &certPem)
 QString Tls::fingerprintOf(const QSslCertificate &cert)
 {
     if (cert.isNull())
-        return {};
+        return QString();
     return QString::fromLatin1(cert.digest(QCryptographicHash::Sha256).toHex().toUpper());
 }
 
@@ -137,7 +137,7 @@ Tls::Identity Tls::load()
     // Missing or damaged: make a new one. Other devices will see this handheld as new once.
     QByteArray keyPem, certPem;
     if (!make(keyPem, certPem))
-        return {};
+        return Identity();
     QDir().mkpath(dir);
     QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     // Even if saving fails, use the new identity for this run so sharing still works.

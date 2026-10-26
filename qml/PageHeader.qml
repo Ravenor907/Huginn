@@ -20,7 +20,7 @@ Item {
             text: header.title.toUpperCase()
             color: Theme.text
             font.family: Theme.display
-            font.pixelSize: Theme.px(24)
+            font.pixelSize: Theme.fs(24)
             font.weight: Font.Bold
             font.letterSpacing: Theme.px(4)
         }
@@ -29,7 +29,7 @@ Item {
             text: header.subtitle
             color: Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
         }
     }
     Row {

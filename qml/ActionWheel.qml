@@ -70,7 +70,7 @@ Item {
             text: wheel.futhark[index]
             color: Theme.textFaint
             font.family: Theme.runic
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
         }
     }
 
@@ -126,7 +126,7 @@ Item {
                 text: modelData.label
                 color: parent.on ? Theme.accent : parent.usable ? Theme.textSoft : Theme.textFaint
                 font.family: Theme.body
-                font.pixelSize: Theme.px(15)
+                font.pixelSize: Theme.fs(15)
                 font.weight: Font.DemiBold
             }
         }
@@ -162,7 +162,7 @@ Item {
                 text: (wheel.actions[wheel.current] || {}).label ? wheel.actions[wheel.current].label.toUpperCase() : ""
                 color: Theme.accent
                 font.family: Theme.display
-                font.pixelSize: Theme.px(24)
+                font.pixelSize: Theme.fs(24)
                 font.weight: Font.Bold
                 font.letterSpacing: Theme.px(2)
                 fontSizeMode: Text.HorizontalFit
@@ -174,7 +174,7 @@ Item {
                 text: wheel.subject
                 color: Theme.textSoft
                 font.family: Theme.body
-                font.pixelSize: Theme.px(15)
+                font.pixelSize: Theme.fs(15)
             }
             Text {
                 width: parent.width
@@ -182,7 +182,7 @@ Item {
                 text: wheel.detail
                 color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.px(14)
+                font.pixelSize: Theme.fs(14)
             }
         }
     }

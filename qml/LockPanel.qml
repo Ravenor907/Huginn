@@ -60,14 +60,14 @@ Rectangle {
         Text {
             width: parent.width; wrapMode: Text.WordWrap
             text: panel.mode === "setup" ? "Protect your messages" : panel.mode === "change" ? "Change lock" : "Chat is locked"
-            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(22); font.weight: Font.DemiBold
+            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold
         }
         Text {
             width: parent.width; wrapMode: Text.WordWrap
             text: panel.mode === "unlock"
                   ? (panel.usePattern ? "Draw your pattern. Your messages, photos, voice and contacts stay encrypted until you do." : "Press A to type your password.")
                   : "Chat opens with a pattern or password. Everything it keeps is encrypted with it: without it nobody can read your messages, not even Huginn. There's no way to recover it."
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(16)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
         }
         Row {
             visible: panel.mode !== "unlock"
@@ -82,7 +82,7 @@ Rectangle {
                 : panel.note !== "" ? panel.note
                 : panel.usePattern && panel.mode !== "unlock" ? "Draw a pattern: connect at least 4 dots."
                 : ""
-            color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(16)
+            color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16)
         }
         PatternPad {
             id: pad
@@ -103,7 +103,7 @@ Rectangle {
             width: parent.width; wrapMode: Text.WordWrap
             visible: Gamepad.connected && panel.usePattern
             text: "Controller: D-pad to move, A to connect a dot, X to start over, Y when done."
-            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.px(14)
+            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
     }
 

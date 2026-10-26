@@ -45,7 +45,7 @@ Rectangle {
         text: model.name
         color: model.hidden ? Theme.textMuted : Theme.text
         font.family: Theme.body
-        font.pixelSize: Theme.px(19)
+        font.pixelSize: Theme.fs(19)
         font.weight: Font.Medium
     }
     Text {
@@ -56,7 +56,7 @@ Rectangle {
         text: model.meta
         color: Theme.textMuted
         font.family: Theme.body
-        font.pixelSize: Theme.px(15)
+        font.pixelSize: Theme.fs(15)
     }
     TapHandler { onTapped: row.tapped() }
 }

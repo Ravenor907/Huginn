@@ -41,11 +41,11 @@ Rectangle {
             Column {
                 anchors.left: ico.right; anchors.leftMargin: Theme.px(12); anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
-                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(18); font.weight: Font.DemiBold }
+                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.DemiBold }
                 Text {
                     width: parent.width; elide: Text.ElideRight
                     text: modelData.blocked ? "Blocked · A to unblock" : (modelData.contact ? "In touch" : "Met close by") + (modelData.verified ? " · verified" : "")
-                    color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14)
+                    color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
             }
             TapHandler { onTapped: { page.row = index; page.choose() } }
@@ -55,7 +55,7 @@ Rectangle {
         anchors.centerIn: list
         visible: list.count === 0
         text: "Nobody yet. People you chat with show up here."
-        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(17)
+        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(17)
     }
 
     PromptBar {

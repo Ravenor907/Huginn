@@ -72,7 +72,7 @@ Rectangle {
                     text: model.initials
                     color: Theme.textSoft
                     font.family: Theme.display
-                    font.pixelSize: Theme.px(19)
+                    font.pixelSize: Theme.fs(19)
                     font.weight: Font.Bold
                 }
             }
@@ -89,14 +89,14 @@ Rectangle {
                     text: model.name
                     color: Theme.text
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(19)
+                    font.pixelSize: Theme.fs(19)
                     font.weight: Font.DemiBold
                 }
                 Text {
                     text: "App ID " + model.appId
                     color: Theme.textMuted
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(14)
+                    font.pixelSize: Theme.fs(14)
                 }
             }
             Text {
@@ -107,7 +107,7 @@ Rectangle {
                 text: model.sizeText
                 color: Theme.textSoft
                 font.family: Theme.body
-                font.pixelSize: Theme.px(16)
+                font.pixelSize: Theme.fs(16)
             }
             TapHandler { onTapped: { page.current = index; page.zone = "list" } }
         }
@@ -120,7 +120,7 @@ Rectangle {
             text: Games.loading ? "Looking through your Steam libraries…" : "No Steam games found. Huginn looks in ~/.local/share/Steam and every library folder Steam knows about."
             color: Theme.textMuted
             font.family: Theme.body
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
         }
     }
 
@@ -153,7 +153,7 @@ Rectangle {
                         text: page.game ? page.game.initials : ""
                         color: Theme.accent
                         font.family: Theme.display
-                        font.pixelSize: Theme.px(28)
+                        font.pixelSize: Theme.fs(28)
                         font.weight: Font.Bold
                     }
                 }
@@ -164,7 +164,7 @@ Rectangle {
                         text: page.game ? page.game.name : ""
                         color: Theme.text
                         font.family: Theme.display
-                        font.pixelSize: Theme.px(28)
+                        font.pixelSize: Theme.fs(28)
                         font.weight: Font.Bold
                         font.letterSpacing: 1
                     }
@@ -172,7 +172,7 @@ Rectangle {
                         text: page.game ? page.game.where : ""
                         color: Theme.textMuted
                         font.family: Theme.body
-                        font.pixelSize: Theme.px(15)
+                        font.pixelSize: Theme.fs(15)
                     }
                 }
             }
@@ -197,9 +197,9 @@ Rectangle {
                             anchors.leftMargin: Theme.px(16)
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: Theme.px(4)
-                            Text { text: modelData.label.toUpperCase(); color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(13); font.weight: Font.DemiBold; font.letterSpacing: 2 }
-                            Text { text: modelData.sizeText; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(26); font.weight: Font.DemiBold }
-                            Text { text: modelData.exists ? "Open in browser" : "Not created yet"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                            Text { text: modelData.label.toUpperCase(); color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold; font.letterSpacing: 2 }
+                            Text { text: modelData.sizeText; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(26); font.weight: Font.DemiBold }
+                            Text { text: modelData.exists ? "Open in browser" : "Not created yet"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                         }
                         TapHandler { onTapped: { page.zone = "actions"; page.actionIndex = index; page.activate() } }
                     }
@@ -219,7 +219,7 @@ Rectangle {
                 text: "Backups go to Home / Huginn Backups. Resetting the prefix backs up your saves first and moves the old prefix to the trash."
                 color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.px(14)
+                font.pixelSize: Theme.fs(14)
             }
         }
     }

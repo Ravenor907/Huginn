@@ -25,7 +25,7 @@ Rectangle {
             : bar.status
         color: FileOps.busy || LocalSend.busy ? Theme.accent : bar.statusColor
         font.family: Theme.body
-        font.pixelSize: Theme.px(16)
+        font.pixelSize: Theme.fs(16)
         font.weight: Font.DemiBold
     }
 

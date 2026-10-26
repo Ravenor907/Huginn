@@ -72,7 +72,7 @@ Item {
                 text: dlg.title.toUpperCase()
                 color: dlg.danger ? Theme.danger : Theme.text
                 font.family: Theme.display
-                font.pixelSize: Theme.px(20)
+                font.pixelSize: Theme.fs(20)
                 font.weight: Font.Bold
                 font.letterSpacing: Theme.px(2)
             }
@@ -82,7 +82,7 @@ Item {
                 text: dlg.message
                 color: Theme.textSoft
                 font.family: Theme.body
-                font.pixelSize: Theme.px(18)
+                font.pixelSize: Theme.fs(18)
                 lineHeight: 1.15
             }
             Row {

@@ -59,6 +59,7 @@ import io.github.ravenor907.muninn.ui.MuninnTheme
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Type
+import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -259,7 +260,10 @@ class MainActivity : ComponentActivity() {
         // A conversation being scrolled gets the whole screen (ChatNav.full).
         val full = tab == "chat" && ChatNav.open.isNotEmpty() && ChatNav.full
         Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
-            androidx.compose.animation.AnimatedVisibility(!full) { Brand {
+            if (Access.reduceMotion) { if (!full) Brand {
+                if (app.vault.hasPassword) MButton("Lock", Modifier.padding(end = 8.dp)) { uiLocked = true }
+                MButton("Settings", kind = if (tab == "settings") Kind.Accent else Kind.Normal, icon = "gear") { tab = if (tab == "settings") "chat" else "settings" }
+            } } else androidx.compose.animation.AnimatedVisibility(!full) { Brand {
                 if (app.vault.hasPassword) MButton("Lock", Modifier.padding(end = 8.dp)) { uiLocked = true }
                 MButton("Settings", kind = if (tab == "settings") Kind.Accent else Kind.Normal, icon = "gear") { tab = if (tab == "settings") "chat" else "settings" }
             } }
@@ -284,7 +288,11 @@ class MainActivity : ComponentActivity() {
                 }
                 toast?.let { (text, bad) ->
                     Box(Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().background(if (bad) Palette.dangerFill else Palette.raised).clickable { Ui.toast.value = null }.padding(14.dp)) {
-                        Text(text, style = Type.normal.copy(color = if (bad) Palette.danger else Palette.text))
+                        // A problem is marked with an icon too, never by color alone.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (bad) { MIcon("info", Palette.danger, 20.dp); androidx.compose.foundation.layout.Spacer(Modifier.padding(start = 8.dp)) }
+                            Text(text, style = Type.normal.copy(color = if (bad) Palette.danger else Palette.text))
+                        }
                     }
                 }
             }

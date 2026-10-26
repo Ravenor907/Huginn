@@ -70,6 +70,23 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("stayConnected", true)
         set(v) = prefs.edit().putBoolean("stayConnected", v).apply()
 
+    // ---- accessibility (Settings › Accessibility)
+    var uiSize: Float
+        get() = prefs.getFloat("uiSize", 1f)
+        set(v) = prefs.edit().putFloat("uiSize", v).apply()
+    var textSize: Float
+        get() = prefs.getFloat("textSize", 1f)
+        set(v) = prefs.edit().putFloat("textSize", v).apply()
+    var highContrast: Boolean
+        get() = prefs.getBoolean("highContrast", false)
+        set(v) = prefs.edit().putBoolean("highContrast", v).apply()
+    var colorBlind: Boolean
+        get() = prefs.getBoolean("colorBlind", false)
+        set(v) = prefs.edit().putBoolean("colorBlind", v).apply()
+    var reduceMotion: Boolean
+        get() = prefs.getBoolean("reduceMotion", false)
+        set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
+
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
     var readReceipts: Boolean

@@ -20,7 +20,7 @@ Rectangle {
         y: Theme.px(4)
         x: sw.checked ? parent.width - width - Theme.px(4) : Theme.px(4)
         color: sw.checked ? Theme.accent : Theme.textFaint
-        Behavior on x { NumberAnimation { duration: 120 } }
+        Behavior on x { NumberAnimation { duration: Theme.motion ? 120 : 0 } }
     }
     TapHandler { onTapped: sw.toggled() }
     Accessible.role: Accessible.CheckBox

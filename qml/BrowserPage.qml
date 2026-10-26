@@ -39,7 +39,7 @@ Rectangle {
                     text: "HUGINN"
                     color: Theme.text
                     font.family: Theme.display
-                    font.pixelSize: Theme.px(24)
+                    font.pixelSize: Theme.fs(24)
                     font.weight: Font.Bold
                     font.letterSpacing: Theme.px(4)
                 }
@@ -47,7 +47,7 @@ Rectangle {
                     text: "ᚺᚢᚷᛁᚾᚾ"
                     color: "#8E897F"
                     font.family: Theme.runic
-                    font.pixelSize: Theme.px(13)
+                    font.pixelSize: Theme.fs(13)
                     font.letterSpacing: Theme.px(6)
                 }
             }
@@ -59,7 +59,7 @@ Rectangle {
                 text: page.activeModel.title + (page.activeModel.filter ? "   ·   matching “" + page.activeModel.filter + "”" : "")
                 color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.px(18)
+                font.pixelSize: Theme.fs(18)
             }
         }
         Row {
@@ -113,7 +113,7 @@ Rectangle {
             text: page.zone === "side" ? "PLACES" : "PLACES  ◀"
             color: Theme.textMuted
             font.family: Theme.display
-            font.pixelSize: Theme.px(13)
+            font.pixelSize: Theme.fs(13)
             font.weight: Font.DemiBold
             font.letterSpacing: Theme.px(2.5)
         }
@@ -145,7 +145,7 @@ Rectangle {
                         text: modelData.name
                         color: parent.parent.here || parent.parent.focused ? Theme.accent : Theme.textSoft
                         font.family: Theme.body
-                        font.pixelSize: Theme.px(18)
+                        font.pixelSize: Theme.fs(18)
                         font.weight: parent.parent.here ? Font.DemiBold : Font.Normal
                     }
                 }

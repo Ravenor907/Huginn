@@ -21,7 +21,7 @@ Rectangle {
     border.color: bad ? Theme.dangerLine : Theme.accent
     opacity: 0
     visible: opacity > 0
-    Behavior on opacity { NumberAnimation { duration: 180 } }
+    Behavior on opacity { NumberAnimation { duration: Theme.motion ? 180 : 0 } }
     Text {
         id: msg
         anchors.centerIn: parent
@@ -29,7 +29,7 @@ Rectangle {
         elide: Text.ElideRight
         color: toast.bad ? Theme.danger : Theme.text
         font.family: Theme.body
-        font.pixelSize: Theme.px(17)
+        font.pixelSize: Theme.fs(17)
     }
     Timer { id: hide; interval: 3200; onTriggered: toast.opacity = 0 }
 }

@@ -27,14 +27,14 @@ Rectangle {
             Icon { anchors.verticalCenter: parent.verticalCenter; name: "archive"; size: Theme.px(30); color: Theme.accent }
             Column {
                 anchors.verticalCenter: parent.verticalCenter
-                Text { text: arc.fileName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(20); font.weight: Font.DemiBold }
-                Text { text: arc.details; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { text: arc.fileName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20); font.weight: Font.DemiBold }
+                Text { text: arc.details; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
         Text {
             anchors.right: parent.right; anchors.rightMargin: Theme.px(28); anchors.verticalCenter: parent.verticalCenter
             text: "Browsing inside the archive. Nothing is extracted yet."
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(15)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
     }
     Divider { id: divider; anchors.top: header.bottom; x: Theme.px(28); width: parent.width - Theme.px(56) }
@@ -73,15 +73,15 @@ Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                 anchors.margins: Theme.px(18)
                 spacing: Theme.px(6)
-                Text { text: "SELECTED"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(14); font.weight: Font.DemiBold; font.letterSpacing: 2 }
-                Text { text: arc.selectedCount > 0 ? arc.selectedCount + " items · " + arc.selectedSize : "Nothing"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(22); font.weight: Font.DemiBold }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "Select nothing to extract everything"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { text: "SELECTED"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold; font.letterSpacing: 2 }
+                Text { text: arc.selectedCount > 0 ? arc.selectedCount + " items · " + arc.selectedSize : "Nothing"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: "Select nothing to extract everything"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
         HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract next to the archive"; kind: "accent"; focused: page.zone === "buttons" && page.button === 0; onClicked: page.extract(0) }
         HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract to…"; focused: page.zone === "buttons" && page.button === 1; onClicked: page.extract(1) }
         HButton { width: parent.width; implicitHeight: Theme.px(56); text: "Extract to a new folder"; focused: page.zone === "buttons" && page.button === 2; onClicked: page.extract(2) }
-        Text { width: parent.width; wrapMode: Text.WordWrap; text: "Works with zip, 7z and tar files (also .tar.gz, .tar.xz and .tar.bz2)"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+        Text { width: parent.width; wrapMode: Text.WordWrap; text: "Works with zip, 7z and tar files (also .tar.gz, .tar.xz and .tar.bz2)"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
     }
 
     PromptBar {

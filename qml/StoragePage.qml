@@ -43,12 +43,12 @@ Rectangle {
                     anchors.fill: parent
                     anchors.margins: Theme.px(16)
                     spacing: Theme.px(8)
-                    Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(20); font.weight: Font.DemiBold }
+                    Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20); font.weight: Font.DemiBold }
                     Rectangle {
                         width: parent.width; height: Theme.px(8); radius: 1; color: Theme.line
                         Rectangle { width: parent.width * modelData.usedFraction; height: parent.height; color: modelData.usedFraction > 0.9 ? Theme.danger : Theme.accent }
                     }
-                    Text { text: modelData.freeText + " free of " + modelData.totalText; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(16) }
+                    Text { text: modelData.freeText + " free of " + modelData.totalText; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 }
                 TapHandler { onTapped: { page.driveIndex = index; page.row = 0 } }
             }
@@ -84,14 +84,14 @@ Rectangle {
                     spacing: Theme.px(6)
                     Row {
                         spacing: Theme.px(12)
-                        Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold }
-                        Text { text: modelData.sizeText; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: Font.DemiBold }
+                        Text { text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
+                        Text { text: modelData.sizeText; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
                     }
                     Rectangle {
                         width: parent.width; height: Theme.px(6); radius: 1; color: Theme.line
                         Rectangle { width: parent.width * share; height: parent.height; color: Theme.textMuted }
                     }
-                    Text { visible: modelData.note.length > 0; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                    Text { visible: modelData.note.length > 0; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 }
                 Text {
                     id: actionText
@@ -101,7 +101,7 @@ Rectangle {
                     text: page.actionLabel(modelData)
                     color: Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.px(16)
+                    font.pixelSize: Theme.fs(16)
                 }
                 TapHandler { onTapped: { page.row = index; page.act() } }
             }
@@ -109,7 +109,7 @@ Rectangle {
         Text {
             visible: page.cats.length === 0
             text: Storage.measuring ? "Measuring…" : "Nothing to show yet"
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(17)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(17)
         }
     }
 

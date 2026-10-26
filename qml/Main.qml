@@ -112,7 +112,7 @@ Window {
                 text: "UPDATING HUGINN TO " + Updater.latest.toUpperCase()
                 color: Theme.text
                 font.family: Theme.display
-                font.pixelSize: Theme.px(24)
+                font.pixelSize: Theme.fs(24)
                 font.weight: Font.Bold
                 font.letterSpacing: Theme.px(3)
             }
@@ -121,7 +121,7 @@ Window {
                 text: Updater.status
                 color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.px(18)
+                font.pixelSize: Theme.fs(18)
             }
         }
     }

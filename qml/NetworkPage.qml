@@ -35,21 +35,21 @@ Rectangle {
             id: col
             width: parent.width
             spacing: Theme.px(8)
-            Text { text: "SAVED"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
+            Text { text: "SAVED"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
             Text {
                 visible: Network.saved.length === 0
                 text: "Nothing saved yet. Press Y to add an SFTP share by address; it's saved for next time."
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(16)
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             }
             Repeater {
                 model: Network.saved
                 ShareRow { width: col.width; entry: modelData; focused: page.focusIndex === index; saved: true }
             }
-            Text { visible: Network.found.length > 0; topPadding: Theme.px(10); text: "FOUND NEARBY"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.px(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
+            Text { visible: Network.found.length > 0; topPadding: Theme.px(10); text: "FOUND NEARBY"; color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold; font.letterSpacing: 2 }
             Text {
                 visible: false
                 text: ""
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(16)
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             }
             Repeater {
                 model: Network.found
@@ -76,8 +76,8 @@ Rectangle {
             Column {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(2)
-                Text { text: entry.name; color: saved ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.px(19); font.weight: saved ? Font.DemiBold : Font.Medium }
-                Text { text: entry.address; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(14) }
+                Text { text: entry.name; color: saved ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: saved ? Font.DemiBold : Font.Medium }
+                Text { text: entry.address; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
         Text {
@@ -85,7 +85,7 @@ Rectangle {
             anchors.rightMargin: Theme.px(18)
             anchors.verticalCenter: parent.verticalCenter
             text: saved ? "Saved" : "Not saved"
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.px(15)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
         TapHandler { onTapped: Ui.main.openInBrowser(entry.url) }
     }

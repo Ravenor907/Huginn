@@ -624,10 +624,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 }
             } catch (e: InterruptedException) {
                 done(false, "Sending stopped.")
-            } catch (e: javax.net.ssl.SSLHandshakeException) {
-                // Most likely the certificate check: whoever answered isn't the device that was found.
-                done(false, "Didn't send: ${dev.alias} didn't prove it's the same device that was found. Look again and pick it.")
             } catch (e: java.io.IOException) {
+                // The certificate check failing shows up as a handshake error caused by our CertificateException.
+                if (generateSequence<Throwable>(e) { it.cause }.any { it is java.security.cert.CertificateException }) {
+                    done(false, "Didn't send: whoever answered isn't the ${dev.alias} that was found earlier. Look again and pick it.")
+                    return@execute
+                }
                 done(false, e.message?.takeIf { it.contains(dev.alias) } ?: "Couldn't reach ${dev.alias}. Is it on the same Wi-Fi with LocalSend, Huginn or Muninn open?")
             } catch (e: Exception) {
                 done(false, "Sending failed: ${e.message ?: e.javaClass.simpleName}")
