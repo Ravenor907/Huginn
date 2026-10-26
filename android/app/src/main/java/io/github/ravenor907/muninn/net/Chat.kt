@@ -425,7 +425,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 else "$name is out of range. Say yes to Keep in touch to message from anywhere.")
             return
         }
-        attempt(mine)
+        bg { attempt(mine) }
     }
 
     // ------------------------------------------------------------------ getting it there
