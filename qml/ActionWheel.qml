@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Huginn
 
 // The action wheel: hold Y, aim with the stick (or the d-pad, or touch), release or press A.
@@ -39,17 +40,24 @@ Item {
     readonly property string futhark: "ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒᛖᛗᛚᛜᛞᛟ"
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
-    MouseArea { anchors.fill: parent; onClicked: wheel.close() }
+
+    // The wheel is a pie: one slice per action, the picked slice filled with gold.
+    readonly property real rOut: ring * 0.84
+    readonly property real rIn: ring * 0.34
+    readonly property real sliceStep: Math.PI * 2 / Math.max(1, actions.length)
+
+    function wedge(i, r0, r1) {
+        const a0 = i * sliceStep - Math.PI / 2 - sliceStep / 2
+        const a1 = a0 + sliceStep
+        const p = (r, a) => (cx + r * Math.cos(a)).toFixed(1) + " " + (cy + r * Math.sin(a)).toFixed(1)
+        return "M" + p(r0, a0) + " L" + p(r1, a0) + " A" + r1 + " " + r1 + " 0 0 1 " + p(r1, a1)
+             + " L" + p(r0, a1) + " A" + r0 + " " + r0 + " 0 0 0 " + p(r0, a0) + " Z"
+    }
 
     Rectangle {
         x: wheel.cx - width / 2; y: wheel.cy - height / 2
         width: wheel.ring * 2; height: width; radius: width / 2
         color: "transparent"; border.color: Theme.lineStrong
-    }
-    Rectangle {
-        x: wheel.cx - width / 2; y: wheel.cy - height / 2
-        width: wheel.ring * 1.7; height: width; radius: width / 2
-        color: Qt.rgba(0.09, 0.098, 0.106, 0.94); border.color: Theme.line
     }
     Repeater {
         model: 24
@@ -67,46 +75,82 @@ Item {
 
     Repeater {
         model: wheel.actions
-        Rectangle {
-            readonly property real a: index / Math.max(1, wheel.actions.length) * Math.PI * 2 - Math.PI / 2
+        Shape {
+            anchors.fill: parent
+            preferredRendererType: Shape.CurveRenderer
             readonly property bool on: index === wheel.current
             readonly property bool usable: modelData.enabled !== false
-            width: Theme.px(108); height: Theme.px(82)
-            x: wheel.cx + wheel.itemRadius * Math.cos(a) - width / 2
-            y: wheel.cy + wheel.itemRadius * Math.sin(a) - height / 2
-            radius: Theme.radius
-            opacity: usable ? 1 : 0.35
-            color: on ? Theme.accentFill : Theme.raised
-            border.color: on ? Theme.accent : Theme.lineStrong
-            Column {
-                anchors.centerIn: parent
-                spacing: Theme.px(4)
-                Icon {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    name: modelData.icon
-                    size: Theme.px(28)
-                    color: parent.parent.on ? Theme.accent : Theme.textSoft
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: modelData.label
-                    color: parent.parent.on ? Theme.accent : Theme.textSoft
-                    font.family: Theme.body
-                    font.pixelSize: Theme.px(15)
-                    font.weight: Font.DemiBold
-                }
+            ShapePath {
+                fillColor: parent.on ? Theme.accentFill : parent.usable ? "#1B1D1F" : "#151617"
+                strokeColor: Theme.ground
+                strokeWidth: Theme.px(4)
+                joinStyle: ShapePath.RoundJoin
+                PathSvg { path: wheel.wedge(index, wheel.rIn, wheel.rOut) }
             }
-            TapHandler {
-                enabled: parent.usable
-                onTapped: { wheel.current = index; wheel.pick() }
+        }
+    }
+    Shape {
+        anchors.fill: parent
+        visible: wheel.current >= 0
+        preferredRendererType: Shape.CurveRenderer
+        ShapePath {
+            fillColor: "transparent"
+            strokeColor: Theme.accent
+            strokeWidth: Math.max(2, Theme.px(2))
+            joinStyle: ShapePath.RoundJoin
+            PathSvg { path: wheel.current >= 0 ? wheel.wedge(wheel.current, wheel.rIn, wheel.rOut) : "" }
+        }
+    }
+
+    Repeater {
+        model: wheel.actions
+        Column {
+            readonly property real a: index * wheel.sliceStep - Math.PI / 2
+            readonly property real mid: (wheel.rIn + wheel.rOut) / 2
+            readonly property bool on: index === wheel.current
+            readonly property bool usable: modelData.enabled !== false
+            x: wheel.cx + mid * Math.cos(a) - width / 2
+            y: wheel.cy + mid * Math.sin(a) - height / 2
+            spacing: Theme.px(4)
+            Accessible.role: Accessible.MenuItem
+            Accessible.name: modelData.label
+            Icon {
+                anchors.horizontalCenter: parent.horizontalCenter
+                name: modelData.icon
+                size: Theme.px(28)
+                color: parent.on ? Theme.accent : parent.usable ? Theme.textSoft : Theme.textFaint
             }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: modelData.label
+                color: parent.on ? Theme.accent : parent.usable ? Theme.textSoft : Theme.textFaint
+                font.family: Theme.body
+                font.pixelSize: Theme.px(15)
+                font.weight: Font.DemiBold
+            }
+        }
+    }
+
+    // Touch: tapping a slice picks it; tapping the hub or outside closes.
+    MouseArea {
+        anchors.fill: parent
+        onClicked: (mouse) => {
+            const dx = mouse.x - wheel.cx, dy = mouse.y - wheel.cy
+            const r = Math.hypot(dx, dy)
+            if (r < wheel.rIn || r > wheel.rOut) { wheel.close(); return }
+            let ang = Math.atan2(dy, dx) + Math.PI / 2
+            if (ang < 0) ang += Math.PI * 2
+            const i = Math.round(ang / wheel.sliceStep) % wheel.actions.length
+            if (wheel.actions[i].enabled === false) return
+            wheel.current = i
+            wheel.pick()
         }
     }
 
     Rectangle {
         x: wheel.cx - width / 2; y: wheel.cy - height / 2
-        width: Theme.px(180); height: width; radius: width / 2
-        color: Theme.ground; border.color: Theme.accent
+        width: (wheel.rIn - Theme.px(4)) * 2; height: width; radius: width / 2
+        color: Theme.ground; border.color: wheel.current >= 0 ? Theme.accent : Theme.lineMuted
         Column {
             anchors.centerIn: parent
             width: parent.width - Theme.px(24)

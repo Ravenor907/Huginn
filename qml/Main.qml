@@ -191,7 +191,7 @@ Window {
             if (s.section) args.section = s.section
             if (s.page === "") app.closePage(); else app.openPage(s.page, args)
             if (s.picker) picker.open("Move 2 items to…", [{ name: "Other pane", detail: "Home / Downloads", url: "file:///tmp" }], null)
-            if (s.wheel) browser.openWheel(false)
+            if (s.wheel) { browser.openWheel(false); wheel.current = 1 }
             if (s.prompt) prompt.open("Rename folder", "Home", "screenshots", "Rename", null, false)
             if (s.hold) confirm.open("Erase this drive?", "Everything on the 64 GB USB drive will be replaced by Ventoy.", "Erase and install", null, true, true)
             step++
