@@ -532,7 +532,7 @@ jobs:
             fi
           }
           bad=0; n=0
-          start env QT_QPA_PLATFORM=offscreen wine "$h"
+          start env QT_QPA_PLATFORM=offscreen wine "$h" -platform offscreen
           start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
           exit $bad
       - name: Publish the Wine logs to the ci-wine branch

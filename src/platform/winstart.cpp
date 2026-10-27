@@ -186,6 +186,7 @@ void beginStart()
         logLine(QStringLiteral("running under Wine %1%2").arg(wineVersion(), envSet("STEAM_COMPAT_DATA_PATH") ? QStringLiteral(" (Proton)") : QString()));
         // Fonts through GDI, which Wine has had the longest, and no Windows dark-mode lookups:
         // Huginn draws its own dark theme anyway. Anyone who set QT_QPA_PLATFORM keeps their choice.
+        logLine(QStringLiteral("QT_QPA_PLATFORM was \"%1\"").arg(qEnvironmentVariable("QT_QPA_PLATFORM")));
         if (!envSet("QT_QPA_PLATFORM"))
             qputenv("QT_QPA_PLATFORM", "windows:fontengine=gdi,darkmode=0");
     }
