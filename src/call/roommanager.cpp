@@ -578,8 +578,8 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
         return;
     }
     if (t == QLatin1String("vring")) {
-        if (here)
-            return;
+        if (here || (ringing() && m_ringG == g && m_ringCh == ch))
+            return;   // in it already, or the same ring again (6.5 step 1)
         const bool busy = inRoom() || (m_calls && (m_calls->inCall() || m_calls->state() == QLatin1String("incoming")));
         if (!fresh || busy || ringing()) {
             Q_EMIT finished(QStringLiteral("Missed group call from %1").arg(nameOf(g, from)));

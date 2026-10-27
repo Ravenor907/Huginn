@@ -379,7 +379,7 @@ object RoomManager {
                 }
             }
             "vring" -> {
-                if (here) return
+                if (here || _ring.value?.let { it.g == group && it.ch == room } == true) return   // in it, or the same ring again
                 val inCall = CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true
                 val who = nameOf(group, from); val grp = state(group)?.name ?: ""
                 if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, from); return }
