@@ -469,7 +469,7 @@ jobs:
     needs: windows
     runs-on: ubuntu-24.04
     env:
-      WINEPREFIX: /tmp/huginn-wine
+      WINEPREFIX: ${{ github.workspace }}/wineprefix
       WINEDEBUG: -all
       WINEDLLOVERRIDES: "mscoree,mshtml="
     steps:
