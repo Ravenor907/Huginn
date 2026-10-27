@@ -120,14 +120,19 @@ object TvVoice {
         val p = Processor.open(48_000, 16_000, 16_000, 48_000, AEC or RNNOISE or AGC) ?: return "can't open 48 kHz"
         val mic = ShortArray(960); val out = ShortArray(320); val far = ShortArray(320); val play = ShortArray(960)
         var phase = 0.0
+        var heard = 0.0
         for (f in 0 until 50) {
             for (i in mic.indices) { phase += 2 * Math.PI * 220 / 48_000; mic[i] = (3000 * kotlin.math.sin(phase)).toInt().toShort() }
             for (i in far.indices) far[i] = (2000 * kotlin.math.sin(i * 0.3 + f)).toInt().toShort()
             if (p.render(far, far.size, play) != 960) { p.close(); return "render length" }
+            if (f >= 10) for (s in play) heard += s.toDouble() * s
             if (p.capture(mic, mic.size, out) != 320) { p.close(); return "capture length" }
         }
         val v = p.voice()
         p.close()
+        // The speaker must carry the call: a 2000-peak tone is about 1400 RMS, silence is 0.
+        val rms = kotlin.math.sqrt(heard / (40 * 960))
+        if (rms < 700) return "speaker silent (rms ${rms.toInt()})"
         val clip = Processor.open(44_100, 44_100, 16_000, 16_000, RNNOISE or AGC) ?: return "can't open 44.1 kHz"
         val c = ShortArray(882)
         val n = clip.capture(c, c.size, ShortArray(882))
