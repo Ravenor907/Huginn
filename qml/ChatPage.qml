@@ -258,7 +258,7 @@ Rectangle {
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
                     name: "shield"; size: Theme.px(15)
-                    color: Chat.torReady || Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
+                    color: Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter

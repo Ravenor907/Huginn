@@ -80,7 +80,7 @@ Q_SIGNALS:
 private:
     struct Device {
         QString id, alias, model, type, ip, protocol;
-        QString chatKey, chatName, app, onion;   // set by Huginn and Muninn; plain LocalSend apps don't chat
+        QString chatKey, chatName, app;   // set by Huginn and Muninn; plain LocalSend apps don't chat
         int port = 53317;
         QDateTime seen;
     };
@@ -88,7 +88,7 @@ public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
-    struct Peer { QString base, chatKey, chatName, alias, type, onion; };
+    struct Peer { QString base, chatKey, chatName, alias, type; };
     QList<Peer> chatPeers() const;
     QString baseFor(const QString &chatKey) const;
     void announce();

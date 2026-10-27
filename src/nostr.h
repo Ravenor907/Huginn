@@ -12,15 +12,12 @@
 #include <QStringList>
 
 class QWebSocket;
-class Tor;
 
 // Messages for people who aren't nearby, through public Nostr relays (no accounts, no server to
 // run). Each device has a Nostr key; its public half is its mailbox. A message is an event of
 // kind 1059 addressed to the mailbox, signed by a throwaway key so relays can't tell who sent it.
 // The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text.
 // Same behaviour and wire format as Muninn's Nostr.kt.
-// Relays are only ever reached through Tor (setTor): no Tor, or Tor not ready yet, means no
-// connection at all, never a direct one. Each relay gets circuits of its own.
 class Nostr : public QObject
 {
     Q_OBJECT
@@ -47,8 +44,6 @@ public:
     // Reconnect by itself when a relay drops (set while Huginn is listening for messages).
     bool keepAlive() const { return m_keepAlive; }
     void setKeepAlive(bool on);
-    // The Tor every relay connection goes through. Connections wait until it is ready.
-    void setTor(Tor *tor);
 
     Q_INVOKABLE void connectRelays();
     // The network came back: drop dead connections and connect again now.
@@ -91,8 +86,6 @@ private:
     void handle(const QJsonObject &ev);
     void setLive(const QString &url, bool live);
 
-    QPointer<Tor> m_tor;
-    bool m_wanted = false;            // asked to connect while Tor wasn't ready
     std::function<QByteArray()> m_secret;
     mutable QString m_pub;
     QString m_subId;

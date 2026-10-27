@@ -30,58 +30,6 @@
     ],
     "modules": [
         {
-            "name": "libevent",
-            "buildsystem": "autotools",
-            "config-opts": [
-                "--disable-static",
-                "--disable-openssl",
-                "--disable-samples",
-                "--disable-libevent-regress",
-                "--disable-debug-mode"
-            ],
-            "cleanup": [
-                "/bin"
-            ],
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz",
-                    "sha256": "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"
-                }
-            ]
-        },
-        {
-            "name": "tor",
-            "buildsystem": "autotools",
-            "config-opts": [
-                "--with-libevent-dir=/app",
-                "--disable-asciidoc",
-                "--disable-manpage",
-                "--disable-html-manual",
-                "--disable-unittests",
-                "--disable-module-dirauth",
-                "--disable-systemd"
-            ],
-            "cleanup": [
-                "/bin/tor-resolve",
-                "/bin/torify",
-                "/bin/tor-gencert",
-                "/bin/tor-print-ed-signing-cert",
-                "/etc/tor",
-                "/share/tor"
-            ],
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://dist.torproject.org/tor-0.4.9.14.tar.gz",
-                    "mirror-urls": [
-                        "https://archive.torproject.org/tor-package-archive/tor-0.4.9.14.tar.gz"
-                    ],
-                    "sha256": "182449ac1c8ff43278da27b69b02040e11d03d0327db6d9126e4190ec6235e4a"
-                }
-            ]
-        },
-        {
             "name": "huginn",
             "buildsystem": "cmake-ninja",
             "config-opts": [

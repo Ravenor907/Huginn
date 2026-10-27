@@ -74,7 +74,6 @@ import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.Folders
 import io.github.ravenor907.muninn.net.Groups
 import io.github.ravenor907.muninn.net.Proto06
-import io.github.ravenor907.muninn.net.Tor
 import io.github.ravenor907.muninn.ui.Section
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.semantics.selected
@@ -151,7 +150,6 @@ object ChatNav {
 private fun routeText(r: String) = when (r) {
     "close" -> "Close by (Bluetooth)"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Over the internet, privately (Tor)"
     "internet" -> "Over the internet"
     else -> "Not reachable right now"
 }
@@ -159,11 +157,10 @@ private fun routeText(r: String) = when (r) {
 private fun routeShort(r: String) = when (r) {
     "close" -> "Bluetooth"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Internet (Tor)"
     "internet" -> "Internet"
     else -> "Not reachable"
 }
-private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet", "onion" -> "network"; else -> "user" }
+private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet" -> "network"; else -> "user" }
 
 // The "Quiet" chat look. Every size is dp/sp, so Settings › Accessibility size and text scaling apply.
 private val nameStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.text)
@@ -335,7 +332,6 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val wifi by app.net.devices.collectAsState()
     val closeError by app.close.error.collectAsState()
     val nostrUp by app.nostr.connected.collectAsState()
-    val tor by Tor.state.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
     val room by app.chat.nearby.collectAsState()
@@ -424,17 +420,10 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             }
             item {
                 ListLabel(folder?.name ?: "Chats") {
-                    // The internet goes through Tor: "Connecting privately (40%)" until it's ready, then Online or Offline.
-                    // Said in words too, never by the dot's color alone.
-                    val on = tor == Tor.State.Ready && nostrUp > 0
-                    val dot = when {
-                        on -> Palette.online
-                        tor is Tor.State.Starting -> Palette.gold
-                        tor is Tor.State.Failed -> Palette.danger
-                        else -> Palette.textFaint
-                    }
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-                    Text(Tor.label(tor, nostrUp), style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
+                    // Online: the internet relays are connected. Said in words too, never by the dot's color alone.
+                    val on = nostrUp > 0
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
+                    Text(if (on) "Online" else "Offline", style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
                 }
             }
             if (showRoom) item(key = "room") {

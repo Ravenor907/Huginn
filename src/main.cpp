@@ -23,7 +23,6 @@
 #include <QSoundEffect>
 #include "settings.h"
 #include "system.h"
-#include "tor.h"
 #include "transfer.h"
 #include "updater.h"
 
@@ -89,8 +88,6 @@ int main(int argc, char *argv[])
     args.addOption(privacyTest);
     QCommandLineOption backupTest(QStringLiteral("backup-selftest"), QStringLiteral("Back up and restore a temporary chat folder (for CI), then quit."));
     args.addOption(backupTest);
-    QCommandLineOption torTest(QStringLiteral("tor-selftest"), QStringLiteral("Start Tor, make an onion address and send a message to it through Tor (for CI, needs internet), then quit."));
-    args.addOption(torTest);
     QCommandLineOption callTest(QStringLiteral("call-selftest"), QStringLiteral("Check calls against the shared test vectors and an in-process loopback (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(callTest);
     args.process(app);
@@ -103,8 +100,6 @@ int main(int argc, char *argv[])
     }
     if (args.isSet(backupTest))
         return Vault::backupSelfTest() ? 0 : 1;
-    if (args.isSet(torTest))
-        return Tor::selfTest(120) ? 0 : 1;
     if (args.isSet(ratchetTest))
         return Ratchet::selfTest(args.value(ratchetTest)) ? 0 : 1;
     if (args.isSet(nostrTest))
@@ -114,7 +109,7 @@ int main(int argc, char *argv[])
         return a && b && c ? 0 : 1;
     }
 
-    // One copy at a time: two would share the same Tor data and vault files.
+    // One copy at a time: two would share the same chat folder and vault files.
     auto *one = new SingleInstance(&app);
     if (!args.isSet(tour) && !one->claim())
         return 0;
@@ -138,15 +133,12 @@ int main(int argc, char *argv[])
             return QByteArray();
         return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->username()},
                                          {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
-                                         {QStringLiteral("app"), QStringLiteral("huginn")}, {QStringLiteral("onion"), chat->onion()}}).toJson(QJsonDocument::Compact);
+                                         {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
     if (args.isSet(tour) && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // CI screenshots: no lock to draw
-    // All internet traffic goes through Tor (bundled); nothing falls back to a direct connection.
-    // The onion key lives in the vault, so the onion service is added once the vault opens.
-    auto *tor = new Tor(vault, &app);
-    auto *updater = new Updater(settings, tor, &app);
+    auto *updater = new Updater(settings, &app);
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
     auto *nostr = new Nostr([vault] {
         if (vault->locked())
@@ -160,9 +152,7 @@ int main(int argc, char *argv[])
         }
         return secret;
     }, &app);
-    nostr->setTor(tor);
     chat = new Chat(localSend, vault, nostr, ble, &app);
-    chat->setTor(tor);
     auto *voice = new Voice(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
     auto *cs = new CallSignalHooks(&app);
@@ -196,9 +186,8 @@ int main(int argc, char *argv[])
         // and ask the relays for the inbox again so messages that came while locked are read now.
         QObject::connect(vault, &Vault::opened, nostr, [nostr, ble] { ble->sayHello(); nostr->reconnectNow(); nostr->resubscribe(); });
         QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
-        tor->start();
         nostr->setKeepAlive(true);
-        nostr->connectRelays();   // waits for Tor
+        nostr->connectRelays();
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
@@ -242,7 +231,6 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Voice", voice);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
-    qmlRegisterSingletonInstance("Huginn", 1, 0, "Tor", tor);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
 
     QQmlApplicationEngine engine;
