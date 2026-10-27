@@ -181,13 +181,13 @@ object TvRecorder {
             val idx = codec.dequeueOutputBuffer(info, if (ending) 10_000 else 0)
             if (idx < 0) { if (!ending || System.currentTimeMillis() > deadline) return false else continue }
             val ob = codec.getOutputBuffer(idx)
-            if (ob != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+            if (ob != null && info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
                 val frame = ByteArray(info.size)
                 ob.position(info.offset); ob.get(frame)
                 synchronized(buf) { if (buf.size() < MAX_BYTES - frame.size - 7) { buf.write(adts(frame.size)); buf.write(frame) } }
             }
             codec.releaseOutputBuffer(idx, false)
-            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return true
+            if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) return true
         }
     }
 
