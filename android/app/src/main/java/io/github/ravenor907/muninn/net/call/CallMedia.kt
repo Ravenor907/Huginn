@@ -246,7 +246,7 @@ class CallMedia(
         routeDefault()
         val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         // A phone has one source; a Kids' TV falls back to MIC when VOICE_COMMUNICATION won't open or start.
-        val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().firstNotNullOfOrNull { openMic(it, minIn) } ?: return false
+        val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull() ?: return false
         record = rec
         val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         track = AudioTrack.Builder()
