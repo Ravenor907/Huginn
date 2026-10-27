@@ -16,13 +16,15 @@ class PowerLogicTest {
     private val phoneAway = Inputs(foreground = false, screenOn = false, onWifi = true)
 
     @Test
-    fun openOnScreenIsFullyConnected() {
+    fun openOnScreenIsConnectedThroughTheHealthiestThree() {
         val p = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true))
         assertEquals(Why.OPEN, p.why)
-        assertNull(p.relays)
+        assertEquals(PowerLogic.OPEN_RELAYS, p.relays)
         assertEquals(PowerLogic.FAST_PING_MS, p.pingMs)
         assertEquals(Radio.FULL, p.radio)
-        assertEquals(Radio.FULL, p.wifi)
+        // Wi-Fi discovery is slow unless files are being shared.
+        assertEquals(Radio.LOW, p.wifi)
+        assertEquals(Radio.FULL, PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true, sharing = true)).wifi)
     }
 
     @Test
@@ -32,17 +34,21 @@ class PowerLogicTest {
         assertEquals(2, p.relays)
         // Every two minutes, so a dead socket is found (and calls ring again) within about two minutes.
         assertEquals(120_000L, p.pingMs)
-        assertEquals(Radio.LOW, p.radio)
-        assertEquals(Radio.LOW, p.wifi)
+        // Close-by scanning and Wi-Fi discovery rest unless switched on or sharing files.
+        assertEquals(Radio.OFF, p.radio)
+        assertEquals(Radio.OFF, p.wifi)
+        assertEquals(Radio.LOW, PowerLogic.plan(phoneAway.copy(closeBy = true)).radio)
+        assertEquals(Radio.FULL, PowerLogic.plan(phoneAway.copy(sharing = true)).wifi)
         assertEquals("Saving battery while the screen is off", p.label)
     }
 
     @Test
-    fun backgroundWithScreenOnKeepsRadiosFull() {
+    fun backgroundWithScreenOnScansOnlyWhenAsked() {
         val p = PowerLogic.plan(phoneAway.copy(screenOn = true))
         assertEquals(Why.BACKGROUND, p.why)
         assertEquals(2, p.relays)
-        assertEquals(Radio.FULL, p.radio)
+        assertEquals(Radio.OFF, p.radio)
+        assertEquals(Radio.FULL, PowerLogic.plan(phoneAway.copy(screenOn = true, closeBy = true)).radio)
     }
 
     @Test
@@ -59,8 +65,9 @@ class PowerLogicTest {
             assertEquals(Why.BATTERY_SAVER, p.why)
             assertEquals(PowerLogic.SAVING_RELAYS, p.relays)
             assertEquals(PowerLogic.SLOW_PING_MS, p.pingMs)
-            assertEquals(Radio.LOW, p.radio)
+            assertEquals(Radio.OFF, p.radio)
             assertEquals(Radio.OFF, p.wifi)
+            assertEquals(Radio.LOW, PowerLogic.plan(phoneAway.copy(screenOn = screen, onWifi = wifi, batterySaver = true, closeBy = true)).radio)
         }
         assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, unrestricted = true)).relays)
         // Battery Saver and Doze without the exemption: Android cuts the network, so no live sockets.
@@ -68,7 +75,7 @@ class PowerLogicTest {
         assertEquals(0, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).relays)
         assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true, unrestricted = true)).relays)
         // Open on screen it still works normally.
-        assertNull(PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
+        assertEquals(PowerLogic.OPEN_RELAYS, PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
     }
 
     @Test
@@ -124,13 +131,17 @@ class PowerLogicTest {
         val doze = PowerLogic.plan(phoneAway.copy(doze = true))
         val bg = PowerLogic.plan(phoneAway.copy(screenOn = true))
         assertTrue(PowerLogic.saves(full, off))
-        assertTrue(PowerLogic.saves(off, saver))
-        assertTrue(PowerLogic.saves(bg, off))
         assertTrue(PowerLogic.saves(full, bg))
         assertFalse(PowerLogic.saves(off, full))
-        assertFalse(PowerLogic.saves(saver, off))
-        assertFalse(PowerLogic.saves(off, bg))
         assertFalse(PowerLogic.saves(off, off))
+        // Nothing scanning and no Wi-Fi discovery: the screen off, Battery Saver and the background cost the same.
+        assertFalse(PowerLogic.saves(off, saver)); assertFalse(PowerLogic.saves(saver, off))
+        assertFalse(PowerLogic.saves(bg, off)); assertFalse(PowerLogic.saves(off, bg))
+        // With close-by scanning on, the screen being on scans more than off.
+        val bgScan = PowerLogic.plan(phoneAway.copy(screenOn = true, closeBy = true))
+        val offScan = PowerLogic.plan(phoneAway.copy(closeBy = true))
+        assertTrue(PowerLogic.saves(bgScan, offScan))
+        assertFalse(PowerLogic.saves(offScan, bgScan))
         assertTrue(PowerLogic.saves(saver, doze))
         assertFalse(PowerLogic.saves(doze, saver))
     }
@@ -226,5 +237,53 @@ class PowerLogicTest {
         for (c in Check.entries) assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(check = c, kidsTv = true)).why)
         assertEquals(Check.HOUR, Check.of("hour"))
         assertNull(Check.of("weekly"))
+    }
+
+    @Test
+    fun aLowBatterySavesMoreUntilCharged() {
+        val away = phoneAway.copy(check = Check.LIVE)
+        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 30)))
+        assertEquals(Check.QUARTER, PowerLogic.effective(away.copy(battery = 29)))
+        assertEquals(Check.HOUR, PowerLogic.effective(away.copy(battery = 14)))
+        // Charging, or switched off: the person's own choice.
+        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 5, plugged = true)))
+        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 5, lowBatterySave = false)))
+        // Never less saving than the person chose.
+        assertEquals(Check.OPEN, PowerLogic.effective(away.copy(battery = 20, check = Check.OPEN)))
+        val p = PowerLogic.plan(away.copy(battery = 20))
+        assertEquals(Why.EVERY_15, p.why)
+        assertEquals(0, p.relays)
+        assertTrue(p.label.endsWith("(the battery is low)"))
+        // Open or in a call it still connects fully.
+        assertEquals(Why.OPEN, PowerLogic.plan(away.copy(battery = 5, foreground = true, screenOn = true)).why)
+        assertEquals(Why.CALL, PowerLogic.plan(away.copy(battery = 5, inCall = true)).why)
+    }
+
+    @Test
+    fun quietHoursUseTheirModeWhileTheyLast() {
+        assertTrue(PowerLogic.inQuiet(23, 7, 23))
+        assertTrue(PowerLogic.inQuiet(23, 7, 3))
+        assertTrue(!PowerLogic.inQuiet(23, 7, 7))
+        assertTrue(!PowerLogic.inQuiet(23, 7, 12))
+        assertTrue(PowerLogic.inQuiet(13, 15, 14))
+        assertTrue(!PowerLogic.inQuiet(9, 9, 9))
+        val p = PowerLogic.plan(phoneAway.copy(quiet = Check.OPEN, plugged = true))
+        assertEquals(Why.ONLY_OPEN, p.why)
+        assertTrue(p.label.endsWith("(quiet hours)"))
+        assertEquals(Why.EVERY_HOUR, PowerLogic.plan(phoneAway.copy(quiet = Check.HOUR)).why)
+        // The battery being low too: whichever saves most.
+        assertEquals(Check.OPEN, PowerLogic.effective(phoneAway.copy(quiet = Check.OPEN, battery = 10)))
+        // A Kids' TV ignores both.
+        assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(quiet = Check.OPEN, battery = 5, kidsTv = true)).why)
+    }
+
+    @Test
+    fun savingMoreStillWaitsAMoment() {
+        val open = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true))
+        val away = PowerLogic.plan(phoneAway)
+        assertTrue(PowerLogic.saves(open, away))
+        assertTrue(!PowerLogic.saves(away, open))
+        // Fully connected (every relay) ranks above open on screen (three).
+        assertTrue(PowerLogic.saves(PowerLogic.plan(phoneAway.copy(plugged = true)), open))
     }
 }

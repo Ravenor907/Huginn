@@ -16,8 +16,11 @@ class InboxWorker(context: Context, params: WorkerParameters) : Worker(context, 
     override fun doWork(): Result {
         val app = applicationContext as Muninn
         if (app.visible || app.nostr.listening()) return Result.success()   // already listening
-        // "Only when open": nothing until Muninn is opened (the check is cancelled; this covers one already queued).
-        if (app.power.check == PowerLogic.Check.OPEN) return Result.success()
+        // Quiet hours may have ended or the phone charged: the mode in use (and this schedule) catch up first.
+        app.power.refresh()
+        // "Only when open", chosen or for quiet hours: nothing until Muninn is opened.
+        if (app.power.effective() == PowerLogic.Check.OPEN) return Result.success()
+        app.power.countCheck()
         MessageService.start(app)   // allowed again once Muninn may run in the background
         // Locked with a password: only says "New message"; nothing is opened until it's unlocked.
         app.nostr.checkInbox()   // every relay, closing again by itself unless one is kept open

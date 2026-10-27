@@ -25,13 +25,15 @@ object Access {
     var contrast by androidx.compose.runtime.mutableStateOf(false)
     var colorBlind by androidx.compose.runtime.mutableStateOf(false)
     var reduceMotion by androidx.compose.runtime.mutableStateOf(false)
+    var trueBlack by androidx.compose.runtime.mutableStateOf(false)
 }
 
 /** Huginn's stone and iron grays; Muninn's one accent is silver where Huginn's is gold. */
 object Palette {
     private val hc get() = Access.contrast
-    val ground get() = if (hc) Color(0xFF000000) else Color(0xFF101112)
-    val groundDeep get() = if (hc) Color(0xFF000000) else Color(0xFF0C0D0E)
+    // True black: only the background goes black (panels and buttons keep their shade, so they still stand out).
+    val ground get() = if (hc || Access.trueBlack) Color(0xFF000000) else Color(0xFF101112)
+    val groundDeep get() = if (hc || Access.trueBlack) Color(0xFF000000) else Color(0xFF0C0D0E)
     val panel get() = if (hc) Color(0xFF0A0A0A) else Color(0xFF17191B)
     val panelLow get() = if (hc) Color(0xFF050505) else Color(0xFF141617)
     val raised get() = if (hc) Color(0xFF1A1A1A) else Color(0xFF1D1E20)

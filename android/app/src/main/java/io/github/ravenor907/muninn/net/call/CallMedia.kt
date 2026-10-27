@@ -340,8 +340,15 @@ class CallMedia(
         if (d != wasDirect) { wasDirect = d; events.onDirect(d) }
         // The video size follows a free path that answered pings within 3 s (steadier than the 750 ms rule).
         val free = paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastPong > 0 && now - it.lastPong < 3_000 }
-        if (free != wasFree) {
-            wasFree = free
+        var changed = false
+        if (free != wasFree) { wasFree = free; changed = true }
+        // The battery, every 10 seconds: low (or Android's Battery Saver) makes the camera's video lighter.
+        if (now - lowPowerAt >= 10_000) {
+            lowPowerAt = now
+            val lp = lowPowerNow()
+            if (lp != lowPower) { lowPower = lp; changed = true }
+        }
+        if (changed) {
             rate[0].setCap(profile(VideoWire.CAMERA).capKbps); rate[1].setCap(profile(VideoWire.SCREEN).capKbps)
             events.onProfile()
         }
@@ -432,11 +439,31 @@ class CallMedia(
     fun peerSending(stream: Int) = peerSending[stream and 1]
     fun videoSending(stream: Int) = sending[stream and 1]
 
-    /** The size, frame rate and bitrate cap for [stream] right now: 480p over the relay, up to 720p on a free path. */
+    /**
+     * The size, frame rate and bitrate cap for [stream] right now: 480p over the relay, up to 720p on a free path,
+     * and the camera at 360p and 15 frames a second while the battery is low.
+     */
     fun profile(stream: Int): VideoWire.Profile {
         val free = wasFree
-        return if ((stream and 1) == VideoWire.SCREEN) VideoWire.screenProfile(free) else VideoWire.cameraProfile(free)
+        if ((stream and 1) == VideoWire.SCREEN) return VideoWire.screenProfile(free)
+        val p = VideoWire.cameraProfile(free)
+        return if (lowPower) VideoWire.lowPower(p) else p
     }
+
+    @Volatile private var lowPower = false
+    private var lowPowerAt = 0L
+
+    /** Android's Battery Saver is on, or the battery is under 20% and not charging. */
+    private fun lowPowerNow(): Boolean = try {
+        val pm = context.getSystemService(PowerManager::class.java)
+        if (pm?.isPowerSaveMode == true) true else {
+            val b = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            val level = b?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = b?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
+            val plugged = (b?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+            level >= 0 && scale > 0 && level * 100 / scale < 20 && !plugged
+        }
+    } catch (e: Exception) { false }
 
     /** What this side says it sends (in every report, so the other side shows or hides the picture). */
     fun setVideoSending(stream: Int, on: Boolean) {

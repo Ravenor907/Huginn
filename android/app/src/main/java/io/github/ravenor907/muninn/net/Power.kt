@@ -73,14 +73,47 @@ class Power(private val app: Muninn) {
             ?: if (prefs.getBoolean("stayConnected", true)) PowerLogic.Check.LIVE else PowerLogic.Check.QUARTER
         set(v) {
             prefs.edit().putString("checkFor", v.key).putBoolean("stayConnected", v == PowerLogic.Check.LIVE).apply()
-            if (v == PowerLogic.Check.LIVE) MessageService.start(app) else MessageService.stop(app)
-            schedule()
+            followed = null   // the schedule and the Listening service follow at once
             refresh()
         }
 
-    /** The background inbox check, as often as [check] says (none for "Only when open"). */
-    fun schedule() {
-        val every = PowerLogic.checkEveryMinutes(check)
+    /** Settings › Save more when the battery is low (on unless switched off). */
+    var lowBatterySave: Boolean
+        get() = prefs.getBoolean("lowBatterySave", true)
+        set(v) { prefs.edit().putBoolean("lowBatterySave", v).apply(); refresh() }
+
+    /** Settings › Quiet hours: on, from and to (hours of the day, 0 to 23), and the mode they use. */
+    var quietOn: Boolean
+        get() = prefs.getBoolean("quietOn", false)
+        set(v) { prefs.edit().putBoolean("quietOn", v).apply(); refresh() }
+    var quietFrom: Int
+        get() = prefs.getInt("quietFrom", 23)
+        set(v) { prefs.edit().putInt("quietFrom", Math.floorMod(v, 24)).apply(); refresh() }
+    var quietTo: Int
+        get() = prefs.getInt("quietTo", 7)
+        set(v) { prefs.edit().putInt("quietTo", Math.floorMod(v, 24)).apply(); refresh() }
+    var quietMode: PowerLogic.Check
+        get() = PowerLogic.Check.of(prefs.getString("quietMode", null)) ?: PowerLogic.Check.HOUR
+        set(v) { prefs.edit().putString("quietMode", v.key).apply(); refresh() }
+
+    /** Settings › Find phones close by in the background (off unless switched on). */
+    var closeBy: Boolean
+        get() = prefs.getBoolean("closeByBackground", false)
+        set(v) { prefs.edit().putBoolean("closeByBackground", v).apply(); refresh() }
+
+    /** The Files tab is the one showing (MainActivity says): Wi-Fi discovery at full while Muninn is open on it. */
+    val filesOpen = MutableStateFlow(false)
+    @Volatile private var sharing = false
+
+    /** What Muninn checks by right now: the person's choice, or less for quiet hours or a low battery. */
+    fun effective(): PowerLogic.Check = PowerLogic.effective(inputs())
+
+    /**
+     * The background inbox check, as often as the mode in use says. "Only when open" chosen by the person
+     * checks nothing; quiet hours that use it still wake Muninn hourly, only to see whether they've ended.
+     */
+    fun schedule(now: PowerLogic.Check = effective()) {
+        val every = if (now == PowerLogic.Check.OPEN && check != PowerLogic.Check.OPEN) 60L else PowerLogic.checkEveryMinutes(now)
         try {
             val wm = WorkManager.getInstance(app)
             if (every == 0L) wm.cancelUniqueWork("inbox")
@@ -103,6 +136,8 @@ class Power(private val app: Muninn) {
             addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_POWER_CONNECTED); addAction(Intent.ACTION_POWER_DISCONNECTED)
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED); addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+            // The battery level, for saving more when it's low (a cheap check each time it changes).
+            addAction(Intent.ACTION_BATTERY_CHANGED)
         }
         try {
             ContextCompat.registerReceiver(app, object : BroadcastReceiver() {
@@ -129,6 +164,12 @@ class Power(private val app: Muninn) {
             combine(io.github.ravenor907.muninn.net.call.CallManager.call, io.github.ravenor907.muninn.net.call.RoomManager.room) { c, r -> c != null || r != null }
                 .collect { inCall = it; refresh() }
         }
+        // Sharing files: a transfer or Direct connect keeps Wi-Fi discovery at full (and the Files tab, while open).
+        scope.launch {
+            combine(app.net.transfer, app.direct.state) { t, d -> t.active || d.on }
+                .collect { sharing = it; refresh() }
+        }
+        scope.launch { filesOpen.collect { refresh() } }
         applied?.let { radios(it) }
     }
 
@@ -138,10 +179,16 @@ class Power(private val app: Muninn) {
             battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) == false ||
             app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
         val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val quiet = if (quietOn && PowerLogic.inQuiet(quietFrom, quietTo, hour)) quietMode else null
         return PowerLogic.Inputs(
             foreground = started > 0, screenOn = pm.isInteractive, inCall = inCall, kidsTv = kids, plugged = plugged,
             alwaysFull = !saver, batterySaver = pm.isPowerSaveMode, doze = pm.isDeviceIdleMode,
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
+            battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),
         )
     }
 
@@ -150,10 +197,85 @@ class Power(private val app: Muninn) {
         val i = inputs()
         val next = PowerLogic.plan(i)
         _away.value = PowerLogic.whenAway(i)
+        follow(PowerLogic.effective(i), i.kidsTv)
+        // Quiet hours start and end on the hour: look again then.
+        main.removeCallbacks(onTheHour)
+        if (quietOn) main.postDelayed(onTheHour, 3_600_000L - System.currentTimeMillis() % 3_600_000L + 1_000L)
         val now = applied
         if (now == null || !PowerLogic.saves(now, next)) { main.removeCallbacks(later); waiting = null; use(next); return }
         // Saving more: wait a moment, in case the screen comes straight back on.
         if (waiting != next) { waiting = next; main.removeCallbacks(later); main.postDelayed(later, PowerLogic.GRACE_MS) }
+    }
+
+    // ------------------------------------------------------------------ battery report (Settings)
+
+    /**
+     * Today so far: time fully connected, time saving (two relays), and resting (nothing live, so nothing
+     * running: the rest of the day); background checks made; data Muninn has used since the phone started.
+     */
+    data class Report(val connectedMs: Long, val savingMs: Long, val restingMs: Long, val checks: Int, val dataBytes: Long?)
+
+    private var countedSince = System.currentTimeMillis()
+    private var countedKind = -1
+
+    private fun kindOf(p: PowerLogic.Plan): Int = when {
+        p.relays == 0 -> 2
+        p.why == PowerLogic.Why.SCREEN_OFF || p.why == PowerLogic.Why.BACKGROUND || p.why == PowerLogic.Why.BATTERY_SAVER -> 1
+        else -> 0
+    }
+
+    /** Adds the time since the last count to its kind, starting over each day. */
+    @Synchronized private fun count(now: Long, next: Int) {
+        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(now))
+        val e = prefs.edit()
+        val newDay = prefs.getString("reportDay", "") != today
+        if (newDay) {
+            e.putString("reportDay", today).putInt("reportChecks", 0)
+            countedSince = maxOf(countedSince, midnight(now))
+        }
+        var connected = if (newDay) 0L else prefs.getLong("reportConnected", 0)
+        var saving = if (newDay) 0L else prefs.getLong("reportSaving", 0)
+        val spent = (now - countedSince).coerceAtLeast(0)
+        when (countedKind) { 0 -> connected += spent; 1 -> saving += spent }
+        e.putLong("reportConnected", connected).putLong("reportSaving", saving).apply()
+        countedSince = now; countedKind = next
+    }
+
+    private fun midnight(now: Long): Long = java.util.Calendar.getInstance().apply {
+        timeInMillis = now; set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    /** A background inbox check ran (InboxWorker). */
+    fun countCheck() {
+        count(System.currentTimeMillis(), countedKind)
+        prefs.edit().putInt("reportChecks", prefs.getInt("reportChecks", 0) + 1).apply()
+    }
+
+    fun report(): Report {
+        val now = System.currentTimeMillis()
+        count(now, countedKind)
+        val connected = prefs.getLong("reportConnected", 0)
+        val saving = prefs.getLong("reportSaving", 0)
+        val uid = android.os.Process.myUid()
+        val rx = android.net.TrafficStats.getUidRxBytes(uid)
+        val tx = android.net.TrafficStats.getUidTxBytes(uid)
+        val data = if (rx < 0 || tx < 0) null else rx + tx
+        return Report(connected, saving, (now - midnight(now) - connected - saving).coerceAtLeast(0), prefs.getInt("reportChecks", 0), data)
+    }
+
+    private val onTheHour = Runnable { refresh() }
+    private var followed: PowerLogic.Check? = null
+
+    /**
+     * The mode in use changed (the person's choice, quiet hours or the battery): the background check runs as
+     * often as it says, and the Listening service runs only while it's "Right away".
+     */
+    private fun follow(now: PowerLogic.Check, kids: Boolean) {
+        if (now == followed) return
+        followed = now
+        schedule(now)
+        if (kids) return   // a Kids' TV always listens (KidMode keeps the service)
+        if (now == PowerLogic.Check.LIVE) MessageService.start(app) else MessageService.stop(app)
     }
 
     private fun use(p: PowerLogic.Plan) {
@@ -161,6 +283,7 @@ class Power(private val app: Muninn) {
         val before = applied
         applied = p
         _plan.value = p
+        count(System.currentTimeMillis(), kindOf(p))
         app.nostr.plan(p.relays, p.pingMs)
         radios(p)
         // No live connections now: check the inbox once at once, then the scheduled check carries on

@@ -101,6 +101,11 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
+    /** A pure black background: an OLED screen leaves black pixels off, which saves a little battery. */
+    var trueBlack: Boolean
+        get() = prefs.getBoolean("trueBlack", false)
+        set(v) = prefs.edit().putBoolean("trueBlack", v).apply()
+
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
     var readReceipts: Boolean

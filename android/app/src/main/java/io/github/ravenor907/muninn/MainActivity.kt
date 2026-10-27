@@ -363,6 +363,8 @@ class MainActivity : ComponentActivity() {
             launch { app.net.pinNeeded.collect { Ui.say("That device asks for a PIN. Turn off its PIN setting in LocalSend to send from Muninn.", true) } }
         }
         LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
+        // On the Files tab, Muninn looks for devices on the Wi-Fi at full speed (slower elsewhere, to save battery).
+        LaunchedEffect(tab) { app.power.filesOpen.value = tab == "files" }
         // Back from another tab (or Settings) goes to where you came from, then the chat list.
         BackHandler(enabled = tab != "chat") { if (tab == "settings") tab = beforeSettings else tab = "chat" }
 

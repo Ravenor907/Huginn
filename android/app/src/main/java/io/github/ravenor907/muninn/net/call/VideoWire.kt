@@ -249,4 +249,6 @@ object VideoWire {
 
     fun cameraProfile(freePath: Boolean) = if (freePath) Profile(1280, 720, 30, 2000) else Profile(640, 480, 24, 700)
     fun screenProfile(freePath: Boolean) = if (freePath) Profile(1920, 1080, 10, 2500) else Profile(1280, 720, 8, 800)
+    /** The camera on a low battery or Android's Battery Saver: 360p at 15 frames a second at most, so encoding and the radio cost less. */
+    fun lowPower(p: Profile) = Profile(minOf(p.width, 480), minOf(p.height, 360), minOf(p.fps, 15), minOf(p.capKbps, 400))
 }
