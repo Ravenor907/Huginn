@@ -352,6 +352,7 @@ class MainActivity : ComponentActivity() {
         if (!locked) { FirstLock(app) { locked = true }; return }
         val request by app.net.request.collectAsState()
         val offer by app.closeFiles.pendingOffer.collectAsState()
+        val apps by io.github.ravenor907.muninn.update.ApkInstall.offers.collectAsState()
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()
         LaunchedEffect(Unit) {
@@ -390,6 +391,17 @@ class MainActivity : ComponentActivity() {
                 text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.closeFiles.accept() } } },
                 dismissButton = { MButton("Decline") { app.closeFiles.decline() } },
+            )
+        }
+        // An app that came to this TV (ApkInstall): asked about here first, then Android asks too.
+        apps.firstOrNull()?.let { o ->
+            AlertDialog(
+                onDismissRequest = { io.github.ravenor907.muninn.update.ApkInstall.decline(o) },
+                containerColor = Palette.panel,
+                title = { Text("Install ${o.name}?", style = Type.big) },
+                text = { Text("${o.from} sent it. Only install apps from someone you trust. Android asks once more before it installs.", style = Type.normal) },
+                confirmButton = { MButton("Install", kind = Kind.Accent) { io.github.ravenor907.muninn.update.ApkInstall.accept(this@MainActivity, o) } },
+                dismissButton = { MButton("Don't install") { io.github.ravenor907.muninn.update.ApkInstall.decline(o) } },
             )
         }
         ask?.let { AskDialog(it) }

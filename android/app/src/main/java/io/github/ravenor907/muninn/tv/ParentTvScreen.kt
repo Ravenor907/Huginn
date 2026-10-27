@@ -56,7 +56,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.AppFiles
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.IconAction
@@ -86,6 +89,13 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     var naming by remember { mutableStateOf(false) }
     var inviting by remember { mutableStateOf(false) }
     var addingParent by remember { mutableStateOf(false) }
+    var sendingApp by remember { mutableStateOf(false) }
+    val apkPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) Thread {
+            val files = io.github.ravenor907.muninn.screens.Share.copyIn(context, uris, app.net.transfer.value.active)
+            sendAppToTv(app, tvKey, files.filter { AppFiles.isApk(it.name) })
+        }.start()
+    }
     /** People to put in a family group (just invited, or picked under Family groups). */
     var grouping by remember { mutableStateOf<List<String>?>(null) }
     var micLevel by remember(t.mic) { mutableFloatStateOf(t.mic.toFloat()) }
@@ -255,6 +265,13 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                     style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
             }
 
+            Label("Apps")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Setting("Send an app", "From this phone, over the same Wi-Fi") { sendingApp = true }
+                Text("The TV takes only the app you send. Android asks on the TV before installing, so press Install with the remote.",
+                    style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+            }
+
             Label("Updates")
             Column(Modifier.padding(horizontal = 16.dp)) {
                 Setting("Update TV", if (t.app.isNotEmpty()) "Muninn ${t.app} on the TV" else "Look for a new Muninn now") {
@@ -301,6 +318,13 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
             if (added.isNotEmpty()) TvParent.invite(app, tvKey, added)
         }
     }
+    if (sendingApp) io.github.ravenor907.muninn.screens.AppPicker(
+        onCancel = { sendingApp = false },
+        onFile = { sendingApp = false; try { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
+    ) { a ->
+        sendingApp = false
+        Thread { sendAppToTv(app, tvKey, AppFiles.copyOut(context, a.pkg)) }.start()
+    }
     if (inviting) {
         val choices = contacts.filter { it.chatKey != tvKey && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) && it.chatKey !in t.reach }
             .sortedBy { it.shown.lowercase() }
@@ -329,6 +353,22 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
         val people = TvParent.people(app, t).drop(1).map { it.k to it.n }
         FamilyGroupDialog(app, people, start.toSet(), onClose = { grouping = null })
     }
+}
+
+/**
+ * A parent sends an app ([files]: one app's APK and its parts, or .apk files picked by hand) to the TV: first
+ * their SHA-256s in room tvconfig (7.9), then the files themselves over the Wi-Fi. Runs off the main thread.
+ */
+private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
+    if (files.isEmpty()) { Ui.say("That isn't an app Muninn can send. Pick an app, or an .apk file.", true); return }
+    val dev = app.net.devices.value.firstOrNull { it.chatKey == tvKey }
+    if (dev == null) { Ui.say("The TV isn't on this Wi-Fi right now. Apps go over the same Wi-Fi, with the TV turned on.", true); return }
+    if (app.net.transfer.value.active) { Ui.say("Wait for the transfer that's running to finish, then send.", true); return }
+    val name = AppFiles.group(files) { it.name }.joinToString(", ") { it.first }
+    val parts = try { files.map { TvApps.Part(AppFiles.sha256(it), it.length()) } } catch (e: Exception) { Ui.say("$name couldn't be read.", true); return }
+    if (!TvParent.announceApp(app, tvKey, name, parts)) { Ui.say("This TV's Muninn is too old for that. Update it first.", true); return }
+    app.net.send(dev.id, files)
+    Ui.say("Sending $name to the TV. Press Install on the TV when it asks.")
 }
 
 /** Pick one contact to invite; [waiting]: people who haven't accepted this phone yet. */

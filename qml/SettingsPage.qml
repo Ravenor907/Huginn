@@ -10,17 +10,52 @@ Rectangle {
     property int section: 0
     property int row: 0
     property bool inSection: false
-    function setArgs(a) { if (a.section) { section = a.section; inSection = true; row = 1 } }
+    // Another page opens a folder by name ({ section: "Privacy", row: 0 }), or by number.
+    function setArgs(a) {
+        if (a.section === undefined) return
+        const i = typeof a.section === "string" ? sections.indexOf(a.section) : a.section
+        if (i < 0) return
+        section = i; inSection = true; row = a.row || 0
+    }
 
-    readonly property var sections: ["General", "Chat", "Updates", "About"]
-    readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Sections" }]
-                                             : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+    // The same folders as Muninn's Settings (Notifications is Muninn's only: Huginn has nothing for it).
+    readonly property var sections: ["Privacy", "Lock", "Calls", "Nearby and sharing", "Display and accessibility", "Backup and erase", "About and updates"]
+    // The folders, then Exit Huginn at the bottom of the list (A on it closes Huginn).
+    readonly property var navItems: sections.concat(["Exit Huginn"])
+    readonly property bool onExit: section === sections.length
+    readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Folders" }]
+                                             : [{ key: "a", label: onExit ? "Exit" : "Open" }, { key: "b", label: "Back" }]
     readonly property string status: "Changes save as you go"
 
-    // Each row: { kind: "segmented"|"toggle"|"accent"|"button", title, note, ... }
+    // Each row: { kind: "segmented"|"toggle"|"accent"|"button"|"info", title, note, ... }
     readonly property var rows: {
-        switch (section) {
-        case 0: return [
+        switch (sections[section]) {
+        case "Privacy": return [
+            { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
+            { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
+              options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
+            { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
+            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
+            { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" }
+        ]
+        case "Lock": return [
+            { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },
+            { kind: "toggle", key: "panicLock", vault: true, title: "Panic lock (hold L3 and R3)", note: "Hold both stick clicks for a second anywhere in Huginn: Chat locks at once and notifications hide message text until you unlock" },
+            { kind: "toggle", key: "lockOnLeave", vault: true, title: "Lock when I leave Huginn", note: "Chat locks the moment you switch to Steam or another app, or the handheld sleeps" }
+        ]
+        case "Calls": return [
+            { kind: "toggle", key: "noiseRemoval", title: "Noise removal", note: Settings.noiseRemoval
+                ? "Background noise is taken out of your voice. Turn it off if people say you sound quiet. Changes start with your next call"
+                : "Off: background sound comes through with your voice. Echo is still removed. Changes start with your next call" }
+        ]
+        case "Nearby and sharing": return [
+            { kind: "button", key: "chatName", title: "Your name: " + Chat.username, note: "What people see instead of your real name", label: "Change" },
+            { kind: "toggle", key: "visibleNearby", chat: true, title: "Visible to people nearby", note: "Off: no Nearby room, and strangers close by or on the same Wi-Fi can't see your name or message you. Your contacts still can. File sharing has its own switch" },
+            { kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby chat", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
+            { kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
+            { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Muninn and the free LocalSend app on phones and PCs can find this device. You accept every transfer on screen" }
+        ].filter(r => !r.hide)
+        case "Display and accessibility": return [
             { kind: "segmented", key: "layout", title: "Layout", note: "Desktop is smaller, for a mouse and keyboard. Automatic uses it in a wide window when no controller is in use",
               options: [{ value: "handheld", label: "Handheld" }, { value: "desktop", label: "Desktop" }, { value: "auto", label: "Automatic" }] },
             { kind: "segmented", key: "uiSize", title: "Size", note: "Text and buttons. Normal already fits the screen; go bigger if it's hard to read",
@@ -30,36 +65,22 @@ Rectangle {
             { kind: "toggle", key: "highContrast", title: "High contrast", note: "White text on black, stronger outlines and focus" },
             { kind: "toggle", key: "colorBlind", title: "Color-blind friendly", note: "Warnings in amber instead of red; status always says it in words" },
             { kind: "toggle", key: "reduceMotion", title: "Reduce motion", note: "No sliding or fading" },
-            { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Muninn and the free LocalSend app on phones and PCs can find this device. You accept every transfer on screen" },
             { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
         ]
-        case 1: return [
-            { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
-            { kind: "button", key: "chatName", title: "Your name: " + Chat.username, note: "What people see instead of your real name", label: "Change" },
-            { kind: "toggle", key: "visibleNearby", chat: true, title: "Visible to people nearby", note: "Off: no Nearby room, and strangers close by or on the same Wi-Fi can't see your name or message you. Your contacts still can. File sharing has its own switch" },
-            { kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby chat", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
-            { kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
-            { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
-              options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
-            { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
-            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
-            { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" },
-            { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },
-            { kind: "toggle", key: "panicLock", vault: true, title: "Panic lock (hold L3 and R3)", note: "Hold both stick clicks for a second anywhere in Huginn: Chat locks at once and notifications hide message text until you unlock" },
-            { kind: "toggle", key: "lockOnLeave", vault: true, title: "Lock when I leave Huginn", note: "Chat locks the moment you switch to Steam or another app, or the handheld sleeps" },
+        case "Backup and erase": return [
             { kind: "button", key: "backup", title: "Back up chats", note: "An encrypted copy in Documents, opened with a backup password. Use the backup on one device at a time.", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
             { kind: "button", key: "restore", title: "Restore from backup", note: "Replaces everything in Chat on this computer with a backup from Documents", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Every conversation on this computer. Contacts stay", label: "Delete" },
             { kind: "button", key: "eraseChat", title: "Erase everything in Chat", note: "Messages, photos, voice, contacts, keys and the lock. Huginn closes", label: "Erase" }
-        ].filter(r => !r.hide)
-        case 2: return [
+        ]
+        case "About and updates": return [
             { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts.",
-              label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy }
+              label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
+            { kind: "info", title: "Huginn " + System.version, note: "Private chat and file sharing, built for a controller. Made by Ravenor907." },
+            { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." }
         ]
         default: return [
-            { kind: "info", title: "Huginn " + System.version, note: "Private chat and file sharing, built for a controller. Made by Ravenor907." },
-            { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." },
-            { kind: "button", key: "exit", title: "Exit Huginn", note: "Closes Huginn. In Game Mode you land back in Steam.", label: "Exit" }
+            { kind: "info", title: "Exit Huginn", note: "Press A to close Huginn. In Game Mode you land back in Steam." }
         ]
         }
     }
@@ -80,9 +101,10 @@ Rectangle {
             width: parent.width - Theme.px(20)
             spacing: Theme.px(3)
             Repeater {
-                model: page.sections
+                model: page.navItems
                 Rectangle {
                     readonly property bool on: index === page.section
+                    readonly property bool exit: index === page.sections.length
                     width: nav.width; height: Theme.px(46); radius: Theme.px(10)
                     color: on ? Theme.tile : navHover.hovered ? Theme.raised : "transparent"
                     border.width: on && page.active && !page.inSection ? Theme.focusWidth : 0
@@ -93,10 +115,10 @@ Rectangle {
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(14); anchors.verticalCenter: parent.verticalCenter
                         spacing: Theme.px(14)
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(7); height: width; rotation: 45; color: parent.parent.on ? Theme.accent : "transparent"; border.width: parent.parent.on ? 0 : 1; border.color: Theme.ornament }
-                        Text { text: modelData; color: parent.parent.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
+                        Text { text: modelData; color: parent.parent.exit ? Theme.textMuted : parent.parent.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: parent.parent.on ? Font.DemiBold : Font.Normal }
                     }
                     HoverHandler { id: navHover }
-                    TapHandler { onTapped: { page.section = index; page.row = 0; page.inSection = false } }
+                    TapHandler { onTapped: { if (parent.exit) page.press("exit"); else { page.section = index; page.row = 0; page.inSection = false } } }
                 }
             }
         }
@@ -115,7 +137,7 @@ Rectangle {
         anchors.left: middle.right
         anchors.right: parent.right
         carved: false
-        title: page.sections[page.section] || ""
+        title: page.navItems[page.section] || ""
     }
 
     // ------------------------------------------------------------- main column: rows
@@ -318,8 +340,9 @@ Rectangle {
         if (!inSection) {
             switch (b) {
             case "up": section = Math.max(0, section - 1); return true
-            case "down": section = Math.min(sections.length - 1, section + 1); return true
-            case "a": case "right": inSection = true; row = 0; return true
+            case "down": section = Math.min(navItems.length - 1, section + 1); return true
+            case "a": if (onExit) { press("exit"); return true } inSection = true; row = 0; return true
+            case "right": if (onExit) return true; inSection = true; row = 0; return true
             }
             return false
         }

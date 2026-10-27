@@ -602,7 +602,8 @@ class CallMedia(
         tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, playRate, Opus.RATE)
         if (io.github.ravenor907.muninn.tv.TvMic.platformEffects()) {
             if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
-            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+            // Off in Settings: switched off rather than left alone, as the call microphone has Android's own on already.
+            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = CallManager.noiseRemoval(context) } } catch (e: Exception) { null }
         }
         val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
         if (ok) return rec

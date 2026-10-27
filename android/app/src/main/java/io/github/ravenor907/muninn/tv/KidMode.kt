@@ -248,6 +248,13 @@ object KidTv {
                 TvStorage.later { TvStorage.clear(app); sendStatus(app, null) }
                 true
             }
+            "apps" -> {
+                // k4 (7.9): a parent names the files of an app that's coming over the Wi-Fi; only those are taken.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                val (name, parts) = TvApps.parse(o) ?: return false
+                TvApps.allow(fromKey, name, parts)
+                true
+            }
             "disconnect" -> {
                 val d = o.optJSONObject("d") ?: return false
                 val cur = s.cfg ?: return false
@@ -303,6 +310,7 @@ object KidTv {
         app.chat.deleteAll()
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
+        TvApps.clear()
         _state.value = KidState()
         tune(KidState())
     }

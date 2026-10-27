@@ -17,6 +17,7 @@ class Settings : public QObject
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
     Q_PROPERTY(QString transferFolder READ transferFolder WRITE setTransferFolder NOTIFY changed)
+    Q_PROPERTY(bool noiseRemoval READ noiseRemoval WRITE setNoiseRemoval NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -40,6 +41,11 @@ public:
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
     bool nearbySharing() const { return value("nearbySharing", true).toBool(); }
     QString transferFolder() const;
+    // Settings › Calls › Noise removal (on unless switched off). Off: calls keep the echo canceller and level
+    // control but leave background noise in, for a voice the noise suppressor turns down too far.
+    bool noiseRemoval() const { return saved("noiseRemoval", true).toBool(); }
+    // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
+    static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(key, fallback); }
 
     void setLayout(const QString &v) { set("layout", v); }
     void setUiSize(const QString &v) { set("uiSize", v); }
@@ -51,6 +57,7 @@ public:
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setNearbySharing(bool v) { set("nearbySharing", v); }
     void setTransferFolder(const QString &v) { set("transferFolder", v); }
+    void setNoiseRemoval(bool v) { set("noiseRemoval", v); }
 
 Q_SIGNALS:
     void changed();

@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 c2 k1 k2 k3 t1 v1 m1"
+"caps": "r1 g1 c1 c2 k1 k2 k3 k4 t1 v1 m1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -61,6 +61,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
 | `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
+| `k4` | kids' TV `apps` (7.9): a parent sends an app to the TV. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 
@@ -84,7 +85,7 @@ opens a contact's chat and the caps are unknown.
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `m1` for rooms `rich`, `mx` and
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
@@ -1022,6 +1023,33 @@ All three additions are optional fields that older apps ignore.
   normally". A parent's disconnect plaintext may carry `"free":true` (`{"t":"disconnect","d":{...},
   "free":true}`). The TV then offers it again. The flag rides in the parent's sealed envelope, which the TV
   only takes from a parent.
+
+### 7.9 Apps a parent sends to the TV (`k4`)
+
+A Kids' TV takes no files: it shows no "wants to send" question and answers every LocalSend
+`prepare-upload` with 403, except for an app a parent sends. The parent's app first names the files in
+room `tvconfig` (only to a TV whose app says `k4`):
+
+```
+{"t":"apps","name":"<the app's name>","files":[{"h":"<SHA-256, lowercase hex>","s":<bytes>}, ...]}
+```
+
+`name` is text of 1 to 100 characters; `files` holds 1 to 64 entries; `h` is exactly 64 lowercase hex
+digits; `s` is an integer `0 < s < 2^53`. Anything else is malformed and ignored. The TV takes it only
+from a current parent while it has a config, and keeps it for 30 minutes (its own clock). A disconnect
+forgets every one.
+
+The parent's app then sends the files with LocalSend over the Wi-Fi, each with its `sha256` in
+`prepare-upload`. The TV accepts the transfer only when every file is an `.apk` with a `sha256`, and the
+set of (`sha256`, size) pairs is exactly the set one `apps` named. That `apps` is then used up. The
+`prepare-upload` may arrive before the `apps` does, so the TV waits up to 10 seconds for it before
+answering 403. The upload itself still checks each file's SHA-256 (as any LocalSend transfer that gives one).
+
+An app on the phone goes out as `<name>.apk`, plus `<name>.split.<part>.apk` for each part Android keeps it
+in. The TV installs all the files of one name in one PackageInstaller session, and deletes them afterwards.
+Android still asks on the TV before it installs. A TV used normally (not in kids' mode) also keeps `.apk`
+files it receives out of Downloads and asks "Install …?" first; anyone the person accepts files from can
+send one there, with no `apps` needed.
 
 ## 8. Message types
 

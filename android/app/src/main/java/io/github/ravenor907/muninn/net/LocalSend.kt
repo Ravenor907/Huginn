@@ -114,8 +114,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         @Volatile var done = false
         @Volatile var failed = false
         @Volatile var savedAs: Received.Target? = null
+        /** An app kept in Muninn's own files to be installed (on a TV), not saved to Downloads. */
+        @Volatile var kept = false
     }
-    private class Session(val id: String, val from: String, val ip: String, val files: Map<String, InFile>) {
+    /** [kids]: an app a parent sent to this Kids' TV (TvApps). */
+    private class Session(val id: String, val from: String, val ip: String, val files: Map<String, InFile>, val kids: Boolean = false) {
         @Volatile var touched = System.currentTimeMillis()
     }
     @Volatile private var session: Session? = null
@@ -456,6 +459,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
             messages.tryEmit(false to "$alias tried to send ${size(total)}, but there's only ${size(free)} free. Free up space and try again.")
             return
         }
+        // A Kids' TV shows no "wants to send" box and takes nothing from anyone, except an app a parent said is
+        // coming, file for file by SHA-256 and size (TvApps, 7.9). The parent's word may come a moment after the files.
+        if (io.github.ravenor907.muninn.tv.KidMode.saved(context)) {
+            val parts = map.values.map { io.github.ravenor907.muninn.tv.TvApps.Part(it.sha?.lowercase() ?: "", it.size) }
+            val apps = map.values.all { AppFiles.isApk(it.name) && it.sha != null }
+            if (!apps || io.github.ravenor907.muninn.tv.TvApps.await(parts, 10_000) == null) { reply(out, 403); return }
+            synchronized(decision) {
+                if (session != null || pendingFiles != null) { reply(out, 409); return }
+                open(map, alias, ip, total, out, kids = true)
+            }
+            return
+        }
         synchronized(decision) {
             pendingFiles = map; pendingFrom = alias; pendingIp = ip; answer = null
             val names = map.values.map { it.name.substringAfterLast('/') }.sorted()
@@ -470,13 +485,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 reply(out, 403)
                 return
             }
-            val sess = Session(UUID.randomUUID().toString(), alias, ip, map)
-            session = sess
-            _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total)
-            NearbyService.hold(context, true)
-            val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
-            reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
+            open(map, alias, ip, total, out, kids = false)
         }
+    }
+
+    /** The files are accepted: the session starts and the sender gets a token per file. */
+    private fun open(map: Map<String, InFile>, alias: String, ip: String, total: Long, out: OutputStream, kids: Boolean) {
+        val sess = Session(UUID.randomUUID().toString(), alias, ip, map, kids)
+        session = sess
+        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total)
+        NearbyService.hold(context, true)
+        val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
+        reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
     }
 
     fun accept() = synchronized(decision) { answer = true; (decision as Object).notifyAll() }
@@ -487,9 +507,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val f = sess.files[r.query["fileId"]]
         if (r.query["sessionId"] != sess.id) { reply(out, 409); return }
         if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
-        // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg").
-        val target = try { Received.create(context, f.name) } catch (e: Exception) { null }
+        // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg"). On a TV an
+        // app waits in Muninn's own files instead, to be installed (ApkInstall) and then deleted.
+        val keep = AppFiles.isApk(f.name) && (sess.kids || io.github.ravenor907.muninn.tv.KidMode.isTv(context))
+        val target = try {
+            if (keep) Received.inside(context, File(context.cacheDir, "apps/${sess.id}"), f.name) else Received.create(context, f.name)
+        } catch (e: Exception) { null }
         f.savedAs = target
+        f.kept = keep
         f.received = 0
         f.failed = false
         val md = if (f.sha != null) MessageDigest.getInstance("SHA-256") else null
@@ -526,8 +551,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (sess.files.values.all { it.done || it.failed }) {
             val done = sess.files.values.count { it.done }
             val failed = sess.files.values.any { it.failed }
-            endSession(!failed, if (failed) "$done of ${sess.files.size} files from ${sess.from} arrived. Send the rest again."
-                else "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${Received.place(context)}.")
+            val apps = AppFiles.group(sess.files.values.toList()) { it.name }.map { it.first }
+            endSession(!failed, when {
+                failed -> "$done of ${sess.files.size} files from ${sess.from} arrived. Send the rest again."
+                sess.files.values.all { it.kept } -> "${sess.from} sent ${apps.joinToString(", ")}."
+                else -> "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${Received.place(context)}."
+            })
         }
     }
 
@@ -540,7 +569,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun InFile.toItem() = Item(
         savedAs?.name ?: name.substringAfterLast('/'),
-        when { done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
+        when { done && kept -> "Ready to install"; done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
         if (size > 0) received.toFloat() / size else if (done) 1f else 0f, failed,
     )
 
@@ -551,8 +580,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
         session = null
         s.files.values.forEach { f ->
             if (!f.done) f.savedAs?.discard()
-            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "From ${s.from} · saved to ${Received.place(context)}" else "From ${s.from} · didn't arrive", failed = !f.done))
+            val where = if (f.kept) "ready to install" else "saved to ${Received.place(context)}"
+            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "From ${s.from} · $where" else "From ${s.from} · didn't arrive", failed = !f.done))
         }
+        // Apps for this TV: installed once every part is here (an app missing a part won't install), else deleted.
+        val apps = s.files.values.filter { it.kept && it.done }.mapNotNull { it.savedAs?.file }
+        if (ok && apps.isNotEmpty()) io.github.ravenor907.muninn.update.ApkInstall.arrived(context, s.from, apps, s.kids)
+        else apps.forEach { it.delete() }
         while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
         _transfer.value = Transfer()
@@ -576,12 +610,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         pool.execute {
             val base = "${dev.protocol}://${dev.ip}:${dev.port}$API"
             try {
+                // Apps go with their SHA-256: a Kids' TV takes only the exact files a parent named (TvApps).
+                val shas = list.map { f -> if (AppFiles.isApk(f.name)) try { AppFiles.sha256(f) } catch (e: Exception) { null } else null }
                 val meta = JSONObject()
                 list.forEachIndexed { i, f ->
                     val ext = f.extension.lowercase()
                     meta.put("f$i", JSONObject().put("id", "f$i").put("fileName", f.name).put("size", f.length())
                         .put("fileType", MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream")
-                        .put("sha256", JSONObject.NULL).put("preview", JSONObject.NULL))
+                        .put("sha256", shas[i] ?: JSONObject.NULL).put("preview", JSONObject.NULL))
                 }
                 val c = open("$base/prepare-upload" + (pin?.let { "?pin=" + URLEncoder.encode(it, "UTF-8") } ?: ""), 5 * 60_000, expected)
                 sendConn = c

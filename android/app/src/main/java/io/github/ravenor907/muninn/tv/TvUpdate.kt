@@ -122,7 +122,7 @@ object TvUpdate {
         if (Build.VERSION.SDK_INT >= 34 && c.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == false)
             add(Need("fullscreen", "Full-screen calls", "So the call screen can open by itself when someone calls."))
         if (!canInstall(c))
-            add(Need("install", "Install updates", "So Muninn can keep itself up to date on this TV."))
+            add(Need("install", "Install updates and apps", "So Muninn can keep itself up to date, and install apps a parent sends."))
     }
 
     /**

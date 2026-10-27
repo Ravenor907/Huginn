@@ -113,6 +113,14 @@ object CallManager {
     fun internetCalls(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("internetCalls", true)
     fun setInternetCalls(context: Context, on: Boolean) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("internetCalls", on).apply()
 
+    /**
+     * Settings › "Noise removal" (default on). Off: Android's noise suppressor is switched off on the call's
+     * microphone, where the phone lets an app do that. Some phones suppress hard enough to make a voice
+     * quiet. The echo canceller stays on either way, and a phone may still filter in its own hardware.
+     */
+    fun noiseRemoval(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("noiseRemoval", true)
+    fun setNoiseRemoval(context: Context, on: Boolean) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("noiseRemoval", on).apply()
+
     // ------------------------------------------------------------------ actions (from the screens)
 
     /** Can [peerKey] get video calls? Their app speaks c2 (5.8) and this phone has VP8. */

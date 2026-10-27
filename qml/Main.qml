@@ -93,7 +93,7 @@ Window {
     }
     // Back out of a page: Contacts goes back to Settings, everything else to the rail.
     function closePage() {
-        if (pageName === "contacts") openPage("settings", { section: 1 })
+        if (pageName === "contacts") openPage("settings", { section: "Privacy", row: 0 })
         else focusRail()
         keys.forceActiveFocus()
     }
@@ -493,7 +493,7 @@ Window {
             { page: "files", file: "03-files" },
             { page: "calls", file: "04-calls" },
             { page: "settings", file: "05-settings" },
-            { page: "settings", section: 1, file: "06-settings-chat" },
+            { page: "settings", section: "Nearby and sharing", file: "06-settings-chat" },
             { page: "contacts", file: "07-contacts" },
             { page: "dms", picker: true, file: "08-options" },
             { page: "dms", prompt: true, file: "09-write" },
