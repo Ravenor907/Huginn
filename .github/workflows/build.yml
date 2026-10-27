@@ -628,3 +628,4 @@ jobs:
             **Huginn** (Linux and SteamOS): Huginn.flatpak. Installed copies update themselves at launch.
             **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
+            Code signing policy and privacy: https://github.com/Ravenor907/Huginn-Muninn#code-signing-policy
