@@ -13,7 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Where a call or voice room sounds: the phone's earpiece, its speaker, wired headphones, or a Bluetooth device,
  * picked by name on the call screen ("Audio"). One call or room at a time, so one route for the whole app.
- * [automatic] means the usual order: Bluetooth, then wired, then the earpiece. A device that goes away mid-call
+ * [automatic] means the usual order: Bluetooth, then wired, then the earpiece; in a video call the speaker takes
+ * the earpiece's place, since the phone is held out in front. A device that goes away mid-call
  * (headphones unplugged, a headset switched off) drops the choice back to automatic, and a newly connected one
  * shows up in the list at once.
  */
@@ -34,17 +35,22 @@ object AudioRoute {
     @Volatile private var am: AudioManager? = null
     @Volatile private var chosen = AUTOMATIC
     @Volatile private var preferSpeaker = false
+    @Volatile private var video = false
     private val main = Handler(Looper.getMainLooper())
     private val watch = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = refresh()
         override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = refresh()
     }
 
-    /** A call or room took the audio: route it ([speaker]: start on the speaker, as a voice room does) and follow devices. */
-    fun start(audio: AudioManager, speaker: Boolean = false) {
+    /**
+     * A call or room took the audio: route it and follow devices. [speaker]: start on the speaker whatever is
+     * connected, as a voice room does. [video]: a video call, so the speaker unless a headset is connected.
+     */
+    fun start(audio: AudioManager, speaker: Boolean = false, video: Boolean = false) {
         am = audio
         chosen = AUTOMATIC
         preferSpeaker = speaker
+        this.video = video
         try { audio.registerAudioDeviceCallback(watch, main) } catch (_: Exception) {}
         apply()
     }
@@ -60,6 +66,13 @@ object AudioRoute {
         } catch (_: Exception) {}
         _outputs.value = emptyList()
         _current.value = null
+    }
+
+    /** The camera came on mid-call: it's a video call now, so the speaker unless a headset is connected or the person chose. */
+    fun videoCall() {
+        if (video) return
+        video = true
+        if (chosen == AUTOMATIC) apply()
     }
 
     /** The person picked [id] on the call screen ([AUTOMATIC]: the usual order). */
@@ -83,10 +96,7 @@ object AudioRoute {
         val a = am ?: return
         val all = list()
         _outputs.value = all
-        val pick = all.firstOrNull { it.id == chosen }
-            ?: (if (preferSpeaker) all.firstOrNull { it.kind == Kind.SPEAKER } else null)
-            ?: all.firstOrNull { it.kind == Kind.BLUETOOTH } ?: all.firstOrNull { it.kind == Kind.WIRED }
-            ?: all.firstOrNull { it.kind == Kind.EARPIECE } ?: all.firstOrNull()
+        val pick = pickOutput(all, chosen, preferSpeaker, video)
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 val dev = pick?.let { p -> a.availableCommunicationDevices.firstOrNull { idOf(it) == p.id } }
@@ -142,4 +152,17 @@ object AudioRoute {
         Kind.WIRED -> "Headphones"
         Kind.BLUETOOTH -> product?.trim()?.takeIf { it.isNotEmpty() } ?: "Bluetooth"
     }
+}
+
+/**
+ * Where the sound goes: the person's choice while it's connected; else the speaker for a voice room; else a
+ * Bluetooth headset, then wired headphones, then the earpiece, or for a video call the speaker before the earpiece.
+ */
+fun pickOutput(all: List<AudioRoute.Output>, chosen: String, preferSpeaker: Boolean, video: Boolean): AudioRoute.Output? {
+    fun kind(k: AudioRoute.Kind) = all.firstOrNull { it.kind == k }
+    return all.firstOrNull { it.id == chosen }
+        ?: (if (preferSpeaker) kind(AudioRoute.Kind.SPEAKER) else null)
+        ?: kind(AudioRoute.Kind.BLUETOOTH) ?: kind(AudioRoute.Kind.WIRED)
+        ?: (if (video) kind(AudioRoute.Kind.SPEAKER) else null)
+        ?: kind(AudioRoute.Kind.EARPIECE) ?: all.firstOrNull()
 }

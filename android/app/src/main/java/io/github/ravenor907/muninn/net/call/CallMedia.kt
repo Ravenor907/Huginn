@@ -552,14 +552,17 @@ class CallMedia(
     /** What the room's player plays next for this peer. */
     fun nextPlay(): Play = jitter.next()
 
-    /** Starts the microphone and the speaker. False if the microphone couldn't open (no permission?). */
+    /**
+     * Starts the microphone and the speaker. False if the microphone couldn't open (no permission?).
+     * [video]: a video call, which starts on the speaker unless a headset is connected (AudioRoute).
+     */
     @SuppressLint("MissingPermission")
-    fun startAudio(): Boolean {
+    fun startAudio(video: Boolean = false): Boolean {
         if (externalAudio) return true
         if (Opus.loadError != null) return false
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
-        AudioRoute.start(audio)
+        AudioRoute.start(audio, video = video)
         // Kids' TV: the microphone and speaker at the TV's own rate (TvVoice converts); a phone: the call's 16 kHz.
         val tv = io.github.ravenor907.muninn.tv.TvMic.active
         io.github.ravenor907.muninn.tv.TvMic.callRates(context, Opus.RATE).let { (m, p) -> micRate = m; playRate = p }
@@ -582,7 +585,8 @@ class CallMedia(
         tvGain?.delay(20 + outBytes / 2 * 1000 / playRate)
         mic = Thread({ captureLoop(rec) }, "muninn-call-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
         player = Thread({ playLoop(track!!) }, "muninn-call-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
-        proximityOn(true)
+        // Against the ear only when it isn't on the speaker (a video call usually is).
+        proximityOn(!AudioRoute.onSpeaker)
         return true
     }
 
@@ -674,6 +678,13 @@ class CallMedia(
 
     /** Speaker on or off. Off goes back to the usual order: a Bluetooth headset, wired headphones, else the earpiece. */
     fun setSpeaker(on: Boolean) = setOutput(if (on) "speaker" else AudioRoute.AUTOMATIC)
+
+    /** The camera came on mid-call: the sound moves to the speaker, unless a headset is connected or the person chose. */
+    fun videoStarted() {
+        if (externalAudio) return
+        AudioRoute.videoCall()
+        proximityOn(!AudioRoute.onSpeaker)
+    }
 
     /** The sound goes to [id], one of [AudioRoute.outputs] (the call screen's Audio button). */
     fun setOutput(id: String) {
