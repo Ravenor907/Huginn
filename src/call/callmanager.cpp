@@ -8,7 +8,11 @@
 #include "opuscodec.h"
 #include "relayconfig.h"
 #include "turnclient.h"
+#include "videoengine.h"
+#include "vpxcodec.h"
 #include "../vault.h"
+
+#include <QVideoSink>
 
 #include <QDateTime>
 #include <QGuiApplication>
@@ -22,13 +26,14 @@
 #include <QDBusReply>
 #include <QVariantMap>
 #else
-#include "../platform/chime.h"
 #include "../platform/notify.h"
 #endif
+#include "../platform/chime.h"
 
 namespace
 {
 const char kFile[] = "calls.json";
+const char kTrustFile[] = "calltrust.json";
 const int kMaxHistory = 200;
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 QString str(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
@@ -44,6 +49,12 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     });
     m_ticker.setInterval(1000);
     connect(&m_ticker, &QTimer::timeout, this, &CallManager::tick);
+    // The video bitrate follows the other side's reports (5.8.6).
+    m_videoRate.setInterval(1000);
+    connect(&m_videoRate, &QTimer::timeout, this, [this] {
+        if (m_camera && m_session && m_session->media())
+            m_camera->setKbps(m_session->media()->videoKbps(VideoWire::Camera));
+    });
     m_clear.setSingleShot(true);
     m_clear.setInterval(2500);
     connect(&m_clear, &QTimer::timeout, this, [this] {
@@ -56,6 +67,7 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     connect(&m_ringer, &QTimer::timeout, m_ringtone, &Chime::play);
     if (m_vault) {
         connect(m_vault, &Vault::opened, this, &CallManager::load);
+        connect(m_vault, &Vault::opened, this, &CallManager::loadTrust);
         // Panic lock: the call ends at once and nothing about it stays on screen.
         connect(m_vault, &Vault::panicked, this, [this] {
             if (m_session)
@@ -63,8 +75,10 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
             m_endText.clear();
             Q_EMIT changed();
         });
-        if (!m_vault->locked())
+        if (!m_vault->locked()) {
             load();
+            loadTrust();
+        }
     }
 #ifdef Q_OS_LINUX
     QDBusConnection::sessionBus().connect(QString(), QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"),
@@ -124,7 +138,7 @@ QString CallManager::statusText() const
     if (s == QLatin1String("connecting")) return QStringLiteral("Connecting…");
     if (s == QLatin1String("reconnecting")) return QStringLiteral("Reconnecting…");
     if (s == QLatin1String("ended")) return m_endText;
-    if (s == QLatin1String("active")) return duration(elapsed());
+    if (s == QLatin1String("active")) return QStringLiteral("Connected · ") + duration(elapsed());
     return QString();
 }
 
@@ -135,6 +149,144 @@ bool CallManager::peerSpeaking() const { return m_session && m_session->media() 
 bool CallManager::relayLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Relay); }
 bool CallManager::wifiLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Wifi); }
 bool CallManager::bleLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Ble); }
+bool CallManager::directLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Direct); }
+bool CallManager::directTried() const { return m_session && m_session->directTried(); }
+bool CallManager::videoAvailable() const { return vpxAvailable(); }
+bool CallManager::videoPossible() const { return m_session && m_session->media() && m_session->videoBoth() && m_session->state() != CallSession::Ended; }
+bool CallManager::peerCamera() const { return videoPossible() && m_session->media()->peerSending(VideoWire::Camera); }
+int CallManager::peerRotation() const { return m_remote ? m_remote->rotation() : 0; }
+bool CallManager::incomingVideo() const { return m_session && m_session->state() == CallSession::Incoming && m_session->peerWantsVideo() && vpxAvailable(); }
+QString CallManager::cameraName() const { return m_camera ? m_camera->cameraName() : QString(); }
+
+// ------------------------------------------------------------------ video (5.8.5)
+
+bool CallManager::canVideo(const QString &key) const { return canCall(key) && vpxAvailable() && m_signal->hasCap(key, QStringLiteral("c2")); }
+
+QString CallManager::callVideo(const QString &key) { return startCall(key, vpxAvailable()); }
+
+void CallManager::answerVideo()
+{
+    if (!m_session || m_session->state() != CallSession::Incoming)
+        return;
+    m_cameraOn = vpxAvailable();
+    m_session->wantVideo = m_cameraOn;
+    answer();
+}
+
+void CallManager::toggleCamera() { setCamera(!m_cameraOn); }
+
+void CallManager::nextCamera()
+{
+    if (m_camera && m_camera->nextCamera())
+        Q_EMIT changed();
+}
+
+void CallManager::setRemoteSink(QObject *sink)
+{
+    m_remoteSink = qobject_cast<QVideoSink *>(sink);
+    if (m_remote)
+        m_remote->setSink(m_remoteSink);
+    if (m_remoteSink && m_session && m_session->media())
+        m_session->media()->requestKeyframe(VideoWire::Camera);   // a fresh picture for the new view
+}
+
+void CallManager::setLocalSink(QObject *sink)
+{
+    m_localSink = qobject_cast<QVideoSink *>(sink);
+    if (m_camera)
+        m_camera->setPreview(m_localSink);
+}
+
+void CallManager::startVideo()
+{
+    CallSession *s = m_session;
+    if (!s || !s->media() || !s->videoBoth())
+        return;
+    CallMedia *m = s->media();
+    if (!m_remote) {
+        m_remote = new VideoReceiver(this);
+        m_remote->setSink(m_remoteSink);
+        connect(m_remote, &VideoReceiver::changed, this, &CallManager::changed);
+        QPointer<CallMedia> pm = m;
+        connect(m_remote, &VideoReceiver::needKey, this, [pm] {
+            if (pm)
+                pm->requestKeyframe(VideoWire::Camera);
+        });
+        connect(m, &CallMedia::videoFrame, m_remote, [this](int stream, const QByteArray &vp8, bool key, int rotation) {
+            if (stream == VideoWire::Camera && m_remote)
+                m_remote->frame(vp8, key, rotation);
+        });
+        connect(m, &CallMedia::peerVideoChanged, this, &CallManager::changed);
+        connect(m, &CallMedia::keyframeWanted, this, [this](int stream) {
+            if (stream == VideoWire::Camera && m_camera)
+                m_camera->requestKey();
+        });
+        connect(m, &CallMedia::profileChanged, this, [this] {
+            if (m_camera && m_session && m_session->media())
+                m_camera->setProfile(m_session->media()->profile(VideoWire::Camera));
+        });
+    }
+    if (m_cameraOn)
+        setCamera(true);
+    Q_EMIT changed();
+}
+
+void CallManager::setCamera(bool on)
+{
+    m_cameraOn = on && vpxAvailable();
+    CallMedia *m = m_session ? m_session->media() : nullptr;
+    if (!m || !m_session->videoBoth()) {
+        Q_EMIT changed();   // remembered for when the call connects
+        return;
+    }
+    if (m_cameraOn) {
+        if (!m_camera) {
+            m_camera = new VideoSender(VideoSender::Camera, this);
+            connect(m_camera, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
+                if (m_session && m_session->media())
+                    m_session->media()->sendVideo(VideoWire::Camera, key, 0, vp8);
+            });
+            connect(m_camera, &VideoSender::failed, this, [this](const QString &) {
+                Q_EMIT finished(QStringLiteral("The camera isn't available"));
+                setCamera(false);
+            });
+        }
+        m_camera->setPreview(m_localSink);
+        m_camera->setProfile(m->profile(VideoWire::Camera));
+        if (!m_camera->start()) {
+            Q_EMIT finished(QStringLiteral("No camera found"));
+            m_cameraOn = false;
+            m->setVideoSending(VideoWire::Camera, false);
+            Q_EMIT changed();
+            return;
+        }
+        m->setVideoSending(VideoWire::Camera, true);
+        m_videoRate.start();
+    } else {
+        m->setVideoSending(VideoWire::Camera, false);
+        if (m_camera)
+            m_camera->stop();
+        m_videoRate.stop();
+    }
+    Q_EMIT changed();
+}
+
+void CallManager::stopVideo()
+{
+    m_videoRate.stop();
+    m_cameraOn = false;
+    if (m_camera) {
+        m_camera->stop();
+        m_camera->deleteLater();
+        m_camera = nullptr;
+    }
+    if (m_remote) {
+        m_remote->deleteLater();
+        m_remote = nullptr;
+    }
+    if (m_remoteSink)
+        m_remoteSink->setVideoFrame(QVideoFrame());
+}
 
 QString CallManager::outputName() const
 {
@@ -180,7 +332,9 @@ void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &
     m_relay->get(QByteArray::fromBase64(m_signal->myKey().toLatin1()), std::move(done));
 }
 
-QString CallManager::call(const QString &key)
+QString CallManager::call(const QString &key) { return startCall(key, false); }
+
+QString CallManager::startCall(const QString &key, bool video)
 {
     if (!available())
         return QStringLiteral("Calls aren't available in this build.");
@@ -191,7 +345,10 @@ QString CallManager::call(const QString &key)
     if (!m_signal->canCall(key))
         return QStringLiteral("Needs Muninn or Huginn 0.6");
     auto *s = new CallSession(m_signal, key, [this](auto done) { getLogin(std::move(done)); }, this);
+    prime(s);
+    s->wantVideo = video;
     adopt(s);
+    m_cameraOn = video;
     m_started = nowMs();
     s->start();
     return QString();
@@ -199,6 +356,7 @@ QString CallManager::call(const QString &key)
 
 void CallManager::adopt(CallSession *s)
 {
+    stopVideo();
     if (m_session)
         m_session->deleteLater();
     m_session = s;
@@ -270,6 +428,7 @@ void CallManager::sessionEnded()
     CallSession *s = m_session;
     if (!s)
         return;
+    stopVideo();
     ring(false);
     notifyIncoming(false);
     m_ticker.stop();
@@ -325,6 +484,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         return;
     }
     auto *s = new CallSession(m_signal, from, [this](auto done) { getLogin(std::move(done)); }, this);
+    prime(s);
     adopt(s);
     m_started = nowMs();
     s->takeOffer(msg);
@@ -383,6 +543,75 @@ void CallManager::onNotificationAction(uint id, const QString &action)
         answer();
     else if (action == QLatin1String("decline"))
         decline();
+}
+
+// ------------------------------------------------------------------ trust (5.8.1)
+
+bool CallManager::trusted(const QString &key) const
+{
+    if (m_trustOn.contains(key))
+        return true;
+    if (m_trustOff.contains(key))
+        return false;
+    return m_signal->inFamily(key);
+}
+
+QString CallManager::trustText(const QString &key) const
+{
+    if (m_trustOn.contains(key))
+        return QStringLiteral("On");
+    if (m_trustOff.contains(key))
+        return QStringLiteral("Off");
+    return m_signal->inFamily(key) ? QStringLiteral("On (Family folder)") : QStringLiteral("Off");
+}
+
+void CallManager::setTrusted(const QString &key, bool on)
+{
+    if (key.isEmpty())
+        return;
+    m_trustOn.remove(key);
+    m_trustOff.remove(key);
+    (on ? m_trustOn : m_trustOff).insert(key);
+    saveTrust();
+    if (!on && m_session && m_session->peerKey() == key)
+        m_session->setTrusted(false);
+    Q_EMIT trustChanged(key, on);
+    Q_EMIT changed();
+}
+
+void CallManager::prime(CallSession *s)
+{
+    s->trusted = trusted(s->peerKey());
+    s->c2Local = true;
+    s->videoCodec = vpxAvailable();
+    connect(s, &CallSession::mediaStarted, this, [this, s] {
+        if (s == m_session)
+            startVideo();
+    });
+}
+
+void CallManager::loadTrust()
+{
+    if (!m_vault || m_vault->locked())
+        return;
+    const QJsonObject o = QJsonDocument::fromJson(m_vault->read(QString::fromLatin1(kTrustFile))).object();
+    for (const QJsonValue &v : o.value(QStringLiteral("on")).toArray())
+        m_trustOn.insert(v.toString());
+    for (const QJsonValue &v : o.value(QStringLiteral("off")).toArray())
+        m_trustOff.insert(v.toString());
+    m_trustOff.subtract(m_trustOn);
+}
+
+void CallManager::saveTrust()
+{
+    if (!m_vault || m_vault->locked())
+        return;
+    QJsonArray on, off;
+    for (const QString &k : std::as_const(m_trustOn))
+        on << k;
+    for (const QString &k : std::as_const(m_trustOff))
+        off << k;
+    m_vault->write(QString::fromLatin1(kTrustFile), QJsonDocument(QJsonObject{{QStringLiteral("on"), on}, {QStringLiteral("off"), off}}).toJson(QJsonDocument::Compact));
 }
 
 // ------------------------------------------------------------------ history

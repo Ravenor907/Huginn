@@ -45,6 +45,36 @@ object RoomManager {
         val speaker: Boolean, val since: Long, val connected: Int, val groupCall: Boolean, val note: String,
     )
 
+    /** Someone in the room sharing their screen (5.8.7), and its picture's size and turn. */
+    data class Screen(val key: String, val name: String, val width: Int = 0, val height: Int = 0, val rotation: Int = 0)
+
+    private val _screen = MutableStateFlow<Screen?>(null)
+    val screen: StateFlow<Screen?> = _screen.asStateFlow()
+    private val screenView = RemoteVideo("muninn-screen-dec", { sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }) { w, h, r ->
+        _screen.value = _screen.value?.copy(width = w, height = h, rotation = r)
+    }
+    @Volatile private var sharer = ""
+
+    /** "Direct calls" turned off for [k]: the room's call with them stops going direct. */
+    fun untrust(k: String) = exec.execute { peers[k]?.s?.untrust() }
+
+    private fun sharerMedia(): CallMedia? = if (sharer.isEmpty()) null else peers[sharer]?.s?.mediaNow
+
+    /** The room screen's surface for the shared screen, or null when it goes away. */
+    fun screenSurface(sf: android.view.Surface?) = screenView.surface(sf)
+
+    /** Who shares their screen: the one shown stays while they share, otherwise the first who does (on [exec]). */
+    private fun pickSharer() {
+        val still = sharer.isNotEmpty() && sharerMedia()?.peerSending(VideoWire.SCREEN) == true
+        if (still) return
+        val next = peers.entries.firstOrNull { it.value.s.mediaNow?.peerSending(VideoWire.SCREEN) == true }?.key ?: ""
+        if (next == sharer) return
+        screenView.stop()
+        sharer = next
+        _screen.value = if (next.isEmpty()) null else Screen(next, nameOf(g, next))
+        if (next.isNotEmpty()) { screenView.start(); sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }
+    }
+
     /** A group call ringing this phone. */
     data class Ring(val g: String, val ch: String, val from: String, val name: String, val group: String, val at: Long)
 
@@ -180,6 +210,7 @@ object RoomManager {
         for (p in all) p.s.hangup()
         RoomAudio.stop()
         medias.clear(); speaking.clear()
+        screenView.stop(); sharer = ""; _screen.value = null
         busy = false
         _room.value = null
         app?.let { RoomService.stop(it) }
@@ -213,6 +244,24 @@ object RoomManager {
             timers += exec.schedule(Runnable { if (my == gen && peers.isEmpty()) doLeave("No one joined") }, RoomLogic.RING_MS, TimeUnit.MILLISECONDS)
         }
         return null
+    }
+
+    /** Who in [group] a group call can ring now (in its current state, with an app that takes rooms). */
+    fun ringable(group: String): Set<String> = members(group).toSet()
+
+    /**
+     * In a group call of [group] going on here: ring [keys] too (people the group reached late). Returns
+     * who will be rung (empty when no call of [group] is going on yet).
+     */
+    fun ringMore(group: String, keys: Collection<String>): Set<String> {
+        val room = ch
+        if (g != group || !RoomLogic.isGroupCall(room)) return emptySet()
+        val ok = members(group).filter { it in keys }.toSet()
+        if (ok.isNotEmpty()) exec.execute {
+            if (g != group || ch != room) return@execute
+            for (k in ok) if (!peers.containsKey(k) && k !in declined) { rung += k; sendRoom("vring", k, group, room) }
+        }
+        return ok
     }
 
     /** Join the group call that's ringing. Null when joining, otherwise what to tell the person. */
@@ -285,6 +334,12 @@ object RoomManager {
                     override fun onFirstMedia() = s.mediaFirst()
                     override fun onPaths(relay: Boolean, wifi: Boolean, bluetooth: Boolean) = s.mediaPaths(relay, wifi, bluetooth)
                     override fun onSpeaking(peer: Boolean) {}
+                    override fun onDirect(live: Boolean) = s.mediaDirect(live)
+                    // Screen share (5.8.7): Muninn shows it; sharing is Huginn's.
+                    override fun onPeerVideo(camera: Boolean, screen: Boolean) { exec.execute { pickSharer() } }
+                    override fun onVideoFrame(stream: Int, data: ByteArray, key: Boolean, rotation: Int) {
+                        if (stream == VideoWire.SCREEN && s.peerKey == sharer) screenView.frame(data, key, rotation)
+                    }
                 }).also { it.externalAudio = true; it.muted = muted; medias[s.callId] = it }
             override fun changed(s: CallSession) {
                 // Muted before the pair's call was up: tell them once it is.
@@ -301,6 +356,7 @@ object RoomManager {
 
     private fun newSession(callId: String, key: String, outgoing: Boolean, retries: Int): CallSession {
         val s = CallSession(callId, key, outgoing, host, exec, work)
+        s.inRoom = true
         peers[key] = Peer(s, retries)
         return s
     }
@@ -320,6 +376,7 @@ object RoomManager {
         if (p == null || p.s !== s) return
         peers.remove(s.peerKey)
         speaking.remove(s.peerKey)
+        if (s.peerKey == sharer) pickSharer()
         // A pair that lost its connection while both stay: the lower key calls again (6.3 step 7).
         if (g.isNotEmpty() && (s.endWhy == "nopath" || s.endWhy == "dropped") && p.retries < 3 && RoomLogic.offerWins(me(), s.peerKey) == me()) {
             val my = gen
@@ -526,10 +583,10 @@ object RoomManager {
                     for ((id, m) in medias) {
                         val dec = decoders.getOrPut(id) { try { Opus.Decoder() } catch (e: Throwable) { return } }
                         val n = when (val f = m.nextPlay()) {
-                            is CallLogic.Play.Packet -> dec.decode(f.data, one)
-                            is CallLogic.Play.Fec -> dec.decode(f.next, one, fec = true)
-                            CallLogic.Play.Conceal -> dec.decode(null, one)
-                            CallLogic.Play.Silence -> { one.fill(0); Opus.FRAME }
+                            is Play.Packet -> dec.decode(f.data, one)
+                            is Play.Fec -> dec.decode(f.next, one, fec = true)
+                            Play.Conceal -> dec.decode(null, one)
+                            Play.Silence -> { one.fill(0); Opus.FRAME }
                         }
                         if (n <= 0) one.fill(0)
                         for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()

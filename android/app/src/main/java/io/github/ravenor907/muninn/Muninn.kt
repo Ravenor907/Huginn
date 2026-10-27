@@ -45,6 +45,8 @@ class Muninn : Application() {
     lateinit var chat: Chat
     lateinit var direct: Direct
     lateinit var updater: Updater
+    /** Saving battery while the screen is off (see net/PowerLogic). */
+    lateinit var power: io.github.ravenor907.muninn.net.Power
     /** True once everything is running (the vault is open). */
     val ready = MutableStateFlow(false)
     @Volatile var visible = false
@@ -80,15 +82,13 @@ class Muninn : Application() {
         }
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
+        // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
+        // (It also reconnects to the relays at once when the network comes back.)
+        power = io.github.ravenor907.muninn.net.Power(this)
+        power.install()
         if (vault.openDefault()) start()
         dropOldTools()
         dropTorFiles()
-        // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
-        try {
-            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: android.net.Network) { nostr.reconnectNow() }
-            })
-        } catch (_: Exception) {}
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Every 15 minutes (Android's shortest), check the internet inbox even when Muninn is closed.
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.KEEP,
@@ -114,6 +114,9 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
+        chat.foreground(visible)
+        power.ready()
         // Messages that came while locked were only announced: ask the relays for them again now.
         nostr.resubscribe()
     }
@@ -167,13 +170,41 @@ class Muninn : Application() {
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVibrate(BUZZ).setOnlyAlertOnce(key == "inbox")
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
+            .apply { replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
         // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
         if (!visible) try {
             if (io.github.ravenor907.muninn.tv.KidMode.on(this))
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Reply from the notification is allowed now: Muninn open, not panic-locked, not a Kids' TV, and the
+     * app lock isn't due (the same check MainActivity makes before showing anything).
+     */
+    fun canReply(): Boolean {
+        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { true }
+        val lockDue = try {
+            io.github.ravenor907.muninn.ui.AppLock.due(vault.hasPassword, io.github.ravenor907.muninn.ui.AppLock.awaySince,
+                android.os.SystemClock.elapsedRealtime(), identity.lockAfter)
+        } catch (_: Exception) { true }
+        return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue)
+    }
+
+    /** Reply from the notification (a contact's chat or a group), only when [canReply]. */
+    private fun replyAction(key: String): NotificationCompat.Action? {
+        if (!canReply()) return null
+        if (!key.startsWith("g:") && !chat.isContact(key)) return null
+        val input = androidx.core.app.RemoteInput.Builder(io.github.ravenor907.muninn.net.ReplyReceiver.TEXT).setLabel("Reply").build()
+        val intent = Intent(this, io.github.ravenor907.muninn.net.ReplyReceiver::class.java)
+            .setAction(io.github.ravenor907.muninn.net.ReplyReceiver.ACTION).putExtra(io.github.ravenor907.muninn.net.ReplyReceiver.KEY, key)
+        // Android fills the typed text into the intent, so it has to be mutable.
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+        val pi = PendingIntent.getBroadcast(this, key.hashCode(), intent, flags)
+        return NotificationCompat.Action.Builder(R.drawable.ic_notify, "Reply", pi).addRemoteInput(input).setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY).setShowsUserInterface(false).build()
     }
 
     /** A short double buzz: a message arrived in the chat you're looking at. */

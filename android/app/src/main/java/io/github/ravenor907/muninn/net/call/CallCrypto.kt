@@ -30,6 +30,11 @@ object CallCrypto {
     const val AUDIO = 0
     const val PING = 1
     const val PONG = 2
+    // 3 to 6 only between two c2 apps (docs/protocol-0.6.md 5.8). A 0.7 app refuses them as "type".
+    const val VIDEO = 3
+    const val REPORT = 4
+    const val KEY_REQUEST = 5
+    const val NACK = 6
     const val CODEC = "opus16"
     private val random = SecureRandom()
 
@@ -142,7 +147,7 @@ object CallCrypto {
 
     /** Packet type and tag without decrypting, or null if it isn't a media packet of a known type. */
     fun peekTag(p: ByteArray): Int? =
-        if (p.size >= HEADER_LEN + TAG_LEN && p.size <= MAX_PACKET && (p[0].toInt() and 0xFF) == VERSION && p[1].toInt() in AUDIO..PONG)
+        if (p.size >= HEADER_LEN + TAG_LEN && p.size <= MAX_PACKET && (p[0].toInt() and 0xFF) == VERSION && p[1].toInt() in AUDIO..NACK)
             ((p[2].toInt() and 0xFF) shl 8) or (p[3].toInt() and 0xFF) else null
 
     /**
@@ -164,7 +169,7 @@ object CallCrypto {
             val seq = b.int.toLong() and 0xFFFFFFFFL
             val ts = b.int.toLong() and 0xFFFFFFFFL
             if (ver != VERSION) throw Dropped("version")
-            if (type !in AUDIO..PONG) throw Dropped("type")
+            if (type !in AUDIO..NACK) throw Dropped("type")
             if (t0 != tag[0] || t1 != tag[1]) throw Dropped("other call")
             if (high >= 0 && seq + REPLAY_WINDOW <= high) throw Dropped("too old")
             if (seq <= high && slot[(seq % REPLAY_WINDOW).toInt()] == seq) throw Dropped("duplicate")

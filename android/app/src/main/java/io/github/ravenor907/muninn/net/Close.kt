@@ -62,15 +62,57 @@ class Close(private val context: Context, private val identity: Identity) {
         running = true
         _error.value = null
         this.hello = hello
-        val strategy = Strategy.P2P_CLUSTER
-        client.startAdvertising(advertisedName(), SERVICE, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
-            .addOnFailureListener { fail(it) }
-        client.startDiscovery(SERVICE, discovery, DiscoveryOptions.Builder().setStrategy(strategy).build())
-            .addOnFailureListener { fail(it) }
+        looking = false
+        look()
+    }
+
+    // ------------------------------------------------------------------ saving battery
+
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    /** See PowerLogic: FULL as before, LOW low-power and in turns, OFF not looking (connected phones stay). */
+    @Volatile private var level = PowerLogic.Radio.FULL
+    private var looking = false
+    private var dutyOn = true
+    private val duty = Runnable { dutyOn = !dutyOn; look() }
+
+    fun power(r: PowerLogic.Radio) {
+        main.post {
+            if (r == level) return@post
+            level = r
+            dutyOn = true
+            if (looking) quiet()   // the options change: start over with the new ones
+            look()
+        }
+    }
+
+    /** Advertise and discover as [level] says, on the main thread. */
+    private fun look() {
+        main.post {
+            main.removeCallbacks(duty)
+            if (!running) return@post
+            val want = level == PowerLogic.Radio.FULL || (level == PowerLogic.Radio.LOW && dutyOn)
+            if (want && !looking) {
+                looking = true
+                val strategy = Strategy.P2P_CLUSTER
+                val low = level == PowerLogic.Radio.LOW
+                client.startAdvertising(advertisedName(), SERVICE, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).setLowPower(low).build())
+                    .addOnFailureListener { fail(it) }
+                client.startDiscovery(SERVICE, discovery, DiscoveryOptions.Builder().setStrategy(strategy).setLowPower(low).build())
+                    .addOnFailureListener { fail(it) }
+            } else if (!want && looking) quiet()
+            if (level == PowerLogic.Radio.LOW) main.postDelayed(duty, PowerLogic.dutyNext(dutyOn))
+        }
+    }
+
+    /** Stops looking and being seen; phones already connected stay connected. */
+    private fun quiet() {
+        looking = false
+        try { client.stopAdvertising(); client.stopDiscovery() } catch (_: Exception) {}
     }
 
     fun stop() {
         running = false
+        main.post { main.removeCallbacks(duty); looking = false }
         try {
             client.stopAdvertising(); client.stopDiscovery(); client.stopAllEndpoints()
         } catch (_: Exception) {}

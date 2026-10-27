@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1 k2 t1 v1"
+"caps": "r1 g1 c1 c2 k1 k2 k3 t1 v1 m1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -56,10 +56,13 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `r1` | message ratchet (same as `cap:"r1"`) |
 | `g1` | group chats (section 3) |
 | `c1` | 1:1 calls (section 5) |
+| `c2` | call extras after 0.7 (5.8): the direct path between trusted contacts, receiver reports and the higher Opus bitrate, video calls and screen share. Implies `c1`. |
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
+| `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
+| `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -81,7 +84,8 @@ opens a contact's chat and the caps are unknown.
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`). 0.5 would answer 400 and drop it.
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `m1` for rooms `rich`, `mx` and
+  `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work exactly as in 0.5 with everyone.
@@ -332,8 +336,9 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
 - Audio is Opus, 20 ms frames. Every packet goes out on every live path at once: UDP on the shared Wi-Fi,
   UDP through the TURN relay over the internet, and Bluetooth LE when connected. The receiver keeps the
   first copy of each sequence number.
-- **Relay only over the internet.** Nothing is ever sent straight to a peer's internet address: no STUN,
-  no hole punching, no `host` or `srflx` candidates. Each side allocates its own address on the TURN relay
+- **Relay only over the internet**, unless both people trust each other (5.8.1). Nothing is ever sent
+  straight to the internet address of someone who isn't trusted: no STUN, no hole punching, no `host` or
+  `srflx` candidates. Each side allocates its own address on the TURN relay
   (Cloudflare, logins from the relay Worker, see `docs/relay.md`) and sends to the other side's relayed
   address through it. So the person you call never learns your IP address, and you never learn theirs.
 - If no path works the call fails with "Can't connect".
@@ -394,11 +399,12 @@ Candidates (the final 0.6 format, the same in both apps):
   and differ, `lp` wins.
 - At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
 - Receivers take the first `relay` whose `a` is an IP literal (a peer's candidate never makes an app look a
-  name up, so a name is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
-- Send the offer with what is ready (an app may wait up to 1.5 s for its relay), and anything later in
-  `cands`. Resent offers and answers carry the newest candidates, and the caller takes the candidates of
-  a resent answer too (same `eph` as the first), not only of `cands`. A `cands` that would come sooner than
-  2 s after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
+  name up, so a name is skipped) and ignore every other type. With `c2`, `srflx` and `host` come back, only
+  between trusted contacts that both speak `c2` (5.8.2); a 0.7 app ignores them as before.
+- Send the offer with what is ready (an app may wait up to 400 ms for its relay and its STUN answer; 0.7
+  waited up to 1.5 s), and anything later in `cands`. Resent offers and answers carry the newest candidates,
+  and the caller takes the candidates of a resent answer too (same `eph` as the first), not only of
+  `cands`. A `cands` that would come sooner than 1 s (0.7: 2 s) after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
   answer carries the relay when it is ready.
 
 ### 5.3 Key derivation
@@ -468,6 +474,12 @@ Wideband is what phone calls with "HD voice" use; speech gains little above 8 kH
 
 Jitter buffer: play in seq order, target delay adaptive between 40 and 200 ms (start at 60 ms). A missing
 frame is rebuilt from the next packet's FEC when it is there, otherwise Opus packet loss concealment.
+After 0.7 both apps use the same buffer (Huginn `JitterBuffer`, Muninn `Jitter`, one algorithm, the same
+simulated-network tests): the delay is the 95th percentile of how much arrival times wander over the last
+3 s plus one frame; it grows at once (and by one frame for every packet that came too late to play, at most
+4), and shrinks by one frame every 2 s at most. Playout follows the sender's clock: too far behind drops a
+frame, too far ahead plays one concealed frame, at most once every 100 ms. Muninn sends a DTX silence
+packet every 400 ms too (0.7 sent none), so the other side's decoder makes comfort noise.
 With DTX, silence sends a packet about every 400 ms; `ts` shows the gap.
 
 Speaking indicator: from the decoded audio, never sent. Speaking while the 20 ms level is above -45 dBFS
@@ -520,7 +532,9 @@ is dropped. Two Muninns close by may also use their Nearby Connections link (BYT
 These paths are live by the same rule (authentic packet within 4 s). Optional: an app without it sends
 `ble:false` and uses the relay and Wi-Fi only.
 
-**Sending.** Every audio packet goes out on every live path (relay, Wi-Fi, Bluetooth).
+**Sending.** Every audio packet goes out on every live path (relay, Wi-Fi, Bluetooth), except that after
+0.7 the relay rests while a free path carries the call (5.8.3). That is the sender's choice alone, so it
+works with 0.7 peers too.
 
 **No path.** If no path is live 15 s after the answer was sent or received, both sides show "Can't connect"
 and send `hangup` `why:"nopath"`. During a call, if every path is dead, show "Reconnecting"; after 20 s,
@@ -529,7 +543,9 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 ### 5.7 IP addresses (shown to the user before the first internet call)
 
 - The person you call never learns your IP address, and you never learn theirs: offers and answers carry
-  only the relay's address and, on the same Wi-Fi, a port.
+  only the relay's address and, on the same Wi-Fi, a port. The one exception is someone you both trust
+  (5.8.1): then each of you sends your internet address so the call can skip the relay. Neither app ever
+  shows an IP address on screen.
 - The TURN relay (Cloudflare) sees your public address, because the audio goes from your device to it
   directly. It can't hear the call: media is encrypted end to end (5.3, 5.4).
 - The relay Worker sees your public address (an HTTPS request), a hash of your chat key and the time.
@@ -538,6 +554,184 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 - Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
   candidate is sent, and calls work only over Wi-Fi and Bluetooth.
+
+### 5.8 Call extras (cap `c2`)
+
+Everything here is used in a call only when **both** the offer and the answer carry `"c2": true`. A 0.7
+app never sends it and never gets anything below: its calls work exactly as in 5.1 to 5.7.
+
+New fields in `offer` and `answer` (all optional; the signature still covers only `t`, `call`, `eph`):
+
+| field | meaning |
+|---|---|
+| `c2` | `true`: this side speaks this section |
+| `vc` | `"vp8"`: this side can send and show video (5.8.5). Missing: sound only |
+| `vid` | `true`: its camera is on from the start (a video call; the callee's screen says "Video call") |
+| `p2p` | `true`: this side trusts the other and offers the direct path (5.8.1); its `cands` carry `srflx`/`host` |
+
+#### 5.8.1 Trusted contacts
+
+Each app keeps, per contact and only on that device, whether it trusts them for direct calls:
+
+- Default: trusted when the contact is in a folder named "Family" (section 4, any case).
+- A per-contact switch "Direct calls" overrides it, on or off (Huginn `calltrust.json`, Muninn
+  `calltrust.json`, both in the Vault).
+- The caller puts `p2p` and its direct candidates in the offer only when it trusts the callee. The callee
+  puts `p2p` and its own in the answer only when the offer had `p2p` **and** it trusts the caller.
+- The direct path is tried only when both did (`p2p` both ways). Switching "Direct calls" off during a
+  call stops it at once on that side: its later `cands` carry no `srflx` or `host`, it sends nothing more
+  to the peer's address and takes nothing from it, and the relay carries the call. Anyone else is relay only: they never get
+  your address, and you never send anything to theirs. A caller who trusts the callee has shared its own
+  address with them by its own choice, even if the callee doesn't trust back.
+
+#### 5.8.2 Direct path
+
+Candidates, only in messages to someone trusted (and never more than 8 in all, 5.2):
+
+```json
+{"t": "srflx", "a": "203.0.113.7", "p": 51820}
+{"t": "host", "a": "2001:db8::17", "p": 40312}
+```
+
+- `srflx`: the call socket's address as a STUN server saw it: one Binding request (RFC 8489, no
+  authentication) from the call socket (the Wi-Fi one of 5.6) to `stun.cloudflare.com:3478`, looked up with
+  the system resolver, resent after 300, 900 and 1800 ms, given up after 3 s. Only the server's answer
+  to that transaction id counts; the XOR-MAPPED-ADDRESS is the candidate. The callee asks while it rings.
+- `host`: up to 2 global unicast IPv6 addresses (2000::/3) of this device, with the call socket's port. No
+  IPv4 host candidates: a private address is the Wi-Fi path, a public one is the `srflx`.
+- Receivers take up to 3, IP literals only, and never a local address (private, shared, loopback or
+  link-local IPv4, `::1`, `fe80::/10`, `fc00::/7`, multicast): a peer can't make an app send to its LAN.
+- Connectivity checks are the pings of 5.6, from the call socket to every direct candidate of the peer,
+  on the same schedule (50 ms for 2 s, then 250 ms to 15 s, then 2 s). Both sides ping at once, which
+  opens both NATs (hole punching). Once an authentic packet arrives on the call socket from an address
+  that isn't the peer's Wi-Fi address, and the packet opened as new (a duplicate never teaches an address,
+  so a copy replayed from somewhere else can't redirect the call), that address is the Direct path and replies go there (the peer's
+  NAT may have picked another port than its `srflx`). Only between two trusted sides; otherwise such
+  packets are dropped as in 5.6.
+- Live by the same rule as every path (an authentic packet within 4 s). A symmetric NAT on both sides
+  means no direct path: the relay carries the call, nothing else changes.
+- During "Reconnecting" (every path dead for 1.5 s), after 4 s an app makes a new relay allocation and asks
+  the STUN server again (the network may have changed, Wi-Fi to mobile data), at most 3 times a call,
+  6 s apart, and sends the new candidates in `cands`. 0.7 peers take a new `relay` candidate from `cands`
+  too. A relay allocation that fails is tried once more after 2 s.
+
+#### 5.8.3 Free paths first
+
+Sound, video and the packets below go out on every live path, except:
+
+- the relay is left out while Wi-Fi or Direct answered one of this side's pings (a pong on that path) within
+  the last 750 ms. A pong proves the path works both ways; packets that only come in (a firewall on the
+  other side that lets nothing in) never rest the relay;
+- video (and its resends) never goes over Bluetooth.
+
+So the relay is a standby: it keeps its 1 s pings (it stays live) and takes over within a second when the
+free path stops. A live Wi-Fi or Direct path is pinged every 250 ms (not 1 s) so that its silence is noticed
+quickly. Pings, pongs and resends follow the same rules as the media they belong to.
+
+#### 5.8.4 Receiver reports and Opus
+
+New media packet types (5.4; a 0.7 receiver refuses them as "type", nobody sends them to one):
+
+| type | name | plaintext |
+|---|---|---|
+| 3 | video | a video fragment (5.8.5) |
+| 4 | report | 8 bytes, below |
+| 5 | keyframe request | 1 byte: the stream (0 camera, 1 screen) |
+| 6 | resend request (NACK) | stream (1), frame (2, big-endian), n (1), then n fragment indexes (1 each); n = 0 asks for the whole frame |
+
+Each side sends a **report** every second, from the first authentic packet on:
+
+```
+offset size
+0      1    loss: percent of the packets due since the last report that didn't arrive (0 to 100)
+1      1    flags: bit 0 my camera is on (sending video), bit 1 I'm sharing my screen; others 0
+2      2    jitter: my jitter buffer's delay in ms
+4      2    kbps of media I received since the last report (all paths, copies not counted)
+6      2    my round trip in ms, 0 when unknown
+```
+
+Loss counts audio by its `ts`: a gap of 2 to 10 frames between two packets is that many lost, a longer one
+is a DTX pause (one packet due), a late packet takes one back. Video counts fragments, and the fragments
+asked for again the first time as lost. Reports are how each side knows whether the other's camera or
+screen share is on, so the picture appears and goes away even if a signaling message is slow.
+
+Opus in a 1:1 call between two `c2` apps: still 16 kHz wideband, 20 ms, VBR, DTX, but **32 kbps** while a
+free path carries the call and **24 kbps** over the relay (16 kbps stays the rule in voice rooms, where
+every peer gets its own copy, and with 0.7). The expected loss given to the encoder (and so how much in-band
+FEC it adds) is `clamp(loss * 1.5 + 3, 5, 30)` percent from the other side's latest report (10 % before the
+first). A decoder of any 0.6 or 0.7 app plays these packets as they are.
+
+#### 5.8.5 Video
+
+VP8 (RFC 6386 bitstream), both ways, when both sides said `"vc": "vp8"`. Encoded at the profile of 5.8.6,
+realtime, error resilient, a keyframe at the start, on request and at least every 10 s. Each encoded frame
+is cut into at most 255 even fragments of at most 1166 bytes, each the plaintext of one type 3 packet:
+
+```
+offset size
+0      1    stream: 0 camera, 1 screen
+1      1    flags: bit 0 keyframe; bits 1-2 rotation, the quarter turns clockwise that show it upright
+            (0, 90, 180, 270 degrees); others 0
+2      2    frame number, uint16 big-endian, per stream, +1 for every encoded frame (wraps)
+4      1    fragment index, from 0
+5      1    fragment count, 1 to 255
+6      n    VP8 data
+```
+
+A sealed video packet is at most 12 + 6 + 1166 + 16 = 1200 bytes. Video uses the call's per-direction keys
+like sound (5.3, 5.4): it is end-to-end encrypted, and its seqs share the one replay window. A frame that
+would need more than 255 fragments isn't sent.
+
+The receiver (reference: Huginn `VideoWire::Assembler`, Muninn `VideoWire.Assembler`; their self-tests
+match) puts each stream's fragments back together and hands whole frames to the decoder in order:
+
+- A frame with a fragment missing, once a later frame has started (or 30 ms after its last fragment), is
+  asked for again with a NACK for just the missing indexes (the whole frame when nothing of it came), at
+  most 3 times, `max(40 ms, 1.2 x round trip)` apart. The sender keeps the last 64 frames' fragments and
+  resends them (as new packets, new seqs).
+- A frame that still isn't whole `max(250 ms, 2 x round trip + 120 ms)` after it was missed is given up:
+  the receiver asks for a keyframe (type 5), at most every `max(300 ms, 2 x round trip)`, and shows
+  nothing new until a whole keyframe arrives. A whole keyframe ahead of a hole is taken at once.
+- A new receiver (or a stream that was off) asks for a keyframe first.
+- Keyframe requests go at most once per `max(300 ms, 2 x round trip)` per stream, whatever asks (the
+  reassembly, a decoder that lost its place, a picture that came back on screen). A sender ignores a request
+  that comes within 300 ms of a keyframe it sent (they cross on the way).
+- A gap of 120 frames or more between the next frame due and the newest one isn't asked for again: the
+  receiver waits for a keyframe instead.
+
+Camera on or off: the sender's report flags say it (and the sender sends a report at once when it
+changes); the receiver shows the picture while the flag is on and the person's initial otherwise.
+Switching between the front and the back camera is the sender's business (a keyframe follows).
+
+#### 5.8.6 Size and bitrate
+
+| | over the relay | on a free path (Wi-Fi or Direct answered a ping within 3 s) |
+|---|---|---|
+| camera | 640 x 480, 24 fps, at most 700 kbps | 1280 x 720, 30 fps, at most 2000 kbps |
+| screen | 1280 x 720, 8 fps, at most 800 kbps | 1920 x 1080, 10 fps, at most 2500 kbps |
+
+480p over the relay is about 0.4 GB an hour with the sound, to save data. Sizes are the largest; a camera
+that can't do them sends what it can. The bitrate starts at 60 % of the cap and follows the other side's
+reports: 10 % loss or more takes a quarter off, 4 % or more takes 8 % off, under 2 % for 3 s adds 8 % +
+10 kbps a second, never below 120 kbps or above the cap. When a free path comes or goes the encoder starts
+again at the other size (with a keyframe).
+
+#### 5.8.7 Screen share in voice rooms
+
+In a voice room or group call (section 6) someone can share their screen (Huginn on Windows); everyone
+else in the room sees it (Muninn and Huginn). It is the video of 5.8.5 with stream 1, sent separately to
+every peer whose pair call speaks `c2` with `vc`, sealed with that pair's keys like the room's sound:
+encrypted per recipient, nothing to rekey when someone leaves. The sharer encodes once and sends the same
+fragments to everyone; a keyframe request from anyone makes the next frame a keyframe for all. The size and
+bitrate are the lowest any peer allows (the relay profile as soon as one peer is on the relay). A peer
+without `c2` keeps hearing the room and simply doesn't see the screen.
+
+#### 5.8.8 Timing
+
+- Offer: sent once the relay and the STUN answer are in, or after 400 ms with what is there.
+- `cands`: at most one a second (0.7 peers accept any rate up to the room limit of 2.4).
+- States the apps show: "Calling" (offer out), "Ringing" (they rang), "Connecting" (answered, no path
+  yet), "Connected" with the time (a path is live), "Reconnecting", then the end text.
 
 ## 6. Voice rooms and group calls (cap `v1`)
 
@@ -739,7 +933,7 @@ sends a config with them once the TV's `applied` shows `k2`.
 | field | type | absent | meaning |
 |---|---|---|---|
 | `calls` | true or false | true | the kids can call people in `contacts` (and parents), and those people can call the TV |
-| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls |
+| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls. A TV that runs its own voice processing (echo canceller, noise suppression and automatic gain) applies `0.3 * (mic - 50)` dB after it instead, so 50 is the processed level |
 
 Anything else that's extra is still malformed. Vectors: `tv.configs.cfg4` (calls off, mic 80), and step 7 of
 `tv.accept`.
@@ -767,6 +961,45 @@ still unknown a minute after a probe, 1.2) gets the TV's link as a private messa
 once on every route (the relays hold it for an offline phone); the parent can always share the TV's code too.
 To put the person in a family group, the parent's app uses the normal group invite (3.5).
 
+### 7.7 Microphone level on the TV, storage and Clear history (`k3`)
+
+Anyone at the TV can set its microphone level on the TV itself (no parent unlock). The TV uses that
+level until a parent picks another one: it applies a new config's `mic` only when it differs from the
+`mic` of the config it had (a parent changed it; the last change wins), and keeps its own otherwise.
+
+The TV tells its parents (those whose app says `k3`) in room `tvconfig`:
+
+```
+{"t":"status","mic":<level in use, 0..100>,"used":<bytes Muninn takes on the TV>,"ts":<ms>[,"own":true]}
+```
+
+`ts` is when the level last changed: the TV's clock when it was set on the TV, else the config's `ts`.
+All three are integers `0 <= n < 2^53`; anything else is malformed. `own` is present (and `true`) only
+while the level in use was set on the TV itself; when present it MUST be a boolean, else the status is
+malformed. Older TVs never send it, which means `false`. The TV sends it a second after its slider stops
+moving, after every config it applies, after Clear history, and in answer to `usage`.
+
+A parent's app that gets a `status` whose `mic` differs from its own takes the TV's level and sends a new
+config with it (7.2), so the other parent and later configs carry it too, when:
+
+- `own` is `true` and the TV has already said `applied` for this phone's latest config (a change made on
+  the phone that is still on its way wins). The phone records the change at its own clock, the moment the
+  status arrived. The TV's `ts` is not compared with the phone's clock, since the two clocks can differ.
+- `own` is absent (an older TV) and `ts` is newer than the phone's own last change, as before.
+
+It shows `used` as the TV's storage.
+
+A parent (only a current parent; anyone else gets 403) may send:
+
+| plaintext | the TV |
+|---|---|
+| `{"t":"usage"}` | answers with `status` |
+| `{"t":"clear"}` | erases every message, photo and voice message and its caches (pairing, parent keys, config and contacts stay), then sends `status` |
+
+Neither is retried; the parent's app asks again when its Kids' TV screen opens. On its own, the TV also
+keeps its storage small (recent messages only, smaller photos, voice messages for two weeks, caches
+emptied); that is local and not on the wire.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -784,6 +1017,11 @@ To put the person in a family group, the parent's app uses the normal group invi
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
 | `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
+| `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
+| `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
+| `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
+| `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
+| `group` | `react` `edit` | 11.5 | yes | a day, until greceipt | Seen | m1 |
 
 ## 9. Size limits
 
@@ -808,6 +1046,9 @@ To put the person in a family group, the parent's app uses the normal group invi
 | TV config, canonical | 16 KB |
 | TV microphone level (`mic`) | 0 to 100 |
 | group code / invite token | 1 hour |
+| a reaction | 1 to 16 characters (or empty, to take it back) |
+| a 1:1 message id in `re`, `msg` | 1 to 64 of `A-Z a-z 0-9 - _` |
+| typing and active status clock difference | 60 s |
 
 Characters means Unicode code points. Anything over a limit is malformed and refused, not cut.
 
@@ -831,3 +1072,107 @@ Each app's unit tests should:
 - `room`: every `messages` entry's `signed` matches and its signature verifies with its sender; `accept` gives
   each `result` (with the named state, receiver and clock); running `presence` in order through one table
   gives each `in` list (and `changed`); `glare` gives each winner.
+
+`python3 tools/m1_ref.py` writes `tests/m1-vectors.json` (section 11): every `good` payload is well-formed for its
+room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
+gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn checks it in `RichTest`, Huginn in
+`--chat-selftest` (the file next to `chat-vectors.json`).
+
+## 11. Messenger features (cap `m1`)
+
+Replies, reactions, edits, typing and active status, in 1:1 chats and groups. Nothing here is new cryptography:
+every payload is UTF-8 JSON sealed exactly like a private message, so the reference (`tools/m1_ref.py`) only
+pins down which payloads are well-formed and how reactions and edits that arrive in any order settle.
+Everything in this section goes only to someone whose caps include `m1`; to anyone else the app sends what
+0.7 understands (a reply as plain text) or nothing (a reaction, an edit, typing) and says so where it matters
+("Raven needs a newer Muninn or Huginn to see edits").
+
+### 11.1 Shared rules
+
+- A 1:1 message id (`re`, `msg` in 11.2 and 11.3) is 1 to 64 characters of `A-Z a-z 0-9 - _` (the apps use UUIDs).
+  A group message id is a logical id (2.3).
+- `ts` is the sender's clock in ms, an integer 0 <= ts < 2^53.
+- `text` is 1 to 2000 characters (code points), not only spaces, like a private message.
+- `e` (a reaction) is `""` (take mine back) or 1 to 16 characters, not only spaces, without U+0000..U+001F or U+007F.
+  Any emoji will do; the apps offer heart, laugh, thumbs up, wow and sad first (`❤️ 😂 👍 😮 😢`).
+- Fields not listed are ignored (later versions may add some). An unknown `t` is refused (400).
+
+### 11.2 Room `rich`: a reply
+
+```json
+{"text": "Count me in", "re": "<the id of the message it answers>"}
+```
+
+Exactly a `private` message in every other way: the envelope `id` is the message id, it is deduped against the
+chat, answered with `receipt` `delivered` (and `read`), retried for a day, unsent with `unsend`. `re` may be left
+out. The receiver looks the quoted message up in that chat; one that isn't there (deleted, or never arrived)
+shows as "Not here any more". A reply to a contact without `m1` goes as `private` with just the text.
+
+### 11.3 Room `mx`: reactions and edits of 1:1 messages
+
+```json
+{"t": "react", "msg": "<id>", "e": "❤️", "ts": 1761500130000}
+{"t": "edit",  "msg": "<id>", "text": "Fixed the typo", "ts": 1761500130000}
+```
+
+- Sent to the other person only, sealed like a private message. The receiver answers `receipt`
+  `{"ids": ["<envelope id>"], "s": "delivered"}`; the sender keeps the sealed envelope and sends the same bytes
+  again (5 s, 10 s, 20 s, 60 s, then every 5 min) until a receipt names its envelope id, or a day passes.
+- `react`: on a message of either person in that chat. Each person has one reaction per message; the receiver
+  keeps, per message and person, the reaction with the highest `ts` (an `e` of `""` stays as a marker, so an
+  older copy can't bring the reaction back). Equal or lower `ts` changes nothing. Vectors: `reactions`.
+- `edit`: only on a message the sender wrote (theirs, from the receiver's side), not unsent, not a photo or voice
+  message. The highest `ts` wins; the message shows "(edited)". Vectors: `edits`.
+- A `react` or `edit` for a message that isn't there is confirmed and dropped.
+- Limit: 20 per sender per 10 s.
+
+### 11.4 Room `live`: typing and active status
+
+```json
+{"t": "typing", "on": true, "ts": 1761500130000}
+{"t": "active", "on": true, "ts": 1761500130000}
+```
+
+- Always sealed with v1 (the static pair key), never through the ratchet, so these never move it. Sent once on
+  every route, never retried, never answered. Limit: 30 per sender per 10 s.
+- Taken only if `ts` is within 60 s of the receiver's clock (vectors: `fresh`); a late copy from the relays does
+  nothing.
+- `typing`: `on` while the box has text, at most every 3 s; `off` when it's cleared (a sent message also ends it
+  at the receiver). The receiver shows "typing" for 6 s after the last `on`.
+- `active`: `on` when the app comes to the front and every 2 minutes while it stays there, `off` when it goes to the
+  back, to the 20 contacts with `m1` chatted with most lately. The receiver shows a green dot for 5 minutes after
+  the last `on`. Active status is a setting (on by default); off sends `off` once, then nothing, and shows nobody's.
+
+### 11.5 Groups
+
+- `gmsg` (3.8) may carry `"re": "<logical id>"`, the message it answers (in the same group). A `gmsg` whose `re`
+  isn't a logical id is refused. Apps without `m1` ignore the field and show the text.
+- Room `group` (3.4) gets two more `t`, sent to every member whose caps include `m1`, retried like every group
+  control message until a `greceipt` `delivered` for its `id`:
+
+  | t | fields | effect |
+  |---|---|---|
+  | `react` | `msg` (a gmsg or gphoto id), `e`, `ts` | as 11.3, per member: everyone in the group sees reactions |
+  | `edit` | `msg` (the sender's gmsg), `text`, `ts` | as 11.3, only from the message's author |
+
+  Taken only from a member of the receiver's current state.
+- Read receipts are the 3.10 ones: the author's app shows a check mark and, in a circle, how many members have
+  read the message. Nobody else learns who read what.
+- `@name` in a message's text (any case, not inside a longer word) mentions that member: the app lights the
+  message up and says "Raven mentioned you in Family". Nothing extra goes on the wire.
+
+### 11.6 Put straight in a group by a contact
+
+Messenger style: a contact can make a group with you in it without an invite to accept. The admin signs a state
+that adds you and sends it (`state`, `op:"add"`) as in 3.4. An app with `m1` that has no state of that group and
+isn't joining it accepts it at first sight (3.3 step 2) when all of these hold: the envelope is from a real
+contact (not a group peer), `new.by` is that contact, you are in `new.members`, and `new` is well-formed and its
+signature verifies. It says "Raven added you to Family". Anything else first-sight still needs the invite or
+group code of 3.5. An admin only does this for people whose caps include `m1`; everyone else gets the 3.4 invite.
+(Huginn 0.7 already sends `op:"add"` when it lets someone in with a code; that person is joining, so nothing changes
+for them.)
+
+### 11.7 Only on the device
+
+Pinned messages, the "New messages" line, the emoji picker, search inside a chat and a chat's photos and voice
+page are local: nothing about them goes on the wire, and the two apps don't need to agree on them.

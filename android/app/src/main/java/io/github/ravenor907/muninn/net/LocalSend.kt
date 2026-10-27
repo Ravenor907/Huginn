@@ -172,7 +172,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         pool.execute { acceptLoop() }
         try {
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            lock = wifi.createMulticastLock("muninn").apply { setReferenceCounted(false); acquire() }
+            lock = wifi.createMulticastLock("muninn").apply { setReferenceCounted(false); if (wifiLevel == PowerLogic.Radio.FULL) acquire() }
             udp = MulticastSocket(PORT).apply {
                 reuseAddress = true
                 for (nif in lanInterfaces()) {
@@ -185,9 +185,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
         announce()
         pool.execute {
+            var quietFor = 0
             while (running) {
                 Thread.sleep(60_000)
                 if (!running) break
+                // Saving battery: off Wi-Fi nothing is announced; with the screen off only every 5 minutes.
+                val w = wifiLevel
+                if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
+                quietFor = 0
                 announce()
                 val cutoff = System.currentTimeMillis() - 10 * 60_000
                 found.entries.removeIf { it.value.seen < cutoff }
@@ -196,6 +201,24 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
             }
         }
+    }
+
+    /**
+     * Wi-Fi discovery (see PowerLogic). FULL as before. LOW and OFF let go of the multicast lock, which
+     * otherwise keeps the Wi-Fi chip waking for every multicast packet on the network; messages sent
+     * straight to this phone still arrive.
+     */
+    @Volatile private var wifiLevel = PowerLogic.Radio.FULL
+
+    fun discovery(r: PowerLogic.Radio) {
+        if (r == wifiLevel) return
+        val was = wifiLevel
+        wifiLevel = r
+        try {
+            if (r == PowerLogic.Radio.FULL) { lock?.let { if (!it.isHeld) it.acquire() }; if (running) announce() }
+            else lock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {}
+        if (was == PowerLogic.Radio.OFF && r != PowerLogic.Radio.OFF && running) announce()   // back on Wi-Fi: say hello now
     }
 
     fun stop() {

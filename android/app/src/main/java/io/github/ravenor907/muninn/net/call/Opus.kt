@@ -16,6 +16,7 @@ object Opus {
 
     @JvmStatic external fun encoderNew(rate: Int, bitrate: Int, loss: Int, complexity: Int): Long
     @JvmStatic external fun encode(h: Long, pcm: ShortArray, frame: Int, out: ByteArray): Int
+    @JvmStatic external fun encoderTune(h: Long, bitrate: Int, loss: Int)
     @JvmStatic external fun encoderFree(h: Long)
     @JvmStatic external fun decoderNew(rate: Int): Long
     @JvmStatic external fun decode(h: Long, data: ByteArray?, pcm: ShortArray, frame: Int, fec: Int): Int
@@ -25,15 +26,32 @@ object Opus {
         private var h = encoderNew(RATE, BITRATE, 10, 5).also { check(it != 0L) { "Opus encoder" } }
         private val out = ByteArray(MAX_PACKET)
 
-        /** One 20 ms frame to one packet; null for DTX silence (nothing to send) or an error. */
-        @Synchronized fun encode(pcm: ShortArray): ByteArray? {
+        private var bitrate = BITRATE
+        private var loss = 10
+
+        /**
+         * One 20 ms frame to one packet; null for an error, and for DTX silence unless [keepSilence] (then the 1 or 2 byte
+         * silence packet comes back too, see [isSilence]: a 1:1 call sends one every 400 ms so the other side makes comfort noise).
+         */
+        @Synchronized fun encode(pcm: ShortArray, keepSilence: Boolean = false): ByteArray? {
             if (h == 0L) return null
             val n = encode(h, pcm, FRAME, out)
-            return if (n > 2) out.copyOf(n) else null
+            return if (n > 2 || (keepSilence && n > 0)) out.copyOf(n) else null
         }
+
+        /** 5.8.4: the bitrate (16, 24 or 32 kbps) and the expected loss the other side reports. Unchanged when the same. */
+        @Synchronized fun tune(bps: Int, lossPct: Int) {
+            val b = bps.coerceIn(8_000, 64_000); val l = lossPct.coerceIn(0, 40)
+            if (h == 0L || (b == bitrate && l == loss)) return
+            bitrate = b; loss = l
+            encoderTune(h, b, l)
+        }
+        val bitrateNow: Int get() = bitrate
 
         @Synchronized override fun close() { if (h != 0L) { encoderFree(h); h = 0L } }
     }
+
+    fun isSilence(p: ByteArray) = p.size <= 2
 
     class Decoder : AutoCloseable {
         private var h = decoderNew(RATE).also { check(it != 0L) { "Opus decoder" } }

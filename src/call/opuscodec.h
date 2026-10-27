@@ -29,9 +29,16 @@ public:
     // isSilence() says so and the caller sends only some of those.
     QByteArray encode(const qint16 *pcm320);
     static bool isSilence(const QByteArray &packet) { return packet.size() <= 2; }
+    // Between two c2 apps (docs/protocol-0.6.md 5.8.4): 24 or 32 kbps, and the loss the other side
+    // reports, so in-band FEC carries as much as the network needs. Unchanged when the same.
+    void setBitrate(int bps);
+    void setLossPercent(int pct);
+    int bitrate() const { return m_bitrate; }
+    int lossPercent() const { return m_loss; }
 
 private:
     void *m_enc = nullptr;
+    int m_bitrate = 16000, m_loss = 10;
 };
 
 class OpusDecoder16

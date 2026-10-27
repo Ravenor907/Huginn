@@ -15,6 +15,8 @@ set(CMAKE_AUTOMOC ON)
 if(WIN32)
     enable_language(RC)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network WebSockets Bluetooth Multimedia)
+    # The updater unpacks the release zip itself with Qt's zip reader (src/platform/winupdate.cpp).
+    find_package(Qt6 6.6 REQUIRED COMPONENTS CorePrivate GuiPrivate)
     # Only needed while main.cpp still sends notifications over D-Bus (it should call Platform::notify).
     find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS DBus)
     find_package(OpenSSL REQUIRED)
@@ -22,6 +24,13 @@ if(WIN32)
     find_path(QRENCODE_INCLUDE_DIR qrencode.h REQUIRED)
     find_library(QRENCODE_LIBRARY NAMES qrencode qrencoded REQUIRED)
     find_package(Opus CONFIG QUIET)
+    # libvpx (VP8 video calls and screen share), from vcpkg: its config package when there is one,
+    # otherwise the header and the library found by name.
+    find_package(unofficial-libvpx CONFIG QUIET)
+    if(NOT TARGET unofficial::libvpx::libvpx)
+        find_path(VPX_INCLUDE_DIR vpx/vpx_encoder.h)
+        find_library(VPX_LIBRARY NAMES vpx vpxmd libvpx)
+    endif()
     option(HUGINN_WINDOWS_PORTABLE "The CI build for Huginn-Windows.zip (updates itself from GitHub releases)" OFF)
 else()
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
@@ -30,6 +39,7 @@ else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
     pkg_check_modules(OPUS QUIET IMPORTED_TARGET opus)
+    pkg_check_modules(VPX QUIET IMPORTED_TARGET vpx)
 endif()
 
 qt_standard_project_setup(REQUIRES 6.6)
@@ -48,6 +58,7 @@ qt_add_executable(huginn
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
     src/groupwire.cpp src/groupwire.h
+    src/richwire.cpp src/richwire.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h
@@ -59,7 +70,8 @@ qt_add_executable(huginn
     src/tls.cpp src/tls.h
     src/lan.cpp src/lan.h
     src/wifiselftest.cpp src/wifiselftest.h
-    # 1:1 voice calls (docs/protocol-0.6.md section 5, TURN relay only over the internet)
+    # 1:1 calls (docs/protocol-0.6.md section 5: TURN relay over the internet, direct between trusted
+    # contacts, video and screen share between two c2 apps, 5.8)
     src/call/relayconfig.h
     src/call/callsignal.h
     src/call/callcrypto.cpp src/call/callcrypto.h
@@ -69,6 +81,10 @@ qt_add_executable(huginn
     src/call/audiodsp.cpp src/call/audiodsp.h
     src/call/opuscodec.cpp src/call/opuscodec.h
     src/call/audioio.cpp src/call/audioio.h
+    src/call/directpath.cpp src/call/directpath.h
+    src/call/videowire.cpp src/call/videowire.h
+    src/call/vpxcodec.cpp src/call/vpxcodec.h
+    src/call/videoengine.cpp src/call/videoengine.h
     src/call/callmedia.cpp src/call/callmedia.h
     src/call/callsession.cpp src/call/callsession.h
     src/call/callmanager.cpp src/call/callmanager.h
@@ -90,6 +106,7 @@ target_sources(huginn PRIVATE
     src/platform/powerwatch.h
     src/platform/singleinstance.cpp src/platform/singleinstance.h
     src/platform/winupdate.cpp src/platform/winupdate.h
+    src/platform/winstart.cpp src/platform/winstart.h
 )
 if(WIN32)
     target_sources(huginn PRIVATE
@@ -112,7 +129,22 @@ if(WIN32)
     endif()
     set(HUGINN_RC_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/huginn.ico")
     configure_file(packaging/windows/huginn.rc.in ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc @ONLY)
-    target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
+    # The application manifest: runs as the person (asInvoker), Windows 10/11, per-monitor DPI.
+    # The portable zip keeps Huginn.exe alone at the top and its DLLs in lib\, a private assembly
+    # (lib\lib.manifest, written by the Windows job in build.yml) that Windows loads them from.
+    set(HUGINN_MANIFEST_LIB "")
+    if(HUGINN_WINDOWS_PORTABLE)
+        set(HUGINN_MANIFEST_LIB "  <dependency>\n    <dependentAssembly>\n      <assemblyIdentity type=\"win32\" name=\"lib\" version=\"1.0.0.0\" processorArchitecture=\"amd64\"/>\n    </dependentAssembly>\n  </dependency>\n")
+    endif()
+    configure_file(packaging/windows/huginn.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/Huginn.exe.manifest @ONLY)
+    target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc ${CMAKE_CURRENT_BINARY_DIR}/Huginn.exe.manifest)
+    # Our manifest says asInvoker itself; the linker's own would be a second copy.
+    target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/MANIFESTUAC:NO>)
+    target_link_libraries(huginn PRIVATE Qt6::CorePrivate Qt6::GuiPrivate)
+    if(HUGINN_WINDOWS_PORTABLE)
+        # Qt finds its plugins and QML modules in lib\ (packaging/windows/qt.conf, built in as :/qt/etc/qt.conf).
+        qt_add_resources(huginn "huginn_qtconf" PREFIX "/qt/etc" BASE packaging/windows FILES packaging/windows/qt.conf)
+    endif()
     # Sources are UTF-8 (they use … and · in strings); MSVC needs to be told.
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Zc:__cplusplus /permissive->)
     target_compile_definitions(huginn PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN SDL_MAIN_HANDLED)
@@ -123,16 +155,6 @@ if(WIN32)
     # Release: no debug info or PDB, unused code dropped, the same bytes for the same source.
     target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Brepro>)
-
-    # The Huginn.exe people open: a tiny launcher at the top of the zip that starts lib/Huginn.exe,
-    # so Qt, OpenSSL and the rest stay out of sight in lib/ (see the Windows job in build.yml).
-    add_executable(huginn-launcher WIN32 src/platform/launcher_windows.cpp ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
-    set_target_properties(huginn-launcher PROPERTIES OUTPUT_NAME HuginnLauncher AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
-                          MSVC_RUNTIME_LIBRARY MultiThreaded)
-    target_compile_definitions(huginn-launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_compile_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Brepro>)
-    target_link_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
-    target_link_libraries(huginn-launcher PRIVATE user32)
 else()
     target_sources(huginn PRIVATE
         src/platform/notify_linux.cpp
@@ -183,6 +205,13 @@ qt_add_qml_module(huginn
         qml/ContactsPage.qml
         qml/LockPanel.qml
         qml/PatternPad.qml
+        qml/Composer.qml
+        qml/EmojiPicker.qml
+        qml/Reactions.qml
+        qml/QuoteLine.qml
+        qml/HoverBar.qml
+        qml/MessageRow.qml
+        qml/QuickSwitcher.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/raven_message.wav
@@ -192,7 +221,8 @@ qt_add_qml_module(huginn
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
-                   ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar)
+                   ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
+                   HoverBar MessageRow QuickSwitcher)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
@@ -232,6 +262,24 @@ elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
 elseif(NOT WIN32)
     # The Flatpak's runtime ships libopus (freedesktop base); without it calls would build but never sound.
     message(FATAL_ERROR "Opus wasn't found (pkg-config opus): needed for voice calls.")
+endif()
+
+# libvpx (video calls and screen share, 5.8.5): HUGINN_HAVE_VPX when it's there. Without it calls are
+# sound only and the apps say video needs another build.
+if(TARGET unofficial::libvpx::libvpx)
+    target_link_libraries(huginn PRIVATE unofficial::libvpx::libvpx)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(VPX_INCLUDE_DIR AND VPX_LIBRARY)
+    target_include_directories(huginn PRIVATE ${VPX_INCLUDE_DIR})
+    target_link_libraries(huginn PRIVATE ${VPX_LIBRARY})
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(TARGET PkgConfig::VPX)
+    target_link_libraries(huginn PRIVATE PkgConfig::VPX)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
+    message(FATAL_ERROR "libvpx wasn't found: the Windows build installs it with vcpkg (libvpx:x64-windows).")
+else()
+    message(STATUS "libvpx not found: video calls are left out of this build")
 endif()
 
 include(GNUInstallDirs)

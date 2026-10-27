@@ -3,6 +3,8 @@ package io.github.ravenor907.muninn.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -58,6 +60,7 @@ import kotlinx.coroutines.delay
 fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = false) {
     val room by RoomManager.room.collectAsState()
     val ring by RoomManager.ring.collectAsState()
+    val screen by RoomManager.screen.collectAsState()
     Column(Modifier.fillMaxSize().background(Palette.ground).systemBarsPadding().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -102,6 +105,17 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             Spacer(Modifier.height(6.dp))
             Text(status(r), style = Type.normal.copy(color = Palette.textMuted))
             if (r.note.isNotEmpty()) Text(r.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+            // Someone shares their screen (docs/protocol-0.6.md 5.8.7): it shows here, encrypted to this phone like the sound.
+            screen?.let { sc ->
+                Spacer(Modifier.height(16.dp))
+                Text(if (hideNames) "A screen is shared" else "${sc.name} is sharing their screen", style = Type.small.copy(color = Palette.text))
+                Spacer(Modifier.height(8.dp))
+                val turned = sc.rotation % 180 != 0
+                val ratio = if (sc.width > 0 && sc.height > 0) (if (turned) sc.height.toFloat() / sc.width else sc.width.toFloat() / sc.height) else 16f / 9f
+                VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
+                    Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f)).clip(RoundedCornerShape(12.dp)).background(Palette.field),
+                    if (hideNames) "Shared screen" else "${sc.name}'s screen")
+            }
             Spacer(Modifier.height(28.dp))
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
                 verticalArrangement = Arrangement.spacedBy(18.dp)) {

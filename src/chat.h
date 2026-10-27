@@ -12,6 +12,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantList>
 
 class Ble;
@@ -59,6 +60,10 @@ class Chat : public QObject
     Q_PROPERTY(QVariantList groupInvites READ groupInvites NOTIFY changed)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY changed)
     Q_PROPERTY(QString netStatus READ netStatus NOTIFY changed)
+    // Cap m1: who is typing to me and whose app is open (key -> until, ms), and my own Active status.
+    Q_PROPERTY(QVariantMap typing READ typingMap NOTIFY liveChanged)
+    Q_PROPERTY(QVariantMap active READ activeMap NOTIFY liveChanged)
+    Q_PROPERTY(bool activeStatus READ activeStatus WRITE setActiveStatus NOTIFY changed)
 
 public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
@@ -95,7 +100,8 @@ public:
     // Messages
     Q_INVOKABLE QVariantList messagesWith(const QString &key) const;
     Q_INVOKABLE void sendNearby(const QString &text);
-    Q_INVOKABLE void sendPrivate(const QString &key, const QString &text);
+    // re: the id of the message this answers (a reply, cap m1; to an older app it goes as plain text).
+    Q_INVOKABLE void sendPrivate(const QString &key, const QString &text, const QString &re = QString());
     Q_INVOKABLE void markRead(const QString &key);
     Q_INVOKABLE void deleteMessage(const QString &key, const QString &id);
     Q_INVOKABLE void deleteNearbyMessage(const QString &id);
@@ -110,6 +116,28 @@ public:
     Q_INVOKABLE bool savePhoto(const QString &id);
     Q_INVOKABLE QVariantList recentPictures() const;   // Steam screenshots and Pictures, newest first
     Q_INVOKABLE void copyLink() const;
+
+    // Cap m1 (docs/protocol-0.6.md section 11, RichWire): reactions, edits, typing, active status. Calls that
+    // can fail return what to tell the person, "" when done.
+    Q_INVOKABLE bool hasM1(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m1")); }
+    Q_INVOKABLE QString react(const QString &key, const QString &id, const QString &emoji);
+    Q_INVOKABLE QString editMessage(const QString &key, const QString &id, const QString &text);
+    Q_INVOKABLE void typingTo(const QString &key, bool on);
+    Q_INVOKABLE QStringList quickReactions() const;
+    Q_INVOKABLE QStringList emojiList() const;
+    QVariantMap typingMap() const;
+    QVariantMap activeMap() const;
+    bool activeStatus() const { return m_settings.value(QStringLiteral("chat/activeStatus"), true).toBool(); }
+    void setActiveStatus(bool on);
+    // Pinned messages, only on this computer: where is a contact's key or "g:<group>:<channel>".
+    Q_INVOKABLE void setPinned(const QString &where, const QString &id, bool on);
+    Q_INVOKABLE QStringList pinned(const QString &where) const { return m_pins.value(where); }
+    // A picture on the clipboard (pasted into the message box) or a dropped file, sent to a contact or
+    // "g:<group>:<channel>". False when there's no picture.
+    Q_INVOKABLE bool clipboardHasImage() const;
+    Q_INVOKABLE bool pasteImage(const QString &where);
+    Q_INVOKABLE QString localPath(const QUrl &url) const { return url.toLocalFile(); }
+    Q_INVOKABLE bool isPicture(const QString &path) const;
 
     // People
     Q_INVOKABLE QString nameOf(const QString &key) const;          // the nickname when there is one
@@ -145,6 +173,7 @@ public:
     // What their app can do (the "caps" of their envelopes). Unknown until they send something
     // from 0.6 or answer probeCaps (at most once an hour each).
     Q_INVOKABLE bool capsKnown(const QString &key) const { return m_caps.contains(key); }
+    bool hasCap(const QString &key, const QString &cap) const { return m_caps.value(key).contains(cap); }
     Q_INVOKABLE bool canGroup(const QString &key) const;
     Q_INVOKABLE void probeCaps(const QString &key);
 
@@ -169,7 +198,9 @@ public:
     Q_INVOKABLE QString createGroup(const QString &name);
     Q_INVOKABLE QVariantMap groupInfo(const QString &g) const;
     Q_INVOKABLE QVariantList groupMessages(const QString &g, const QString &ch) const;
-    Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text);
+    Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re = QString());
+    Q_INVOKABLE QString reactGroup(const QString &g, const QString &id, const QString &emoji);
+    Q_INVOKABLE QString editGroup(const QString &g, const QString &id, const QString &text);
     Q_INVOKABLE bool sendGroupPhoto(const QString &g, const QString &ch, const QString &path, bool hd);
     Q_INVOKABLE void markGroupRead(const QString &g, const QString &ch);
     Q_INVOKABLE void unsendGroup(const QString &g, const QString &id);
@@ -211,6 +242,7 @@ Q_SIGNALS:
     void arrived(const QString &name, const QString &text, const QString &key);
     // An authentic room "call" envelope from a contact or group peer (at most 30 in 10 s each).
     void callMessage(const QString &fromKey, const QJsonObject &msg);
+    void liveChanged();
 
 private:
     void start();
@@ -271,6 +303,23 @@ private:
     void noteCaps(const QString &key, bool present, const QStringList &caps);
     void loadFolders();
     void saveFolders();
+    // cap m1
+    int receiveM1(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QString &sentId, const QJsonObject &p);
+    void queueMx(const QString &key, const QByteArray &plain);
+    void attemptMx(const QString &envId);
+    void saveMx();
+    void sendLive(const QString &key, const QByteArray &plain);
+    void sendActive(bool on);
+    void liveTick();
+    void savePins();
+    // Built once per message list: where each id sits and how many messages reply to it.
+    struct M1Index {
+        QHash<QString, int> at;             // message id -> index in the list
+        QHash<QString, int> replies;        // message id -> how many messages have it as "re"
+    };
+    static M1Index m1Index(const QVariantList &all);
+    QVariantMap withM1(const QVariantMap &m, const QVariantList &all, const M1Index &idx, const QString &theirName) const;
+    void takeGroupChange(const QString &g, const QString &from, const QJsonObject &p);
 
     // ---- groups (chatgroups.cpp)
     struct Group {
@@ -366,7 +415,12 @@ private:
     QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
     QHash<QString, qint64> m_syncAsked;                 // group|key -> when
     bool m_groupsDirty = false;
-    QHash<QString, QList<qint64>> m_recent, m_pieceTimes, m_recentGroup, m_recentCall;
+    QHash<QString, QList<qint64>> m_recent, m_pieceTimes, m_recentGroup, m_recentCall, m_recentM1;
+    QHash<QString, QVariantMap> m_mxOut;                // reactions and edits on their way: envelope id -> {key, time}
+    QHash<QString, qint64> m_typing, m_active, m_typingSent;
+    QHash<QString, QStringList> m_pins;                 // where -> pinned message ids (only on this computer)
+    bool m_front = false;
+    qint64 m_activeSent = 0;
     struct Tries { int count = 0; qint64 next = 0; };
     QHash<QString, Tries> m_tries;
     struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; };

@@ -3,6 +3,7 @@
 #include "system.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -94,6 +95,7 @@ void Updater::fetch(bool installAfter, bool autoMode)
             return;
         }
         QString bestVer, bestTag, bestAsset;
+        QByteArray bestDigest;
         for (const QJsonValue &v : QJsonDocument::fromJson(r->readAll()).array()) {
             const QJsonObject rel = v.toObject();
             if (rel.value(QStringLiteral("draft")).toBool())
@@ -107,17 +109,23 @@ void Updater::fetch(bool installAfter, bool autoMode)
             if (ver.isEmpty())
                 continue;
             QString asset;
+            QByteArray digest;
             for (const QJsonValue &a : rel.value(QStringLiteral("assets")).toArray())
-                if (a.toObject().value(QStringLiteral("name")).toString().endsWith(WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral(".flatpak")))
+                if (a.toObject().value(QStringLiteral("name")).toString().endsWith(WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral(".flatpak"))) {
                     asset = a.toObject().value(QStringLiteral("browser_download_url")).toString();
+                    // GitHub's own SHA-256 of the file ("sha256:..."), when it has one.
+                    digest = WinUpdate::parseDigest(a.toObject().value(QStringLiteral("digest")).toString().toLatin1());
+                }
             if (asset.isEmpty())
                 continue;
             if (bestVer.isEmpty() || newer(ver, bestVer)) {
                 bestVer = ver;
                 bestTag = tag;
                 bestAsset = asset;
+                bestDigest = digest;
             }
         }
+        m_assetDigest = bestDigest;
         chosen(bestVer, bestTag, bestAsset, installAfter, autoMode);
     });
 }
@@ -142,6 +150,7 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
             return;
         }
         // Every release carries Huginn.flatpak (see .github/workflows/build.yml).
+        m_assetDigest.clear();   // the page doesn't say; the .sha256 file beside the zip does
         chosen(ver, tag, QString::fromLatin1(kDownload) + tag + (WinUpdate::supported() ? QStringLiteral("/") + WinUpdate::assetName() : QStringLiteral("/Huginn.flatpak")), installAfter, autoMode);
     });
 }
@@ -206,21 +215,13 @@ void Updater::download(const QString &url, const QString &tag)
         }
         f.write(r->readAll());
         f.close();
-        m_status = QStringLiteral("Installing…");
-        Q_EMIT changed();
         if (WinUpdate::supported()) {
-            // Windows: unpack next to Huginn.exe and start the new copy.
-            WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
-                m_busy = false;
-                if (!ok)
-                    m_auto = false;
-                m_status = msg;
-                Q_EMIT changed();
-                if (ok)
-                    QTimer::singleShot(300, qApp, &QCoreApplication::quit);
-            });
+            // Windows: only a zip whose SHA-256 matches the release's is unpacked next to Huginn.exe.
+            verifyThenInstall(path, tag);
             return;
         }
+        m_status = QStringLiteral("Installing…");
+        Q_EMIT changed();
         auto *p = new QProcess(this);
         QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
                          QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};
@@ -244,5 +245,58 @@ void Updater::download(const QString &url, const QString &tag)
             QTimer::singleShot(300, qApp, &QCoreApplication::quit);
         });
         p->start(program, args);
+    });
+}
+
+void Updater::failed(const QString &status)
+{
+    m_busy = false;
+    m_auto = false;
+    m_status = status;
+    Q_EMIT changed();
+}
+
+void Updater::verifyThenInstall(const QString &path, const QString &tag)
+{
+    m_status = QStringLiteral("Checking the download…");
+    Q_EMIT changed();
+    auto check = [this, path](const QByteArray &expected) {
+        QFile f(path);
+        QCryptographicHash h(QCryptographicHash::Sha256);
+        if (expected.size() != 64 || !f.open(QIODevice::ReadOnly) || !h.addData(&f)) {
+            QFile::remove(path);
+            failed(QStringLiteral("The update couldn't be checked, so it wasn't installed. Try again later."));
+            return;
+        }
+        f.close();
+        if (h.result().toHex() != expected) {
+            qWarning("update: SHA-256 %s, release says %s", h.result().toHex().constData(), expected.constData());
+            QFile::remove(path);
+            failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
+            return;
+        }
+        m_status = QStringLiteral("Installing…");
+        Q_EMIT changed();
+        WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
+            m_busy = false;
+            if (!ok)
+                m_auto = false;
+            m_status = msg;
+            Q_EMIT changed();
+            if (ok)
+                QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+        });
+    };
+    if (!m_assetDigest.isEmpty()) {
+        check(m_assetDigest);
+        return;
+    }
+    // Huginn-Windows.zip.sha256, published by the release job beside the zip.
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + WinUpdate::digestName()));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply *r = m_net.get(req);
+    connect(r, &QNetworkReply::finished, this, [r, check] {
+        r->deleteLater();
+        check(r->error() == QNetworkReply::NoError ? WinUpdate::parseDigest(r->read(4096)) : QByteArray());
     });
 }

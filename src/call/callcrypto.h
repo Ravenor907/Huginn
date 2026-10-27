@@ -24,7 +24,9 @@ const int kEpochBits = 14;              // a new epoch every 16384 packets
 const int kMaxAhead = 2;                // epochs a packet may be ahead of the receiver
 const unsigned char kVersion = 0x81;
 
-enum Type { Audio = 0, Ping = 1, Pong = 2 };
+// 3 to 6 only between two c2 apps (docs/protocol-0.6.md 5.8): video fragments, receiver reports,
+// keyframe requests and resend requests (NACK). A 0.7 app refuses them as "type"; nobody sends them to one.
+enum Type { Audio = 0, Ping = 1, Pong = 2, Video = 3, Report = 4, KeyRequest = 5, Nack = 6 };
 enum Direction { O2A = 0, A2O = 1 };    // offerer to answerer, and back
 
 struct Ephemeral {

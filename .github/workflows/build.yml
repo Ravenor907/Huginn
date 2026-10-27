@@ -13,8 +13,6 @@ permissions:
 jobs:
   flatpak:
     name: Flatpak
-    # Paused by the owner: Muninn and the Windows zip come first. Set back to true to build it again.
-    if: false
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
@@ -82,12 +80,17 @@ jobs:
             s=0; "$@" > t.log 2>&1 || s=$?
             cat t.log
             if [ $s -ne 0 ]; then
-              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-              echo "::error title=Self-test failed: $* (exit $s)::$e"
+              name=$(echo "$*" | grep -oE -- '--[a-z]+-selftest' || echo "$*")
+              echo "::error title=Self-test failed::$name (exit $s)"
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | tr -cd '[:print:]\n' | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=$name output::$e"
               bad=1
             fi
           }
           bad=0
+          # The runtime's Qt (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          q=$(flatpak run --command=sh io.github.ravenor907.Huginn -c 'ls /usr/lib/*/libQt6Core.so.6.* /usr/lib/libQt6Core.so.6.* 2>/dev/null' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          echo "::notice title=Flatpak runtime::Qt ${q:-unknown}"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
@@ -220,8 +223,10 @@ jobs:
       run:
         shell: bash
     env:
-      VCPKG_PACKAGES: openssl opus sdl2 libqrencode
+      VCPKG_PACKAGES: openssl opus sdl2 libqrencode libvpx
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      # Code signing through SignPath (docs/windows-signing.md): only once its secrets are set, and only on main.
+      SIGNPATH_ON: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
       - name: Fonts
@@ -269,7 +274,7 @@ jobs:
           path: vcpkg-bincache
           key: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-${{ github.sha }}
           restore-keys: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-
-      - name: OpenSSL, Opus, SDL2 and libqrencode (vcpkg)
+      - name: OpenSSL, Opus, SDL2, libqrencode and libvpx (vcpkg)
         run: |
           vcpkg="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/vcpkg.exe"
           "$vcpkg" install $VCPKG_PACKAGES --triplet x64-windows 2>&1 | tee vcpkg.log; status=${PIPESTATUS[0]}
@@ -301,7 +306,9 @@ jobs:
           Copy-Item build/Huginn.exe $out
           windeployqt --release --qmldir qml --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw "$out/Huginn.exe"
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::windeployqt failed"; exit 1 }
-          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), SDL2 (controllers), libqrencode (QR codes)
+          # Qt's offscreen platform too, so Huginn can start with no screen (QT_QPA_PLATFORM=offscreen, CI under Wine).
+          Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$out/platforms/"
+          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), libvpx (video), SDL2 (controllers), libqrencode (QR codes)
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
           # The Visual C++ runtime, so nothing has to be installed first
           $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
@@ -314,21 +321,61 @@ jobs:
           mkdir -p "$d/lib"
           for f in "$d"/* "$d"/.[!.]*; do
             [ -e "$f" ] || continue
-            case "$(basename "$f")" in lib|LICENSE.txt) ;; *) mv "$f" "$d/lib/" ;; esac
+            case "$(basename "$f")" in lib|LICENSE.txt|Huginn.exe) ;; *) mv "$f" "$d/lib/" ;; esac
           done
-          # The launcher (src/platform/launcher_windows.cpp) starts lib/Huginn.exe, whose DLLs sit beside it.
-          cp build/HuginnLauncher.exe "$d/Huginn.exe"
           # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
           find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
             -o -iname '*.prl' -o -iname '*.cmake' -o -iname '*.debug' \) -print -delete
+          # Huginn.exe at the top is the app itself. Its manifest names lib\ as a private assembly, and this
+          # lists the DLLs in it, so Windows (and Wine) load them from lib\ (packaging/windows/huginn.manifest.in).
+          {
+            echo '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            echo '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">'
+            echo '  <assemblyIdentity type="win32" name="lib" version="1.0.0.0" processorArchitecture="amd64"/>'
+            for f in "$d"/lib/*.dll; do echo "  <file name=\"$(basename "$f")\"/>"; done
+            echo '</assembly>'
+          } > "$d/lib/lib.manifest"
+          echo "lib.manifest lists $(grep -c '<file ' "$d/lib/lib.manifest") DLLs"
           top=$(ls -A "$d" | tr '\n' ' ')
           [ "$top" = "Huginn.exe LICENSE.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt and lib/, not: $top"; exit 1; }
-          # Huginn's own QML is compiled into lib/Huginn.exe: no copy of it loose, and no source text inside.
+          # Huginn's own QML is compiled into Huginn.exe: no copy of it loose, and no source text inside.
           loose=$(grep -rl --include='*.qml' -E '^import Huginn|Huginn\.' "$d" || true)
           [ -z "$loose" ] || { echo "::error title=Loose QML::$loose"; exit 1; }
-          n=$(grep -c -a "^import QtQuick" "$d/lib/Huginn.exe" || true)
-          [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in lib/Huginn.exe"; exit 1; }
+          n=$(grep -c -a "^import QtQuick" "$d/Huginn.exe" || true)
+          [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in Huginn.exe"; exit 1; }
           echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
+      - name: Nothing in Huginn.exe that looks like malware (scripts, hidden windows, suspended processes)
+        run: python tools/check-windows-binary.py dist/Huginn
+      # Optional code signing (docs/windows-signing.md). Skipped until the SignPath secrets exist.
+      - name: Hand the folder to SignPath
+        id: unsigned
+        if: env.SIGNPATH_ON == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: huginn-windows-unsigned
+          path: dist/Huginn
+      - name: Sign Huginn.exe (SignPath Foundation)
+        if: env.SIGNPATH_ON == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Huginn-Muninn' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_SLUG || 'huginn-windows' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/Huginn-signed
+      - name: Use the signed files
+        if: env.SIGNPATH_ON == 'true'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Huginn-signed/Huginn.exe)) { Write-Output "::error title=Signing::SignPath gave back no Huginn.exe"; exit 1 }
+          Remove-Item -Recurse -Force dist/Huginn
+          Move-Item dist/Huginn-signed dist/Huginn
+          $sig = Get-AuthenticodeSignature dist/Huginn/Huginn.exe
+          Write-Output "::notice title=Signed::Huginn.exe: $($sig.Status) by $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { exit 1 }
       - name: Zip it, then unpack the zip and test exactly what ships
         shell: pwsh
         run: |
@@ -342,7 +389,30 @@ jobs:
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
           Remove-Item -Recurse -Force dist/Huginn
           Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
-          if (-not (Test-Path dist/Huginn/lib/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/lib/Huginn.exe"; exit 1 }
+          if (-not (Test-Path dist/Huginn/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/Huginn.exe"; exit 1 }
+          if (-not (Test-Path dist/Huginn/lib/lib.manifest)) { Write-Output "::error::The zip doesn't unpack to Huginn/lib/lib.manifest"; exit 1 }
+      - name: Windows Defender scan of the zip and the unpacked folder
+        shell: pwsh
+        run: |
+          $mp = Join-Path $env:ProgramFiles "Windows Defender/MpCmdRun.exe"
+          if (-not (Test-Path $mp)) { Write-Output "::warning title=Defender::MpCmdRun.exe isn't on this runner; no scan"; exit 0 }
+          & $mp -SignatureUpdate 2>&1 | Select-Object -Last 3
+          $bad = 0
+          foreach ($what in @("$PWD\Huginn-Windows.zip", "$PWD\dist\Huginn")) {
+            $out = (& $mp -Scan -ScanType 3 -File $what -DisableRemediation 2>&1) -join "`n"
+            $code = $LASTEXITCODE
+            Write-Output $out
+            if ($code -eq 2 -or $out -match 'found [1-9][0-9]* threat') {
+              $t = ($out -split "`n" | Select-String -Pattern 'Threat|found' | ForEach-Object { $_.Line }) -join '%0A'
+              Write-Output "::error title=Windows Defender flagged $(Split-Path $what -Leaf)::$t"
+              $bad = 1
+            } elseif ($code -ne 0) {
+              Write-Output "::warning title=Defender couldn't scan $(Split-Path $what -Leaf) (exit $code)::$(($out -split "`n" | Select-Object -Last 4) -join '%0A')"
+            } else {
+              Write-Output "Defender: no threats in $what"
+            }
+          }
+          exit $bad
       - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
         run: |
           h=dist/Huginn/Huginn.exe
@@ -364,6 +434,10 @@ jobs:
           run timeout 150 "$h" --wifi-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
+          if [ -f dist/Huginn/Huginn-start.log ] && [ $bad -ne 0 ]; then
+            e=$(tail -n 30 dist/Huginn/Huginn-start.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Huginn-start.log::$e"
+          fi
           exit $bad
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true
@@ -393,6 +467,88 @@ jobs:
           name: Huginn-Windows.zip
           path: Huginn-Windows.zip
 
+  wine:
+    name: Windows zip under Wine (Proton)
+    # The same zip on Linux through Wine, as Steam's Proton runs it: the self-tests, then a start with
+    # no screen (offscreen) and one on a virtual X screen (the real Windows platform and OpenGL).
+    needs: windows
+    runs-on: ubuntu-24.04
+    env:
+      WINEPREFIX: ${{ github.workspace }}/wineprefix
+      WINEDEBUG: -all
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Huginn-Windows.zip
+      - name: Wine
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends wine wine64 xvfb xauth unzip libgl1-mesa-dri > apt.log 2>&1 || { tail -n 30 apt.log; echo "::error title=Wine::apt couldn't install Wine"; exit 1; }
+          unzip -q Huginn-Windows.zip -d dist
+          wine --version
+          timeout 180 wineboot -i > /dev/null 2>&1 || true
+          wineserver -w || true
+      - name: Self-tests under Wine
+        run: |
+          h=dist/Huginn/Huginn.exe
+          run() {
+            s=0; timeout 300 "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; [ -f dist/Huginn/Huginn-start.log ] && tail -n 15 dist/Huginn/Huginn-start.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Wine self-test failed: ${*:2} (exit $s)::$e"
+              bad=1
+            fi
+            wineserver -k 2>/dev/null || true
+          }
+          bad=0
+          run wine "$h" --chat-selftest tests/chat-vectors.json
+          run wine "$h" --ratchet-selftest tests/ratchet-vectors.json
+          run wine "$h" --nostr-selftest tests/nostr-vectors.json
+          run wine "$h" --privacy-selftest
+          run wine "$h" --backup-selftest
+          run wine "$h" --call-selftest tests/proto06-vectors.json
+          exit $bad
+      - name: Start under Wine (offscreen, then a virtual X screen)
+        run: |
+          h=dist/Huginn/Huginn.exe
+          log=dist/Huginn/Huginn-start.log
+          start() {
+            rm -f "$log"
+            s=0; HUGINN_KEEP_START_LOG=1 timeout 60 "$@" > out.log 2>&1 || s=$?
+            wineserver -k 2>/dev/null || true
+            n=$((n+1)); mkdir -p wine-logs; cp out.log "wine-logs/start$n-out.log"; cp "$log" "wine-logs/start$n-Huginn-start.log" 2>/dev/null || true
+            echo "--- $* (exit $s)"; tail -n 30 out.log; echo "--- Huginn-start.log"; cat "$log" 2>/dev/null || echo "(none)"
+            # Still running when the minute was up (124; 0 when xvfb-run's screen is what gets stopped),
+            # and it drew its window and kept going for 5 seconds ("started"): it started.
+            if { [ $s -eq 124 ] || [ $s -eq 0 ]; } && grep -q "started" "$log" 2>/dev/null; then
+              echo "::notice title=Wine start ($1)::$(grep -E 'Wine|graphics' "$log" | cut -c14- | tr '\n' ';')"
+            else
+              e=$( { echo "exit $s"; tail -n 25 "$log" 2>/dev/null; tail -n 10 out.log; } | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Huginn didn't start under Wine ($1)::$e"
+              bad=1
+            fi
+          }
+          bad=0; n=0
+          start env QT_QPA_PLATFORM=offscreen wine "$h" -platform offscreen
+          start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
+          exit $bad
+      - name: Publish the Wine logs to the ci-wine branch
+        # Only a convenience for reading logs: a failed push must not fail the Wine job or block a release.
+        continue-on-error: true
+        if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          [ -d wine-logs ] || exit 0
+          cd wine-logs
+          git init -q -b ci-wine
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Wine logs for ${GITHUB_SHA::7}" || exit 0
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-wine
+
 
 
   site:
@@ -416,8 +572,8 @@ jobs:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
-    # Muninn and the Windows zip must both pass. (The Flatpak is paused; add flatpak back here when it returns.)
-    needs: [muninn, muninn-screens, windows]
+    # The Flatpak, Muninn and the Windows zip must all pass.
+    needs: [flatpak, muninn, muninn-screens, windows, wine]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -437,11 +593,22 @@ jobs:
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
         with:
+          name: Huginn.flatpak
+      - uses: actions/download-artifact@v4
+        if: steps.v.outputs.new == '1'
+        with:
           name: muninn-apk
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
         with:
           name: Huginn-Windows.zip
+      - name: SHA-256 of the Windows zip (Huginn checks it before installing an update)
+        if: steps.v.outputs.new == '1'
+        run: |
+          if [ -f Huginn-Windows.zip ]; then
+            sha256sum Huginn-Windows.zip > Huginn-Windows.zip.sha256
+            cat Huginn-Windows.zip.sha256
+          fi
       - uses: softprops/action-gh-release@v2
         if: steps.v.outputs.new == '1'
         with:
@@ -449,12 +616,15 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
+            Huginn.flatpak
             Huginn-Windows.zip
+            Huginn-Windows.zip.sha256
             Muninn.apk
           fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
           generate_release_notes: true
           body: |
+            **Huginn** (Linux and SteamOS): Huginn.flatpak. Installed copies update themselves at launch.
             **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.

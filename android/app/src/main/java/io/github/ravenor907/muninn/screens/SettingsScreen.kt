@@ -44,6 +44,7 @@ private const val DAY = 86_400_000L
 fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val id = app.identity
     var receipts by remember { mutableStateOf(id.readReceipts) }
+    var activeOn by remember { mutableStateOf(id.activeStatus) }
     var name by remember { mutableStateOf(id.username) }
     var device by remember { mutableStateOf(id.deviceName) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
@@ -86,6 +87,15 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
                 Text("Turn it off on the next screen. Muninn keeps listening and messages still notify you.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             }
+            var saver by remember { mutableStateOf(app.power.saver) }
+            val away by app.power.away.collectAsState()
+            ToggleRow("Battery saver",
+                if (saver) "Saves battery while the screen is off. Messages and calls still arrive, sometimes a few seconds later."
+                else "Maximum speed: always fully connected. Uses more battery.", saver) {
+                saver = it; app.power.saver = it
+            }
+            androidx.compose.runtime.LaunchedEffect(Unit) { app.power.refresh() }
+            Text(away.label, style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
                     ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -107,6 +117,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             Text("Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             ToggleRow("Show message text in notifications", "Off: notifications only say “New message”", preview) { preview = it; id.showPreview = it }
             ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
+            ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
         Section("Lock")

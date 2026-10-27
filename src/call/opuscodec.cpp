@@ -28,6 +28,24 @@ OpusEncoder16::OpusEncoder16()
     m_enc = e;
 }
 
+void OpusEncoder16::setBitrate(int bps)
+{
+    bps = qBound(8000, bps, 64000);
+    if (!m_enc || bps == m_bitrate)
+        return;
+    m_bitrate = bps;
+    opus_encoder_ctl(static_cast<OpusEncoder *>(m_enc), OPUS_SET_BITRATE(bps));
+}
+
+void OpusEncoder16::setLossPercent(int pct)
+{
+    pct = qBound(0, pct, 40);
+    if (!m_enc || pct == m_loss)
+        return;
+    m_loss = pct;
+    opus_encoder_ctl(static_cast<OpusEncoder *>(m_enc), OPUS_SET_PACKET_LOSS_PERC(pct));
+}
+
 OpusEncoder16::~OpusEncoder16()
 {
     if (m_enc)
@@ -92,6 +110,8 @@ bool OpusDecoder16::conceal(qint16 *pcm320) { return run(m_dec, nullptr, false, 
 // Built without libopus (CMake didn't find it): calls say they can't start; nothing else changes.
 OpusEncoder16::OpusEncoder16() {}
 OpusEncoder16::~OpusEncoder16() {}
+void OpusEncoder16::setBitrate(int bps) { m_bitrate = bps; }
+void OpusEncoder16::setLossPercent(int pct) { m_loss = pct; }
 QByteArray OpusEncoder16::encode(const qint16 *) { return QByteArray(); }
 OpusDecoder16::OpusDecoder16() {}
 OpusDecoder16::~OpusDecoder16() {}

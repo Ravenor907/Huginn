@@ -7,6 +7,10 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Video calls use a camera when there is one; phones and TVs without one still install. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -41,6 +45,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Calls: the call keeps running with the screen off (phone-call and microphone foreground service),
          rings full screen over the lock screen, and routes audio (earpiece, speaker, headset). -->
@@ -135,6 +140,14 @@
             android:name=".net.MessageService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging|dataSync" />
+        <!-- Reply straight from a message notification. -->
+        <receiver
+            android:name=".net.ReplyReceiver"
+            android:exported="false" />
+        <!-- The relay keepalive check while saving battery. -->
+        <receiver
+            android:name=".net.RelayAlarm"
+            android:exported="false" />
         <receiver
             android:name=".net.StartAtBoot"
             android:exported="true">

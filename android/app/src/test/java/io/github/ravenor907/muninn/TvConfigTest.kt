@@ -155,4 +155,42 @@ class TvConfigTest {
         // 80 characters counted as code points: 80 runes are fine.
         val ok = JSONObject(good.toString()); ok.getJSONArray("quick").getJSONObject(0).put("text", "ᚺ".repeat(80)); TvRules.check(ok)
     }
+
+    @Test
+    fun k3StatusIsCheckedAndUsageAndClearAreSimple() {
+        val m = JSONObject(TvRules.statusMessage(70, 123_456_789L, 1_761_500_100_000L))
+        assertEquals(TvRules.Status(70, 123_456_789L, 1_761_500_100_000L, own = false), TvRules.status(m))
+        assertFalse(m.has("own"))   // older apps never see a new field unless the level was set on the TV
+        // Out of range levels are held to 0..100 when made; anything else is refused when read.
+        assertEquals(100, TvRules.status(JSONObject(TvRules.statusMessage(250, 1, 1)))!!.mic)
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("mic", 101)))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("used", -1)))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("ts", "soon")))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("t", "applied")))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).apply { remove("used") }))
+        // "own": the level was set on the TV. Must be a boolean when present.
+        val own = JSONObject(TvRules.statusMessage(70, 1, 5, own = true))
+        assertEquals(true, own.get("own"))
+        assertEquals(TvRules.Status(70, 1, 5, own = true), TvRules.status(own))
+        assertEquals(null, TvRules.status(JSONObject(own.toString()).put("own", 1)))
+        assertEquals(false, TvRules.status(JSONObject(own.toString()).put("own", false))!!.own)
+        assertEquals("usage", JSONObject(TvRules.usageMessage()).getString("t"))
+        assertEquals("clear", JSONObject(TvRules.clearMessage()).getString("t"))
+    }
+
+    @Test
+    fun k3MicAdoptionNeverComparesTheTvClockWithThePhones() {
+        // Set on the TV: taken whatever the TV's clock says (here far behind the phone's), once the TV has
+        // this phone's latest config.
+        val own = TvRules.Status(mic = 70, used = 1, ts = 1_000, own = true)
+        assertTrue(TvRules.adoptMic(own, myMic = 50, myMicAt = 9_999_999_999L, synced = true))
+        // A change made here still on its way to the TV wins over the TV's older level.
+        assertFalse(TvRules.adoptMic(own, myMic = 50, myMicAt = 0, synced = false))
+        // Same level: nothing to do.
+        assertFalse(TvRules.adoptMic(own.copy(mic = 50), myMic = 50, myMicAt = 0, synced = true))
+        // An older TV (no "own"): the ts rule as before.
+        val old = TvRules.Status(mic = 70, used = 1, ts = 2_000)
+        assertTrue(TvRules.adoptMic(old, myMic = 50, myMicAt = 1_000, synced = true))
+        assertFalse(TvRules.adoptMic(old, myMic = 50, myMicAt = 3_000, synced = true))
+    }
 }

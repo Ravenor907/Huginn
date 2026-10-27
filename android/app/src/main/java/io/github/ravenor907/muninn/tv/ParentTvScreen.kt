@@ -89,6 +89,10 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     var grouping by remember { mutableStateOf<List<String>?>(null) }
     var micLevel by remember(t.mic) { mutableFloatStateOf(t.mic.toFloat()) }
     val k2 = TvParent.k2(app, tvKey)
+    val k3 = TvParent.k3(app, tvKey)
+    val met by app.chat.met.collectAsState()
+    // The TV's storage and microphone level (k3): asked each time this screen opens.
+    LaunchedEffect(tvKey, k3) { TvParent.askUsage(app, tvKey) }
     var order by remember(t.quick) { mutableStateOf(t.quick) }
     var dragId by remember { mutableStateOf("") }
     var dragY by remember { mutableFloatStateOf(0f) }
@@ -190,11 +194,12 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                 }
                 Text("Microphone level", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 10.dp))
                 Text(when {
-                    micLevel < 1f -> "As the TV hears it, no boost"
-                    else -> "Louder by about ${(TvMic.gainDb(micLevel.toInt()) + 0.5f).toInt()} dB. Turn it up if the TV barely hears the kids."
+                    t.micOnTv && micLevel.toInt() == t.mic -> "${t.mic} of 100, set on the TV. Anyone at the TV can change it too; the last change counts."
+                    micLevel.toInt() == TvRules.DEFAULT_MIC -> "50 is the usual level. Turn it up if the kids sound quiet on calls, down if they sound loud."
+                    else -> "${micLevel.toInt()} of 100. Turn it up if the kids sound quiet on calls, down if they sound loud."
                 }, style = Type.small.copy(fontSize = 13.sp))
                 Slider(micLevel, { micLevel = it }, valueRange = 0f..TvRules.MAX_MIC.toFloat(), steps = 9,
-                    onValueChangeFinished = { val v = micLevel.toInt(); TvParent.change(tvKey) { it.copy(mic = v) } },
+                    onValueChangeFinished = { TvParent.setMic(tvKey, micLevel.toInt()) },
                     colors = SliderDefaults.colors(thumbColor = Palette.gold, activeTrackColor = Palette.gold, inactiveTrackColor = Palette.lineMuted),
                     modifier = Modifier.semantics { contentDescription = "Microphone level ${micLevel.toInt()} of 100" })
                 if (!k2) Text("Calls and the microphone level reach the TV once it runs the newest Muninn.", style = Type.small.copy(fontSize = 13.sp))
@@ -212,6 +217,24 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                 Setting("Invite someone", "Talk with the kids on the TV") { inviting = true }
                 Setting("Family groups", "Add people to a group") { grouping = emptyList() }
                 Text("Invite someone you have as a contact: the TV adds them and their Muninn or Huginn adds the TV. Nothing to do on the TV.",
+                    style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+            }
+
+            Label("Storage on the TV")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Text(when {
+                    !k3 -> "Shows once the TV runs the newest Muninn."
+                    t.used < 0 -> "Asking the TV…"
+                    else -> "Muninn uses ${sizeText(t.used)} on the TV."
+                }, style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(vertical = 8.dp))
+                Setting("Clear history", "Messages, photos and voice messages") {
+                    Ui.sure(Ask("Clear the TV's history?", "Every message, photo and voice message on the TV is erased, and its caches. " +
+                        "The TV stays paired and keeps the people it can reach.", "Clear history", danger = true) {
+                        if (TvParent.clearTv(app, tvKey)) Ui.say("The TV is clearing its history.")
+                        else Ui.say("This TV's Muninn is too old for that. Update it first.", true)
+                    })
+                }
+                Text("The TV also keeps itself small: recent messages only, smaller photos, and voice messages for two weeks.",
                     style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
             }
 
@@ -241,12 +264,18 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     if (naming) TextDialog("Your name on the TV", t.myName, TvRules.MAX_NAME, onCancel = { naming = false }) { name ->
         TvParent.change(tvKey) { it.copy(myName = name) }; naming = false
     }
+    // People this phone asked who haven't accepted yet: shown too, invited by themselves once they accept.
+    val pending = remember(met, contacts) { TvParent.notYetConnected(app).filter { it.first != tvKey }.sortedBy { it.second.lowercase() } }
     if (choosing) {
         val choices = contacts.filter { it.chatKey != tvKey && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) }
             .sortedBy { it.shown.lowercase() }
-        PeopleDialog(choices.map { it.chatKey to it.shown }, t.reach.toSet(), onCancel = { choosing = false }) { picked ->
-            val added = picked - t.reach.toSet()
+        PeopleDialog(choices.map { it.chatKey to it.shown } + pending, t.reach.toSet() + t.waiting.keys, pending.map { it.first }.toSet(),
+            onCancel = { choosing = false }) { picked ->
+            val waitingNow = pending.map { it.first }.filter { it in picked }
+            val added = picked - t.reach.toSet() - waitingNow.toSet()
             TvParent.change(tvKey) { it.copy(reach = choices.map { c -> c.chatKey }.filter { k -> k in picked }) }; choosing = false
+            TvParent.dropWaiting(tvKey, t.waiting.keys - picked)
+            TvParent.inviteLater(tvKey, waitingNow)
             // Newly on the list: their app gets the TV's code too.
             if (added.isNotEmpty()) TvParent.invite(app, tvKey, added)
         }
@@ -254,11 +283,16 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     if (inviting) {
         val choices = contacts.filter { it.chatKey != tvKey && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) && it.chatKey !in t.reach }
             .sortedBy { it.shown.lowercase() }
-        InviteDialog(choices.map { it.chatKey to it.shown }, onCancel = { inviting = false }) { k ->
+        InviteDialog(choices.map { it.chatKey to it.shown }, pending.filter { it.first !in t.waiting }, onCancel = { inviting = false }) { k ->
             inviting = false
-            TvParent.invite(app, tvKey, listOf(k))
-            Ui.say("${app.chat.nameOf(k)} can talk with the kids now. Their app adds the TV by itself.")
-            grouping = listOf(k)
+            if (pending.any { it.first == k }) {
+                TvParent.inviteLater(tvKey, listOf(k))
+                Ui.say("${app.chat.nameOf(k)} hasn't accepted you yet. They're invited to the TV the moment they do.")
+            } else {
+                TvParent.invite(app, tvKey, listOf(k))
+                Ui.say("${app.chat.nameOf(k)} can talk with the kids now. Their app adds the TV by itself.")
+                grouping = listOf(k)
+            }
         }
     }
     grouping?.let { start ->
@@ -267,28 +301,44 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     }
 }
 
-/** Pick one contact to invite. */
+/** Pick one contact to invite; [waiting]: people who haven't accepted this phone yet. */
 @Composable
-private fun InviteDialog(choices: List<Pair<String, String>>, onCancel: () -> Unit, onPick: (String) -> Unit) {
+private fun InviteDialog(choices: List<Pair<String, String>>, waiting: List<Pair<String, String>>, onCancel: () -> Unit, onPick: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Palette.panel,
         title = { Text("Invite someone", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (choices.isEmpty()) Text("Everyone in your contacts can already reach the TV. Add the person as a contact first.", style = Type.small)
-                choices.forEach { (k, name) ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { onPick(k) }, verticalAlignment = Alignment.CenterVertically) {
-                        MIcon("user", Palette.accent, 20.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+                if (choices.isEmpty() && waiting.isEmpty()) Text("Everyone in your contacts can already reach the TV. Add the person as a contact first.", style = Type.small)
+                choices.forEach { (k, name) -> PersonRow(name, null) { onPick(k) } }
+                waiting.forEach { (k, name) -> PersonRow(name, WAITING) { onPick(k) } }
             }
         },
         confirmButton = {},
         dismissButton = { MButton("Cancel", onClick = onCancel) },
     )
+}
+
+private const val WAITING = "Waiting for them to accept"
+
+@Composable
+private fun PersonRow(name: String, note: String?, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        MIcon("user", if (note == null) Palette.accent else Palette.textFaint, 20.dp)
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (note != null) Text(note, style = Type.small.copy(fontSize = 13.sp))
+        }
+    }
+}
+
+/** "12 MB", "1.3 GB". */
+private fun sizeText(b: Long): String = when {
+    b >= 1L shl 30 -> "%.1f GB".format(b / (1L shl 30).toDouble())
+    b >= 1L shl 20 -> "${(b + (1L shl 19)) shr 20} MB"
+    else -> "${maxOf(1L, (b + 512) shr 10)} KB"
 }
 
 /**
@@ -399,7 +449,7 @@ private fun TextDialog(title: String, start: String, max: Int, onCancel: () -> U
 }
 
 @Composable
-private fun PeopleDialog(choices: List<Pair<String, String>>, chosen: Set<String>, onCancel: () -> Unit, onDone: (Set<String>) -> Unit) {
+private fun PeopleDialog(choices: List<Pair<String, String>>, chosen: Set<String>, waiting: Set<String>, onCancel: () -> Unit, onDone: (Set<String>) -> Unit) {
     var picked by remember { mutableStateOf(chosen.filter { k -> choices.any { it.first == k } }.toSet()) }
     val room = TvRules.MAX_CONTACTS - 1   // this phone is always on the list
     AlertDialog(
@@ -419,7 +469,10 @@ private fun PeopleDialog(choices: List<Pair<String, String>>, chosen: Set<String
                         picked = if (on) picked - k else if (picked.size < room) picked + k else picked
                     }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(on, null, colors = CheckboxDefaults.colors(checkedColor = Palette.gold, checkmarkColor = Palette.onGold, uncheckedColor = Palette.lineMuted))
-                        Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Column {
+                            Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (k in waiting) Text(WAITING, style = Type.small.copy(fontSize = 13.sp))
+                        }
                     }
                 }
                 Text("They need the TV as a contact too: use Share the TV's code.", style = Type.small, modifier = Modifier.padding(top = 8.dp))

@@ -1,9 +1,26 @@
 # Relay credentials (app side)
 
-Over the internet, call audio goes only through Cloudflare TURN relays (docs/protocol-0.6.md 5.1 and 5.6):
-there is no STUN and no direct internet path. The apps never hold the Cloudflare TURN token. They ask the
-relay Worker (`relay-worker/worker.js`) for a short-lived TURN login instead, and get TURN URLs from it,
-never STUN URLs.
+Over the internet, calls go through Cloudflare TURN relays (docs/protocol-0.6.md 5.1 and 5.6). The one
+exception is two people who trust each other (5.8.1, the Family folder or the "Direct calls" switch): their
+apps also try a direct path, which costs the relay nothing (5.8.2). The apps never hold the Cloudflare TURN
+token. They ask the relay Worker (`relay-worker/worker.js`) for a short-lived TURN login instead, and get
+TURN URLs from it, never STUN URLs.
+
+## STUN (trusted contacts only)
+
+For the direct path each app asks `stun.cloudflare.com:3478` (Cloudflare's free STUN service, no login,
+nothing to do with the Worker) what its call socket's public address is: one Binding request from the call
+socket, only in a call with someone it trusts, never otherwise. The answer goes only to that person, in the
+offer or answer (`srflx`). The STUN server sees your public address, as the TURN server does. Nothing here
+changes the Worker or its daily caps.
+
+## Data the relay carries
+
+- Sound: about 30 to 40 kbps each way (24 kbps Opus plus headers between two current apps, 16 kbps with
+  older ones). Nothing while a free path (Wi-Fi or direct) carries the call: the relay only gets a ping a
+  second then (5.8.3).
+- Video: 480p, at most 700 kbps, about 0.4 GB an hour with the sound (5.8.6). On Wi-Fi or a direct path it
+  may go up to 720p, without the relay.
 
 ## Constants
 

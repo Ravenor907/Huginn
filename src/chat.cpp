@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "richwire.h"
 #include "ble.h"
 #include "chatcrypto.h"
 #include "call/callcrypto.h"
@@ -93,6 +94,8 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
             m_gtokens.clear();
             m_gout.clear();
             m_folders.clear();
+            m_mxOut.clear();
+            m_pins.clear();
         }
     });
     if (!m_vault->locked())
@@ -150,6 +153,22 @@ void Chat::start()
             receive(body, QStringLiteral("internet"));
         return true;
     };
+    // Cap m1: what's on the way, pins, and saying "active" while Huginn is in front.
+    const QJsonObject mx = QJsonDocument::fromJson(m_vault->read(QStringLiteral("mxout.json"))).object();
+    for (auto it = mx.begin(); it != mx.end(); ++it)
+        m_mxOut.insert(it.key(), it.value().toObject().toVariantMap());
+    const QJsonObject pins = QJsonDocument::fromJson(m_vault->read(QStringLiteral("pins.json"))).object();
+    for (auto it = pins.begin(); it != pins.end(); ++it)
+        m_pins.insert(it.key(), it.value().toVariant().toStringList());
+    m_front = QGuiApplication::applicationState() == Qt::ApplicationActive;
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState st) {
+        const bool front = st == Qt::ApplicationActive;
+        if (front == m_front)
+            return;
+        m_front = front;
+        if (activeStatus())
+            sendActive(front);
+    });
     m_retry.setInterval(1000);
     connect(&m_retry, &QTimer::timeout, this, &Chat::retryLoop);
     m_retry.start();
@@ -939,7 +958,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     const QString sentId = o.value(QStringLiteral("id")).toString();
     // A copy that's already here (another route, or a resend): confirm again, don't count it.
     // Always before opening: a ratchet message only opens once.
-    if (room == QLatin1String("private") && !sentId.isEmpty() && known(fromKey, sentId)) {
+    if ((room == QLatin1String("private") || room == QLatin1String("rich")) && !sentId.isEmpty() && known(fromKey, sentId)) {
         if (!m_held.value(fromKey).contains(sentId))
             receipt(fromKey, {sentId}, QStringLiteral("delivered"), mailbox);
         return 200;
@@ -951,12 +970,16 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             if (str(v.toMap(), "id") == sentId)
                 return 200;
     }
-    const bool once = room == QLatin1String("receipt") || room == QLatin1String("unsend") || room == QLatin1String("keep") || room == QLatin1String("call");
+    const bool once = room == QLatin1String("receipt") || room == QLatin1String("unsend") || room == QLatin1String("keep") || room == QLatin1String("call")
+        || room == QLatin1String("mx") || room == QLatin1String("live");
     if (once && m_seen.has(fromKey, sentId)) {
         // An unsend's resend: say "unsent" again in case the first answer was lost.
         const QString gone = m_seen.note(fromKey, sentId);
         if (room == QLatin1String("unsend") && !gone.isEmpty())
             receipt(fromKey, {gone}, QStringLiteral("unsent"), mailbox);
+        // A reaction or edit sent again: my receipt didn't get there.
+        if (room == QLatin1String("mx"))
+            receipt(fromKey, {sentId}, QStringLiteral("delivered"), mailbox);
         return 200;
     }
     bool ok = false;
@@ -1013,6 +1036,25 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         }
         return 200;
     }
+    // Cap m1: reactions and edits ("mx"), typing and active status ("live"), with their own limits.
+    if (room == QLatin1String("mx") || room == QLatin1String("live")) {
+        const int code = receiveM1(room, fromKey, name, mailbox, sentId, QJsonDocument::fromJson(plain).object());
+        if (code != 200)
+            m_pendingPeer.reset();
+        return code;
+    }
+    // A reply ("rich", cap m1) is a private message with the id it quotes; everything else is the same.
+    QByteArray body = plain;
+    QString re;
+    if (room == QLatin1String("rich")) {
+        const QJsonObject p = QJsonDocument::fromJson(plain).object();
+        if (!RichWire::ok(QStringLiteral("rich"), p)) {
+            m_pendingPeer.reset();
+            return 400;
+        }
+        body = p.value(QStringLiteral("text")).toString().toUtf8();
+        re = p.value(QStringLiteral("re")).toString();
+    }
     // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room. Counted only
     // once a message proved it's really from them, so nobody can use it to block a real contact.
     if (room != QLatin1String("receipt")) {
@@ -1025,8 +1067,11 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             return 429;
         q << now();
     }
-    const QString text = room == QLatin1String("receipt") ? QString::fromUtf8(plain) : QString::fromUtf8(plain).left(kMax);
+    const QString text = room == QLatin1String("receipt") ? QString::fromUtf8(body) : QString::fromUtf8(body).left(kMax);
     const QString msgId = sentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : sentId;
+    QVariantMap incoming = message(msgId, fromKey, name, text, false, via);
+    if (!re.isEmpty())
+        incoming.insert(QStringLiteral("re"), re);
 
     if (room == QLatin1String("nearby")) {
         if (!nearbyOn() || via == QLatin1String("internet"))
@@ -1035,7 +1080,10 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         addNearby(message(msgId, fromKey, name, text, false, via));
         return 200;
     }
-    if (room == QLatin1String("private")) {
+    if (room == QLatin1String("private") || room == QLatin1String("rich")) {
+        // A message from them ends their "typing".
+        if (m_typing.remove(fromKey))
+            Q_EMIT liveChanged();
         const QString claims = isContact(fromKey) || m_met.contains(fromKey) ? QString() : contactWithMailbox(mailbox, fromKey);
         if (isContact(fromKey)) {
             commitPeer();
@@ -1043,7 +1091,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 m_contacts[fromKey].insert(QStringLiteral("mailbox"), mailbox);
                 saveContacts();
             }
-            if (addPrivate(fromKey, message(msgId, fromKey, name, text, false, via))) {
+            if (addPrivate(fromKey, incoming)) {
                 m_unread.insert(fromKey);
                 Q_EMIT arrived(nameOf(fromKey), text, fromKey);
             }
@@ -1052,7 +1100,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             // A new key with a contact's inbox: maybe that contact with a new security key, maybe
             // not. Never taken on quietly: held until the person accepts (and is warned).
             commitPeer();
-            m_held[fromKey].insert(msgId, message(msgId, fromKey, name, text, false, via));
+            m_held[fromKey].insert(msgId, incoming);
             if (!m_requests.contains(fromKey)) {
                 m_requests.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), name},
                                             {QStringLiteral("code"), codeWith(fromKey)}, {QStringLiteral("mailbox"), mailbox},
@@ -1068,7 +1116,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             if (!mailbox.isEmpty())
                 m.insert(QStringLiteral("mailbox"), mailbox);
             putMet(fromKey, m);
-            if (addPrivate(fromKey, message(msgId, fromKey, name, text, false, via))) {
+            if (addPrivate(fromKey, incoming)) {
                 m_unread.insert(fromKey);
                 Q_EMIT arrived(nameOf(fromKey), text, fromKey);
             }
@@ -1078,7 +1126,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         } else {
             // Someone with this computer's code, from far away: ask first.
             commitPeer();
-            m_held[fromKey].insert(msgId, message(msgId, fromKey, name, text, false, via));
+            m_held[fromKey].insert(msgId, incoming);
             if (!m_requests.contains(fromKey)) {
                 m_requests.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), name},
                                             {QStringLiteral("code"), codeWith(fromKey)}, {QStringLiteral("mailbox"), mailbox}});
@@ -1108,6 +1156,17 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         const QJsonArray a = r.value(QStringLiteral("ids")).toArray();
         for (int i = 0; i < qMin(int(a.size()), 200); ++i)
             ids.insert(a.at(i).toString());
+        // A reaction or edit (cap m1) got there: stop resending it.
+        bool mxDone = false;
+        for (const QString &id : std::as_const(ids))
+            if (st == QLatin1String("delivered") && str(m_mxOut.value(id), "key") == fromKey) {
+                m_mxOut.remove(id);
+                m_tries.remove(id);
+                dropSealed(id);
+                mxDone = true;
+            }
+        if (mxDone)
+            saveMx();
         QVariantList &l = m_private[fromKey];
         bool any = false;
         QStringList done;
@@ -1526,7 +1585,7 @@ void Chat::sendNearby(const QString &text)
         Q_EMIT notice(QStringLiteral("Nobody nearby got that yet. They need Muninn or Huginn open close by or on the same Wi-Fi."));
 }
 
-void Chat::sendPrivate(const QString &key, const QString &text)
+void Chat::sendPrivate(const QString &key, const QString &text, const QString &re)
 {
     const QString t = text.trimmed().left(kMax);
     if (t.isEmpty() || !m_ready)
@@ -1538,6 +1597,9 @@ void Chat::sendPrivate(const QString &key, const QString &text)
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     QVariantMap mine = message(id, key, username(), t, true, r);
     mine.insert(QStringLiteral("state"), QStringLiteral("sending"));
+    if (RichWire::isMsgId(re))
+        mine.insert(QStringLiteral("re"), re);
+    m_typingSent.remove(key);
     m_tries.insert(id, Tries{0, now() + kRetry[0]});
     addPrivate(key, mine);
     if (r.isEmpty() && backupMailbox(mine).isEmpty()) {
@@ -1664,6 +1726,26 @@ void Chat::retryLoop()
     for (const auto &d : due)
         attempt(d.first, d.second);
     groupRetry();
+    // Cap m1: reactions and edits still on their way; typing and active status that ran out.
+    QStringList mxDue, mxGone;
+    for (auto it = m_mxOut.cbegin(); it != m_mxOut.cend(); ++it) {
+        if (t0 - it.value().value(QStringLiteral("time")).toLongLong() > kDay)
+            mxGone << it.key();
+        else if (!m_tries.contains(it.key()))
+            m_tries.insert(it.key(), Tries{1, t0 + kRetry[0]});
+        else if (t0 >= m_tries.value(it.key()).next)
+            mxDue << it.key();
+    }
+    for (const QString &e : std::as_const(mxGone)) {
+        m_mxOut.remove(e);
+        m_tries.remove(e);
+        dropSealed(e);
+    }
+    if (!mxGone.isEmpty())
+        saveMx();
+    for (const QString &e : std::as_const(mxDue))
+        attemptMx(e);
+    liveTick();
     for (const auto &u : unsends) {
         if (u.second.startsWith(QLatin1Char('!'))) {
             const QString id = u.second.mid(1);
@@ -1779,7 +1861,10 @@ QList<QByteArray> Chat::sealedFor(const QString &key, const QString &id, const Q
         for (const QJsonObject &o : pieces(m))
             bodies << compact(o);
     } else {
-        bodies << compact(envelope(QStringLiteral("private"), key, str(m, "text").toUtf8(), id));
+        // A reply goes as "rich" to an app with m1; the same text without the quote to any other.
+        const bool rich = !str(m, "re").isEmpty() && hasM1(key);
+        bodies << compact(rich ? envelope(QStringLiteral("rich"), key, RichWire::richText(str(m, "text"), str(m, "re")), id)
+                               : envelope(QStringLiteral("private"), key, str(m, "text").toUtf8(), id));
     }
     if (!bodies.isEmpty())
         keepSealed(id, key, bodies);
@@ -1810,7 +1895,7 @@ void Chat::sweepSealed()
     const qint64 t = now();
     for (const QString &id : m_outbox.ids()) {
         const ChatWire::Outbox::Entry *e = m_outbox.find(id);
-        bool keep = m_gout.contains(id);   // a group message waiting for that member (groupRetry ends it)
+        bool keep = m_gout.contains(id) || m_mxOut.contains(id);   // a group message waiting for that member, or a reaction or edit
         if (!keep && e && t - e->time <= kDay) {
             const bool unsend = id.startsWith(QLatin1String("u-"));
             const QString msgId = unsend ? id.mid(2) : id;
@@ -2177,10 +2262,14 @@ QVariantList Chat::messagesWith(const QString &key) const
     // Their messages show the name they have here now (the nickname when there is one).
     QVariantList out = m_private.value(key);
     const QString shown = nameOf(key);
+    const QVariantList all = out;
+    const M1Index idx = m1Index(all);
     for (QVariant &v : out) {
-        QVariantMap m = v.toMap();
-        if (m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool())
+        QVariantMap m = withM1(v.toMap(), all, idx, shown);
+        if (m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool()) {
+            v = m;
             continue;
+        }
         m.insert(QStringLiteral("name"), shown);
         if (!str(m, "unsent").isEmpty())
             m.insert(QStringLiteral("unsent"), shown);
@@ -2251,4 +2340,366 @@ int Chat::nearbyCount() const
             keys.insert(p.chatKey);
     keys.remove(QString());
     return int(keys.size());
+}
+
+// ------------------------------------------------------------------ cap m1: reactions, edits, typing, active status
+// docs/protocol-0.6.md section 11, the same as Muninn's net/Chat.kt and Rich.kt. Only ever sent to someone
+// whose app said "m1".
+
+QStringList Chat::quickReactions() const
+{
+    return QString::fromUtf8("❤️ 😂 👍 😮 😢").split(QLatin1Char(' '), Qt::SkipEmptyParts);
+}
+
+QStringList Chat::emojiList() const
+{
+    return QString::fromUtf8(
+               "❤️ 😂 👍 😮 😢 🙏 😀 😃 😄 😁 😆 😅 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😋 😛 😜 🤪 🤨 🧐 🤓 😎 🥳 😏 😒 😞 😔 😟 😕 🙁 "
+               "😣 😖 😫 😩 🥺 😭 😤 😠 😡 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 😶 😐 😑 😬 🙄 😯 😦 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 "
+               "🤒 🤕 🤑 🤠 😈 👻 💀 🤖 🎃 😺 😸 😹 😻 😼 🙀 😿 😾 👋 🤚 ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ 👎 ✊ 👊 🤛 🤜 👏 🙌 "
+               "🤲 🤝 💪 🧠 👀 💋 💘 💖 💗 💓 💞 💕 💔 🧡 💛 💚 💙 💜 🤎 🖤 🤍 💯 💢 💥 💫 💦 💨 🔥 ✨ ⭐ 🌟 ⚡ ☀️ 🌙 🌈 ☁️ ❄️ "
+               "🌊 🌲 🌳 🌿 🍀 🍁 🍂 🌸 🌹 🌻 🐺 🦅 🐦 🐻 🐗 🐴 🐍 🐉 🐟 🐈 🐕 🍎 🍕 🍔 🌮 🍗 🍖 🧀 🍞 🍺 🍻 🍷 ☕ 🍵 🎂 🍰 🍪 🎉 🎊 🎁 🎈 🏆 🥇 "
+               "⚔️ 🛡️ 🏹 🪓 🔨 ⚒️ 🔮 🕯️ 🎮 🕹️ 🎲 🎧 🎵 🎶 🎸 🥁 📷 📞 💻 📱 🔋 💡 📌 📎 ✏️ 📝 📚 🗺️ 🚗 🚀 ✈️ 🏠 ⛺ 🏔️ ⛰️ 🌋 🏕️ ✅ ❌ ❓ ❗ "
+               "⚠️ 🚫 💤 🆗 🆒 🆕 ➕ ➖")
+        .split(QLatin1Char(' '), Qt::SkipEmptyParts);
+}
+
+int Chat::receiveM1(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QString &sentId, const QJsonObject &p)
+{
+    Q_UNUSED(name)
+    if (!isContact(fromKey) && !m_met.contains(fromKey))
+        return 403;
+    if (m_recentM1.size() > 500)
+        m_recentM1.clear();
+    QList<qint64> &q = m_recentM1[room + QLatin1Char('|') + fromKey];
+    while (!q.isEmpty() && now() - q.first() > 10000)
+        q.removeFirst();
+    if (q.size() >= (room == QLatin1String("mx") ? 20 : 30))
+        return 429;
+    q << now();
+    if (!RichWire::ok(room, p))
+        return 400;
+    commitPeer();
+    if (!sentId.isEmpty())
+        m_seen.add(fromKey, sentId, now());
+    const qint64 ts = RichWire::ts(p);
+    const QString t = p.value(QStringLiteral("t")).toString();
+    if (room == QLatin1String("live")) {
+        if (!RichWire::fresh(ts, now()))
+            return 200;
+        const bool on = p.value(QStringLiteral("on")).toBool();
+        QHash<QString, qint64> &map = t == QLatin1String("typing") ? m_typing : m_active;
+        if (t == QLatin1String("active") && !activeStatus())
+            return 200;   // with mine off, nobody's shows
+        if (on)
+            map.insert(fromKey, now() + (t == QLatin1String("typing") ? RichWire::kTypingMs : RichWire::kActiveMs));
+        else
+            map.remove(fromKey);
+        Q_EMIT liveChanged();
+        return 200;
+    }
+    // "mx": a reaction or an edit of a message in our chat.
+    const QString msgId = p.value(QStringLiteral("msg")).toString();
+    QString reactedTo;
+    update(fromKey, msgId, [&](QVariantMap &m) {
+        if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
+            return;
+        if (t == QLatin1String("react")) {
+            QVariantMap rx = m.value(QStringLiteral("rx")).toMap();
+            const QString e = p.value(QStringLiteral("e")).toString();
+            if (RichWire::react(rx, fromKey, e, ts)) {
+                m.insert(QStringLiteral("rx"), rx);
+                if (m.value(QStringLiteral("mine")).toBool() && !e.isEmpty())
+                    reactedTo = e + QStringLiteral(" to “") + (str(m, "photo").isEmpty() ? str(m, "text").left(60) : QStringLiteral("your photo")) + QStringLiteral("”");
+            }
+        } else if (!m.value(QStringLiteral("mine")).toBool() && str(m, "photo").isEmpty()
+                   && RichWire::editWins(fromKey, fromKey, ts, m.value(QStringLiteral("edited")).toLongLong())) {
+            m.insert(QStringLiteral("text"), p.value(QStringLiteral("text")).toString().left(kMax));
+            m.insert(QStringLiteral("edited"), ts);
+        }
+    });
+    if (!reactedTo.isEmpty())
+        Q_EMIT arrived(nameOf(fromKey), QStringLiteral("Reacted ") + reactedTo, fromKey);
+    // Confirmed by its envelope id, so the sender stops resending it.
+    receipt(fromKey, {sentId}, QStringLiteral("delivered"), mailbox);
+    return 200;
+}
+
+QString Chat::react(const QString &key, const QString &id, const QString &emoji)
+{
+    if (!RichWire::emojiOk(emoji))
+        return QStringLiteral("That reaction can't be sent.");
+    const qint64 ts = now();
+    bool done = false;
+    update(key, id, [&](QVariantMap &m) {
+        if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
+            return;
+        QVariantMap rx = m.value(QStringLiteral("rx")).toMap();
+        if (RichWire::react(rx, myKey(), emoji, ts)) {
+            m.insert(QStringLiteral("rx"), rx);
+            done = true;
+        }
+    });
+    if (!done)
+        return QString();
+    if (!hasM1(key)) {
+        probeCaps(key);
+        return nameOf(key) + QStringLiteral(" needs a newer Huginn or Muninn to see reactions.");
+    }
+    queueMx(key, RichWire::reactMsg(id, emoji, ts));
+    return QString();
+}
+
+QString Chat::editMessage(const QString &key, const QString &id, const QString &text)
+{
+    const QString t = text.trimmed().left(kMax);
+    if (t.isEmpty())
+        return QStringLiteral("A message can't be empty. Unsend it instead.");
+    if (!hasM1(key)) {
+        probeCaps(key);
+        return nameOf(key) + QStringLiteral(" needs a newer Huginn or Muninn to see edits.");
+    }
+    qint64 at = 0;
+    update(key, id, [&](QVariantMap &m) {
+        if (!m.value(QStringLiteral("mine")).toBool() || !str(m, "unsent").isEmpty() || !str(m, "photo").isEmpty() || str(m, "text") == t)
+            return;
+        at = qMax(now(), m.value(QStringLiteral("edited")).toLongLong() + 1);
+        m.insert(QStringLiteral("text"), t);
+        m.insert(QStringLiteral("edited"), at);
+    });
+    if (at == 0)
+        return QString();
+    queueMx(key, RichWire::editMsg(id, t, at));
+    return QString();
+}
+
+// Sealed once and kept until their receipt names its envelope id (a day at most).
+void Chat::queueMx(const QString &key, const QByteArray &plain)
+{
+    const QString env = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    keepSealed(env, key, {compact(envelope(QStringLiteral("mx"), key, plain, env))});
+    m_mxOut.insert(env, {{QStringLiteral("key"), key}, {QStringLiteral("time"), now()}});
+    m_tries.insert(env, Tries{0, 0});
+    saveMx();
+    attemptMx(env);
+}
+
+void Chat::attemptMx(const QString &envId)
+{
+    const QString key = str(m_mxOut.value(envId), "key");
+    const ChatWire::Outbox::Entry *e = m_outbox.find(envId);
+    if (key.isEmpty() || !e || e->bodies.empty()) {
+        m_mxOut.remove(envId);
+        m_tries.remove(envId);
+        saveMx();
+        return;
+    }
+    Tries &t = m_tries[envId];
+    t.count++;
+    t.next = now() + retryDelay(t.count);
+    const QByteArray body = e->bodies.front();
+    m_ble->send(key, body);
+    const QString base = m_net->baseFor(key);
+    if (!base.isEmpty())
+        post(base, body);
+    sendInternet(key, {body}, mailboxOf(key));
+}
+
+void Chat::saveMx()
+{
+    QJsonObject o;
+    for (auto it = m_mxOut.cbegin(); it != m_mxOut.cend(); ++it)
+        o.insert(it.key(), QJsonObject::fromVariantMap(it.value()));
+    m_vault->write(QStringLiteral("mxout.json"), compact(o));
+}
+
+// Typing and active status: sealed with v1 (never the ratchet), once on every route, never retried.
+void Chat::sendLive(const QString &key, const QByteArray &plain)
+{
+    const QByteArray body = compact(envelope(QStringLiteral("live"), key, plain, QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    m_ble->send(key, body);
+    const QString base = m_net->baseFor(key);
+    if (!base.isEmpty())
+        post(base, body);
+    sendInternet(key, {body}, mailboxOf(key));
+}
+
+void Chat::typingTo(const QString &key, bool on)
+{
+    if (!m_ready || !hasM1(key) || isBlocked(key))
+        return;
+    const qint64 t = now(), last = m_typingSent.value(key, 0);
+    if (on && t - last < RichWire::kTypingEvery)
+        return;
+    if (!on && (last == 0 || t - last > RichWire::kTypingMs)) {
+        m_typingSent.remove(key);
+        return;
+    }
+    if (on)
+        m_typingSent.insert(key, t);
+    else
+        m_typingSent.remove(key);
+    sendLive(key, RichWire::liveMsg(QStringLiteral("typing"), on, t));
+}
+
+// To the 20 contacts with m1 chatted with most lately (each one is a relay event).
+void Chat::sendActive(bool on)
+{
+    if (!m_ready)
+        return;
+    const qint64 t = now();
+    if (on)
+        m_activeSent = t;
+    QList<QPair<qint64, QString>> who;
+    for (auto it = m_contacts.cbegin(); it != m_contacts.cend(); ++it)
+        if (hasM1(it.key()) && !isBlocked(it.key())) {
+            const QVariantList l = m_private.value(it.key());
+            who << qMakePair(l.isEmpty() ? qint64(0) : l.last().toMap().value(QStringLiteral("time")).toLongLong(), it.key());
+        }
+    std::sort(who.begin(), who.end(), [](const QPair<qint64, QString> &a, const QPair<qint64, QString> &b) { return a.first > b.first; });
+    const QByteArray plain = RichWire::liveMsg(QStringLiteral("active"), on, t);
+    for (int i = 0; i < qMin(20, int(who.size())); ++i)
+        sendLive(who.at(i).second, plain);
+}
+
+void Chat::setActiveStatus(bool on)
+{
+    if (on == activeStatus())
+        return;
+    m_settings.setValue(QStringLiteral("chat/activeStatus"), on);
+    if (!on) {
+        m_active.clear();
+        sendActive(false);
+        Q_EMIT liveChanged();
+    } else if (m_front) {
+        sendActive(true);
+    }
+    Q_EMIT changed();
+}
+
+void Chat::liveTick()
+{
+    const qint64 t = now();
+    bool gone = false;
+    for (QHash<QString, qint64> *map : {&m_typing, &m_active})
+        for (auto it = map->begin(); it != map->end();)
+            if (it.value() < t) {
+                it = map->erase(it);
+                gone = true;
+            } else {
+                ++it;
+            }
+    if (gone)
+        Q_EMIT liveChanged();
+    if (m_front && activeStatus() && t - m_activeSent > RichWire::kActiveEvery)
+        sendActive(true);
+}
+
+QVariantMap Chat::typingMap() const
+{
+    QVariantMap out;
+    for (auto it = m_typing.cbegin(); it != m_typing.cend(); ++it)
+        out.insert(it.key(), it.value());
+    return out;
+}
+
+QVariantMap Chat::activeMap() const
+{
+    QVariantMap out;
+    for (auto it = m_active.cbegin(); it != m_active.cend(); ++it)
+        out.insert(it.key(), it.value());
+    return out;
+}
+
+void Chat::setPinned(const QString &where, const QString &id, bool on)
+{
+    QStringList &l = m_pins[where];
+    l.removeAll(id);
+    if (on)
+        l.prepend(id);
+    while (l.size() > 50)
+        l.removeLast();
+    if (l.isEmpty())
+        m_pins.remove(where);
+    savePins();
+    Q_EMIT changed();
+}
+
+void Chat::savePins()
+{
+    QJsonObject o;
+    for (auto it = m_pins.cbegin(); it != m_pins.cend(); ++it)
+        o.insert(it.key(), QJsonArray::fromStringList(it.value()));
+    m_vault->write(QStringLiteral("pins.json"), compact(o));
+}
+
+bool Chat::clipboardHasImage() const
+{
+    const QClipboard *c = QGuiApplication::clipboard();
+    return c && !c->image().isNull();
+}
+
+// A pasted picture goes through the same shrinking and scrubbing as a picked one.
+bool Chat::pasteImage(const QString &where)
+{
+    const QClipboard *c = QGuiApplication::clipboard();
+    const QImage img = c ? c->image() : QImage();
+    if (img.isNull())
+        return false;
+    const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
+        QStringLiteral("huginn-paste-%1.png").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!img.save(path, "PNG"))
+        return false;
+    const bool ok = sendPhoto(where, path, false);   // a contact, or "g:<group>:<channel>"
+    QFile::remove(path);
+    return ok;
+}
+
+bool Chat::isPicture(const QString &path) const
+{
+    static const QStringList kinds{QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("png"), QStringLiteral("webp"),
+                                   QStringLiteral("bmp"), QStringLiteral("gif"), QStringLiteral("heic")};
+    return kinds.contains(QFileInfo(path).suffix().toLower());
+}
+
+// What the screens need for replies, reactions and edits: the quoted message's name and text, the
+// reaction counts (mine marked) and whether it was edited.
+Chat::M1Index Chat::m1Index(const QVariantList &all)
+{
+    M1Index idx;
+    idx.at.reserve(all.size());
+    for (int i = 0; i < all.size(); ++i) {
+        const QVariantMap q = all.at(i).toMap();
+        const QString id = str(q, "id");
+        if (!id.isEmpty() && !idx.at.contains(id))
+            idx.at.insert(id, i);
+        const QString re = str(q, "re");
+        if (!re.isEmpty())
+            ++idx.replies[re];
+    }
+    return idx;
+}
+
+QVariantMap Chat::withM1(const QVariantMap &in, const QVariantList &all, const M1Index &idx, const QString &theirName) const
+{
+    QVariantMap m = in;
+    const QString re = str(m, "re");
+    if (!re.isEmpty()) {
+        QString who = QStringLiteral("Message"), what = QStringLiteral("Not here any more");
+        const auto hit = idx.at.constFind(re);
+        if (hit != idx.at.cend()) {
+            const QVariantMap q = all.at(*hit).toMap();
+            who = q.value(QStringLiteral("mine")).toBool() ? QStringLiteral("You") : theirName.isEmpty() ? str(q, "name") : theirName;
+            what = !str(q, "unsent").isEmpty() ? QStringLiteral("Message deleted")
+                 : q.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
+                 : !str(q, "photo").isEmpty() ? QStringLiteral("Photo") : str(q, "text").left(120);
+        }
+        m.insert(QStringLiteral("reName"), who);
+        m.insert(QStringLiteral("reText"), what);
+    }
+    m.insert(QStringLiteral("replies"), idx.replies.value(str(m, "id"), 0));
+    m.insert(QStringLiteral("rxList"), RichWire::counts(m.value(QStringLiteral("rx")).toMap(), myKey()));
+    m.insert(QStringLiteral("myReaction"), RichWire::shown(m.value(QStringLiteral("rx")).toMap()).value(myKey()).toString());
+    m.insert(QStringLiteral("isEdited"), m.value(QStringLiteral("edited")).toLongLong() > 0 && str(m, "unsent").isEmpty());
+    return m;
 }

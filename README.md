@@ -20,7 +20,23 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 - **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
 
-## What's new in 0.7
+## What's new in 0.8
+
+| | |
+|---|---|
+| **Video calls** | One-to-one video calls between phones and Windows, end-to-end encrypted, with camera switching and a small self view. |
+| **Direct calls for family** | People in your Family folder (or anyone you switch on) connect straight to you, so calls and video use no relay data. Everyone else stays on the relay and never sees your IP address. |
+| **Smoother calls** | An adaptive buffer, loss repair and higher quality sound; calls ring faster and reconnect when you change networks. |
+| **Screen share** | Share your screen from Huginn in a voice room. |
+| **Group text and call from the list** | Hold a contact, tick a few more, and start a group text or a group call. Group messages show how many have read them. |
+| **Messenger touches** | Reactions, swipe to reply, reply from the notification, edit with "(edited)", emoji picker, typing dots, active status, a photo gallery and search in each chat. |
+| **Desktop like it should be** | Huginn on a PC types in a normal box at the bottom of the chat, with Ctrl+K, threads, pins, drag and drop, @mentions and a New messages line. |
+| **Kids' TV** | Clearer calls with echo cancelling and noise removal, a microphone control on the TV, full-screen photos, the show pauses for a call and picks back up after, storage and Clear history from the parent's phone, and people who haven't accepted yet show as waiting. |
+| **Battery saver** | Muninn uses far less battery with the screen off while still getting messages and calls. Turn it off for maximum speed. |
+| **Windows** | No more antivirus false alarms from the updater, a cleaner folder, updates checked before they install, and it runs on Linux through Proton and Wine. |
+| **Linux and SteamOS** | The Flatpak is back. |
+
+## Also in 0.7
 
 | | |
 |---|---|
@@ -73,7 +89,13 @@ Both apps ship together, in the same release, with the same version number, and 
 
 **Huginn on Windows:** download [Huginn-Windows.zip](https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip), unzip it anywhere and run `Huginn.exe`.
 
-**Huginn on Linux and SteamOS:** the Linux build is paused while the Windows and Android apps come first. The 0.6 Flatpak is still on the [0.6 release](https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.6).
+**Huginn on Linux and SteamOS** (in a terminal; on SteamOS, Konsole in Desktop Mode):
+
+```
+cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
+```
+
+On SteamOS, add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
 **Muninn on Android and Google TV:** open this link on the device and install it:
 
@@ -96,11 +118,11 @@ A mouse and keyboard work too.
 
 ## What's next
 
-The Linux and SteamOS build returns, then 1.0 once everything has been tested on every device.
+1.0 once everything has been tested on every device.
 
 ## Versions
 
-One dot only, read as a decimal: 0.5, 0.6, 0.7, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Windows and Muninn, tests both, and publishes them together.
+One dot only, read as a decimal: 0.5, 0.6, 0.7, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
 
 ## Building
 

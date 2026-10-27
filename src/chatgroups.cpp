@@ -2,6 +2,7 @@
 // member over their own session, receipts, unsend, photos and voice, invites and group codes.
 // What is deterministic (canonical JSON, signatures, acceptance) lives in GroupWire.
 #include "chat.h"
+#include "richwire.h"
 #include "ble.h"
 #include "groupwire.h"
 #include "localsend.h"
@@ -169,10 +170,14 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
     const auto it = m_groups.constFind(g);
     if (it == m_groups.cend())
         return out;
+    const M1Index idx = m1Index(it->messages);
     for (const QVariant &v : it->messages) {
-        QVariantMap m = v.toMap();
-        if (str(m, "ch") != ch)
+        if (str(v.toMap(), "ch") != ch)
             continue;
+        // Cap m1: the quoted message, reactions, edits, how many read it, and @mentions of me.
+        QVariantMap m = withM1(v.toMap(), it->messages, idx, QString());
+        m.insert(QStringLiteral("readCount"), int(m.value(QStringLiteral("rd")).toStringList().size()));
+        m.insert(QStringLiteral("mention"), !m.value(QStringLiteral("mine")).toBool() && RichWire::mentions(str(m, "text"), username()));
         if (m.value(QStringLiteral("mine")).toBool()) {
             const int to = int(m.value(QStringLiteral("to")).toStringList().size());
             const int dlv = int(m.value(QStringLiteral("dlv")).toStringList().size());
@@ -718,7 +723,7 @@ void Chat::sendStateTo(const QString &g, const QString &to)
     sendControl(g, to, {{QStringLiteral("t"), QStringLiteral("state")}, {QStringLiteral("op"), QStringLiteral("sync")}, {QStringLiteral("state"), m_groups.value(g).state}});
 }
 
-void Chat::sendGroup(const QString &g, const QString &ch, const QString &text)
+void Chat::sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re)
 {
     const QString t = text.trimmed().left(kMax);
     const auto it = m_groups.constFind(g);
@@ -739,12 +744,106 @@ void Chat::sendGroup(const QString &g, const QString &ch, const QString &text)
                   {QStringLiteral("state"), to.isEmpty() ? QStringLiteral("delivered") : QStringLiteral("sending")}, {QStringLiteral("to"), to},
                   {QStringLiteral("dlv"), QStringList()}, {QStringLiteral("rd"), QStringList()}, {QStringLiteral("photo"), QString()},
                   {QStringLiteral("voice"), 0}, {QStringLiteral("unsent"), QString()}, {QStringLiteral("failed"), false}};
+    // A reply (cap m1): "re" names the message it answers; older apps just show the text.
+    const bool quoting = GroupWire::isLogicalId(re) && m_gidx.value(re) == g;
+    if (quoting)
+        m.insert(QStringLiteral("re"), re);
     storeGroupMessage(g, m, false);
-    const QJsonObject p{{QStringLiteral("g"), g}, {QStringLiteral("ch"), channel}, {QStringLiteral("id"), id}, {QStringLiteral("sv"), ver(s)},
-                        {QStringLiteral("text"), t}, {QStringLiteral("ts"), ts}};
+    QJsonObject p{{QStringLiteral("g"), g}, {QStringLiteral("ch"), channel}, {QStringLiteral("id"), id}, {QStringLiteral("sv"), ver(s)},
+                  {QStringLiteral("text"), t}, {QStringLiteral("ts"), ts}};
+    if (quoting)
+        p.insert(QStringLiteral("re"), re);
     const QByteArray plain = compact(p);
     for (const QString &k : to)
         queueGroup(g, k, QStringLiteral("gmsg"), id, plain);
+}
+
+// Cap m1: my reaction to a group message ("" takes it away), to every member whose app has m1.
+QString Chat::reactGroup(const QString &g, const QString &id, const QString &emoji)
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty() || it->removed || it->left)
+        return QStringLiteral("You're no longer in this group.");
+    if (!RichWire::emojiOk(emoji))
+        return QStringLiteral("That reaction can't be sent.");
+    const qint64 ts = now();
+    bool done = false;
+    updateGroupMessage(g, id, [&](QVariantMap &m) {
+        if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
+            return;
+        QVariantMap rx = m.value(QStringLiteral("rx")).toMap();
+        if (RichWire::react(rx, myKey(), emoji, ts)) {
+            m.insert(QStringLiteral("rx"), rx);
+            done = true;
+        }
+    });
+    if (!done)
+        return QString();
+    const QString lid = GroupWire::newLogicalId();
+    for (const QString &k : without(GroupWire::keysOf(m_groups.value(g).state), myKey()))
+        if (hasM1(k))
+            sendControl(g, k, {{QStringLiteral("t"), QStringLiteral("react")}, {QStringLiteral("id"), lid}, {QStringLiteral("msg"), id},
+                               {QStringLiteral("e"), emoji}, {QStringLiteral("ts"), ts}});
+    return QString();
+}
+
+// Cap m1: a new text for my message, for everyone who got it and has m1.
+QString Chat::editGroup(const QString &g, const QString &id, const QString &text)
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty() || it->removed || it->left)
+        return QStringLiteral("You're no longer in this group.");
+    const QString t = text.trimmed().left(kMax);
+    if (t.isEmpty())
+        return QStringLiteral("A message can't be empty. Unsend it instead.");
+    qint64 at = 0;
+    QStringList to;
+    updateGroupMessage(g, id, [&](QVariantMap &m) {
+        if (!m.value(QStringLiteral("mine")).toBool() || !str(m, "unsent").isEmpty() || !str(m, "photo").isEmpty() || str(m, "text") == t)
+            return;
+        at = qMax(now(), m.value(QStringLiteral("edited")).toLongLong() + 1);
+        m.insert(QStringLiteral("text"), t);
+        m.insert(QStringLiteral("edited"), at);
+        to = m.value(QStringLiteral("to")).toStringList();
+    });
+    if (at == 0)
+        return QString();
+    const QJsonObject s = m_groups.value(g).state;
+    const QString lid = GroupWire::newLogicalId();
+    for (const QString &k : std::as_const(to))
+        if (GroupWire::isMember(s, k) && hasM1(k))
+            sendControl(g, k, {{QStringLiteral("t"), QStringLiteral("edit")}, {QStringLiteral("id"), lid}, {QStringLiteral("msg"), id},
+                               {QStringLiteral("text"), t}, {QStringLiteral("ts"), at}});
+    return QString();
+}
+
+// A reaction or edit (cap m1, already checked) from a member.
+void Chat::takeGroupChange(const QString &g, const QString &from, const QJsonObject &p)
+{
+    const QString msg = p.value(QStringLiteral("msg")).toString();
+    const qint64 ts = RichWire::ts(p);
+    const bool reaction = p.value(QStringLiteral("t")).toString() == QLatin1String("react");
+    QString note, ch;
+    updateGroupMessage(g, msg, [&](QVariantMap &m) {
+        if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
+            return;
+        ch = str(m, "ch");
+        if (reaction) {
+            QVariantMap rx = m.value(QStringLiteral("rx")).toMap();
+            const QString e = p.value(QStringLiteral("e")).toString();
+            if (RichWire::react(rx, from, e, ts)) {
+                m.insert(QStringLiteral("rx"), rx);
+                if (m.value(QStringLiteral("mine")).toBool() && !e.isEmpty())
+                    note = QStringLiteral("Reacted ") + e + QStringLiteral(" to your message");
+            }
+        } else if (!m.value(QStringLiteral("mine")).toBool() && str(m, "photo").isEmpty()
+                   && RichWire::editWins(str(m, "from"), from, ts, m.value(QStringLiteral("edited")).toLongLong())) {
+            m.insert(QStringLiteral("text"), p.value(QStringLiteral("text")).toString().left(kMax));
+            m.insert(QStringLiteral("edited"), ts);
+        }
+    });
+    if (!note.isEmpty())
+        Q_EMIT arrived(QStringLiteral("%1 in %2").arg(memberName(g, from), groupName(g)), note, QStringLiteral("g:%1:%2").arg(g, ch));
 }
 
 bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &path, bool hd)
@@ -931,7 +1030,9 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
         const QString what = m.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
                            : !str(m, "photo").isEmpty()                    ? QStringLiteral("Photo")
                                                                            : str(m, "text");
-        Q_EMIT arrived(QStringLiteral("%1 in %2").arg(memberName(g, str(m, "from")), groupName(g)), what, key);
+        // An @mention of me says so (and Main.qml makes it stand out).
+        const bool mention = RichWire::mentions(str(m, "text"), username());
+        Q_EMIT arrived((mention ? QStringLiteral("%1 mentioned you in %2") : QStringLiteral("%1 in %2")).arg(memberName(g, str(m, "from")), groupName(g)), what, key);
     }
     saveGroupChats();
     Q_EMIT changed();
@@ -1146,6 +1247,12 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     } else if (t == QLatin1String("leave")) {
         if (member && GroupWire::isAdmin(git->state, me))
             change(g, {{QStringLiteral("op"), QStringLiteral("leave")}, {QStringLiteral("k"), fromKey}});
+    } else if (t == QLatin1String("react") || t == QLatin1String("edit")) {
+        // Cap m1: only from someone in the current state.
+        if (!RichWire::ok(QStringLiteral("group"), p))
+            return 400;
+        if (member && !git->removed && !git->left)
+            takeGroupChange(g, fromKey, p);
     } else if (t == QLatin1String("unsend")) {
         const QString gone = p.value(QStringLiteral("msg")).toString();
         if (have && GroupWire::isLogicalId(gone)) {
@@ -1179,7 +1286,7 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
         return 403;
     const QString id = p.value(QStringLiteral("id")).toString();
     const QJsonValue textValue = p.value(QStringLiteral("text"));
-    if (!GroupWire::isLogicalId(id) || !textValue.isString() || GroupWire::length(textValue.toString()) > kMax)
+    if (!GroupWire::isLogicalId(id) || !textValue.isString() || GroupWire::length(textValue.toString()) > kMax || !RichWire::ok(QStringLiteral("gmsg"), p))
         return 400;
     if (gmsgKnown(id)) {
         groupReceipt(g, from, {id}, QStringLiteral("delivered"));
@@ -1216,6 +1323,8 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
                   {QStringLiteral("text"), textValue.toString()}, {QStringLiteral("mine"), false}, {QStringLiteral("time"), now()},
                   {QStringLiteral("ts"), p.value(QStringLiteral("ts")).toInteger()}, {QStringLiteral("via"), via}, {QStringLiteral("state"), QString()},
                   {QStringLiteral("photo"), QString()}, {QStringLiteral("voice"), 0}, {QStringLiteral("unsent"), QString()}};
+    if (p.contains(QStringLiteral("re")))
+        m.insert(QStringLiteral("re"), p.value(QStringLiteral("re")).toString());
     storeGroupMessage(g, m, true);
     groupReceipt(g, from, {id}, QStringLiteral("delivered"));
     return 200;
@@ -1306,13 +1415,14 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
 
 bool Chat::applyState(const QString &g, const QJsonObject &next, const QString &from, const QString &op)
 {
-    Q_UNUSED(op)
     const QString me = myKey();
     const bool first = !m_groups.contains(g) || m_groups.value(g).state.isEmpty();
     if (first) {
         // Joining: only a state signed by the admin we asked, with us in it (3.3 step 2).
         const QVariantMap j = m_joining.value(g);
-        if (j.isEmpty() || str(j, "admin") != next.value(QStringLiteral("by")).toString() || next.value(QStringLiteral("g")).toString() != g)
+        // Cap m1: a contact put me straight in (op "add", signed by them), no invite to accept.
+        const bool added = j.isEmpty() && op == QLatin1String("add") && isContact(from) && next.value(QStringLiteral("by")).toString() == from;
+        if ((!added && (j.isEmpty() || str(j, "admin") != next.value(QStringLiteral("by")).toString())) || next.value(QStringLiteral("g")).toString() != g)
             return false;
         if (!GroupWire::accept(nullptr, next).ok || !GroupWire::isMember(next, me))
             return false;
@@ -1326,6 +1436,11 @@ bool Chat::applyState(const QString &g, const QJsonObject &next, const QString &
         m_joining.remove(g);
         m_ginvites.remove(g);
         stateAccepted(g, QJsonObject(), true);
+        if (added) {
+            const QString who = nameOf(from), gname = next.value(QStringLiteral("name")).toString();
+            Q_EMIT notice(QStringLiteral("%1 added you to %2.").arg(who, gname));
+            Q_EMIT arrived(who, QStringLiteral("Added you to ") + gname, QStringLiteral("g:%1:main").arg(g));
+        }
         return true;
     }
     const QJsonObject old = m_groups.value(g).state;
