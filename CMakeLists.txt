@@ -73,6 +73,9 @@ qt_add_executable(huginn
     src/call/callsession.cpp src/call/callsession.h
     src/call/callmanager.cpp src/call/callmanager.h
     src/call/callselftest.cpp src/call/callselftest.h
+    # voice rooms and group calls (section 6): a mesh of the 1:1 calls above
+    src/call/roomwire.cpp src/call/roomwire.h
+    src/call/roommanager.cpp src/call/roommanager.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
@@ -173,6 +176,7 @@ qt_add_qml_module(huginn
         qml/CallsPage.qml
         qml/CallPage.qml
         qml/IncomingCall.qml
+        qml/RoomBar.qml
         qml/SettingsPage.qml
         qml/ContactsPage.qml
         qml/LockPanel.qml
@@ -186,7 +190,7 @@ qt_add_qml_module(huginn
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
-                   ContactsPage LockPanel PatternPad CallPage IncomingCall)
+                   ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

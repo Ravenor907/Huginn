@@ -1576,3 +1576,23 @@ void Chat::pruneGroups(qint64 cutoff)
     if (any)
         saveGroupChats();
 }
+
+// ------------------------------------------------------------------ voice rooms
+
+QJsonObject Chat::groupState(const QString &g) const
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->removed || it->left)
+        return QJsonObject();
+    return it->state;
+}
+
+bool Chat::canRoom(const QString &key) const
+{
+    if (key.isEmpty() || isBlocked(key) || (!isContact(key) && !isGroupPeer(key)))
+        return false;
+    // Not known yet (a group peer that hasn't sent anything since): try; a 0.6 app drops it quietly.
+    return !capsKnown(key) || m_caps.value(key).contains(QStringLiteral("v1"));
+}
+
+bool Chat::lacksRooms(const QString &key) const { return capsKnown(key) && !m_caps.value(key).contains(QStringLiteral("v1")); }

@@ -1,0 +1,572 @@
+package io.github.ravenor907.muninn.net.call
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
+import android.os.Build
+import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.Proto06
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+
+/**
+ * Voice rooms and group calls (docs/protocol-0.6.md section 6). A room is a full mesh of 1:1 calls: one
+ * [CallSession] per other person, each with its own keys, its own TURN allocation and paths, so media is
+ * encrypted per recipient and nobody in the room learns anyone's IP address. This object owns the
+ * microphone and the speaker for all of them: each 20 ms frame is encoded once and sealed for every peer,
+ * and each peer's jitter buffer and decoder give a frame that is mixed into the speaker.
+ *
+ * Everything that changes state runs on [exec], the thread the room's sessions run on too.
+ */
+object RoomManager {
+    /** One person in the room. [state]: "live", "connecting" or "reconnecting". Never an address. */
+    data class Person(val key: String, val name: String, val me: Boolean, val speaking: Boolean = false, val muted: Boolean = false, val state: String = "live")
+
+    /** The room this phone is in, for the screens. */
+    data class Ui(
+        val g: String, val ch: String, val title: String, val groupName: String, val people: List<Person>, val muted: Boolean,
+        val speaker: Boolean, val since: Long, val connected: Int, val groupCall: Boolean, val note: String,
+    )
+
+    /** A group call ringing this phone. */
+    data class Ring(val g: String, val ch: String, val from: String, val name: String, val group: String, val at: Long)
+
+    private val _room = MutableStateFlow<Ui?>(null)
+    val room: StateFlow<Ui?> = _room.asStateFlow()
+    private val _ring = MutableStateFlow<Ring?>(null)
+    val ring: StateFlow<Ring?> = _ring.asStateFlow()
+    /** Bumps whenever who's in which room may have changed (for the group screens). */
+    private val _presence = MutableStateFlow(0)
+    val presence: StateFlow<Int> = _presence.asStateFlow()
+    private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** How a room ended or what happened, for a toast. */
+    val notices: SharedFlow<String> = _notices.asSharedFlow()
+
+    /** In a room (or joining one): 1:1 offers get busy (6.6). */
+    @Volatile var busy = false; private set
+
+    private val exec = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "muninn-room").apply { isDaemon = true } }
+    private val work = Executors.newCachedThreadPool { r -> Thread(r, "muninn-room-work").apply { isDaemon = true } }
+    @Volatile private var app: Muninn? = null
+
+    private class Peer(val s: CallSession, val retries: Int)
+    private val peers = ConcurrentHashMap<String, Peer>()
+    private val medias = ConcurrentHashMap<String, CallMedia>()    // call id -> its media
+    private val speaking = ConcurrentHashMap<String, Boolean>()     // peer key -> speaking now
+    private val presenceTable = RoomLogic.Presence()
+    @Volatile private var g = ""
+    @Volatile private var ch = ""
+    @Volatile private var muted = false
+    @Volatile private var speakerOn = true
+    @Volatile private var mySpeaking = false
+    private var joinedAt = 0L
+    private var note = ""
+    private var gen = 0
+    private val rung = HashSet<String>()
+    private val declined = HashSet<String>()
+    private val timers = ArrayList<ScheduledFuture<*>>()
+    private var ringTimer: ScheduledFuture<*>? = null
+
+    fun init(app: Muninn) {
+        this.app = app
+        exec.scheduleWithFixedDelay({ _presence.value = _presence.value + 1 }, 60, 60, TimeUnit.SECONDS)
+    }
+
+    private fun now() = System.currentTimeMillis()
+    private fun me(): String = app?.identity?.publicKey ?: ""
+    private fun state(group: String): Proto06.State? = try { app?.chat?.groups?.group(group)?.takeIf { !it.readOnly }?.state } catch (e: Exception) { null }
+    private fun nameOf(group: String, k: String): String {
+        val a = app ?: return "Someone"
+        val contact = try { a.chat.contacts.contact(k)?.shown } catch (e: Exception) { null }
+        return contact ?: state(group)?.member(k)?.n?.ifBlank { null } ?: try { a.chat.nameOf(k) } catch (e: Exception) { "Someone" }
+    }
+
+    /** Can [k]'s app join rooms? "v1", or caps not known yet (a 0.6 app quietly drops it). Not blocked. */
+    private fun canRoom(k: String): Boolean {
+        val a = app ?: return false
+        val c = try { a.chat.contacts.get(k) } catch (e: Exception) { null } ?: return false
+        if (try { a.chat.blocked.value.contains(k) } catch (e: Exception) { false }) return false
+        return c.caps.isEmpty() || "v1" in c.caps
+    }
+
+    /** Known to have an app without voice rooms. */
+    fun needsUpdate(k: String): Boolean {
+        val c = try { app?.chat?.contacts?.get(k) } catch (e: Exception) { null } ?: return false
+        return c.caps.isNotEmpty() && "v1" !in c.caps
+    }
+
+    private fun members(group: String): List<String> {
+        val mine = me()
+        return state(group)?.members?.map { it.k }?.filter { it != mine && canRoom(it) } ?: emptyList()
+    }
+
+    private fun sendRoom(t: String, to: String, group: String, room: String) {
+        val a = app ?: return
+        try { CallManager.host.send(to, RoomLogic.make(a.identity.keys.private, t, group, room, now())) } catch (_: Exception) {}
+    }
+
+    private fun announce(onlyUnconnected: Boolean) {
+        if (g.isEmpty()) return
+        for (k in members(g)) if (!onlyUnconnected || !peers.containsKey(k)) sendRoom("vjoin", k, g, ch)
+    }
+
+    // ------------------------------------------------------------------ actions (from the screens)
+
+    /** Joins (g, ch). Null when joining, otherwise what to tell the person. Needs the microphone permission. */
+    fun join(group: String, room: String): String? {
+        if (app == null) return "Unlock Muninn first."
+        if (Opus.loadError != null) return "Calling isn't working on this phone."
+        if (CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true) return "Hang up the call first."
+        if (!RoomLogic.isRoomId(room)) return "That isn't a voice room."
+        val st = state(group) ?: return "You're not in this group anymore."
+        if (!st.has(me())) return "You're not in this group anymore."
+        if (!RoomLogic.isGroupCall(room) && st.channel(room)?.t != "voice") return "That isn't a voice room."
+        if (g == group && ch == room) return null
+        busy = true
+        exec.execute { doJoin(group, room) }
+        return null
+    }
+
+    private fun doJoin(group: String, room: String) {
+        if (g.isNotEmpty()) doLeave("")
+        val a = app ?: return
+        if (_ring.value?.let { it.g == group && it.ch == room } == true) stopRing()
+        gen++
+        g = group; ch = room; joinedAt = now(); note = ""
+        busy = true
+        rung.clear(); declined.clear(); speaking.clear(); mySpeaking = false
+        if (!RoomAudio.start(a, speakerOn)) note = "The microphone isn't available"
+        announce(false)
+        val my = gen
+        for (ms in listOf(4_000L, 12_000L)) timers += exec.schedule(Runnable { if (my == gen) announce(true) }, ms, TimeUnit.MILLISECONDS)
+        timers += exec.scheduleWithFixedDelay({
+            if (my != gen) return@scheduleWithFixedDelay
+            if (state(g) == null) { doLeave("You're not in this group anymore"); return@scheduleWithFixedDelay }
+            announce(false)
+        }, RoomLogic.ANNOUNCE_MS, RoomLogic.ANNOUNCE_MS, TimeUnit.MILLISECONDS)
+        RoomService.start(a)
+        bumpPresence()
+        publish()
+    }
+
+    fun leave() = exec.execute { doLeave("") }
+
+    private fun doLeave(why: String) {
+        if (g.isEmpty()) return
+        val group = g; val room = ch
+        for (k in members(group)) sendRoom("vleave", k, group, room)
+        gen++
+        g = ""; ch = ""
+        timers.forEach { it.cancel(false) }; timers.clear()
+        val all = peers.values.toList()
+        peers.clear()
+        for (p in all) p.s.hangup()
+        RoomAudio.stop()
+        medias.clear(); speaking.clear()
+        busy = false
+        _room.value = null
+        app?.let { RoomService.stop(it) }
+        if (why.isNotEmpty()) _notices.tryEmit(why)
+        bumpPresence()
+    }
+
+    fun setMuted(on: Boolean) = exec.execute {
+        muted = on
+        for (p in peers.values) p.s.setMuted(on)
+        publish()
+    }
+
+    fun setSpeaker(on: Boolean) = exec.execute { speakerOn = on; RoomAudio.route(on); publish() }
+
+    /** Rings [keys] (every member who can join, when empty) into a new group call of [group], and joins it. */
+    fun callGroup(group: String, keys: List<String>): String? {
+        val room = RoomLogic.newGroupCallId()
+        val all = members(group)
+        val targets = (if (keys.isEmpty()) all else keys.filter { it in all }).distinct()
+        if (targets.isEmpty()) return "Nobody in this group can join calls yet."
+        join(group, room)?.let { return it }
+        exec.execute {
+            if (g != group || ch != room) return@execute
+            rung.addAll(targets)
+            for (k in targets) sendRoom("vring", k, group, room)
+            val my = gen
+            timers += exec.schedule(Runnable {
+                if (my == gen) for (k in rung) if (!peers.containsKey(k) && k !in declined) sendRoom("vring", k, group, room)
+            }, 15, TimeUnit.SECONDS)
+            timers += exec.schedule(Runnable { if (my == gen && peers.isEmpty()) doLeave("No one joined") }, RoomLogic.RING_MS, TimeUnit.MILLISECONDS)
+        }
+        return null
+    }
+
+    /** Join the group call that's ringing. Null when joining, otherwise what to tell the person. */
+    fun answerRing(): String? {
+        val r = _ring.value ?: return null
+        stopRing()
+        return join(r.g, r.ch)
+    }
+
+    fun declineRing() {
+        val r = _ring.value ?: return
+        stopRing()
+        exec.execute { sendRoom("vdecline", r.from, r.g, r.ch) }
+    }
+
+    private fun stopRing() {
+        ringTimer?.cancel(false); ringTimer = null
+        _ring.value = null
+        app?.let { RoomRinger.stop(it) }
+    }
+
+    /** Who is in a room right now (presence, plus my own calls there when I'm in it). */
+    fun whoIn(group: String, room: String): List<Person> {
+        val mine = g == group && ch == room
+        val keys = presenceTable.inRoom(group, room, now()).toMutableList()
+        if (mine) peers.keys.forEach { if (it !in keys) keys += it }
+        val out = ArrayList<Person>()
+        if (mine) out += Person(me(), "You", true, speaking = mySpeaking && !muted, muted = muted)
+        for (k in keys) if (k != me()) out += Person(k, nameOf(group, k), false, speaking = mine && speaking[k] == true)
+        return out
+    }
+
+    /** Group calls going on in [group]: room id to who's in it. */
+    fun groupCalls(group: String): List<Pair<String, List<Person>>> {
+        val rooms = presenceTable.rooms(group, now()).keys.toMutableSet()
+        if (g == group && RoomLogic.isGroupCall(ch)) rooms += ch
+        return rooms.filter { RoomLogic.isGroupCall(it) }.map { it to whoIn(group, it) }.filter { it.second.isNotEmpty() || (g == group && ch == it.first) }
+    }
+
+    private fun bumpPresence() { _presence.value = _presence.value + 1 }
+
+    private fun publish() {
+        if (g.isEmpty()) { _room.value = null; return }
+        val st = state(g)
+        val people = ArrayList<Person>()
+        people += Person(me(), "You", true, speaking = mySpeaking && !muted, muted = muted)
+        var connected = 0
+        for ((k, p) in peers) {
+            val s = p.s
+            if (s.phase == CallSession.Phase.ENDED) continue
+            val live = s.phase == CallSession.Phase.LIVE
+            if (live || s.phase == CallSession.Phase.RECONNECTING) connected++
+            people += Person(k, nameOf(g, k), false, speaking = speaking[k] == true, muted = s.peerMuted,
+                state = if (live) "live" else if (s.phase == CallSession.Phase.RECONNECTING) "reconnecting" else "connecting")
+        }
+        val sorted = listOf(people.first()) + people.drop(1).sortedBy { it.name.lowercase() }
+        val title = if (RoomLogic.isGroupCall(ch)) "Group call" else st?.channel(ch)?.n ?: "Voice room"
+        _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note)
+        bumpPresence()
+        app?.let { RoomService.update(it) }
+    }
+
+    // ------------------------------------------------------------------ what a room's sessions get
+
+    private val host: CallSession.Host by lazy {
+        object : CallSession.Host by CallManager.host {
+            override fun newMedia(s: CallSession): CallMedia =
+                // No Bluetooth media in rooms: that link has one handler, for 1:1 calls.
+                CallMedia(app!!, s.outgoing, s.callId, s.peerKey, null, object : CallMedia.Events {
+                    override fun onFirstMedia() = s.mediaFirst()
+                    override fun onPaths(relay: Boolean, wifi: Boolean, bluetooth: Boolean) = s.mediaPaths(relay, wifi, bluetooth)
+                    override fun onSpeaking(peer: Boolean) {}
+                }).also { it.externalAudio = true; it.muted = muted; medias[s.callId] = it }
+            override fun changed(s: CallSession) {
+                // Muted before the pair's call was up: tell them once it is.
+                if (s.phase == CallSession.Phase.LIVE && muted && !mutedSent.contains(s.callId)) {
+                    mutedSent += s.callId
+                    send(s.peerKey, CallLogic.mute(s.callId, true))
+                }
+                if (peers[s.peerKey]?.s === s) publish()
+            }
+            override fun ended(s: CallSession) = peerEnded(s)
+        }
+    }
+    private val mutedSent = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+    private fun newSession(callId: String, key: String, outgoing: Boolean, retries: Int): CallSession {
+        val s = CallSession(callId, key, outgoing, host, exec, work)
+        peers[key] = Peer(s, retries)
+        return s
+    }
+
+    private fun offerTo(key: String, retries: Int = 0) {
+        if (g.isEmpty() || peers.containsKey(key)) return
+        val s = newSession(CallCrypto.newCallId(), key, true, retries)
+        s.extra = JSONObject().put("g", g).put("ch", ch)
+        s.startOutgoing()
+        if (muted) s.setMuted(true)
+        publish()
+    }
+
+    private fun peerEnded(s: CallSession) {
+        medias.remove(s.callId)
+        val p = peers[s.peerKey]
+        if (p == null || p.s !== s) return
+        peers.remove(s.peerKey)
+        speaking.remove(s.peerKey)
+        // A pair that lost its connection while both stay: the lower key calls again (6.3 step 7).
+        if (g.isNotEmpty() && (s.endWhy == "nopath" || s.endWhy == "dropped") && p.retries < 3 && RoomLogic.offerWins(me(), s.peerKey) == me()) {
+            val my = gen
+            timers += exec.schedule(Runnable { if (my == gen) offerTo(s.peerKey, p.retries + 1) }, 5, TimeUnit.SECONDS)
+        }
+        publish()
+    }
+
+    /** Drops my own call to [key] without a word (6.3 step 4: their offer won). */
+    private fun drop(key: String) {
+        val p = peers.remove(key) ?: return
+        medias.remove(p.s.callId)?.stop()
+        p.s.end("hangup", send = false)
+    }
+
+    // ------------------------------------------------------------------ signaling (from Chat)
+
+    /** Every opened room "call" plaintext; anything not about rooms is left to [CallManager]. */
+    fun onSignal(fromKey: String, json: String) {
+        if (app == null) return
+        exec.execute {
+            val o = try { JSONObject(json) } catch (e: Exception) { return@execute }
+            val call = o.opt("call") as? String ?: return@execute
+            when {
+                call == "-" -> roomMessage(fromKey, o)
+                o.has("g") -> if (o.opt("t") == "offer") roomOffer(fromKey, o)
+                else -> {
+                    val p = peers[fromKey] ?: return@execute
+                    if (p.s.callId != call) return@execute
+                    val s = try { CallLogic.parse(fromKey, json) } catch (e: CallLogic.Bad) { return@execute }
+                    p.s.onSignal(s)
+                }
+            }
+        }
+    }
+
+    private fun roomMessage(from: String, o: JSONObject) {
+        val group = o.optString("g"); val room = o.optString("ch"); val t = o.optString("t")
+        val verdict = RoomLogic.accept(state(group), me(), from, o, now())
+        val fresh = verdict == "ok"
+        if (!fresh && verdict != "stale") return
+        val here = g == group && ch == room
+        when (t) {
+            "vjoin", "vleave" -> {
+                if (presenceTable.apply(from, o, now())) bumpPresence()
+                if (t == "vjoin") {
+                    if (fresh && here && !peers.containsKey(from)) {
+                        if (RoomLogic.full(peers.size)) sendRoom("full", from, group, room) else offerTo(from)
+                    }
+                } else {
+                    if (here) peers.remove(from)?.let { p -> p.s.hangup(); medias.remove(p.s.callId); speaking.remove(from); publish() }
+                    val r = _ring.value
+                    if (r != null && r.g == group && r.ch == room && presenceTable.inRoom(group, room, now()).isEmpty()) {
+                        stopRing()
+                        missed(r.name, r.group, from)
+                    }
+                }
+            }
+            "vring" -> {
+                if (here || _ring.value?.let { it.g == group && it.ch == room } == true) return   // in it, or the same ring again
+                val inCall = CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true
+                val who = nameOf(group, from); val grp = state(group)?.name ?: ""
+                if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, from); return }
+                val a = app ?: return
+                if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
+                _ring.value = Ring(group, room, from, who, grp, now())
+                RoomRinger.ring(a, who, grp)
+                ringTimer = exec.schedule(Runnable {
+                    val r = _ring.value
+                    if (r != null && r.g == group && r.ch == room) { stopRing(); missed(who, grp, from) }
+                }, RoomLogic.RING_MS, TimeUnit.MILLISECONDS)
+            }
+            "vdecline" -> if (fresh && here) { declined += from; _notices.tryEmit("${nameOf(group, from)} can't join right now") }
+            "full" -> if (fresh && here && now() - joinedAt < 30_000) doLeave("This room is full (${RoomLogic.MAX_PEOPLE} people)")
+        }
+    }
+
+    private fun missed(who: String, group: String, from: String) {
+        val a = app ?: return
+        Ringer.missed(a, if (group.isNotEmpty()) "$who · $group" else who, from)
+    }
+
+    private fun roomOffer(from: String, o: JSONObject) {
+        val group = o.opt("g") as? String ?: return
+        val room = o.opt("ch") as? String ?: return
+        val call = o.opt("call") as? String ?: return
+        // The rest is a plain 5.2 offer: checked the same way.
+        val plain = JSONObject(o.toString()).apply { remove("g"); remove("ch") }
+        val s = try { CallLogic.parse(from, plain.toString()) } catch (e: CallLogic.Bad) { return }
+        if (!CallLogic.fresh(s.ts, now())) return
+        val st = state(group)
+        if (g != group || ch != room || st == null || !st.has(from) || s.codec != CallCrypto.CODEC) {
+            CallManager.host.send(from, CallLogic.simple("decline", call))
+            return
+        }
+        val cur = peers[from]
+        if (cur != null) {
+            if (cur.s.callId == call) { cur.s.onSignal(s); return }   // a resent offer
+            // Both offered (6.3 step 4): the lower chat key's offer wins.
+            if (cur.s.outgoing && RoomLogic.offerWins(me(), from) == me()) return
+            drop(from)
+        }
+        val ns = newSession(call, from, false, cur?.retries ?: 0)
+        if (muted) ns.setMuted(true)
+        ns.startIncoming(s)
+        ns.answer()   // no ringing inside a room (6.3 step 3)
+        publish()
+    }
+
+    // ------------------------------------------------------------------ audio for the whole room
+
+    /** One microphone and one speaker for every peer: encode once, seal per peer; decode per peer, mix. */
+    private object RoomAudio {
+        private var record: AudioRecord? = null
+        private var track: AudioTrack? = null
+        private var aec: AcousticEchoCanceler? = null
+        private var ns: NoiseSuppressor? = null
+        private var mic: Thread? = null
+        private var player: Thread? = null
+        @Volatile private var running = false
+        private var oldMode = AudioManager.MODE_NORMAL
+        private var audio: AudioManager? = null
+
+        @SuppressLint("MissingPermission")
+        fun start(c: Context, speaker: Boolean): Boolean {
+            stop()
+            val am = c.getSystemService(AudioManager::class.java) ?: return false
+            audio = am
+            oldMode = am.mode
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            route(speaker)
+            running = true
+            val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val t = try {
+                AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setAudioFormat(AudioFormat.Builder().setSampleRate(Opus.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                    .setBufferSizeInBytes(maxOf(minOut, Opus.FRAME * 2 * 3))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            } catch (e: Exception) { null }
+            track = t
+            if (t != null) player = Thread({ playLoop(t) }, "muninn-room-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+            val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val rec = try {
+                AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
+            } catch (e: Exception) { null }
+            if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return false }
+            record = rec
+            if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+            mic = Thread({ captureLoop(rec) }, "muninn-room-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+            return true
+        }
+
+        fun route(speaker: Boolean) {
+            val am = audio ?: return
+            try {
+                if (Build.VERSION.SDK_INT >= 31) {
+                    val devs = am.availableCommunicationDevices
+                    val bt = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                    val wired = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+                    val pick = if (speaker) devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        else bt ?: wired ?: devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                    pick?.let { am.setCommunicationDevice(it) } ?: am.clearCommunicationDevice()
+                } else @Suppress("DEPRECATION") { am.isSpeakerphoneOn = speaker }
+            } catch (_: Exception) {}
+        }
+
+        private fun captureLoop(rec: AudioRecord) {
+            val enc = try { Opus.Encoder() } catch (e: Throwable) { return }
+            val pcm = ShortArray(Opus.FRAME)
+            val me = CallLogic.Speaking()
+            try {
+                rec.startRecording()
+                while (running) {
+                    var got = 0
+                    while (got < Opus.FRAME && running) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }
+                    if (got < Opus.FRAME) continue
+                    val talking = !muted && me.feed(pcm, Opus.FRAME, System.currentTimeMillis())
+                    if (talking != mySpeaking) { mySpeaking = talking; exec.execute { publish() } }
+                    if (muted || medias.isEmpty()) continue   // pings go on; no audio while muted (5.5)
+                    val opus = enc.encode(pcm) ?: continue
+                    for (m in medias.values) m.sendOpus(opus)
+                }
+            } catch (_: Exception) {
+            } finally { try { rec.stop() } catch (_: Exception) {}; enc.close() }
+        }
+
+        private fun playLoop(t: AudioTrack) {
+            val decoders = HashMap<String, Opus.Decoder>()
+            val talk = HashMap<String, CallLogic.Speaking>()
+            val one = ShortArray(Opus.FRAME)
+            val mix = IntArray(Opus.FRAME)
+            val out = ShortArray(Opus.FRAME)
+            try {
+                t.play()
+                while (running) {
+                    mix.fill(0)
+                    val nowMs = System.currentTimeMillis()
+                    for ((id, m) in medias) {
+                        val dec = decoders.getOrPut(id) { try { Opus.Decoder() } catch (e: Throwable) { return } }
+                        val n = when (val f = m.nextPlay()) {
+                            is CallLogic.Play.Packet -> dec.decode(f.data, one)
+                            is CallLogic.Play.Fec -> dec.decode(f.next, one, fec = true)
+                            CallLogic.Play.Conceal -> dec.decode(null, one)
+                            CallLogic.Play.Silence -> { one.fill(0); Opus.FRAME }
+                        }
+                        if (n <= 0) one.fill(0)
+                        for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()
+                        val key = peers.entries.firstOrNull { it.value.s.callId == id }?.key
+                        if (key != null) {
+                            val s = talk.getOrPut(id) { CallLogic.Speaking() }.feed(one, Opus.FRAME, nowMs)
+                            if (s != (speaking[key] == true)) { speaking[key] = s; exec.execute { publish() } }
+                        }
+                    }
+                    // Peers that left: their decoders go.
+                    decoders.keys.filter { !medias.containsKey(it) }.forEach { decoders.remove(it)?.close(); talk.remove(it) }
+                    for (i in 0 until Opus.FRAME) out[i] = mix[i].coerceIn(-32768, 32767).toShort()
+                    t.write(out, 0, Opus.FRAME)   // blocking: the audio clock paces this loop
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { t.stop() } catch (_: Exception) {}
+                decoders.values.forEach { it.close() }
+            }
+        }
+
+        fun stop() {
+            running = false
+            try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}
+            mic = null; player = null
+            try { record?.release() } catch (_: Exception) {}
+            try { track?.release() } catch (_: Exception) {}
+            try { aec?.release(); ns?.release() } catch (_: Exception) {}
+            record = null; track = null; aec = null; ns = null
+            audio?.let { am ->
+                try {
+                    if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
+                    else @Suppress("DEPRECATION") { am.isSpeakerphoneOn = false }
+                    am.mode = oldMode
+                } catch (_: Exception) {}
+            }
+            audio = null
+        }
+    }
+}

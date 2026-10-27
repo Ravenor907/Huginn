@@ -77,6 +77,11 @@ public:
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE QString duration(int seconds) const;
 
+    // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
+    std::function<bool()> busyElsewhere;
+    // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
+    void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
+
 Q_SIGNALS:
     void changed();
     void tick();
@@ -94,7 +99,6 @@ private:
     void ring(bool on);
     void notifyIncoming(bool on);
     Q_SLOT void onNotificationAction(uint id, const QString &action);
-    void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
 
     CallSignal *m_signal;
     QPointer<Vault> m_vault;

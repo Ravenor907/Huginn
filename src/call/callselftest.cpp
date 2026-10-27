@@ -7,6 +7,7 @@
 #include "callsignal.h"
 #include "jitterbuffer.h"
 #include "opuscodec.h"
+#include "roomwire.h"
 #include "stun.h"
 #include "turnclient.h"
 
@@ -542,6 +543,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
 {
     g_fail = 0;
     const bool vectors = CallCrypto::selfTest(vectorsPath);
+    const bool rooms = RoomWire::selfTest(vectorsPath);
     const bool stun = Stun::selfTest();
     const bool jitter = JitterBuffer::selfTest();
     const bool dsp = AudioDsp::selfTest();
@@ -549,7 +551,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     mediaLoopback();
     signalingLoopback();
     relayCall();
-    const bool ok = vectors && stun && jitter && dsp && g_fail == 0;
+    const bool ok = vectors && rooms && stun && jitter && dsp && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");
     std::fflush(stdout);
     return ok;

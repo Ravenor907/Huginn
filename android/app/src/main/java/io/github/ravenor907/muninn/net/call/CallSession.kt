@@ -53,6 +53,8 @@ class CallSession(
     /** Something to tell the person while the call goes on (relay trouble), never an address. */
     @Volatile var note = ""; private set
     @Volatile var answered = false; private set
+    /** Added to the offer: a voice room's "g" and "ch" (section 6). Set before [startOutgoing]. */
+    var extra: JSONObject? = null
 
     private var eph: KeyPair? = null
     private var myEph = ""
@@ -83,6 +85,7 @@ class CallSession(
         media = host.newMedia(this)
         val sig = CallCrypto.sign(host.chatPrivate, "offer", callId, myEph)
         offerJson = CallLogic.offer(callId, myEph, sig, System.currentTimeMillis(), null, lanPortIfClose(), host.bluetoothFor())
+        extra?.let { e -> for (k in e.keys()) offerJson!!.put(k, e.get(k)) }
         host.send(peerKey, offerJson!!)
         // Resend the offer every 3 s until the other side says anything; give up after 45 s.
         val resend = exec.scheduleWithFixedDelay({ if (phase == Phase.CALLING) offerJson?.let { host.send(peerKey, it) } },

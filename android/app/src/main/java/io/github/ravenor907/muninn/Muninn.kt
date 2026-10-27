@@ -107,6 +107,7 @@ class Muninn : Application() {
         chat = Chat(this, net, close, ble, nostr, contacts, vault)
         io.github.ravenor907.muninn.tv.Tv.install(this)
         io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
+        io.github.ravenor907.muninn.net.call.RoomManager.init(this)
         closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key) } }

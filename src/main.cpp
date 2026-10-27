@@ -7,6 +7,7 @@
 #include "call/callmanager.h"
 #include "call/callselftest.h"
 #include "call/callsignal.h"
+#include "call/roommanager.h"
 #include "groupwire.h"
 #include "ratchet.h"
 #include "ble.h"
@@ -175,6 +176,14 @@ int main(int argc, char *argv[])
     cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
+    // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.
+    auto *rooms = new RoomManager(cs, calls, [calls](auto done) { calls->getLogin(std::move(done)); }, &app);
+    rooms->groupState = [chat](const QString &g) { return chat->groupState(g); };
+    rooms->canRoom = [chat](const QString &k) { return chat->canRoom(k); };
+    rooms->lacksRooms = [chat](const QString &k) { return chat->lacksRooms(k); };
+    rooms->memberName = [chat](const QString &g, const QString &k) { return chat->groupMemberName(g, k); };
+    calls->busyElsewhere = [rooms] { return rooms->inRoom(); };
+    QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
 
@@ -223,14 +232,15 @@ int main(int argc, char *argv[])
         });
     }
     // Sending, receiving or a call keeps the handheld awake until it finishes.
-    auto awake = [system, localSend, calls] {
-        if (calls->inCall())
+    auto awake = [system, localSend, calls, rooms] {
+        if (calls->inCall() || rooms->inRoom())
             system->setKeepAwake(true, QStringLiteral("In a call"));
         else
             system->setKeepAwake(localSend->busy(), localSend->sending() ? QStringLiteral("Sending files") : QStringLiteral("Receiving files"));
     };
     QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
     QObject::connect(calls, &CallManager::changed, system, awake);
+    QObject::connect(rooms, &RoomManager::changed, system, awake);
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
@@ -244,6 +254,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Rooms", rooms);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);

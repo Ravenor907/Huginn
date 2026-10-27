@@ -201,7 +201,7 @@ object Ringer {
 
     /** The raven call on loop plus vibration, as the ring mode allows (silent: neither; vibrate: buzz only). */
     @Synchronized
-    private fun sound(c: Context, on: Boolean) {
+    internal fun sound(c: Context, on: Boolean) {
         if (io.github.ravenor907.muninn.tv.TvRing.instead(c, on)) return   // a Kids' TV rings at its own volume
         val vib = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(VibratorManager::class.java)?.defaultVibrator
             else @Suppress("DEPRECATION") c.getSystemService(Vibrator::class.java)

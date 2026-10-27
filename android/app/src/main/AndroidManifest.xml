@@ -164,6 +164,25 @@
         <receiver
             android:name=".net.call.CallActions"
             android:exported="false" />
+        <!-- Voice rooms and group calls: their screen (over the lock screen for a group call's ring),
+             service and notification buttons, the same way as a 1:1 call's. -->
+        <activity
+            android:name=".screens.RoomActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity="io.github.ravenor907.muninn.room"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.Muninn" />
+        <service
+            android:name=".net.call.RoomService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+        <receiver
+            android:name=".net.call.RoomActions"
+            android:exported="false" />
         <!-- Kids' TV: the answer from Android's installer when Muninn updates itself. -->
         <receiver
             android:name=".tv.TvInstallResult"

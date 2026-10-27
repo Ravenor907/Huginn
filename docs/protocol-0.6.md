@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1 k2 t1"
+"caps": "r1 g1 c1 k1 k2 t1 v1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -55,7 +55,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 |---|---|
 | `r1` | message ratchet (same as `cap:"r1"`) |
 | `g1` | group chats (section 3) |
-| `c1` | 1:1 calls and voice rooms (sections 5, 6) |
+| `c1` | 1:1 calls (section 5) |
+| `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
@@ -79,7 +80,7 @@ opens a contact's chat and the caps are unknown.
 ### 1.3 Fallback for 0.5 peers
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
-  token (`g1` for the group rooms, `c1` for `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
+  token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
   and for a config with `calls` or `mic`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
@@ -119,6 +120,7 @@ Domains:
 | `huginn-muninn call v1` | call offer and answer (5.2) |
 | `huginn-muninn tvconfig v1` | TV config (7.2) |
 | `huginn-muninn tvdisconnect v1` | TV disconnect (7.3) |
+| `huginn-muninn vroom v1` | voice room and group call messages (6.2) |
 
 Signatures may use random k (Java `SHA256withECDSA`, OpenSSL `EVP_DigestSign`); receivers only verify.
 The vectors use RFC 6979 so the file is reproducible.
@@ -158,7 +160,7 @@ signatures apart from each other.
 - No group key. Every group message is sealed separately to each member over that member's pairwise
   session (ratchet). A group of n people costs n-1 envelopes per message; in exchange there is no group key
   to rotate, leak, or resend when someone leaves, and every route and retry rule from 0.5 applies unchanged.
-- Max 50 members, 20 channels, 6 people per voice room.
+- Max 50 members, 20 channels, 8 people per voice room or group call.
 - Group state is a signed snapshot. Every change is a whole new state with a higher version, signed by an
   admin. Members keep the current state and the last 32 accepted states (for `sync`, 3.6).
 
@@ -336,7 +338,7 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
   address through it. So the person you call never learns your IP address, and you never learn theirs.
 - If no path works the call fails with "Can't connect".
 
-Calls are offered only to contacts with `c1`, and to group peers inside a voice room (section 6).
+Calls are offered only to contacts with `c1`, and to group peers inside a voice room or group call (section 6, `v1`).
 
 ### 5.2 Signaling messages (room `call`)
 
@@ -373,7 +375,7 @@ Timing:
 - Callee resends the same `answer` every 2 s until the first authentic media packet, for up to 15 s.
 - `hangup`, `decline`, `busy`: sent 3 times over 2 s, no further retries. Every `call` message expires: it
   is never kept in the day-long Outbox.
-- A device in a call answers any other `offer` with `busy` (voice room offers excepted, section 6).
+- A device in a call answers any other `offer` with `busy` (offers for the room it is in excepted, 6.3).
 
 Candidates (the final 0.6 format, the same in both apps):
 
@@ -459,9 +461,9 @@ duplicate. Vectors: `call.frames`, `call.receive` (order matters; one receiver p
 Opus, application VOIP, mono, **16 kHz (wideband), 16 kbps VBR, 20 ms frames**, in-band FEC on (expected
 loss 10%), DTX on, complexity 5. Decoders may run at 16 or 48 kHz.
 
-Why 16 kHz and 16 kbps over 48 kHz and 24 kbps: each packet is sent on up to 3 paths, and to up to 5 peers
+Why 16 kHz and 16 kbps over 48 kHz and 24 kbps: each packet is sent on up to 3 paths, and to up to 7 peers
 in a voice room. At 16 kbps a packet is about 68 bytes (12 header, ~40 Opus, 16 tag), so one Bluetooth LE
-write per 20 ms carries it, and a full voice room is about 190 kbps up per UDP path instead of about 250.
+write per 20 ms carries it, and a full voice room (8 people) is about 210 kbps up per UDP path instead of about 330.
 Wideband is what phone calls with "HD voice" use; speech gains little above 8 kHz of audio bandwidth.
 
 Jitter buffer: play in seq order, target delay adaptive between 40 and 200 ms (start at 60 ms). A missing
@@ -537,23 +539,127 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
   candidate is sent, and calls work only over Wi-Fi and Bluetooth.
 
-## 6. Voice rooms (group calls)
+## 6. Voice rooms and group calls (cap `v1`)
 
-- A voice room is a `voice` channel of a group. Up to 6 people at once, full mesh: every pair runs its own
-  1:1 call (section 5) with its own call id, keys and paths.
-- Join: send `{"t":"vjoin","g","ch","call":"-"}` in room `call` to every group member. (`call` is the literal
-  `-` for room-wide messages, which carry `g` and `ch` and no `eph`.)
-- Everyone already in that voice room answers the joiner with an `offer` carrying `g` and `ch`. The joiner
-  auto-answers offers for the room it just joined (no ringing, no `busy`). So the joiner finds out who is
-  there from the offers it gets, and nobody keeps a list that can go stale.
-- Full: someone in the room who already has 5 peers there answers `{"t":"full","g","ch","call":"-"}` instead
-  of an offer. A joiner that gets `full` leaves and shows "Voice room is full".
-- Both offering at once (two people joined at the same moment): the side whose chat key text is lower in
-  byte order keeps its offer; the other drops its own and answers.
-- Leave: `{"t":"vleave","g","ch","call":"-"}` to every member, then `hangup` to each peer.
-- For people not in the room: show who's in it from `vjoin`/`vleave`. Those in a room re-send `vjoin` every
-  30 minutes; an entry with nothing for 3 hours is dropped.
-- Mute: `mute` to each peer in the room. Speaking indicator per peer from that peer's audio (5.5).
+### 6.1 Model
+
+- A **room** is named by `(g, ch)`: `g` is a group, `ch` is either the id of a `voice` channel in that group's
+  current state (a **voice room**, always there, Discord style) or 16 random bytes in base64url (22 chars) made
+  up by whoever starts a **group call** (a temporary room that exists while someone is in it). The two kinds
+  can't be mixed up: channel ids are 11 characters, group call ids 22.
+- **At most 8 people** in a room, the one who started it included. The apps say so where you join or call.
+- **Full mesh of 1:1 calls.** Every pair in a room runs its own call from section 5: its own call id, its own
+  signed ephemeral keys, its own per-direction AES-256-GCM keys, epochs and replay window, its own paths. Each
+  device encodes its microphone once and seals and sends that Opus stream separately to every other person.
+  So media is encrypted **per recipient**: there is no room key, and nothing to rotate when someone joins or
+  leaves. Someone who leaves holds no key for anything said after, and someone who joins holds none for
+  anything said before (each pair's keys are fresh when the pair's call starts).
+- **Relay only over the internet**, exactly as 5.6: each pair's call has its own TURN allocation (from the same
+  cached relay login), so a device has one relayed address per peer, the peers see only relay addresses, and
+  nobody in the room learns anyone's IP address. On the same Wi-Fi a pair may also go direct, as in 5.6.
+- **Mixing on receive**: one jitter buffer (5.5) and one Opus decoder per peer; each 20 ms the decoded frames are
+  summed and clipped into the speaker. The speaking indicator is per peer, from that peer's decoded audio, and
+  for yourself from your microphone (same rule, 5.5).
+- Cost: about 68 bytes per 20 ms packet plus UDP and TURN headers, so about 30 kbps per peer each way; a full
+  room of 8 is about 210 kbps up and 210 kbps down per path. Fine on Wi-Fi and LTE; the reason for the cap.
+
+### 6.2 Room messages (room `call`)
+
+```json
+{"t": "vjoin", "call": "-", "g": "<group id>", "ch": "<room id>", "ts": 1761500400000, "sig": "<base64 DER>"}
+```
+
+| t | sent by, to | meaning |
+|---|---|---|
+| `vjoin` | someone joining (and every 10 minutes while in), to every member | I'm in this room |
+| `vleave` | someone leaving, to every member | I left |
+| `vring` | whoever starts a group call, to each person it rings | join my group call |
+| `vdecline` | someone who was rung, to the ringer | not now |
+| `full` | someone in the room, to a joiner | the room already has 8 people |
+
+- Exactly the fields `t`, `call` (the literal `-`), `g`, `ch`, `ts` (sender's clock in ms) and `sig`.
+- `sig`: signature (2.2) with domain `huginn-muninn vroom v1` over the whole object without `sig`, by the
+  sender's chat key, checked against the envelope's `fromKey`. Join, leave and ring are thereby signed
+  statements, not just authentic envelopes; the media keys are signed per pair by the 5.2 offer and answer.
+- 1:1 calls go on using real call ids; `call:"-"` marks a room message and never names a call.
+
+Accepting one (reference `accept_room`), with the receiver's current state of group `g`:
+
+1. Well-formed: the fields above and no others, `t` one of the five, `call` is `-`, `g` is 16 bytes and `ch`
+   8 or 16 bytes of canonical base64url (`main` is never a room).
+2. The signature verifies with the sender's chat key.
+3. The receiver has group `g`, the sender and the receiver are both members of its current state, and the
+   sender isn't the receiver.
+4. An 11-character `ch` is a `voice` channel of that state.
+5. Fresh: `ts` at most 60 s old and at most 120 s ahead by the receiver's clock gives **ok**. Otherwise
+   **stale**: a stale `vjoin` or `vleave` still counts for presence (6.4), a stale `vring` is shown as a missed
+   group call, a stale `full` or `vdecline` does nothing.
+
+Anything else is refused and dropped. Vectors: `room.messages`, `room.accept`.
+
+### 6.3 Joining, the mesh, leaving
+
+1. Joining `(g, ch)`: send `vjoin` to every other member of `g` whose caps include `v1`, or aren't known yet
+   (a group peer that hasn't sent anything since). Members known to lack `v1` get nothing (6.7).
+2. A member M who is in `(g, ch)` and gets a fresh `vjoin` from J, and has no call with J for this room: if M
+   already has 7 peers there it answers `full`; otherwise M calls J (5.2) with an `offer` that also carries
+   `"g"` and `"ch"`. M stays in the room whatever J does.
+3. J, while in `(g, ch)`, answers offers carrying that `g` and `ch` from members of `g` at once: no ringing and
+   never `busy`. An offer naming a room J isn't in is answered `decline`.
+4. Two offers for the same room crossing (both joined at the same moment): the offer from the side whose chat
+   key text is lower in byte order wins (reference `room_offer_wins`). The lower side ignores the other's
+   offer; the higher side drops its own call without a word and answers. Vectors: `room.glare`.
+5. A `vjoin` that got lost: J resends `vjoin` 4 s and 12 s after joining to the members it has no call with
+   yet, and everyone in a room re-sends `vjoin` to every member every 10 minutes, which a member in the room
+   that has no call with them answers as in step 2. So a lost offer or a pair that never connected heals.
+6. A joiner that gets `full` leaves at once and shows "This room is full (8 people)".
+7. A pair's call that ends with `nopath` or `dropped` while both stay in the room: the side with the lower
+   key calls again after 5 s, at most 3 times.
+8. Leaving: `vleave` to every member who got `vjoin`, then `hangup` to every peer (5.2). A `vleave` from a peer
+   ends that pair's call at once.
+
+Mute: `mute` (5.2) on each pair's call; a muted device sends no audio to anyone (pings go on).
+
+### 6.4 Presence: who is in a room
+
+Every member keeps, per `(g, ch, sender)`, the last `vjoin` or `vleave` it accepted (ok or stale): in or out,
+the sender's `ts`, and when it was seen by its own clock (reference `presence_apply`, `presence_in`):
+
+- A message replaces the entry only if its `ts` is higher than the entry's (a late, older copy changes
+  nothing; comparing one sender's clock with itself needs no clock agreement).
+- Someone counts as in while the entry says in and it was seen within the last 25 minutes (two and a half
+  times the 10-minute re-send; a phone that died never sends `vleave`).
+- While you are in a room, everyone you have a live call with there counts as in as well.
+
+Shown to everyone in the group, in or out of the room: "Raven, Moose" under the voice room with **Join**,
+and a group call as "Group call" with **Join** while anyone is in it. Vectors: `room.presence`.
+
+### 6.5 Group calls (ringing people into a room)
+
+1. The caller picks a group and who to ring: everyone (the default) or some of its members, which is how a
+   small ad hoc set is called (people who share no group have no pairwise sessions with each other, so they
+   are put in a group first). The caller makes a new 22-character room id, joins it (6.3 step 1: everyone in
+   the group with `v1` sees the call and can join) and sends `vring` to the people it rings, again 15 s later
+   to those who haven't joined or declined.
+2. A fresh `vring` rings for up to 45 s: "Raven is calling Family" with **Join** and **Decline**. Join joins
+   that room (6.3). Decline sends `vdecline` to the ringer. Ringing stops on join or decline, after 45 s, or
+   once presence shows nobody in that room (the caller gave up).
+3. A `vring` that arrives while already in a call or a room is shown as a missed group call, never `busy`.
+4. After 45 s with nobody else in the room the caller leaves it and shows "No one joined".
+5. A group call has no end message: it is over when the last person leaves.
+6. More people than fit can be rung: the first 7 to join get in, later ones get `full`.
+
+### 6.6 One call at a time
+
+A device is in at most one 1:1 call or one room. In a room, a 1:1 `offer` is answered `busy` (5.2). In a 1:1
+call, joining a room says "Hang up first", and a `vring` is a missed group call.
+
+### 6.7 Peers without `v1`
+
+0.6 apps (caps `r1 g1 c1`) drop every room "call" message that has `call:"-"` or a `g` without answering,
+so nothing breaks; they show voice channels as "coming soon" and can't join. Apps with `v1` send them
+nothing for rooms, and show "Needs an update to join calls" next to members known to lack `v1`. Probing caps
+(1.2) when a group opens finds out for members whose caps aren't known.
 
 ## 7. Kids' TV
 
@@ -674,7 +780,7 @@ To put the person in a family group, the parent's app uses the normal group invi
 | `gphoto` | | 3.9 pieces | yes | as photo | (from, gid, i) | g1 |
 | `greceipt` | | 3.10 | yes | no | Seen | g1 |
 | `call` | `offer` `ring` `answer` `decline` `busy` `cands` `mute` `hangup` | 5.2 | yes | short, 5.2 | call id + t; Seen | c1 |
-| `call` | `vjoin` `vleave` `full` | 6 | yes | no | Seen | c1 |
+| `call` | `vjoin` `vleave` `vring` `vdecline` `full` | 6.2 | yes | short, 6.3 and 6.5 | Seen; then 6.4 | v1 |
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
 | `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
@@ -688,7 +794,7 @@ To put the person in a family group, the parent's app uses the normal group invi
 | photo piece | 16 KB, as 0.5 |
 | group members | 50 |
 | channels per group | 20 (including `main`) |
-| people per voice room | 6 |
+| people per voice room or group call | 8 |
 | group name, member name, contact name | 40 characters |
 | channel name | 32 characters |
 | group state, canonical | 24 KB |
@@ -722,3 +828,6 @@ Each app's unit tests should:
   `frames` entry gives `packet` exactly; running `receive` in order through one receiver per side gives each
   `result`.
 - `tv.disconnect`: accepted at version 3, refused at 4.
+- `room`: every `messages` entry's `signed` matches and its signature verifies with its sender; `accept` gives
+  each `result` (with the named state, receiver and clock); running `presence` in order through one table
+  gives each `in` list (and `changed`); `glare` gives each winner.

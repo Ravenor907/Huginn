@@ -67,7 +67,7 @@ object CallManager {
     /** Starts a call to [peerKey]. False if a call is already going on or calling isn't set up yet. */
     fun start(peerKey: String): Boolean {
         val a = app ?: return false
-        if (session != null || Opus.loadError != null) return false
+        if (session != null || RoomManager.busy || Opus.loadError != null) return false
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
         session = s
         remember(s.callId)
@@ -110,7 +110,7 @@ object CallManager {
         exec.execute {
             val a = app ?: return@execute
             val s = try { CallLogic.parse(fromKey, json) } catch (e: CallLogic.Bad) { return@execute }
-            if (s.voiceRoom) return@execute   // voice rooms (section 6) aren't built yet
+            if (s.voiceRoom) return@execute   // voice rooms and group calls: RoomManager
             val cur = session
             if (cur != null && cur.callId == s.call) { if (cur.peerKey == fromKey) cur.onSignal(s); return@execute }
             if (s.t != "offer") return@execute
@@ -120,8 +120,8 @@ object CallManager {
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts, 0, "missed")).also { Ringer.missed(a, nameOf(fromKey), fromKey) }
                 return@execute
             }
-            if (cur != null) {
-                // Already in a call: busy, 3 times over 2 s.
+            if (cur != null || RoomManager.busy) {
+                // Already in a call (or a voice room): busy, 3 times over 2 s.
                 val busy = CallLogic.simple("busy", s.call)
                 send(fromKey, busy); exec.schedule(Runnable { send(fromKey, busy) }, 1, TimeUnit.SECONDS); exec.schedule(Runnable { send(fromKey, busy) }, 2, TimeUnit.SECONDS)
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed"))
@@ -156,7 +156,7 @@ object CallManager {
 
     // ------------------------------------------------------------------ what a session gets from the app
 
-    private val host = object : CallSession.Host {
+    internal val host = object : CallSession.Host {
         override val chatPrivate get() = app!!.identity.keys.private
         override fun send(peerKey: String, json: JSONObject) = this@CallManager.send(peerKey, json)
         override fun lanAddressOf(peerKey: String): InetAddress? = try {

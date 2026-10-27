@@ -28,7 +28,12 @@ from ratchet_ref import b64, pub_der, load_pub, priv_from_int, hkdf, shared_key 
 
 MAX_MEMBERS = 50
 MAX_CHANNELS = 20
-MAX_VOICE_PEOPLE = 6
+MAX_ROOM_PEOPLE = 8          # people in one voice room or group call, the caller included
+ROOM_TYPES = ("vjoin", "vleave", "vring", "vdecline", "full")
+ROOM_PAST_MS, ROOM_AHEAD_MS = 60_000, 120_000   # a room message is fresh if at most 60 s old, 120 s ahead
+PRESENCE_TTL_MS = 25 * 60_000                    # a join not heard again for this long counts as gone
+ROOM_ANNOUNCE_MS = 10 * 60_000                   # those in a room re-send vjoin this often
+B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 MAX_NAME = 40
 MAX_CHANNEL_NAME = 32
 MAX_QUICK = 24
@@ -50,6 +55,7 @@ D_GROUP = "huginn-muninn group v1"
 D_CALL = "huginn-muninn call v1"
 D_TVCONFIG = "huginn-muninn tvconfig v1"
 D_TVDISCONNECT = "huginn-muninn tvdisconnect v1"
+D_ROOM = "huginn-muninn vroom v1"
 
 
 def b64url(b): return base64.urlsafe_b64encode(b).decode().rstrip("=")
@@ -206,6 +212,62 @@ class Receiver:
         else:
             self.bits |= 1 << (self.high - seq)
         return ptype, seq, ts, payload
+
+# ------------------------------------------------------------------ voice rooms and group calls (section 6)
+
+def is_id(s, n):
+    """Exactly n random bytes as canonical base64url without padding (22 chars for 16, 11 for 8)."""
+    if not isinstance(s, str) or len(s) != (4 * n + 2) // 3 or any(c not in B64URL for c in s): return False
+    try: raw = b64url_d(s)
+    except ValueError: return False
+    return len(raw) == n and b64url(raw) == s
+
+def check_room(m):
+    """Shape of a room message (6.2); raises ValueError. Does not check the signature."""
+    if not isinstance(m, dict) or set(m) != {"t", "call", "g", "ch", "ts", "sig"}: raise ValueError("fields")
+    if m["t"] not in ROOM_TYPES: raise ValueError("type")
+    if m["call"] != "-": raise ValueError("call")
+    if not is_id(m["g"], 16): raise ValueError("group id")
+    if not (is_id(m["ch"], 8) or is_id(m["ch"], 16)): raise ValueError("room id")
+    ts = m["ts"]
+    if not isinstance(ts, int) or isinstance(ts, bool) or not 0 <= ts < 2 ** 53: raise ValueError("ts")
+
+def accept_room(state, me, from_key, m, now):
+    """6.2: "ok" (act on it), "stale" (presence only; a stale vring is a missed group call) or why it's refused.
+    [state]: the receiver's current state of m's group (None if it has none), [me]: the receiver's chat key."""
+    try: check_room(m)
+    except ValueError as e: return "malformed: %s" % e
+    if not verify(from_key, D_ROOM, m): return "bad signature"
+    if state is None or state["g"] != m["g"]: return "unknown group"
+    keys = {x["k"] for x in state["members"]}
+    if from_key == me: return "from myself"
+    if from_key not in keys: return "sender not a member"
+    if me not in keys: return "not a member"
+    if len(m["ch"]) == 11 and not any(c["id"] == m["ch"] and c["t"] == "voice" for c in state["channels"]):
+        return "not a voice room"
+    if not now - ROOM_PAST_MS <= m["ts"] <= now + ROOM_AHEAD_MS: return "stale"
+    return "ok"
+
+def presence_apply(table, from_key, m, now):
+    """6.4. [table]: {(g, ch, key): (in, ts, seenAt)}. [m]: an accepted ("ok" or "stale") vjoin or vleave.
+    Newer ts (the sender's clock) wins; [now] (this device's clock) is when it was seen. True if it changed."""
+    k = (m["g"], m["ch"], from_key)
+    if k in table and m["ts"] <= table[k][1]: return False
+    table[k] = (m["t"] == "vjoin", m["ts"], now)
+    return True
+
+def presence_in(table, g, ch, now):
+    """Who is in room (g, ch): joined, and seen within the last 25 minutes by this device's clock. Sorted keys."""
+    return sorted(key for (gg, cc, key), (here, _, seen) in table.items()
+                  if gg == g and cc == ch and here and now - seen <= PRESENCE_TTL_MS)
+
+def room_offer_wins(a, b):
+    """6.3 glare: when two members offer each other for the same room, the offer from the lower chat key text wins."""
+    return a if a < b else b
+
+def room_full(peers):
+    """6.3: someone with this many peers in the room answers a new joiner with "full"."""
+    return peers >= MAX_ROOM_PEOPLE - 1
 
 # ------------------------------------------------------------------ kids' TV
 
@@ -402,6 +464,68 @@ def main():
         "frames": frames, "receive": rx_vec,
     }
 
+    # ---- voice rooms and group calls
+    T = 1761500400000
+    temp = b64url(bytes([0xE0 + i for i in range(16)]))          # a group call's room
+    no_ch = b64url(bytes([0x90 + i for i in range(8)]))          # an 8-byte id that isn't a voice channel of s2
+    rm = lambda who, t, ch, ts: sign(who, D_ROOM, {"t": t, "call": "-", "g": g, "ch": ch, "ts": ts})
+    room_msgs = {
+        "joinB": rm(B, "vjoin", ch_voice, T), "joinC": rm(C, "vjoin", ch_voice, T + 1000),
+        "leaveB": rm(B, "vleave", ch_voice, T + 5000), "joinB2": rm(B, "vjoin", ch_voice, T + 6000),
+        "ringA": rm(A, "vring", temp, T), "joinA": rm(A, "vjoin", temp, T), "declineB": rm(B, "vdecline", temp, T + 3000),
+        "fullC": rm(C, "full", ch_voice, T + 2000), "joinBnoRoom": rm(B, "vjoin", no_ch, T),
+        "joinBmain": rm(B, "vjoin", "main", T), "joinBold": rm(B, "vjoin", ch_voice, T - 10 * 60_000),
+        "joinBextra": sign(B, D_ROOM, {"t": "vjoin", "call": "-", "g": g, "ch": ch_voice, "ts": T, "n": "x"}),
+        "joinBcall": sign(B, D_ROOM, {"t": "vjoin", "call": call_id, "g": g, "ch": ch_voice, "ts": T}),
+        "waveB": sign(B, D_ROOM, {"t": "wave", "call": "-", "g": g, "ch": ch_voice, "ts": T}),
+        "joinAasB": rm(A, "vjoin", ch_voice, T),
+    }
+    st_names = {"s2": s2, "s4b": s4b}
+    key_of = {"A": kA, "B": kB, "C": kC}
+    room_cases = [
+        ("s2", "A", "B", "joinB", T + 500, "ok"), ("s2", "A", "C", "joinC", T + 1500, "ok"), ("s2", "A", "B", "leaveB", T + 5000, "ok"),
+        ("s2", "B", "A", "ringA", T + 100, "ok"), ("s2", "C", "A", "ringA", T + 61000, "stale"), ("s2", "A", "B", "declineB", T + 3000, "ok"),
+        ("s2", "B", "C", "fullC", T + 2000, "ok"), ("s2", "A", "B", "joinB", T - 121000, "stale"),
+        ("s2", "A", "B", "joinBold", T, "stale"), ("s2", "A", "B", "joinBnoRoom", T, "not a voice room"),
+        ("s2", "A", "B", "joinBmain", T, "malformed: room id"), ("s2", "A", "B", "joinBextra", T, "malformed: fields"),
+        ("s2", "A", "B", "joinBcall", T, "malformed: call"), ("s2", "A", "B", "waveB", T, "malformed: type"),
+        ("s2", "C", "B", "joinAasB", T, "bad signature"), ("s2", "A", "A", "joinA", T, "from myself"),
+        ("s4b", "A", "C", "joinC", T + 1000, "sender not a member"), ("s4b", "C", "B", "joinB", T, "not a member"),
+        (None, "A", "B", "joinB", T, "unknown group"),
+    ]
+    room_acc = []
+    for st, me, frm, msg, now, want in room_cases:
+        got = accept_room(st_names[st] if st else None, key_of[me], key_of[frm], room_msgs[msg], now)
+        expect(got == want, "room %s from %s at %s: wanted %s, got %s" % (msg, frm, me, want, got))
+        room_acc.append({"state": st, "me": me, "from": frm, "msg": msg, "now": now, "result": got})
+    # What A's app shows for the Hangout room (and the group call) as messages arrive; "now" is A's clock.
+    table = {}
+    pres_steps = [
+        ("B", "joinB", T + 400), ("C", "joinC", T + 1200), ("B", "leaveB", T + 5100), ("B", "joinBold", T + 5200),
+        ("B", "joinB", T + 5300), ("B", "joinB2", T + 6100), (None, None, T + 1200 + PRESENCE_TTL_MS - 1),
+        (None, None, T + 1200 + PRESENCE_TTL_MS + 1), (None, None, T + 6100 + PRESENCE_TTL_MS + 1),
+    ]
+    pres_vec = []
+    for frm, msg, now in pres_steps:
+        changed = False
+        if msg:
+            assert accept_room(s2, kA, key_of[frm], room_msgs[msg], now) in ("ok", "stale")
+            changed = presence_apply(table, key_of[frm], room_msgs[msg], now)
+        inside = ["ABC"[[kA, kB, kC].index(k)] for k in presence_in(table, g, ch_voice, now)]
+        pres_vec.append({"from": frm, "msg": msg, "now": now, "changed": changed, "in": inside})
+    expect([p["in"] for p in pres_vec] == [["B"], ["B", "C"], ["C"], ["C"], ["C"], ["B", "C"], ["B", "C"], ["B"], []], "presence")
+    expect(room_offer_wins(kA, kB) == min(kA, kB) and room_offer_wins(kB, kA) == min(kA, kB), "glare")
+    expect(not room_full(6) and room_full(7), "room size")
+    room_vec = {
+        "g": g, "voiceRoom": ch_voice, "groupCall": temp, "maxPeople": MAX_ROOM_PEOPLE, "freshPastMs": ROOM_PAST_MS,
+        "freshAheadMs": ROOM_AHEAD_MS, "presenceTtlMs": PRESENCE_TTL_MS,
+        "messages": {k: {"msg": m, "signed": signed_bytes(D_ROOM, m).decode()} for k, m in room_msgs.items()},
+        "accept": room_acc, "presence": pres_vec,
+        "glare": [{"a": "A", "b": "B", "wins": "A" if room_offer_wins(kA, kB) == kA else "B"},
+                  {"a": "B", "b": "C", "wins": "B" if room_offer_wins(kB, kC) == kB else "C"},
+                  {"a": "C", "b": "A", "wins": "C" if room_offer_wins(kC, kA) == kC else "A"}],
+    }
+
     # ---- kids' TV
     q = lambda i, text: {"id": b64url(bytes([0xD0 + i] * 8)), "text": text}
     cfg1 = sign(A, D_TVCONFIG, {"tv": kTV, "v": 1, "by": kA, "parents": [kA], "dictation": False, "ts": 1761500000000,
@@ -449,10 +573,11 @@ def main():
                  "of the canonical JSON with sig. Packets and keys are hex. Every 'accept' and 'receive' step must give the "
                  "same result, in the order listed (receive steps share one receiver per side).",
         "keys": {"A": kA, "B": kB, "C": kC, "TV": kTV, "mailboxA": mbA, "mailboxB": mbB, "mailboxC": mbC},
-        "domains": {"group": D_GROUP, "call": D_CALL, "tvconfig": D_TVCONFIG, "tvdisconnect": D_TVDISCONNECT},
+        "domains": {"group": D_GROUP, "call": D_CALL, "tvconfig": D_TVCONFIG, "tvdisconnect": D_TVDISCONNECT, "room": D_ROOM},
         "canonical": {"good": canon_vec, "refuse": canon_bad},
         "group": group_vec,
         "call": call_vec,
+        "room": room_vec,
         "tv": tv_vec,
         "pairKeyAB": shared_key(A, base64.b64decode(kA), kB).hex(),
     }
@@ -463,6 +588,7 @@ def main():
     print("wrote", path)
     print("group: %d states, %d acceptance checks, conflict winner %s" % (len(states), len(acc_vec), win3_label))
     print("call: %d packets sealed, %d receive steps, epochs 0..2 derived, both ends agree on the root" % (len(frames), len(rx_vec)))
+    print("room: %d messages, %d acceptance checks, %d presence steps" % (len(room_vec["messages"]), len(room_acc), len(pres_vec)))
     print("tv: %d configs, %d acceptance checks, disconnect checked" % (len(tv_vec["configs"]), len(tv_acc)))
     print("all %d checks passed" % ok)
 
@@ -490,6 +616,21 @@ def check_file(path):
     for f in c["frames"]:
         root = bytes.fromhex(c["root"])
         assert seal_packet(root, f["dir"], tag, f["type"], f["seq"], f["ts"], bytes.fromhex(f["payload"])).hex() == f["packet"]; n += 1
+    r = v["room"]
+    keys = v["keys"]
+    rst = {"s2": st["s2"], "s4b": st["s4b"]}
+    for k, x in r["messages"].items():
+        assert signed_bytes(D_ROOM, x["msg"]).decode() == x["signed"]; n += 1
+    for a in r["accept"]:
+        got = accept_room(rst[a["state"]] if a["state"] else None, keys[a["me"]], keys[a["from"]], r["messages"][a["msg"]]["msg"], a["now"])
+        assert got == a["result"], (a, got); n += 1
+    table = {}
+    for p in r["presence"]:
+        if p["msg"]:
+            assert presence_apply(table, keys[p["from"]], r["messages"][p["msg"]]["msg"], p["now"]) == p["changed"]
+        assert presence_in(table, r["g"], r["voiceRoom"], p["now"]) == sorted(keys[x] for x in p["in"]); n += 1
+    for gl in r["glare"]:
+        assert room_offer_wins(keys[gl["a"]], keys[gl["b"]]) == keys[gl["wins"]]; n += 1
     print("re-read %s: %d checks passed" % (os.path.basename(path), n))
 
 if __name__ == "__main__":

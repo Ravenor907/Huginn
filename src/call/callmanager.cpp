@@ -187,6 +187,8 @@ QString CallManager::call(const QString &key)
         return QStringLiteral("Calls aren't available in this build.");
     if (m_session && m_session->state() != CallSession::Ended)
         return QStringLiteral("You're already in a call.");
+    if (busyElsewhere && busyElsewhere())
+        return QStringLiteral("Leave the voice room first.");
     if (!m_signal->canCall(key))
         return QStringLiteral("Needs Muninn or Huginn 0.6");
     auto *s = new CallSession(m_signal, key, [this](auto done) { getLogin(std::move(done)); }, this);
@@ -289,7 +291,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
 {
     const QString t = str(msg, "t"), id = str(msg, "call");
     if (id == QLatin1String("-") || msg.contains(QStringLiteral("g")))
-        return;   // voice rooms (section 6) aren't in Huginn yet
+        return;   // voice rooms and group calls: RoomManager
     if (m_session && m_session->callId() == id && m_session->peerKey() == from) {
         m_session->handle(msg);
         return;
@@ -310,7 +312,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         addHistory(from, false, QStringLiteral("missed"), qint64(msg.value(QStringLiteral("ts")).toDouble()), 0);
         return;
     }
-    if (m_session && m_session->state() != CallSession::Ended) {
+    if ((m_session && m_session->state() != CallSession::Ended) || (busyElsewhere && busyElsewhere())) {
         m_handled.insert(id);
         const QJsonObject busy{{QStringLiteral("t"), QStringLiteral("busy")}, {QStringLiteral("call"), id}};
         m_signal->send(from, busy);
