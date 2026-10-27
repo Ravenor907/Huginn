@@ -13,6 +13,8 @@ permissions:
 jobs:
   flatpak:
     name: Flatpak
+    # Paused by the owner: Muninn and the Windows zip come first. Set back to true to build it again.
+    if: false
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
@@ -214,10 +216,8 @@ jobs:
   windows:
     name: Windows (portable zip)
     # Huginn-Windows.zip: unzip anywhere and run Huginn.exe, nothing to install.
-    # New in 0.6 and not proven yet, so it may fail without stopping the Linux and Android release.
-    # Remove continue-on-error once a few releases have built cleanly.
+    # Required: a release only goes out when this passes.
     runs-on: windows-latest
-    continue-on-error: true
     defaults:
       run:
         shell: bash
@@ -412,8 +412,8 @@ jobs:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
-    # windows has continue-on-error, so a failed Windows build never holds this back (the zip is just left out).
-    needs: [flatpak, muninn, muninn-screens, windows]
+    # Muninn and the Windows zip must both pass. (The Flatpak is paused; add flatpak back here when it returns.)
+    needs: [muninn, muninn-screens, windows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -433,14 +433,9 @@ jobs:
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
         with:
-          name: Huginn.flatpak
-      - uses: actions/download-artifact@v4
-        if: steps.v.outputs.new == '1'
-        with:
           name: muninn-apk
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
-        continue-on-error: true   # missing when the Windows job failed
         with:
           name: Huginn-Windows.zip
       - uses: softprops/action-gh-release@v2
@@ -450,7 +445,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
-            Huginn.flatpak
             Huginn-Windows.zip
             Muninn.apk
           fail_on_unmatched_files: false
@@ -458,6 +452,5 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
-            **Huginn** (SteamOS handheld): Huginn.flatpak. Installed copies update themselves at launch.
             **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
