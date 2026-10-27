@@ -11,8 +11,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * One 1:1 call from start to end (docs/protocol-0.6.md 5.2 timing, 5.6 "no path"). Every method runs on
- * [CallManager]'s single call thread ([exec]), so the state needs no locks; slow work (the relay login
- * through Tor, the TURN allocation) runs on [work] and hops back.
+ * [CallManager]'s single call thread ([exec]), so the state needs no locks; slow work (the relay login,
+ * the TURN allocation) runs on [work] and hops back.
  */
 class CallSession(
     val callId: String,
@@ -28,7 +28,7 @@ class CallSession(
         fun send(peerKey: String, json: JSONObject)
         /** The peer's address on this Wi-Fi from Chat's discovery, or null. Never shown anywhere. */
         fun lanAddressOf(peerKey: String): java.net.InetAddress?
-        /** A relay login (blocking, through Tor), or null. */
+        /** A relay login (blocking), or null. */
         fun relayLogin(): TurnCreds.Login?
         fun resolve(host: String): java.net.InetAddress?
         fun internetAllowed(): Boolean

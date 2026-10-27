@@ -259,7 +259,7 @@ Rectangle {
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
                     name: "shield"; size: Theme.px(15)
-                    color: Chat.torReady || Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
+                    color: Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -586,7 +586,7 @@ Rectangle {
         }
     }
     function addSomeone() {
-        Ui.ask("Add someone", "Paste the code they sent you (it starts with MUNINN1), or a group code (MUNINNG1)", "", "Add", t => {
+        Ui.ask("Add someone", "Paste the code or link they sent you (the code starts with MUNINN1), or a group code (MUNINNG1)", "", "Add", t => {
             if (t.indexOf("MUNINNG1:") >= 0) {
                 const gc = Chat.parseGroupCode(t)
                 const r = Chat.joinWithCode(t)

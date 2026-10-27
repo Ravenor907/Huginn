@@ -2,7 +2,7 @@ package io.github.ravenor907.muninn.net.call
 
 import android.content.Context
 import io.github.ravenor907.muninn.Muninn
-import io.github.ravenor907.muninn.net.Tor
+import io.github.ravenor907.muninn.net.Net
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,7 +71,6 @@ object CallManager {
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
         session = s
         remember(s.callId)
-        Tor.hold(a, "call")
         publish(s)
         CallService.start(a)
         exec.execute { s.startOutgoing() }
@@ -132,7 +131,6 @@ object CallManager {
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
             session = ns
-            Tor.hold(a, "call")
             ns.startIncoming(s)
             publish(ns)
             Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey)
@@ -166,9 +164,9 @@ object CallManager {
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null
-            return TurnCreds.get(a.identity.keys.public.encoded, { url, body -> postThroughTor(url, body) })
+            return TurnCreds.get(a.identity.keys.public.encoded, { url, body -> post(url, body) })
         }
-        override fun resolve(host: String) = TurnClient.torResolve(Tor.proxy(), host)
+        override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false
         override fun newMedia(s: CallSession) = CallMedia(app!!, s.outgoing, s.callId, s.peerKey, bluetooth, object : CallMedia.Events {
             override fun onFirstMedia() = s.mediaFirst()
@@ -183,7 +181,6 @@ object CallManager {
             publish(s)
             if (a != null) {
                 Ringer.stop(a)
-                Tor.release("call")
                 CallService.stop(a)
                 val result = when (s.endWhy) {
                     "missed" -> "missed"
@@ -202,11 +199,10 @@ object CallManager {
         }
     }
 
-    /** POST through Tor only; never a direct connection. (status, body) or null. */
-    private fun postThroughTor(url: String, body: String): Pair<Int, String>? {
-        if (!Tor.awaitReady(45_000)) return null
+    /** HTTPS POST to the relay Worker. (status, body) or null if it couldn't connect. */
+    private fun post(url: String, body: String): Pair<Int, String>? {
         return try {
-            Tor.client().newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(
+            Net.client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(
                 Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType())).build()
             ).execute().use { r -> r.code to (r.body?.string() ?: "") }
         } catch (e: Exception) { null }

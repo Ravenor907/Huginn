@@ -74,7 +74,6 @@ import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.Folders
 import io.github.ravenor907.muninn.net.Groups
 import io.github.ravenor907.muninn.net.Proto06
-import io.github.ravenor907.muninn.net.Tor
 import io.github.ravenor907.muninn.ui.Section
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.semantics.selected
@@ -151,7 +150,6 @@ object ChatNav {
 private fun routeText(r: String) = when (r) {
     "close" -> "Close by (Bluetooth)"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Over the internet, privately (Tor)"
     "internet" -> "Over the internet"
     else -> "Not reachable right now"
 }
@@ -159,11 +157,10 @@ private fun routeText(r: String) = when (r) {
 private fun routeShort(r: String) = when (r) {
     "close" -> "Bluetooth"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Internet (Tor)"
     "internet" -> "Internet"
     else -> "Not reachable"
 }
-private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet", "onion" -> "network"; else -> "user" }
+private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet" -> "network"; else -> "user" }
 
 // The "Quiet" chat look. Every size is dp/sp, so Settings › Accessibility size and text scaling apply.
 private val nameStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.text)
@@ -296,12 +293,12 @@ private fun SearchBox(value: String, onChange: (String) -> Unit) {
     }
 }
 
-/** One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold for folders. */
+/** One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold to rename or for folders. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
                       onLong: (() -> Unit)? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onLongClickLabel = if (onLong != null) "Folders" else null, onLongClick = onLong, onClick = onClick)
+    Row(Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onLongClickLabel = if (onLong != null) "Options" else null, onLongClick = onLong, onClick = onClick)
         .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         avatar()
@@ -335,7 +332,6 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val wifi by app.net.devices.collectAsState()
     val closeError by app.close.error.collectAsState()
     val nostrUp by app.nostr.connected.collectAsState()
-    val tor by Tor.state.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
     val room by app.chat.nearby.collectAsState()
@@ -424,17 +420,10 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             }
             item {
                 ListLabel(folder?.name ?: "Chats") {
-                    // The internet goes through Tor: "Connecting privately (40%)" until it's ready, then Online or Offline.
-                    // Said in words too, never by the dot's color alone.
-                    val on = tor == Tor.State.Ready && nostrUp > 0
-                    val dot = when {
-                        on -> Palette.online
-                        tor is Tor.State.Starting -> Palette.gold
-                        tor is Tor.State.Failed -> Palette.danger
-                        else -> Palette.textFaint
-                    }
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-                    Text(Tor.label(tor, nostrUp), style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
+                    // Online: the internet relays are connected. Said in words too, never by the dot's color alone.
+                    val on = nostrUp > 0
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
+                    Text(if (on) "Online" else "Offline", style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
                 }
             }
             if (showRoom) item(key = "room") {
@@ -845,6 +834,10 @@ private fun MyCode(app: Muninn) {
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
+                // Someone without Muninn, right here: hand them the app itself, no internet needed.
+                Text("They don't have Muninn yet? Send it to their phone straight from yours, by Quick Share or Bluetooth. Then they scan your code.",
+                    style = Type.small, modifier = Modifier.padding(top = 16.dp))
+                MButton("Share the app", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "phone") { io.github.ravenor907.muninn.ui.ShareApp.share(context) }
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -856,7 +849,7 @@ private fun AddSomeone(app: Muninn) {
     val context = LocalContext.current
     var text by remember {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-        mutableStateOf(ChatNav.incoming.ifEmpty { if (clip.contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
+        mutableStateOf(ChatNav.incoming.ifEmpty { if (Contacts.unlink(clip).contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
     }
     val found = Contacts.parse(text)
     val groupCode = Proto06.parseCode(text)
@@ -864,7 +857,7 @@ private fun AddSomeone(app: Muninn) {
         PageBar("Add someone")
         // Scrolls, so the Add button stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            Text("Paste the code they sent you (it starts with MUNINN1, or MUNINNG1 for a group). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
+            Text("Paste the code or link they sent you (the code starts with MUNINN1, or MUNINNG1 for a group). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
             Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
             when {
                 text.isBlank() -> {}
@@ -1052,7 +1045,7 @@ private fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, label
 
 /** Rename: a nickname kept on this phone only. Empty goes back to the name they chose. */
 @Composable
-private fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
+internal fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
     var text by remember(c.chatKey) { mutableStateOf(c.nickname ?: "") }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { done(null) },
@@ -1196,13 +1189,22 @@ private fun NameDialog(title: String, start: String, confirm: String, hint: Stri
 @Composable
 internal fun FolderPicker(app: Muninn, key: String, name: String, done: () -> Unit) {
     val folders by app.chat.folders.all.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // the new name shows at once
     var newName by remember { mutableStateOf("") }
+    // Holding a chat or a person: their nickname is here too (a contact only, never a group).
+    val contact = app.chat.contacts.contact(key)
+    var renaming by remember { mutableStateOf(false) }
+    if (renaming && contact != null) {
+        RenameDialog(contact) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
+        return
+    }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
         title = { Text("Folders for $name", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (contact != null) MButton("Rename", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
                 Text("Folders are only on this phone. Nobody else sees them.", style = Type.small, modifier = Modifier.padding(bottom = 6.dp))
                 folders.forEach { f ->
                     val on = key in f.keys

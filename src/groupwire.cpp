@@ -533,12 +533,10 @@ QJsonObject GroupWire::channel(const QJsonObject &s, const QString &id)
 // ------------------------------------------------------------------ group codes
 
 QString GroupWire::code(const QString &g, const QString &groupName, const QString &adminKey, const QString &adminName, const QString &mailbox,
-                        const QString &token, qint64 expiresMs, const QString &onion)
+                        const QString &token, qint64 expiresMs)
 {
     QJsonObject o{{QStringLiteral("g"), g}, {QStringLiteral("gn"), groupName}, {QStringLiteral("a"), adminKey}, {QStringLiteral("an"), adminName},
                   {QStringLiteral("p"), mailbox}, {QStringLiteral("i"), token}, {QStringLiteral("x"), expiresMs / 1000}};
-    if (!onion.isEmpty())
-        o.insert(QStringLiteral("o"), onion);
     return QLatin1String(kCodePrefix) + b64url(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
@@ -577,8 +575,7 @@ QVariantMap GroupWire::parseCode(const QString &text, qint64 nowMs)
             {QStringLiteral("mailbox"), isMailbox(p) ? p : QString()},
             {QStringLiteral("token"), i},
             {QStringLiteral("expires"), x},
-            {QStringLiteral("expired"), x <= nowMs},
-            {QStringLiteral("onion"), o.value(QStringLiteral("o")).toString()}};
+            {QStringLiteral("expired"), x <= nowMs}};
 }
 
 // ------------------------------------------------------------------ self-test
@@ -750,14 +747,23 @@ bool GroupWire::selfTest(const QString &vectorsPath)
         check(!isGroupId(QStringLiteral("AAECAwQFBgcICQoLDA0OD+")) && !isLogicalId(QStringLiteral("000102030405060708090A0B0C0D0E0F")), "bad ids are refused");
         const QString g = newGroupId(), tok = newToken();
         const qint64 t0 = 1761500000000;
-        const QString text = QStringLiteral("Join us: ") + code(g, QStringLiteral("Family"), kA, QStringLiteral("Raven"), QString(64, QLatin1Char('a')), tok, t0 + kTokenLife,
-                                                                QStringLiteral("abc.onion")) + QStringLiteral(" (an hour)");
+        const QString text = QStringLiteral("Join us: ") + code(g, QStringLiteral("Family"), kA, QStringLiteral("Raven"), QString(64, QLatin1Char('a')), tok, t0 + kTokenLife)
+                             + QStringLiteral(" (an hour)");
         const QVariantMap p = parseCode(text, t0);
         check(p.value(QStringLiteral("g")).toString() == g && p.value(QStringLiteral("name")).toString() == QLatin1String("Family")
                   && p.value(QStringLiteral("admin")).toString() == kA && p.value(QStringLiteral("token")).toString() == tok
-                  && p.value(QStringLiteral("mailbox")).toString().size() == 64 && !p.value(QStringLiteral("expired")).toBool()
-                  && p.value(QStringLiteral("onion")).toString() == QLatin1String("abc.onion"),
+                  && p.value(QStringLiteral("mailbox")).toString().size() == 64 && !p.value(QStringLiteral("expired")).toBool(),
               "a group code reads back");
+        const QString bare = code(g, QStringLiteral("Family"), kA, QStringLiteral("Raven"), QString(64, QLatin1Char('a')), tok, t0 + kTokenLife);
+        const QJsonObject inside = QJsonDocument::fromJson(QByteArray::fromBase64(bare.mid(int(qstrlen(kCodePrefix))).toLatin1(), QByteArray::Base64UrlEncoding)).object();
+        check(inside.value(QStringLiteral("g")).toString() == g && !inside.contains(QStringLiteral("o")), "a group code carries no onion address");
+        // A 0.6 code with an onion address ("o") still reads; the address is ignored.
+        const QJsonObject old{{QStringLiteral("g"), g}, {QStringLiteral("gn"), QStringLiteral("Family")}, {QStringLiteral("a"), kA}, {QStringLiteral("an"), QStringLiteral("Raven")},
+                              {QStringLiteral("p"), QString(64, QLatin1Char('a'))}, {QStringLiteral("i"), tok}, {QStringLiteral("x"), (t0 + kTokenLife) / 1000},
+                              {QStringLiteral("o"), QString(56, QLatin1Char('a')) + QStringLiteral(".onion")}};
+        const QVariantMap po = parseCode(QLatin1String(kCodePrefix) + b64url(QJsonDocument(old).toJson(QJsonDocument::Compact)), t0);
+        check(po.value(QStringLiteral("g")).toString() == g && po.value(QStringLiteral("token")).toString() == tok && !po.contains(QStringLiteral("onion")),
+              "a 0.6 group code with an onion address still reads (the address is ignored)");
         check(parseCode(text, t0 + kTokenLife + 1000).value(QStringLiteral("expired")).toBool(), "a group code expires after an hour");
         check(parseCode(QStringLiteral("MUNINN1:abc"), t0).isEmpty() && parseCode(QStringLiteral("MUNINNG1:e30"), t0).isEmpty(), "anything else isn't a group code");
     }

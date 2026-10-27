@@ -137,7 +137,7 @@ CallSession::Cands CallSession::parseCands(const QJsonObject &msg)
         if (!port)
             continue;
         if (t == QLatin1String("relay") && !out.relay.valid()) {
-            // A literal address only: a name would mean a DNS lookup outside Tor.
+            // A relay address is always a literal IP (the TURN server hands it out).
             QHostAddress a;
             if (a.setAddress(str(o, "a")))
                 out.relay = CallNet::fromHost(a, port);

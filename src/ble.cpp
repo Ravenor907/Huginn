@@ -160,8 +160,7 @@ QVariantList Ble::peers() const
         out << QVariantMap{{QStringLiteral("address"), l->address},
                            {QStringLiteral("name"), l->name},
                            {QStringLiteral("chatKey"), l->chatKey},
-                           {QStringLiteral("mailbox"), l->mailbox},
-                           {QStringLiteral("onion"), l->onion}};
+                           {QStringLiteral("mailbox"), l->mailbox}};
     }
     return out;
 }
@@ -413,7 +412,6 @@ void Ble::onHello(Link *l, const QByteArray &value)
     l->chatKey = key;
     l->name = o.value(QStringLiteral("name")).toString();
     l->mailbox = o.value(QStringLiteral("mailbox")).toString();
-    l->onion = o.value(QStringLiteral("onion")).toString().left(70);   // 0.6: where it's reached over Tor
 
     const QLowEnergyCharacteristic outbox = l->svc->characteristic(kOutbox);
     const QLowEnergyDescriptor cccd = outbox.clientCharacteristicConfiguration();
