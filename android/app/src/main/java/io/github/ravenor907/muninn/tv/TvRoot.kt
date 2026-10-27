@@ -484,8 +484,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         }
     }
 
-    val firstId = when { dictate -> "say"; mic -> "rec"; cfg.quick.isNotEmpty() -> cfg.quick.first().id; else -> "call" }
     val calls = cfg.calls
+    // The first button the remote lands on; never the Call button while it's off or can't work (no mic).
+    val firstId: String? = when { dictate -> "say"; mic -> "rec"; cfg.quick.isNotEmpty() -> cfg.quick.first().id; mic && calls -> "call"; else -> null }
     val first = remember { FocusRequester() }
     fun req(id: String) = if (id == firstId) first else null
 
@@ -520,7 +521,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             }
         }
     }
-    LaunchedEffect(firstId) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+    LaunchedEffect(firstId) { if (firstId != null) { delay(80); try { first.requestFocus() } catch (_: Exception) {} } }
 
     overlay?.let { o ->
         TvDialog(onBack = { cancel() }) {

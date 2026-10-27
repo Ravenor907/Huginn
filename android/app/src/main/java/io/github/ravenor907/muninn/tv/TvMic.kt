@@ -20,7 +20,8 @@ import kotlin.math.tanh
  * search from across the room and come in very quiet, so everything recorded on the TV (voice messages,
  * speech to text, calls) goes through the same steps:
  *  - a source that isn't turned down: VOICE_RECOGNITION for clips and dictation, VOICE_COMMUNICATION
- *    for calls (it keeps the echo canceller, which a TV's loud speakers need), each falling back to MIC;
+ *    for calls (it keeps the echo canceller, which a TV's loud speakers need), each falling back to MIC
+ *    ([open], [callSources]);
  *  - Android's AutomaticGainControl where the TV has one;
  *  - [Gain]: a software gain set by the parent's "Microphone level" (in the signed config, 7.5) with a
  *    soft limiter, so a loud voice close by bends instead of clipping.
@@ -39,10 +40,22 @@ object TvMic {
      * Gain with a soft limiter. Below [KNEE] the signal is only made louder; above it, it curves smoothly
      * toward full scale (tanh) and never wraps around. Pure Kotlin, so the unit tests can run it.
      */
-    class Gain(level: Int) {
-        private val g = 10f.pow(gainDb(level) / 20f)
+    class Gain(private val level: () -> Int) {
+        /** A fixed level (tests, a clip that is already recording). */
+        constructor(level: Int) : this({ level })
+
+        private var at = Int.MIN_VALUE
+        private var g = 1f
+
+        /** The factor for the level right now: a new level from the parent applies from the next frame. */
+        fun factor(): Float {
+            val l = level()
+            if (l != at) { at = l; g = 10f.pow(gainDb(l) / 20f) }
+            return g
+        }
 
         fun process(pcm: ShortArray, n: Int = pcm.size) {
+            val g = factor()
             if (g == 1f) return
             for (i in 0 until n) pcm[i] = (shape(pcm[i] / 32768f * g) * 32767f).toInt().toShort()
         }
@@ -62,15 +75,24 @@ object TvMic {
 
     @Volatile private var callAgc: AutomaticGainControl? = null
 
-    /** The call's microphone source: unchanged on a phone. */
-    fun callSource(): Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+    /**
+     * The call's microphone sources, in order: VOICE_COMMUNICATION (with the echo canceller) and, on a
+     * Kids' TV only, MIC when the TV can't open that one. A phone keeps exactly one, as before.
+     */
+    fun callSources(): IntArray = callSources(active)
+    fun callSources(tv: Boolean): IntArray =
+        if (tv) intArrayOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.MIC)
+        else intArrayOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
 
-    /** The gain stage for a call's microphone, or null on a phone. Also turns on the TV's AGC for [sessionId]. */
+    /**
+     * The gain stage for a call's microphone, or null on a phone. Also turns on the TV's AGC for [sessionId].
+     * It reads [level] for every frame, so a new "Microphone level" reaches a call that is going on.
+     */
     fun forCall(sessionId: Int): Gain? {
         if (!active) return null
         release()
         callAgc = agc(sessionId)
-        return Gain(level)
+        return Gain { level }
     }
 
     fun release() { try { callAgc?.release() } catch (_: Exception) {}; callAgc = null }
@@ -140,7 +162,7 @@ object TvRecorder {
 
     private fun loop(rec: AudioRecord, codec: MediaCodec, buf: ByteArrayOutputStream) {
         val agc = TvMic.clipAgc(rec.audioSessionId)
-        val gain = TvMic.Gain(TvMic.level)
+        val gain = TvMic.Gain { TvMic.level }
         val pcm = ShortArray(FRAME)
         val bytes = ByteArray(FRAME * 2)
         val info = MediaCodec.BufferInfo()

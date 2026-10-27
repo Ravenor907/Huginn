@@ -169,6 +169,11 @@ class Muninn : Application() {
             .setVibrate(BUZZ).setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
+        // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
+        if (!visible) try {
+            if (io.github.ravenor907.muninn.tv.KidMode.on(this))
+                io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
+        } catch (_: Exception) {}
     }
 
     /** A short double buzz: a message arrived in the chat you're looking at. */

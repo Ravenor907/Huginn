@@ -99,7 +99,11 @@ class CallMedia(
         addPath(CallLogic.Kind.WIFI, a)
     }
 
-    private fun addPath(kind: CallLogic.Kind, a: InetSocketAddress?) { paths += CallLogic.Path(kind, a) }
+    private fun addPath(kind: CallLogic.Kind, a: InetSocketAddress?) {
+        // One relay path: its sends go to every relayed address in peerRelay.targets().
+        if (kind == CallLogic.Kind.RELAY && paths.any { it.kind == kind }) return
+        paths += CallLogic.Path(kind, a)
+    }
 
     /** Both ephemeral keys are known: start sending and receiving. */
     fun begin(k: CallCrypto.Keys) {
@@ -161,7 +165,7 @@ class CallMedia(
         // A Wi-Fi packet from an address we didn't know (a second interface): it's a path now.
         if (p == null && kind == CallLogic.Kind.WIFI && from != null && paths.count { it.kind == kind } < 3) { p = CallLogic.Path(kind, from); paths += p }
         // Relayed before their cands reached us: the relay is a path already.
-        if (p == null && kind == CallLogic.Kind.RELAY && from != null) { p = CallLogic.Path(kind, from); paths += p }
+        if (p == null && kind == CallLogic.Kind.RELAY && from != null) { addPath(kind, from); p = path(kind, from) }
         p?.lastIn = now
     }
 
@@ -200,12 +204,11 @@ class CallMedia(
         val p = try { CallCrypto.seal(k, offerer, tag, type, s, System.currentTimeMillis() - started, payload) } catch (e: Exception) { return }
         val now = System.currentTimeMillis()
         val targets = only?.let { listOf(it) } ?: paths.filter { it.live(now) }.ifEmpty { paths }
-        // Up to 3 UDP paths (Wi-Fi first, then the lowest round trip) plus Bluetooth.
-        val udp = targets.filter { it.kind != CallLogic.Kind.BLUETOOTH }
-            .sortedWith(compareBy({ if (it.kind == CallLogic.Kind.WIFI) 0 else 1 }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs })).take(3)
-        for (t in udp) when (t.kind) {
-            CallLogic.Kind.RELAY -> turn?.let { tc -> for (a in peerRelay.targets()) tc.send(a, p) }
-            CallLogic.Kind.WIFI -> t.addr?.let { a -> try { lan?.send(DatagramPacket(p, p.size, a)) } catch (_: Exception) {} }
+        // Up to 3 UDP paths (Wi-Fi first, then the lowest round trip) plus Bluetooth; each distinct
+        // destination gets the packet once (the relay once per relayed address, not once per relay path).
+        for (d in CallLogic.udpSends(targets, peerRelay.targets())) when (d.kind) {
+            CallLogic.Kind.RELAY -> turn?.send(d.addr, p)
+            CallLogic.Kind.WIFI -> try { lan?.send(DatagramPacket(p, p.size, d.addr)) } catch (_: Exception) {}
             else -> {}
         }
         if (targets.any { it.kind == CallLogic.Kind.BLUETOOTH } && bluetooth?.canCarry(peerKey) == true) bluetooth.send(peerKey, p)
@@ -242,15 +245,9 @@ class CallMedia(
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
         routeDefault()
         val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val rec = try {
-            AudioRecord(io.github.ravenor907.muninn.tv.TvMic.callSource(), Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
-        } catch (e: Exception) { null }
-        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return false }
+        // A phone has one source; a Kids' TV falls back to MIC when VOICE_COMMUNICATION won't open or start.
+        val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull() ?: return false
         record = rec
-        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId)   // Kids' TV: louder microphone
-        if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
-        if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
         val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -266,11 +263,33 @@ class CallMedia(
         return true
     }
 
+    /**
+     * Opens and starts the microphone on [src] with the echo canceller, noise suppressor and (Kids' TV)
+     * gain and AGC where the device has them. Null, with everything released, if it doesn't record.
+     */
+    @SuppressLint("MissingPermission")
+    private fun openMic(src: Int, minIn: Int): AudioRecord? {
+        val rec = try {
+            AudioRecord(src, Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
+        } catch (e: Exception) { null }
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
+        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId)   // Kids' TV: louder microphone
+        if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
+        if (ok) return rec
+        try { aec?.release(); ns?.release() } catch (_: Exception) {}
+        aec = null; ns = null
+        if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(); tvGain = null }
+        rec.release()
+        return null
+    }
+
     private fun captureLoop(rec: AudioRecord) {
         val enc = try { Opus.Encoder() } catch (e: Throwable) { return }
         val pcm = ShortArray(Opus.FRAME)
         try {
-            rec.startRecording()
+            // Already recording: openMic started it to know the source works.
             while (!stopped) {
                 var got = 0
                 while (got < Opus.FRAME && !stopped) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }

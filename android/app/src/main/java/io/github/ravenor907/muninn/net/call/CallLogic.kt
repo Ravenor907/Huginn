@@ -259,6 +259,28 @@ object CallLogic {
         fun live(now: Long) = lastIn > 0 && now - lastIn < PATH_DEAD_MS
     }
 
+    /** Where one sealed packet goes: [kind] says which socket (the TURN allocation or the Wi-Fi one). */
+    data class Dest(val kind: Kind, val addr: InetSocketAddress)
+
+    /**
+     * The UDP sends for one packet over [targets] (paths, best first): up to [max] paths, Wi-Fi first then
+     * the lowest round trip. The relay counts as one path however many relay paths are known, and each
+     * distinct relayed address in [relayTargets] gets the packet once; each Wi-Fi address once too.
+     */
+    fun udpSends(targets: List<Path>, relayTargets: List<InetSocketAddress>, max: Int = 3): List<Dest> {
+        val chosen = targets.filter { it.kind != Kind.BLUETOOTH }
+            .sortedWith(compareBy({ if (it.kind == Kind.WIFI) 0 else 1 }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs }))
+            .distinctBy { if (it.kind == Kind.RELAY) "relay" else "${it.kind}|${it.addr}" }
+            .take(max)
+        val out = LinkedHashSet<Dest>()
+        for (p in chosen) when (p.kind) {
+            Kind.RELAY -> for (a in relayTargets) out += Dest(Kind.RELAY, a)
+            Kind.WIFI -> p.addr?.let { out += Dest(Kind.WIFI, it) }
+            else -> {}
+        }
+        return out.toList()
+    }
+
     /**
      * When to ping a path: while punching (the first 15 s, never live yet) every 50 ms for 2 s then every
      * 250 ms; once live every 1 s (keeps NAT and relay mappings open); dead ones every 2 s for revival.
