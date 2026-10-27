@@ -1704,7 +1704,7 @@ QJsonObject Chat::groupState(const QString &g) const
 
 bool Chat::canRoom(const QString &key) const
 {
-    if (key.isEmpty() || isBlocked(key) || (!isContact(key) && !isGroupPeer(key)))
+    if (key.isEmpty() || isBlocked(key) || isTrashed(key) || (!isContact(key) && !isGroupPeer(key)))
         return false;
     // Not known yet (a group peer that hasn't sent anything since): try; a 0.6 app drops it quietly.
     return !capsKnown(key) || m_caps.value(key).contains(QStringLiteral("v1"));

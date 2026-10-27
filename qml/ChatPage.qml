@@ -1,18 +1,27 @@
 import QtQuick
 import Huginn
 
-// Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, the Nearby
-// room, chats and people around you. Main column: the open conversation. Locked with a pattern or
-// password like Muninn.
+// Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, people in no
+// folder, then each folder as a section that folds away (like Discord categories), the Trash, and at
+// the very bottom the Nearby room and people around you. Main column: the open conversation. Locked
+// with a pattern or password like Muninn.
 Rectangle {
     id: page
     color: Theme.ground
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "chips" (folder filters), "list" or "messages"
-    property string folder: ""        // the folder filter, "" for everyone
-    property int chip: 0
+    property string zone: "list"      // "list" or "messages"
+    // A person being dragged with the mouse (from which section), and where they'd land: the line
+    // (in the list's content), the section, and whether that's onto a folder's header.
+    property string dragKey: ""
+    property string dragFrom: ""
+    property string dragName: ""
+    property real dragY: 0
+    property real dropLine: -1
+    property string dropSection: ""
+    property int dropAt: -1
+    property bool dropOnHeader: false
     property string openKey: ""       // "" = Nearby room, otherwise a private chat
     property int sel: -1              // selected message, for its options
     property bool showCode: false
@@ -46,7 +55,7 @@ Rectangle {
         tour = !!a.tour
         changeLock = !!a.changeLock
         if (a.zone) zone = a.zone
-        if (a.folders) { zone = "chips"; chip = Math.min(1, chips.length - 1) }
+        if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; zone = "messages" }   // from Contacts › Message
     }
 
@@ -54,38 +63,50 @@ Rectangle {
     // The lock's own LB / RB (pattern or password) win over moving along the rail.
     readonly property bool ownsShoulders: lock.visible && lock.mode !== "unlock"
 
-    // Folder chips at the top: All, each folder, then + to make one.
-    readonly property var chips: [{ id: "", name: "All" }].concat(Chat.folders).concat([{ id: "+", name: "+ Folder" }])
+    // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
+    // keep their own order; people in no folder go newest first until they're moved.
     readonly property var entries: {
         const out = [{ kind: "add", name: "Add someone", detail: "Paste their code, or a group code" },
                      { kind: "code", name: "My code", detail: "A QR anyone can scan to message you" }]
-        if (folder !== "") {
-            Chat.chats.filter(c => (c.folders || []).indexOf(folder) >= 0)
-                .forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
-            return out
-        }
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName,
                                                   detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
-        out.push({ kind: "nearby", name: "Nearby room", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
-        Chat.chats.forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
-        Chat.around.forEach(p => out.push({ kind: "stranger", key: p.key, name: p.name, detail: page.routeText(p.route) + " · A to message", route: p.route }))
+        const chats = Chat.chats, byKey = {}
+        chats.forEach(c => byKey[c.key] = c)
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route, section: section })
+        const order = Chat.topOrder
+        const loose = chats.filter(c => !(c.folders || []).length)
+        loose.filter(c => order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
+        order.forEach(k => { const c = byKey[k]; if (c && !(c.folders || []).length) out.push(person(c, "")) })
+        Chat.folders.forEach(f => {
+            const keys = (f.keys || []).filter(k => !!byKey[k])
+            out.push({ kind: "folder", id: f.id, name: f.name, collapsed: !!f.collapsed, count: keys.length,
+                       unread: !!f.collapsed && keys.some(k => byKey[k].unread) })
+            if (!f.collapsed) keys.forEach(k => out.push(person(byKey[k], f.id)))
+        })
+        const trash = Chat.trash
+        if (trash.length) out.push({ kind: "trash", name: "Trash", detail: trash.length + (trash.length === 1 ? " person" : " people") + " · deleted for good after 30 days" })
+        // Nearby always last, in its own section. Hidden from people nearby: none of it.
+        if (Chat.visibleNearby) {
+            out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
+            Chat.around.forEach((p, i) => out.push({ kind: "stranger", key: p.key, name: p.name, label: i === 0 ? "Around you" : "", detail: page.routeText(p.route) + " · A to message", route: p.route }))
+        }
         return out
     }
     readonly property var messages: {
         if (tour && openKey === "")
             return [{ id: "1", name: "Raven 4821", text: "Anyone have the Emerald save from yesterday?", mine: false, time: Date.now() - 60000 },
                     { id: "2", name: Chat.username, text: "Sending it over LocalSend now", mine: true, time: Date.now(), state: "read" }]
-        return openKey === "" ? Chat.nearby : (Chat.chats, Chat.messagesWith(openKey))
+        return openKey === "" ? (Chat.visibleNearby ? Chat.nearby : []) : (Chat.chats, Chat.messagesWith(openKey))
     }
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
     readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
 
     // What the hint bar shows (Main.qml adds LB RB).
     readonly property var prompts: lock.visible ? [{ key: "b", label: "Back" }]
-        : zone === "chips" ? [{ key: "a", label: "Show" }, { key: "x", label: "Folder options" }, { key: "b", label: "Back" }]
-        : zone === "list" ? [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+        : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
+                             { key: "x", label: "Options" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
             .concat(sel >= 0 || openKey !== "" ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
     readonly property string status: lock.visible ? "" : Chat.netStatus
@@ -146,47 +167,36 @@ Rectangle {
         width: Theme.px(270)
         color: Theme.column
 
-        PageHeader { id: listHead; width: parent.width; title: "Direct messages" }
-
-        // Folders (only on this computer) as filter chips.
-        Flow {
-            id: chipRow
-            visible: !page.locked
-            anchors.top: listHead.bottom
-            anchors.topMargin: Theme.px(10)
-            x: Theme.px(10)
-            width: parent.width - Theme.px(20)
-            spacing: Theme.px(6)
-            Repeater {
-                model: page.chips
-                Rectangle {
-                    readonly property bool on: page.active && page.zone === "chips" && page.chip === index
-                    readonly property bool picked: modelData.id === page.folder && modelData.id !== "+"
-                    height: Theme.px(30)
-                    width: chipLabel.implicitWidth + Theme.px(22)
-                    radius: height / 2
-                    color: picked ? Theme.accentFill : chipHover.hovered ? Theme.raised : Theme.tile
-                    border.width: on ? Theme.focusWidth : picked ? 1 : 0
-                    border.color: Theme.accent
-                    Accessible.role: Accessible.Button
-                    Accessible.name: modelData.id === "+" ? "New folder" : "Show " + modelData.name
-                    Text {
-                        id: chipLabel
-                        anchors.centerIn: parent
-                        text: modelData.name || ""
-                        color: parent.picked ? Theme.accent : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: parent.picked ? Font.DemiBold : Font.Normal
-                    }
-                    HoverHandler { id: chipHover }
-                    TapHandler { onTapped: { page.zone = "chips"; page.chip = index; page.pickChip() } }
+        PageHeader {
+            id: listHead
+            width: parent.width
+            title: "Direct messages"
+            // Folders are sections of the list below; this makes a new one (with a pointer).
+            Rectangle {
+                visible: !page.locked
+                anchors.verticalCenter: parent.verticalCenter
+                height: Theme.px(30)
+                width: newFolderLabel.implicitWidth + Theme.px(22)
+                radius: height / 2
+                color: newFolderHover.hovered ? Theme.raised : Theme.tile
+                Accessible.role: Accessible.Button
+                Accessible.name: "New folder"
+                Text {
+                    id: newFolderLabel
+                    anchors.centerIn: parent
+                    text: "+ Folder"
+                    color: Theme.textSoft
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
+                HoverHandler { id: newFolderHover }
+                TapHandler { onTapped: page.newFolder("") }
             }
         }
 
         ListView {
             id: listPane
             visible: !page.locked
-            anchors.top: chipRow.visible ? chipRow.bottom : listHead.bottom
+            anchors.top: listHead.bottom
             anchors.topMargin: Theme.px(10)
             anchors.bottom: netStrip.top
             anchors.bottomMargin: Theme.px(6)
@@ -198,72 +208,223 @@ Rectangle {
             currentIndex: page.row
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
-            delegate: Rectangle {
+            delegate: Item {
+                id: entry
                 readonly property bool on: page.active && page.zone === "list" && page.row === index
-                readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
-                readonly property bool person: modelData.kind === "chat" || modelData.kind === "stranger" || modelData.kind === "request"
+                readonly property bool isHeader: modelData.kind === "folder"
+                readonly property real labelHeight: modelData.label ? Theme.px(34) : 0
                 width: listPane.width
-                height: Theme.px(56)
-                radius: Theme.px(10)
-                color: on || here ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
-                border.width: on ? Theme.focusWidth : 0
-                border.color: Theme.accent
-                Accessible.role: Accessible.ListItem
-                Accessible.name: modelData.name + ", " + modelData.detail
-                Rectangle {
-                    id: ava
-                    anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Theme.px(34); height: width; radius: width / 2
-                    color: parent.person ? Theme.avatar(modelData.name).bg : Theme.raised
+                height: labelHeight + (isHeader ? Theme.px(36) : Theme.px(56))
+
+                // The start of the bottom section (Nearby), or of the people around you.
+                Item {
+                    visible: !!modelData.label
+                    width: parent.width
+                    height: entry.labelHeight
+                    Rectangle { visible: modelData.kind === "nearby"; anchors.top: parent.top; anchors.topMargin: Theme.px(6); width: parent.width; height: 1; color: Theme.line }
                     Text {
-                        visible: parent.parent.person
-                        anchors.centerIn: parent
-                        text: page.initial(modelData.name)
-                        color: Theme.avatar(modelData.name).fg
-                        font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(4)
+                        text: String(modelData.label || "").toUpperCase()
+                        color: Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
                     }
+                }
+
+                // A folder's header: tap (or A) folds it away, X for its options.
+                Rectangle {
+                    visible: entry.isHeader
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: Theme.px(36)
+                    radius: Theme.px(8)
+                    color: entry.on || (page.dragKey !== "" && page.dropSection === modelData.id && page.dropOnHeader) ? Theme.tile : headHover.hovered ? Theme.raised : "transparent"
+                    border.width: entry.on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.name + (modelData.collapsed ? ", folded away" : "")
                     Icon {
-                        visible: !parent.parent.person
-                        anchors.centerIn: parent
-                        size: Theme.px(18)
-                        name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : "people"
-                        color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
+                        id: chevron
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "down"; size: Theme.px(14)
+                        rotation: modelData.collapsed ? -90 : 0
+                        color: Theme.textMuted
                     }
-                    // Requests wait for an answer: a lock badge so they stand out.
+                    Text {
+                        anchors.left: chevron.right; anchors.leftMargin: Theme.px(6)
+                        anchors.right: headDot.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: String(modelData.name || "").toUpperCase() + "  ·  " + (modelData.count || 0)
+                        color: entry.on || modelData.unread ? Theme.text : Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
+                    }
                     Rectangle {
-                        visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
-                        anchors.right: parent.right; anchors.bottom: parent.bottom
-                        anchors.margins: -Theme.px(2)
-                        width: Theme.px(14); height: width; radius: width / 2
+                        id: headDot
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(8); height: width; radius: width / 2
                         color: Theme.accent
+                        visible: !!modelData.unread
+                    }
+                    HoverHandler { id: headHover }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.listOptions(); else page.choose() }
                     }
                 }
-                Column {
-                    anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                    anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text {
-                        width: parent.width; elide: Text.ElideRight; text: modelData.name
-                        color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.DemiBold
-                    }
-                    Text {
-                        width: parent.width; elide: Text.ElideRight; text: modelData.detail
-                        color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                    }
-                }
+
                 Rectangle {
-                    id: dot
-                    anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Theme.px(9); height: width; radius: width / 2
-                    color: Theme.accent
-                    visible: !!modelData.unread
+                    readonly property bool on: entry.on
+                    readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
+                    readonly property bool person: modelData.kind === "chat" || modelData.kind === "stranger" || modelData.kind === "request"
+                    visible: !entry.isHeader
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: Theme.px(56)
+                    radius: Theme.px(10)
+                    // The one being dragged stays dim in its old place until it's dropped.
+                    opacity: page.dragKey !== "" && modelData.kind === "chat" && modelData.key === page.dragKey && modelData.section === page.dragFrom ? 0.4 : 1
+                    color: on || here ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
+                    border.width: on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.ListItem
+                    Accessible.name: modelData.name + ", " + modelData.detail
+                    Rectangle {
+                        id: ava
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(34); height: width; radius: width / 2
+                        color: parent.person ? Theme.avatar(modelData.name).bg : Theme.raised
+                        Text {
+                            visible: parent.parent.person
+                            anchors.centerIn: parent
+                            text: page.initial(modelData.name)
+                            color: Theme.avatar(modelData.name).fg
+                            font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                        }
+                        Icon {
+                            visible: !parent.parent.person
+                            anchors.centerIn: parent
+                            size: Theme.px(18)
+                            name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : modelData.kind === "trash" ? "close" : "people"
+                            color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
+                        }
+                        // Requests wait for an answer: a lock badge so they stand out.
+                        Rectangle {
+                            visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
+                            anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.margins: -Theme.px(2)
+                            width: Theme.px(14); height: width; radius: width / 2
+                            color: Theme.accent
+                        }
+                    }
+                    Column {
+                        anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
+                        anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text {
+                            width: parent.width; elide: Text.ElideRight; text: modelData.name
+                            color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
+                            font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.DemiBold
+                        }
+                        Text {
+                            width: parent.width; elide: Text.ElideRight; text: modelData.detail
+                            color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                        }
+                    }
+                    Rectangle {
+                        id: dot
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(9); height: width; radius: width / 2
+                        color: Theme.accent
+                        visible: !!modelData.unread
+                    }
+                    HoverHandler { id: rowHover }
+                    TapHandler {
+                        enabled: modelData.kind !== "chat"
+                        onTapped: { page.zone = "list"; page.row = index; page.choose() }
+                    }
+                    // People: a click opens, a right click shows their options, and a mouse drag moves
+                    // them up or down or into another folder. Touch still scrolls the list.
+                    MouseArea {
+                        id: dragArea
+                        anchors.fill: parent
+                        enabled: modelData.kind === "chat"
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        property real startY: 0
+                        property bool moved: false
+                        onPressed: mouse => {
+                            startY = mouse.y
+                            moved = false
+                            preventStealing = mouse.button === Qt.LeftButton && mouse.source === Qt.MouseEventNotSynthesized
+                        }
+                        onPositionChanged: mouse => {
+                            if (!preventStealing) return
+                            if (!moved && Math.abs(mouse.y - startY) > Theme.px(8)) { moved = true; page.startDrag(modelData) }
+                            if (moved) page.dragTo(mapToItem(listPane, mouse.x, mouse.y).y)
+                        }
+                        onReleased: { if (moved) page.dropHere() }
+                        onCanceled: { if (moved) page.cancelDrag(); moved = false }
+                        onClicked: mouse => {
+                            if (moved) return
+                            page.zone = "list"; page.row = index
+                            if (mouse.button === Qt.RightButton) page.listOptions(); else page.choose()
+                        }
+                        Component.onDestruction: if (moved) page.cancelDrag()
+                    }
                 }
-                HoverHandler { id: rowHover }
-                TapHandler { onTapped: { page.zone = "list"; page.row = index; page.choose() } }
+            }
+            // Where a dragged person would land.
+            Rectangle {
+                visible: page.dragKey !== "" && page.dropLine >= 0 && !page.dropOnHeader
+                y: page.dropLine - height / 2
+                z: 5
+                width: listPane.width
+                height: Theme.px(3)
+                radius: height / 2
+                color: Theme.accent
+            }
+        }
+        // The person being dragged, under the pointer.
+        Rectangle {
+            visible: page.dragKey !== ""
+            z: 6
+            x: listPane.x + Theme.px(16)
+            y: listPane.y + page.dragY - height / 2
+            width: listPane.width - Theme.px(32)
+            height: Theme.px(40)
+            radius: Theme.px(10)
+            color: Theme.raised
+            border.width: 1
+            border.color: Theme.accent
+            opacity: 0.95
+            Text {
+                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                text: page.dragName
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
+            }
+        }
+        // Near the top or bottom edge while dragging: the list scrolls.
+        Timer {
+            interval: 30
+            repeat: true
+            running: page.dragKey !== ""
+            onTriggered: {
+                const edge = Theme.px(36), maxY = Math.max(0, listPane.contentHeight - listPane.height)
+                let dy = 0
+                if (page.dragY < edge) dy = -Theme.px(10)
+                else if (page.dragY > listPane.height - edge) dy = Theme.px(10)
+                if (dy === 0) return
+                listPane.contentY = Math.max(listPane.originY, Math.min(listPane.originY + maxY, listPane.contentY + dy))
+                page.dragTo(page.dragY)
             }
         }
         Text {
@@ -883,27 +1044,163 @@ Rectangle {
             Ui.say((on ? "Added to " : "Taken out of ") + (f ? f.name : "the folder") + ".")
         })
     }
-    function pickChip() {
-        const c = chips[chip]
-        if (!c) return
-        if (c.id === "+") {
-            Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => { if (Chat.addFolder(t) === "") Ui.say("Give the folder a name.", true) }, false, true)
+    // ------------------------------------------------------------- sections: folders, order, trash
+    function folderName(id) {
+        const f = Chat.folders.find(x => x.id === id)
+        return f ? f.name : ""
+    }
+    // Who is shown in a section, top to bottom.
+    function sectionKeys(section) {
+        return entries.filter(e => e.kind === "chat" && e.section === section).map(e => e.key)
+    }
+    // Back on an entry after the list changed under it.
+    function focusEntry(test) {
+        Qt.callLater(() => { const i = page.entries.findIndex(test); if (i >= 0) page.row = i })
+    }
+    function newFolder(key, from) {
+        Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => {
+            const f = Chat.addFolder(t)
+            if (f === "") { Ui.say("Give the folder a name.", true); return }
+            if (key) Chat.placeIn(key, from || "", f, [key])
+        }, false, true)
+    }
+    // X (or a right click) on a row of the list.
+    function listOptions() {
+        const e = entries[row]
+        if (!e) return
+        if (e.kind === "chat") { personOptions(e); return }
+        if (e.kind === "folder") { folderOptions(e); return }
+        if (e.kind === "trash") { openTrash(); return }
+        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" }] }], a => { if (a === "folder") newFolder("") })
+    }
+    function personOptions(e) {
+        const k = e.key, section = e.section, keys = sectionKeys(section), at = keys.indexOf(k)
+        const items = [{ name: "Open", url: "open" }]
+        if (at > 0) items.push({ name: "Move up", url: "up" })
+        if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
+        items.push({ name: "Move to folder…", detail: section === "" ? "Now in no folder" : "Now in " + folderName(section), url: "move" },
+                   { name: "Folders", detail: folderNames(k), url: "folders" },
+                   { name: "Rename", detail: "A name only you see", url: "rename" },
+                   { name: "Remove", detail: "Goes to the Trash with your chat. Restore brings both back within 30 days", url: "remove" })
+        Ui.pickFrom(e.name, [{ header: "", items: items }], a => {
+            if (a === "open") { openKey = k; zone = "messages" }
+            else if (a === "up" || a === "down") {
+                const next = keys.slice()
+                const to = a === "up" ? at - 1 : at + 1
+                next.splice(at, 1)
+                next.splice(to, 0, k)
+                Chat.placeIn(k, section, section, next)
+                focusEntry(x => x.kind === "chat" && x.key === k && x.section === section)
+            }
+            else if (a === "move") moveToFolder(e)
+            else if (a === "folders") pickFolders(k)
+            else if (a === "rename") rename(k)
+            else if (a === "remove") removePerson(k, e.name)
+        })
+    }
+    function moveToFolder(e) {
+        const k = e.key, from = e.section
+        const items = from === "" ? [] : [{ name: "No folder", detail: "Near the top of the list", url: "-" }]
+        Chat.folders.filter(f => f.id !== from).forEach(f => items.push({ name: f.name, detail: Chat.foldersOf(k).indexOf(f.id) >= 0 ? "Already in it too" : "", url: f.id }))
+        items.push({ name: "New folder", detail: "Make one and move them into it", url: "+" })
+        Ui.pickFrom("Move " + e.name + " to", [{ header: from === "" ? "" : "Out of " + folderName(from), items: items }], id => {
+            if (id === "+") { newFolder(k, from); return }
+            const to = id === "-" ? "" : id
+            Chat.placeIn(k, from, to, sectionKeys(to).concat([k]))
+            focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
+        })
+    }
+    function removePerson(k, name) {
+        Ui.sure("Remove " + name + "?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
+                "Remove", () => { if (openKey === k) { openKey = ""; zone = "list" } Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
+    }
+    function folderOptions(e) {
+        const id = e.id, ids = Chat.folders.map(f => f.id), at = ids.indexOf(id)
+        const items = [{ name: e.collapsed ? "Expand" : "Collapse", url: "fold" }]
+        if (at > 0) items.push({ name: "Move up", url: "up" })
+        if (at >= 0 && at < ids.length - 1) items.push({ name: "Move down", url: "down" })
+        items.push({ name: "Rename", url: "rename" },
+                   { name: "Delete the folder", detail: "The people in it stay", url: "delete" },
+                   { name: "New folder", url: "new" })
+        Ui.pickFrom(e.name, [{ header: "Only on this computer", items: items }], a => {
+            if (a === "fold") Chat.setCollapsed(id, !e.collapsed)
+            else if (a === "up" || a === "down") { Chat.moveFolder(id, a === "up" ? -1 : 1); focusEntry(x => x.kind === "folder" && x.id === id) }
+            else if (a === "rename") Ui.ask("Rename " + e.name, "A name only you see", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
+            else if (a === "delete") Ui.sure("Delete " + e.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete", () => Chat.deleteFolder(id), false, false)
+            else if (a === "new") newFolder("")
+        })
+    }
+    function openTrash() {
+        const t = Chat.trash
+        if (!t.length) { Ui.say("The Trash is empty."); return }
+        const items = t.map(p => ({ name: p.name, detail: p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left · Restore or Delete for good", url: p.key }))
+        Ui.pickFrom("Trash", [{ header: "Deleted for good after 30 days", items: items },
+                              { header: "", items: [{ name: "Empty trash", detail: "Everyone here and your chats with them go for good", url: "!empty" }] }], k => {
+            if (k === "!empty") {
+                Ui.sure("Empty trash?", "Everyone in the Trash and your chats with them are deleted for good.", "Hold to empty", () => { Chat.emptyTrash(); Ui.say("Trash emptied.") }, true, true)
+                return
+            }
+            const p = t.find(x => x.key === k)
+            if (!p) return
+            Ui.pickFrom(p.name, [{ header: "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left", items: [
+                { name: "Restore", detail: "They and your chat come back", url: "restore" },
+                { name: "Delete for good", detail: "Your chat with them goes too", url: "delete" }] }], a => {
+                if (a === "restore") { Chat.restore(k); Ui.say(p.name + " is back.") }
+                else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "They and your chat with them can't be brought back.", "Delete for good",
+                                                 () => { Chat.deleteForGood(k); Ui.say(p.name + " deleted for good.") }, false, true)
+            })
+        })
+    }
+    // ------------------------------------------------------------- dragging people with the mouse
+    function startDrag(e) {
+        dragKey = e.key
+        dragFrom = e.section
+        dragName = e.name
+        dropLine = -1
+        dropAt = -1
+    }
+    // y in the list's own coordinates. Lands before or after a person (by which half of them the
+    // pointer is on), at the top of a folder when over its header, or at the top of the list.
+    function dragTo(y) {
+        dragY = y
+        dropLine = -1; dropAt = -1; dropOnHeader = false
+        const cy = y + listPane.contentY
+        const i = listPane.indexAt(listPane.width / 2, cy)
+        const e = entries[i]
+        const item = i >= 0 ? listPane.itemAtIndex(i) : null
+        if (!e || !item) return
+        if (e.kind === "folder") { dropSection = e.id; dropAt = i + 1; dropOnHeader = true; return }
+        if (e.kind === "chat") {
+            const after = cy > item.y + item.labelHeight + (item.height - item.labelHeight) / 2
+            dropSection = e.section
+            dropAt = after ? i + 1 : i
+            dropLine = after ? item.y + item.height + listPane.spacing / 2 : item.y + item.labelHeight - listPane.spacing / 2
             return
         }
-        folder = c.id
-        row = 0
+        if (e.kind === "add" || e.kind === "code" || e.kind === "ginvite" || e.kind === "request") {
+            const first = entries.findIndex(x => x.kind === "chat" && x.section === "")
+            const at = first >= 0 ? first : i + 1
+            const it = listPane.itemAtIndex(first >= 0 ? first : i)
+            dropSection = ""
+            dropAt = at
+            if (it) dropLine = first >= 0 ? it.y - listPane.spacing / 2 : it.y + it.height + listPane.spacing / 2
+        }
     }
-    function chipOptions() {
-        const c = chips[chip]
-        if (!c || c.id === "" || c.id === "+") { pickChip(); return }
-        const id = c.id
-        Ui.pickFrom(c.name, [{ header: "Only on this computer", items: [
-            { name: "Rename", url: "rename" },
-            { name: "Delete the folder", detail: "The people in it stay", url: "delete" }] }], a => {
-            if (a === "rename") Ui.ask("Rename " + c.name, "A name only you see", c.name, "Save", t => Chat.renameFolder(id, t), false, true)
-            else if (a === "delete") Ui.sure("Delete " + c.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete",
-                                         () => { if (folder === id) folder = ""; Chat.deleteFolder(id) }, false, false)
-        })
+    function dropHere() {
+        const k = dragKey, from = dragFrom, to = dropSection, at = dropAt
+        cancelDrag()
+        if (k === "" || at < 0) return
+        // The target's people as shown, with the dragged one taken out and put where it was let go.
+        const before = [], after = []
+        entries.forEach((x, j) => { if (x.kind === "chat" && x.section === to && x.key !== k) (j < at ? before : after).push(x.key) })
+        Chat.placeIn(k, from, to, before.concat([k]).concat(after))
+        focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
+    }
+    function cancelDrag() {
+        dragKey = ""
+        dropLine = -1
+        dropAt = -1
+        dropOnHeader = false
     }
     function choose() {
         const e = entries[row]
@@ -912,6 +1209,8 @@ Rectangle {
         case "add": addSomeone(); return
         case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; zone = "messages"; return
+        case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
+        case "trash": openTrash(); return
         case "ginvite":
             if (e.waiting) {
                 Ui.sure("Waiting for " + e.fromName, "They let you in to " + e.name + " when their app gets your request. Stop waiting?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
@@ -1113,22 +1412,9 @@ Rectangle {
             if (b === "start") { Chat.keepInTouch(openKey); return true }
             if (b === "back") { Chat.notNow(openKey); return true }
         }
-        if (zone === "chips") {
-            switch (b) {
-            case "left": if (chip === 0) return false; chip--; return true
-            case "right": chip = Math.min(chips.length - 1, chip + 1); return true
-            case "down": zone = "list"; return true
-            case "a": pickChip(); return true
-            case "x": chipOptions(); return true
-            case "b": zone = "list"; return true
-            case "up": return true
-            }
-            return false
-        }
         switch (b) {
         case "up":
-            if (zone === "list" && row === 0 && !locked) { zone = "chips"; chip = Math.max(0, chips.findIndex(c => c.id === folder)) }
-            else if (zone === "list") row = Math.max(0, row - 1)
+            if (zone === "list") row = Math.max(0, row - 1)
             else if (messages.length > 0) { sel = sel < 0 ? messages.length - 1 : Math.max(0, sel - 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "down":
@@ -1142,7 +1428,8 @@ Rectangle {
             return true
         case "a": if (zone === "list") choose(); else write(); return true
         case "x":
-            if (zone === "messages" && sel >= 0) options()
+            if (zone === "list") listOptions()
+            else if (zone === "messages" && sel >= 0) options()
             else if (zone === "messages" && openKey !== "") conversationOptions()
             else if (zone === "messages") write()
             return true
