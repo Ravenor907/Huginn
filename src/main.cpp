@@ -29,6 +29,7 @@
 #include "transfer.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "richwire.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -130,7 +131,8 @@ int main(int argc, char *argv[])
     if (args.isSet(chatTest)) {
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
-        return selfTested(a && b && c);
+        const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
+        return selfTested(a && b && c && d);
     }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());

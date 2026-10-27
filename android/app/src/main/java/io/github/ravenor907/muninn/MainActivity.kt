@@ -269,6 +269,7 @@ class MainActivity : ComponentActivity() {
         app.visible = true
         lockIfDue()
         app.listen()   // relays (with reconnect) and the Wi-Fi side
+        if (app.ready.value) app.chat.foreground(true)   // active status (only if it's on)
     }
 
     override fun onPause() {
@@ -279,6 +280,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         app.visible = false
+        if (app.ready.value && !isChangingConfigurations) app.chat.foreground(false)
         // A new window for a changed setting (dark mode, language) isn't leaving Muninn.
         if (!isChangingConfigurations) {
             io.github.ravenor907.muninn.ui.AppLock.awaySince = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)

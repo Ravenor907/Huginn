@@ -90,6 +90,10 @@ class Identity(context: Context, private val vault: Vault) {
     var deleteAfter: Long
         get() = prefs.getLong("deleteAfter", 0L)
         set(v) = prefs.edit().putLong("deleteAfter", v).apply()
+    /** Active status (cap m1): a green dot for contacts while their app is open. Off sends nothing and shows nobody's. */
+    var activeStatus: Boolean
+        get() = prefs.getBoolean("activeStatus", true)
+        set(v) = prefs.edit().putBoolean("activeStatus", v).apply()
     /** Notifications say only "New message" unless this is on. */
     var showPreview: Boolean
         get() = prefs.getBoolean("showPreview", false)

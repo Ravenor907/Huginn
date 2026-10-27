@@ -21,6 +21,18 @@ Rectangle {
     property bool changeLock: false
     // Groups arrive later; a direct message never shows the member column.
     readonly property bool isGroup: false
+    // Desktop with a mouse and keyboard: type straight into the box at the bottom (Game Mode and
+    // controllers keep the big TextPrompt).
+    readonly property bool typeHere: Theme.desktop && !System.gameMode
+    // Cap m1: the message being answered or edited, where the "New messages" line goes, the message
+    // whose reaction picker is open.
+    property string replyId: ""
+    property string editId: ""
+    property int newFrom: -1
+    property string reactFor: ""
+    readonly property var replyMsg: replyId === "" ? null : messages.find(m => m.id === replyId) || null
+    readonly property bool theyType: openKey !== "" && !locked && Chat.typing[openKey] !== undefined
+    readonly property bool theyActive: openKey !== "" && !locked && Chat.active[openKey] !== undefined
 
     function setArgs(a) {
         tour = !!a.tour
@@ -89,6 +101,19 @@ Rectangle {
 
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
+        replyId = ""; editId = ""; reactFor = ""
+        if (typeHere) compose.text = ""
+        // Where the unread ones start (after my last message), for the "New messages" line.
+        newFrom = -1
+        if (openKey !== "" && !tour && !locked) {
+            const c = Chat.chats.find(x => x.key === openKey)
+            if (c && c.unread) {
+                let i = messages.length
+                while (i > 0 && !messages[i - 1].mine) i--
+                newFrom = i < messages.length ? i : -1
+            }
+        }
+        if (newFrom >= 0) Qt.callLater(() => list.positionViewAtIndex(page.newFrom, ListView.Beginning))
         if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
         if (openKey !== "" && !tour) Calls.prepare(openKey)   // the relay login is ready before Call is pressed
         Chat.openChat = openKey
@@ -287,7 +312,8 @@ Rectangle {
             carved: page.locked
             title: page.locked ? "Locked" : page.openKey === "" ? "Nearby room" : page.openName
             subtitle: page.locked ? "" : page.openKey === "" ? "Everyone close by or on this Wi-Fi with Huginn or Muninn"
-                    : "Encrypted · " + (Chat.keyChanged(page.openKey) ? "security key changed, not verified" : Chat.isVerified(page.openKey) ? "verified" : "not verified")
+                    : page.theyType ? "typing…"
+                    : (page.theyActive ? "Active now · " : "") + "Encrypted · " + (Chat.keyChanged(page.openKey) ? "security key changed, not verified" : Chat.isVerified(page.openKey) ? "verified" : "not verified")
             Row {
                 visible: !page.locked && page.openKey !== ""
                 spacing: Theme.px(6)
@@ -295,6 +321,14 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Theme.px(8); height: width; radius: width / 2
                     color: page.openRoute === "" || page.openRoute === "none" ? Theme.textFaint : Theme.hc ? Theme.text : "#7FB08A"
+                }
+                // Active status (cap m1): their app is open right now.
+                Text {
+                    visible: page.theyActive
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Active"
+                    color: Theme.hc ? Theme.text : "#7FB08A"
+                    font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -361,12 +395,25 @@ Rectangle {
                 delegate: Rectangle {
                     id: msg
                     readonly property bool picked: page.active && page.zone === "messages" && page.sel === index
+                    // The "New messages" line sits over the first unread one.
+                    readonly property int lineH: index === page.newFrom ? Theme.px(30) : 0
                     width: list.width
-                    height: modelData.system ? note.height + Theme.px(12) : Math.max(face.height, col.implicitHeight) + Theme.px(14)
+                    height: modelData.system ? note.height + Theme.px(12) : lineH + Math.max(face.height, col.implicitHeight) + Theme.px(14)
                     radius: Theme.px(8)
                     color: picked ? Theme.focusFill : msgHover.hovered ? Theme.panelLow : "transparent"
                     border.width: picked ? Theme.focusWidth : 0
                     border.color: Theme.accent
+
+                    Item {
+                        visible: msg.lineH > 0
+                        width: parent.width; height: msg.lineH
+                        Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
+                        Rectangle {
+                            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.px(4); color: Theme.danger
+                            Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+                        }
+                    }
 
                     // A note from Huginn itself (a changed security key) sits in the middle.
                     Rectangle {
@@ -394,7 +441,7 @@ Rectangle {
                     Rectangle {
                         id: face
                         visible: !modelData.system
-                        x: Theme.px(8); y: Theme.px(7)
+                        x: Theme.px(8); y: msg.lineH + Theme.px(7)
                         width: Theme.px(40); height: width; radius: width / 2
                         color: Theme.avatar(page.senderName(modelData), modelData.mine).bg
                         Text {
@@ -409,7 +456,7 @@ Rectangle {
                         visible: !modelData.system
                         anchors.left: face.right; anchors.leftMargin: Theme.px(12)
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-                        y: Theme.px(7)
+                        y: msg.lineH + Theme.px(7)
                         spacing: Theme.px(3)
                         Row {
                             spacing: Theme.px(8)
@@ -421,10 +468,17 @@ Rectangle {
                             }
                             Text {
                                 anchors.baseline: who.baseline
-                                text: page.clock(modelData.time) + page.stateLabel(modelData)
+                                text: page.clock(modelData.time) + (modelData.isEdited ? " · (edited)" : "") + page.stateLabel(modelData)
                                 color: modelData.failed ? Theme.danger : modelData.state === "read" && modelData.mine ? Theme.accent : Theme.textMuted
                                 font.family: Theme.body; font.pixelSize: Theme.fs(13)
                             }
+                        }
+                        // A reply: the message it answers, tap to go there.
+                        QuoteLine {
+                            visible: !!modelData.reName && !modelData.unsent
+                            who: modelData.reName || ""
+                            what: modelData.reText || ""
+                            onJump: page.jumpTo(modelData.re)
                         }
                         Image {
                             visible: !!modelData.photo && !modelData.voice && !modelData.unsent
@@ -449,13 +503,41 @@ Rectangle {
                         Text {
                             visible: !modelData.photo || !!modelData.unsent
                             width: parent.width; wrapMode: Text.Wrap
+                            textFormat: Text.PlainText
                             text: modelData.unsent ? (modelData.mine ? "Message deleted by you" : "Message deleted by " + modelData.unsent) : (modelData.text || "")
                             font.italic: !!modelData.unsent
                             color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
                         }
+                        Reactions {
+                            width: parent.width
+                            list: modelData.rxList || []
+                            add: page.typeHere && page.openKey !== ""
+                            onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
+                            onMore: page.openReact(modelData.id, modelData.myReaction || "")
+                        }
+                    }
+                    // Desktop: react, reply, edit and more over the corner while the pointer is on it.
+                    HoverBar {
+                        visible: page.typeHere && page.openKey !== "" && msgHover.hovered && !modelData.system && !modelData.unsent
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        y: msg.lineH - Theme.px(6)
+                        z: 2
+                        canEdit: !!modelData.mine && !modelData.photo && !modelData.failed
+                        onReact: page.openReact(modelData.id, modelData.myReaction || "")
+                        onReply: page.startReply(modelData.id)
+                        onEdit: page.startEdit(modelData)
+                        onMore: { page.zone = "messages"; page.sel = index; page.options() }
                     }
                     HoverHandler { id: msgHover }
-                    TapHandler { onTapped: { page.zone = "messages"; page.sel = index; page.options() } }
+                    // Click: a photo opens; right click (or a click on a handheld) opens the options.
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => {
+                            page.zone = "messages"; page.sel = index
+                            if (button === Qt.RightButton || !page.typeHere) page.options()
+                            else if (modelData.photo && !modelData.voice && !modelData.unsent) page.viewing = modelData.photo
+                        }
+                    }
                 }
             }
             Text {
@@ -493,42 +575,77 @@ Rectangle {
                     Text { text: Voice.length(Voice.elapsed) + "   Let go of Y to send · B to cancel"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
                 }
             }
+
+            // "Raven is typing" under the last message (cap m1).
+            Text {
+                visible: page.theyType
+                anchors.left: parent.left; anchors.leftMargin: Theme.px(22)
+                anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(2)
+                text: page.openName + " is typing…"
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.italic: true
+            }
+
+            // The "New messages" line is out of view: a button to go there.
+            Rectangle {
+                readonly property bool lineInView: {
+                    list.contentY; list.height
+                    const it = page.newFrom >= 0 ? list.itemAtIndex(page.newFrom) : null
+                    return !!it && it.y + it.height > list.contentY && it.y < list.contentY + list.height
+                }
+                visible: page.newFrom >= 0 && !lineInView && list.count > 0
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: Theme.px(10)
+                width: jumpText.implicitWidth + Theme.px(28); height: Theme.px(32); radius: height / 2
+                color: Theme.danger
+                z: 3
+                Accessible.role: Accessible.Button
+                Accessible.name: "Jump to new messages"
+                Text { id: jumpText; anchors.centerIn: parent; text: "New messages · jump"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: list.positionViewAtIndex(page.newFrom, ListView.Beginning) }
+            }
+
+            // Drop pictures (or other files) on the chat to send them.
+            DropArea {
+                anchors.fill: parent
+                enabled: page.typeHere && page.openKey !== "" && !page.locked
+                onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
+                Rectangle {
+                    anchors.fill: parent
+                    visible: parent.containsDrag
+                    color: Qt.rgba(0, 0, 0, 0.55)
+                    border.color: Theme.accent; border.width: 2; radius: Theme.px(10)
+                    Text { anchors.centerIn: parent; text: "Drop to send to " + page.openName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
+                }
+            }
+
+            // Reacting: the quick five and any emoji.
+            EmojiPicker {
+                id: reactPicker
+                quick: true
+                anchors.centerIn: parent
+                onPicked: e => { page.reactTo(page.reactFor, e === current ? "" : e); visible = false }
+            }
         }
 
-        // Desktop: a message box to click, like any chat app. Handheld writes with A.
-        Rectangle {
+        // Desktop: the message box, docked at the bottom and typed into directly. Handheld writes with A.
+        Composer {
             id: compose
-            visible: Theme.desktop && !lock.visible
+            visible: page.typeHere && !lock.visible
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20); anchors.bottomMargin: Theme.px(18)
-            height: Theme.px(46)
-            radius: Theme.px(11)
-            color: Theme.raised
-            border.width: composeHover.hovered ? 1 : 0
-            border.color: Theme.lineMuted
-            Accessible.role: Accessible.EditableText
-            Accessible.name: composeText.text
-            Icon {
-                id: attachIcon
-                visible: page.openKey !== ""
-                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
-                anchors.verticalCenter: parent.verticalCenter
-                name: "attach"; size: Theme.px(20); color: Theme.textMuted
-                TapHandler { onTapped: page.pickPicture() }
-            }
-            Text {
-                id: composeText
-                anchors.left: attachIcon.visible ? attachIcon.right : parent.left
-                anchors.leftMargin: Theme.px(14)
-                anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
-                text: page.openKey === "" ? "Message everyone nearby" : "Message " + page.openName
-                color: Theme.textMuted
-                font.family: Theme.body; font.pixelSize: Theme.fs(16)
-            }
-            HoverHandler { id: composeHover; cursorShape: Qt.IBeamCursor }
-            TapHandler { onTapped: { page.zone = "messages"; page.write() } }
+            height: implicitHeight
+            placeholder: page.openKey === "" ? "Message everyone nearby" : "Message " + page.openName
+            target: page.openKey
+            editing: page.editId !== ""
+            bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.openName) : ""
+            bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
+            onSend: t => page.sendText(t)
+            onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
+            onEditLast: page.editLast()
+            onEscaped: page.escapeKey()
+            onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
+            onAttach: page.pickPicture()
         }
     }
 
@@ -577,12 +694,14 @@ Rectangle {
 
     // ============================================================= actions
     function write() {
+        if (typeHere && !lock.visible) { zone = "messages"; compose.focusField(); return }
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › Chat.", true); return }
             Ui.ask("Message everyone nearby", "You're " + Chat.username, "", "Send", t => Chat.sendNearby(t), false, true)
         } else {
-            const k = openKey
-            Ui.ask("Message " + openName, "End-to-end encrypted", "", "Send", t => Chat.sendPrivate(k, t), false, true)
+            const k = openKey, re = replyId
+            Ui.ask(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "End-to-end encrypted", "", "Send",
+                   t => { Chat.sendPrivate(k, t, re); page.replyId = "" }, false, true)
         }
     }
     function addSomeone() {
@@ -736,6 +855,18 @@ Rectangle {
                 { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
                 q => { if (Chat.sendPhoto(k, path, q === "hd")) Ui.say("Sending the picture.") }))
     }
+    // A controller: the quick reactions in a list (the emoji panel needs a pointer).
+    function pickReaction(m) {
+        const k = openKey, id = m.id
+        const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
+        if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
+        if (typeHere) items.push({ name: "More emoji", url: "+" })
+        Ui.pickFrom("React", [{ header: "", items: items }], e => {
+            if (e === "+") { openReact(id, m.myReaction || ""); return }
+            const r = Chat.react(k, id, e === m.myReaction ? "" : e)
+            if (r !== "") Ui.say(r, true)
+        })
+    }
     function options() {
         const m = messages[sel]
         if (m && m.system) {
@@ -747,6 +878,12 @@ Rectangle {
         }
         if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "It's deleted on this computer only.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
+        if (openKey !== "" && !m.unsent && !m.failed) {
+            items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
+            items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
+        }
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
+        if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
         if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", url: "play" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it from both sides; they'll see “Message deleted by " + Chat.username + "”", url: "unsend" })
@@ -757,7 +894,11 @@ Rectangle {
         const sections = [{ header: "", items: items }]
         if (k !== "") sections.push({ header: "Conversation", items: conversationItems() })
         Ui.pickFrom("Message", sections, a => {
-            if (a === "view") viewing = m.photo
+            if (a === "react") pickReaction(m)
+            else if (a === "reply") startReply(m.id)
+            else if (a === "edit") startEdit(m)
+            else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
+            else if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
             else if (a === "unsend") Chat.unsend(k, m.id)
@@ -768,6 +909,81 @@ Rectangle {
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
         })
+    }
+
+    // ------------------------------------------------------------- cap m1: replies, reactions, edits
+    function jumpTo(id) {
+        const i = messages.findIndex(m => m.id === id)
+        if (i < 0) { Ui.say("That message isn't here anymore."); return }
+        sel = i
+        list.positionViewAtIndex(i, ListView.Center)
+    }
+    function reactTo(id, e) {
+        if (openKey === "" || id === "") return
+        const r = Chat.react(openKey, id, e)
+        if (r !== "") Ui.say(r, true)
+    }
+    function openReact(id, mine) {
+        if (openKey === "") return
+        reactFor = id
+        reactPicker.current = mine
+        reactPicker.visible = true
+    }
+    function startReply(id) {
+        if (openKey === "") return
+        editId = ""
+        replyId = id
+        if (typeHere) compose.focusField(); else write()
+    }
+    function startEdit(m) {
+        if (!m || !m.mine || m.photo || m.unsent || openKey === "") return
+        if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs a newer Huginn or Muninn to see edits.", true); return }
+        replyId = ""
+        if (typeHere) { editId = m.id; compose.setText(m.text) }
+        else { const k = openKey, id = m.id; Ui.ask("Edit your message", "They see it marked (edited)", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
+    }
+    // Up in an empty box: edit my last text message.
+    function editLast() {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i]
+            if (m.mine && !m.photo && !m.unsent && !m.failed && !m.system) { startEdit(m); return }
+        }
+    }
+    // Esc: done with this chat for now: no reply or edit, and it's all read.
+    function escapeKey() {
+        replyId = ""; editId = ""; newFrom = -1
+        if (openKey !== "") Chat.markRead(openKey)
+    }
+    function sendText(t) {
+        if (editId !== "") {
+            const r = Chat.editMessage(openKey, editId, t)
+            if (r !== "") Ui.say(r, true)
+            editId = ""
+            return
+        }
+        if (openKey === "") {
+            if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › Chat.", true); return }
+            Chat.sendNearby(t)
+        } else Chat.sendPrivate(openKey, t, replyId)
+        replyId = ""
+        newFrom = -1
+    }
+    // Dropped files: pictures go in the chat; anything else goes to Files, ready to send over the Wi-Fi.
+    function dropFiles(urls) {
+        const others = []
+        let pics = 0
+        for (let i = 0; i < urls.length; i++) {
+            const path = Chat.localPath(urls[i])
+            if (path === "") continue
+            if (Chat.isPicture(path)) { if (Chat.sendPhoto(openKey, path, false)) pics++ }
+            else others.push(urls[i])
+        }
+        if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
+        if (others.length) {
+            Transfer.share(others)
+            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
+            Ui.openPage("files", {})
+        }
     }
 
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
