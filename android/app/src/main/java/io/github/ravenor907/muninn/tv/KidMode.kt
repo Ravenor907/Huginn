@@ -145,7 +145,7 @@ object KidTv {
         val cfg = s.cfg ?: return
         val b = Tv.bridge(app) ?: return
         val ts = if (s.micLocal != null) s.micAt else cfg.ts
-        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts)
+        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null)
         for (k in to ?: s.parents) if ("k3" in (app.contacts.get(k)?.caps ?: emptySet())) try { b.sendTvRoom(k, msg) } catch (_: Exception) {}
     }
 

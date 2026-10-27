@@ -16,4 +16,11 @@ object AppLock {
      */
     fun due(hasPassword: Boolean, awaySince: Long, now: Long, lockAfter: Long): Boolean =
         hasPassword && awaySince > 0 && now - awaySince >= lockAfter
+
+    /**
+     * Inline reply from a notification: only while Muninn is open ([ready]), not panic-locked, not a
+     * Kids' TV, and the lock isn't due ([lockDue], see [due]): replying must never get past the lock.
+     */
+    fun canReply(ready: Boolean, panic: Boolean, kidsTv: Boolean, lockDue: Boolean): Boolean =
+        ready && !panic && !kidsTv && !lockDue
 }

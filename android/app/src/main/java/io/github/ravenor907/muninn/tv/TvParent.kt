@@ -206,17 +206,20 @@ object TvParent {
     /**
      * k3 (7.7): the TV's microphone level and storage. A level set on the TV after the last change here
      * becomes this phone's too, and goes back out in a config, so every parent's screen shows it and
-     * later configs carry it (the last change wins).
+     * later configs carry it (the last change wins). The TV's clock is never compared with this one's:
+     * a level the TV marks "own" is stamped with the time it arrived here.
      */
     private fun takeStatus(fromKey: String, o: JSONObject): Boolean {
-        val (mic, used, ts) = TvRules.status(o) ?: return false
+        val s = TvRules.status(o) ?: return false
         var adopt = false
         synchronized(lock) {
             val t = _tvs.value[fromKey] ?: return true
             if (t.disconnecting) return true
-            adopt = mic != t.mic && ts > t.micAt
-            put(t.copy(used = used, usedAt = System.currentTimeMillis(),
-                mic = if (adopt) mic else t.mic, micAt = if (adopt) ts else t.micAt, micOnTv = if (adopt) true else t.micOnTv))
+            val now = System.currentTimeMillis()
+            adopt = TvRules.adoptMic(s, t.mic, t.micAt, synced = t.applied >= t.v)
+            put(t.copy(used = s.used, usedAt = now,
+                mic = if (adopt) s.mic else t.mic, micAt = if (adopt) (if (s.own) now else s.ts) else t.micAt,
+                micOnTv = if (adopt) true else t.micOnTv))
         }
         if (adopt) change(fromKey) { it }
         return true

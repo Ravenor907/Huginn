@@ -130,6 +130,15 @@ class Groups(
         return synchronized(lock) { chats.entries.firstOrNull { (_, l) -> l.any { it.id == id } }?.key ?: if (deleted.containsKey(id)) "" else null }
     }
 
+    /**
+     * Members a state envelope of [g] hasn't reached yet (no delivered receipt back): a group call made
+     * with the group waits for them before it rings (see GroupRing).
+     */
+    fun stateWaiting(g: String): Set<String> = act {
+        outs.filter { it.g == g && it.room == "group" && (try { JSONObject(it.plain).optString("t") } catch (e: Exception) { "" }) == "state" }
+            .map { it.to }.toSet()
+    }
+
     // ------------------------------------------------------------------ making and changing groups
 
     /** A new group: me as owner, only admin and only member, the main channel. Nothing is sent. */

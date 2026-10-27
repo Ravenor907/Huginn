@@ -379,16 +379,16 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     // Messenger style: hold a contact to pick them, tap more, then Group text or Group call.
     var selected by remember { mutableStateOf(setOf<String>()) }
     if (selected.isNotEmpty()) BackHandler { selected = emptySet() }
-    val listScope = rememberCoroutineScope()
-    val listContext = LocalContext.current
     fun startGroup(call: Boolean) {
-        val (g, msg) = app.chat.startGroup(selected.toList())
+        val picked = selected.toList()
+        val (g, msg) = app.chat.startGroup(picked)
         selected = emptySet()
         if (g == null) { Ui.say(msg, true); return }
         ChatNav.openGroup(g)
         Ui.say(msg)
-        // Give the new members a moment to get the group before it rings (the ring is sent again after 15 s anyway).
-        if (call) listScope.launch { kotlinx.coroutines.delay(2000); RoomActivity.call(listContext, g, emptyList()) }
+        // Rings once the group has reached the new members (their delivered receipts), people it reaches
+        // later as soon as it does, and says who couldn't be rung.
+        if (call) io.github.ravenor907.muninn.net.call.GroupRing.start(app, g, picked)
     }
     // Everyone reachable right now: close by first, then the same Wi-Fi. (key, name, route)
     val around = buildList {

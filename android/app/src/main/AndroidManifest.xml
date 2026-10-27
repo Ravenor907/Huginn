@@ -144,6 +144,10 @@
         <receiver
             android:name=".net.ReplyReceiver"
             android:exported="false" />
+        <!-- The relay keepalive check while saving battery. -->
+        <receiver
+            android:name=".net.RelayAlarm"
+            android:exported="false" />
         <receiver
             android:name=".net.StartAtBoot"
             android:exported="true">

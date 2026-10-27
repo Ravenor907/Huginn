@@ -114,6 +114,8 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
+        chat.foreground(visible)
         power.ready()
         // Messages that came while locked were only announced: ask the relays for them again now.
         nostr.resubscribe()
@@ -178,9 +180,22 @@ class Muninn : Application() {
         } catch (_: Exception) {}
     }
 
-    /** Reply from the notification (a contact's chat or a group), only while Muninn is open and not panic-locked. */
+    /**
+     * Reply from the notification is allowed now: Muninn open, not panic-locked, not a Kids' TV, and the
+     * app lock isn't due (the same check MainActivity makes before showing anything).
+     */
+    fun canReply(): Boolean {
+        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { true }
+        val lockDue = try {
+            io.github.ravenor907.muninn.ui.AppLock.due(vault.hasPassword, io.github.ravenor907.muninn.ui.AppLock.awaySince,
+                android.os.SystemClock.elapsedRealtime(), identity.lockAfter)
+        } catch (_: Exception) { true }
+        return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue)
+    }
+
+    /** Reply from the notification (a contact's chat or a group), only when [canReply]. */
     private fun replyAction(key: String): NotificationCompat.Action? {
-        if (!ready.value || io.github.ravenor907.muninn.ui.Panic.locked.value) return null
+        if (!canReply()) return null
         if (!key.startsWith("g:") && !chat.isContact(key)) return null
         val input = androidx.core.app.RemoteInput.Builder(io.github.ravenor907.muninn.net.ReplyReceiver.TEXT).setLabel("Reply").build()
         val intent = Intent(this, io.github.ravenor907.muninn.net.ReplyReceiver::class.java)

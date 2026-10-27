@@ -962,16 +962,24 @@ level until a parent picks another one: it applies a new config's `mic` only whe
 The TV tells its parents (those whose app says `k3`) in room `tvconfig`:
 
 ```
-{"t":"status","mic":<level in use, 0..100>,"used":<bytes Muninn takes on the TV>,"ts":<ms>}
+{"t":"status","mic":<level in use, 0..100>,"used":<bytes Muninn takes on the TV>,"ts":<ms>[,"own":true]}
 ```
 
 `ts` is when the level last changed: the TV's clock when it was set on the TV, else the config's `ts`.
-All three are integers `0 <= n < 2^53`; anything else is malformed. The TV sends it a second after its
-slider stops moving, after every config it applies, after Clear history, and in answer to `usage`.
+All three are integers `0 <= n < 2^53`; anything else is malformed. `own` is present (and `true`) only
+while the level in use was set on the TV itself; when present it MUST be a boolean, else the status is
+malformed. Older TVs never send it, which means `false`. The TV sends it a second after its slider stops
+moving, after every config it applies, after Clear history, and in answer to `usage`.
 
-A parent's app that gets a `status` whose `mic` differs from its own and whose `ts` is newer than its own
-last change takes the TV's level and sends a new config with it (7.2), so the other parent and later
-configs carry it too. It shows `used` as the TV's storage.
+A parent's app that gets a `status` whose `mic` differs from its own takes the TV's level and sends a new
+config with it (7.2), so the other parent and later configs carry it too, when:
+
+- `own` is `true` and the TV has already said `applied` for this phone's latest config (a change made on
+  the phone that is still on its way wins). The phone records the change at its own clock, the moment the
+  status arrived. The TV's `ts` is not compared with the phone's clock, since the two clocks can differ.
+- `own` is absent (an older TV) and `ts` is newer than the phone's own last change, as before.
+
+It shows `used` as the TV's storage.
 
 A parent (only a current parent; anyone else gets 403) may send:
 
