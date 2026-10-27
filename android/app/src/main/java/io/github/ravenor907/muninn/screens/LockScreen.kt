@@ -46,6 +46,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
+    var shakes by remember { mutableStateOf(0) }   // a wrong pattern shakes the pad
     val ask by Ui.ask.collectAsState()
     val scope = rememberCoroutineScope()
     val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
@@ -64,6 +65,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             if (ok) { pw = ""; prefs.edit().putInt("lockFails", 0).apply(); io.github.ravenor907.muninn.ui.Panic.unlocked(); done(true) }
             else {
                 wrong = true
+                shakes++
                 val fails = prefs.getInt("lockFails", 0) + 1
                 prefs.edit().putInt("lockFails", fails).apply()
                 // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour.
@@ -93,7 +95,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                     else "Type your password. Your messages, contacts and keys stay encrypted until you do.", style = Type.normal)
                 if (pattern) {
                     Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                        PatternPad(error = wrong, enabled = !waiting && !busy) { dots -> tryIt(patternSecret(dots)) }
+                        PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes) { dots -> tryIt(patternSecret(dots)) }
                     }
                 } else {
                     Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
@@ -131,6 +133,7 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
     var pw1 by remember { mutableStateOf("") }
     var pw2 by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
+    var shakes by remember { mutableStateOf(0) }   // a pattern that won't do shakes the pad
     fun save(secret: String, pattern: Boolean) {
         saving = true
         scope.launch {
@@ -153,12 +156,12 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
                 else -> "Draw it again to confirm."
             }, style = Type.normal.copy(color = if (note.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
             Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                PatternPad(error = note.isNotEmpty(), enabled = !saving) { dots ->
+                PatternPad(error = note.isNotEmpty(), enabled = !saving, shake = shakes) { dots ->
                     val f = first
                     when {
-                        dots.size < 4 -> note = "Connect at least 4 dots."
+                        dots.size < 4 -> { note = "Connect at least 4 dots."; shakes++ }
                         f == null -> { first = dots; note = "" }
-                        f != dots -> { first = null; note = "That didn't match. Start over." }
+                        f != dots -> { first = null; note = "That didn't match. Start over."; shakes++ }
                         else -> save(patternSecret(dots), true)
                     }
                 }
