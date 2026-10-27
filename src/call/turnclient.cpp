@@ -2,13 +2,12 @@
 
 #include "callcrypto.h"
 #include "relayconfig.h"
-#include "../tor.h"
 
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkProxy>
+#include <QHostInfo>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPointer>
@@ -24,83 +23,30 @@ qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 const int kUdpGiveUpMs = 3500;     // no Allocate answer over UDP by then: try TLS
 const int kTlsGiveUpMs = 9000;
 const int kRebindMs = 4 * 60 * 1000;   // permissions last 5 minutes, channels 10
-
-// One SOCKS5 RESOLVE (Tor's 0xF0 extension) on Tor's SOCKS port: the name is looked up by the Tor
-// network, so no DNS server near this device sees it. done gets a null address when Tor can't.
-void torResolveOnce(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done)
-{
-    Tor *tor = Tor::instance();
-    const QByteArray name = host.toLatin1();
-    const quint16 port = tor && tor->ready() ? tor->proxy().port() : 0;
-    if (!port || name.isEmpty() || name.size() > 255) {
-        QTimer::singleShot(0, ctx, [done] { done(QHostAddress()); });
-        return;
-    }
-    auto *sock = new QTcpSocket(ctx);
-    sock->setProxy(QNetworkProxy::NoProxy);
-    auto finished = std::make_shared<bool>(false);
-    auto step = std::make_shared<int>(0);
-    auto buf = std::make_shared<QByteArray>();
-    auto end = [sock, finished, done](const QHostAddress &a) {
-        if (*finished)
-            return;
-        *finished = true;
-        sock->disconnect();
-        sock->abort();
-        sock->deleteLater();
-        done(a);
-    };
-    QObject::connect(sock, &QTcpSocket::connected, sock, [sock] { sock->write(QByteArray("\x05\x01\x00", 3)); });
-    QObject::connect(sock, &QTcpSocket::readyRead, sock, [sock, step, buf, name, end] {
-        *buf += sock->readAll();
-        if (*step == 0) {
-            if (buf->size() < 2)
-                return;
-            if (buf->at(0) != 5 || buf->at(1) != 0)
-                return end(QHostAddress());
-            buf->remove(0, 2);
-            *step = 1;
-            sock->write(QByteArray("\x05\xF0\x00\x03", 4) + char(name.size()) + name + QByteArray(2, 0));
-        }
-        if (buf->size() < 4)
-            return;
-        if (buf->at(1) != 0)
-            return end(QHostAddress());
-        const int type = buf->at(3), len = type == 1 ? 4 : type == 4 ? 16 : -1;
-        if (len < 0)
-            return end(QHostAddress());
-        if (buf->size() < 4 + len)
-            return;
-        const QByteArray ip = buf->mid(4, len);
-        if (len == 4)
-            end(QHostAddress((quint32(quint8(ip[0])) << 24) | (quint32(quint8(ip[1])) << 16) | (quint32(quint8(ip[2])) << 8) | quint32(quint8(ip[3]))));
-        else
-            end(QHostAddress(reinterpret_cast<const quint8 *>(ip.constData())));
-    });
-    QObject::connect(sock, &QTcpSocket::errorOccurred, sock, [end](QAbstractSocket::SocketError) { end(QHostAddress()); });
-    QTimer::singleShot(15000, sock, [end] { end(QHostAddress()); });
-    sock->connectToHost(QHostAddress(QHostAddress::LocalHost), port);
-}
 }
 
-void CallNet::resolveViaTor(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries)
+void CallNet::resolve(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries)
 {
-    // An IP literal needs no lookup. A name goes only to Tor, never the system resolver: that would tell
-    // the local network and its DNS server that this device is making a call (and when).
+    // An IP literal needs no lookup; a name goes to the system resolver.
     const QHostAddress literal(host);
     if (!literal.isNull()) {
         QTimer::singleShot(0, ctx, [done, literal] { done(literal); });
         return;
     }
     QPointer<QObject> guard(ctx);
-    torResolveOnce(host, ctx, [host, ctx, guard, done, tries](const QHostAddress &a) {
+    QHostInfo::lookupHost(host, ctx, [host, ctx, guard, done, tries](const QHostInfo &info) {
         if (!guard)
             return;
+        // IPv4 first (what the relay hands out for calls), else IPv6.
+        QHostAddress a;
+        for (const QHostAddress &x : info.addresses())
+            if (x.protocol() == QAbstractSocket::IPv4Protocol || (a.isNull() && x.protocol() == QAbstractSocket::IPv6Protocol))
+                a = x;
         if (!a.isNull() || tries <= 1) {
             done(a);
             return;
         }
-        QTimer::singleShot(1000, ctx, [host, ctx, done, tries] { resolveViaTor(host, ctx, done, tries - 1); });
+        QTimer::singleShot(1000, ctx, [host, ctx, done, tries] { resolve(host, ctx, done, tries - 1); });
     });
 }
 
@@ -170,27 +116,6 @@ void RelayCredentials::get(const QByteArray &identityKey, std::function<void(con
 void RelayCredentials::fetch()
 {
     m_busy = true;
-    Tor *tor = Tor::instance();
-    if (!tor) {
-        finish(TurnLogin(), QStringLiteral("no Tor"));
-        return;
-    }
-    if (!tor->ready()) {
-        // Everything on the internet goes through Tor; wait for it a while.
-        auto *ctx = new QObject(this);
-        connect(tor, &Tor::readyChanged, ctx, [this, ctx, tor] {
-            if (!tor->ready())
-                return;
-            ctx->deleteLater();
-            fetch();
-        });
-        QTimer::singleShot(45000, ctx, [this, ctx] {
-            ctx->deleteLater();
-            finish(TurnLogin(), QStringLiteral("Tor not ready"));
-        });
-        return;
-    }
-    m_net.setProxy(tor->proxy(QStringLiteral("turn")));
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(30000);
@@ -336,7 +261,7 @@ void TurnClient::tryNext()
     if (m_stopped)
         return;
     if (m_next >= m_servers.size()) {
-        // Not one name could be looked up through Tor: say so (nothing was sent anywhere else).
+        // Not one name could be looked up: say so.
         fail(m_resolved.isEmpty() ? QStringLiteral("Can't reach the call relay right now") : QStringLiteral("relay unreachable"));
         return;
     }
@@ -355,7 +280,7 @@ void TurnClient::tryNext()
         QTimer::singleShot(0, this, &TurnClient::tryNext);
         return;
     }
-    CallNet::resolveViaTor(s.host, this, [this, s, go](const QHostAddress &ip) {
+    CallNet::resolve(s.host, this, [this, s, go](const QHostAddress &ip) {
         if (m_stopped || m_tls || m_udp)
             return;
         if (ip.isNull()) {
@@ -398,8 +323,7 @@ void TurnClient::connectTls(const Server &s, const QHostAddress &ip)
             QTimer::singleShot(0, this, &TurnClient::tryNext);
     });
     m_giveUp.start(kTlsGiveUpMs);
-    // To the address Tor looked up; the certificate is still checked against the server's name.
-    m_tls->setProxy(QNetworkProxy::NoProxy);
+    // To the address looked up; the certificate is still checked against the server's name.
     m_tls->connectToHostEncrypted(ip.toString(), s.port, s.host);
 }
 

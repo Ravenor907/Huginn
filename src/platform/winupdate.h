@@ -6,9 +6,9 @@
 class QObject;
 
 // Updates for the Windows portable build (Huginn-Windows.zip from the GitHub release).
-// Updater downloads the zip through Tor exactly as it downloads the Flatpak, then calls install():
+// Updater downloads the zip exactly as it downloads the Flatpak, then calls install():
 // the zip is unpacked into a staging folder beside Huginn.exe, and a small hidden PowerShell script
-// waits for Huginn (and its tor.exe) to exit, copies the new files over the old ones, deletes the
+// waits for Huginn to exit, copies the new files over the old ones, deletes the
 // staging folder and starts the new Huginn.exe. When done(true, ...) arrives, quit Huginn.
 // On other platforms (and in a Windows development build) supported() is false.
 namespace WinUpdate

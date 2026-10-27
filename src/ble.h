@@ -35,11 +35,11 @@ class Ble : public QObject
 
 public:
     // hello gives the JSON for our first message on every link:
-    // {"t":"hello","name","chatKey","mailbox","app":"huginn"[,"onion"]}
+    // {"t":"hello","name","chatKey","mailbox","app":"huginn"} (an "onion" from a 0.6 app is ignored)
     explicit Ble(std::function<QByteArray()> hello, QObject *parent = nullptr);
     ~Ble() override;
 
-    QVariantList peers() const;   // each {address, name, chatKey, mailbox, onion}
+    QVariantList peers() const;   // each {address, name, chatKey, mailbox}
     QString error() const { return m_error; }
     bool running() const { return m_running; }
 
@@ -70,7 +70,7 @@ private:
         QLowEnergyController *ctl = nullptr;
         QLowEnergyService *svc = nullptr;
         QLowEnergyCharacteristic inbox;
-        QString name, chatKey, mailbox, onion;
+        QString name, chatKey, mailbox;
         bool ready = false;
         bool said = false;          // our hello went out: only then can messages use this link
         int mtu = BleFrames::kMinMtu;

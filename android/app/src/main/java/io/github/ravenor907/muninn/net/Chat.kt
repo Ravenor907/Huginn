@@ -28,8 +28,8 @@ import java.util.concurrent.Executors
  * One message format everywhere: { room, fromKey, fromName, mailbox, cap, caps, nonce, data } (v1), or with
  * "rh" in place of "nonce" when it went through the message ratchet (ChatWire has the details).
  * Groups (protocol 0.6, section 3) live in [groups]: each group message is sealed to every member
- * separately and goes out the same ways. Over the internet a contact with an onion address is tried
- * through Tor first; Nostr stays the mailbox for when they're offline.
+ * separately and goes out the same ways. Over the internet everything goes through the
+ * Nostr relays, which only ever see a sealed envelope for a mailbox.
  */
 class Chat(private val context: Context, private val net: LocalSend, private val close: Close, private val ble: Ble, private val nostr: Nostr, val contacts: Contacts,
            private val vault: Vault) : io.github.ravenor907.muninn.tv.TvBridge, io.github.ravenor907.muninn.net.call.CallSignal {
@@ -113,8 +113,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val seen = Seen()
     /** Caps probes sent (key to when): at most one per contact an hour. */
     private val probed = ConcurrentHashMap<String, Long>()
-    /** Posts to onion addresses wait on Tor, so they get threads of their own. */
-    private val torPool = Executors.newFixedThreadPool(4)
     private val groupDir = File(context.filesDir, "groups")
     /** Group chats: state, members, channels and messages. Chat is how its envelopes travel. */
     val groups: Groups = Groups(id.keys, id.publicKey, GroupHost(), { vault.read(File(groupDir, it)) }, { f, t -> groupDir.mkdirs(); vault.write(File(groupDir, f), t) })
@@ -142,18 +140,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         nostr.onEnvelope = { content ->
             try { unwrap(content)?.let { receive(it, "internet") }; true } catch (_: Exception) { true }
         }
-        // Straight to this phone over Tor: the same envelopes, under the internet's rules (strangers need an invite).
-        Tor.onMessage { body -> try { receive(String(body, Charsets.UTF_8), "internet").first } catch (_: Exception) { 400 } }
         // Auto-delete: check every minute for messages past the chosen age.
         bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep() } catch (_: Exception) {} } }
     }
 
     /** What close-by phones learn about this one. */
     fun hello(): JSONObject = JSONObject().put("name", id.username).put("chatKey", id.publicKey).put("mailbox", nostr.publicKey)
-        .put("device", id.deviceName).apply { myOnion()?.let { put("onion", it) } }
-
-    /** This phone's onion address once Tor has one. */
-    private fun myOnion(): String? = try { ChatWire.onion(Tor.onion()) } catch (_: Throwable) { null }
+        .put("device", id.deviceName)
 
     /** A new code each time it's shown, with an invite good for an hour. */
     fun myCode(): String {
@@ -164,7 +157,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             invites.entries.removeIf { it.value < System.currentTimeMillis() }
             saveInvites()
         }
-        return Contacts.code(id.username, id.publicKey, nostr.publicKey, token, until, myOnion())
+        return Contacts.code(id.username, id.publicKey, nostr.publicKey, token, until)
     }
 
     private fun saveInvites() { try { vault.write(invitesStore, JSONObject(invites as Map<*, *>).toString()) } catch (_: Exception) {} }
@@ -354,7 +347,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun route(peerKey: String): String = when {
         close.endpointFor(peerKey) != null || ble.peers.value.any { it.chatKey == peerKey } -> "close"
         net.devices.value.any { it.chatKey == peerKey } -> "wifi"
-        contact(peerKey)?.onion != null && torStatus().first -> "onion"
         contact(peerKey)?.mailbox != null -> "internet"
         else -> ""
     }
@@ -433,9 +425,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val c = contacts.get(fromKey) ?: return
         // What their app speaks: tokens only ever add up (a changed key starts a new contact with none).
         val caps = c.caps + ChatWire.capsOf(o)
-        val onion = ChatWire.onion(o.optString("o")) ?: c.onion
         val mailbox = if (c.groupOnly) o.optString("mailbox").takeIf { it.length == 64 } ?: c.mailbox else c.mailbox
-        val now = c.copy(ratchet = c.ratchet || ChatWire.capable(o), caps = caps, onion = onion, mailbox = mailbox)
+        val now = c.copy(ratchet = c.ratchet || ChatWire.capable(o), caps = caps, mailbox = mailbox)
         if (now != c) contacts.set(now)
     }
 
@@ -889,26 +880,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); return "close" }
         if (ble.send(peerKey, body.toString())) return "close"
         net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { if (net.post(it, PATH, body.toString()) == 200) return "wifi" }
-        if (internet(peerKey, listOf(body.toString()), mailbox)) return if (onionFor(peerKey) != null) "onion" else "internet"
+        if (internet(peerKey, listOf(body.toString()), mailbox)) return "internet"
         return ""
     }
 
-    /** Their onion address, when Tor is ready to use it (contacts and group peers). */
-    private fun onionFor(peerKey: String): String? = contacts.get(peerKey)?.onion?.takeIf { torStatus().first }
-
-    /**
-     * The internet: straight to their phone over Tor when they have an onion address, and Nostr (their
-     * mailbox, which waits for them while they're offline) whenever that doesn't take it. False when neither can.
-     */
+    /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
     private fun internet(peerKey: String, bodies: List<String>, mailbox: String?): Boolean {
-        val onion = onionFor(peerKey)
-        if (onion != null) {
-            torPool.execute {
-                val ok = try { bodies.all { b -> kotlinx.coroutines.runBlocking { Tor.post(onion, PATH, b.toByteArray(Charsets.UTF_8)) } == 200 } } catch (_: Throwable) { false }
-                if (!ok && mailbox != null) bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it)) }
-            }
-            return true
-        }
         if (mailbox == null) return false
         bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it)) }
         return true
@@ -935,12 +912,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val o = ChatWire.base(room, id.publicKey, id.username, id.fingerprint, nostr.publicKey, msgId)
             // The invite from their code, until they accept: proves they handed it out within the hour.
             .apply { contacts.get(theirKey)?.invite?.let { put("invite", it) } }
-            .apply { onionTo(room, theirKey)?.let { put("o", it) } }
         return seal(room, theirKey, listOf(o to text.toByteArray(Charsets.UTF_8))).first()
     }
-
-    /** My onion address goes only to contacts and group peers, never into the Nearby room. */
-    private fun onionTo(room: String, theirKey: String): String? = if (room == "nearby" || contacts.get(theirKey) == null) null else myOnion()
 
     /**
      * Seals each (envelope, plaintext) for [theirKey]: through the message ratchet when they're a contact
@@ -1224,17 +1197,5 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         /** Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min. */
         val RETRY = longArrayOf(5_000, 10_000, 20_000, 60_000, 300_000)
         private val GROUP_ROOMS = setOf("group", "gmsg", "greceipt")
-
-        /** Tor for the screen: ready, how far it is (0 to 100, or -1), off (not running), failed. */
-        data class TorView(val ready: Boolean, val percent: Int, val off: Boolean, val failed: Boolean = false)
-
-        fun torView(s: Tor.State = Tor.state.value): TorView = when (s) {
-            Tor.State.Ready -> TorView(true, 100, false)
-            is Tor.State.Starting -> TorView(false, s.percent.coerceIn(0, 100), false)
-            is Tor.State.Failed -> TorView(false, -1, false, failed = true)
-            else -> TorView(false, -1, true)
-        }
-
-        fun torStatus(): Pair<Boolean, Int> = try { torView().let { it.ready to it.percent } } catch (_: Throwable) { false to -1 }
     }
 }

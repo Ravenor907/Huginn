@@ -110,7 +110,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                 Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
                 MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {
                     Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
-                        "Hold to erase", danger = true, hold = true) { io.github.ravenor907.muninn.net.Tor.forget(app); app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
                 }
             }
         }

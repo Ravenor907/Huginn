@@ -5,8 +5,7 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 /**
- * TURN logins from the relay Worker (docs/relay.md), fetched through Tor so the Worker never sees this
- * phone's address. Cached in memory until 5 minutes before they expire; after a 429 nothing is asked until
+ * TURN logins from the relay Worker (docs/relay.md), fetched over HTTPS. Cached in memory until 5 minutes before they expire; after a 429 nothing is asked until
  * the next UTC day, after a 5xx not for 60 s. The credential is never logged.
  */
 object TurnCreds {
@@ -42,7 +41,7 @@ object TurnCreds {
 
     /**
      * A usable login, from the cache or the Worker. Blocks (call it off the main thread). [post] does the
-     * HTTP POST through Tor and returns (status, body) or null if it couldn't connect.
+     * HTTPS POST and returns (status, body) or null if it couldn't connect.
      */
     @Synchronized
     fun get(identityDer: ByteArray, post: (url: String, body: String) -> Pair<Int, String>?, nowMs: Long = System.currentTimeMillis()): Login? {

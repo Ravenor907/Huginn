@@ -114,7 +114,7 @@ object CallLogic {
         return null
     }
 
-    /** An IPv4 or IPv6 literal, or null for anything else (a name would mean a DNS lookup outside Tor). */
+    /** An IPv4 or IPv6 literal, or null for anything else (a peer's candidate never makes this phone look a name up). */
     fun literal(s: String): InetAddress? {
         val v4 = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""").find(s)
         if (v4 != null) {

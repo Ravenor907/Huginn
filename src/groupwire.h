@@ -77,8 +77,8 @@ QJsonObject channel(const QJsonObject &s, const QString &id);
 
 // Group codes (3.5): MUNINNG1:<base64url(JSON {g, gn, a, an, p, i, x[, o]})>.
 QString code(const QString &g, const QString &groupName, const QString &adminKey, const QString &adminName, const QString &mailbox,
-             const QString &token, qint64 expiresMs, const QString &onion = QString());
-// {g, name, admin, adminName, mailbox, token, expires (ms), expired, onion} or empty when it isn't one.
+             const QString &token, qint64 expiresMs);
+// {g, name, admin, adminName, mailbox, token, expires (ms), expired} or empty when it isn't one.
 QVariantMap parseCode(const QString &text, qint64 nowMs);
 
 // Checks tests/proto06-vectors.json (group section and canonical JSON, with chat-vectors.json next

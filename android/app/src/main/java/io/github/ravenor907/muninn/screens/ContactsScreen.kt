@@ -43,6 +43,7 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
     data class P(val key: String, val name: String, val detail: String, val contact: Boolean)
     var picked by remember { mutableStateOf<P?>(null) }
     var foldering by remember { mutableStateOf<P?>(null) }
+    var renaming by remember { mutableStateOf<P?>(null) }
     fun inFolders(k: String) = folders.filter { k in it.keys }.joinToString(", ") { it.name }.let { if (it.isEmpty()) "" else " · $it" }
     // A nickname shows as "Nickname (their name)". Group peers aren't contacts: they're not listed.
     val real = contacts.filter { !it.groupOnly }
@@ -76,6 +77,8 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(p.detail, style = Type.small)
+                    // A name for them on this phone only: it's never sent.
+                    if (p.contact) MButton("Rename", Modifier.fillMaxWidth(), icon = "user") { picked = null; renaming = p }
                     MButton("Folders", Modifier.fillMaxWidth(), icon = "folder") { picked = null; foldering = p }
                     if (p.contact) MButton("Remove contact", Modifier.fillMaxWidth()) {
                         picked = null
@@ -93,4 +96,15 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
         )
     }
     foldering?.let { p -> FolderPicker(app, p.key, p.name) { foldering = null } }
+    renaming?.let { p ->
+        val c = app.chat.contacts.contact(p.key)
+        if (c == null) renaming = null
+        else RenameDialog(c) { nick ->
+            if (nick != null) {
+                app.chat.rename(p.key, nick)
+                Ui.say(if (ChatWire.nickname(nick) == null) "Back to ${c.name}." else "Renamed to ${ChatWire.nickname(nick)}.")
+            }
+            renaming = null
+        }
+    }
 }

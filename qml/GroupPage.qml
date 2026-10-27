@@ -235,7 +235,7 @@ Rectangle {
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(8)
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "shield"; size: Theme.px(15); color: Chat.torReady || Chat.internet > 0 ? Theme.accent : Theme.textMuted }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "shield"; size: Theme.px(15); color: Chat.internet > 0 ? Theme.accent : Theme.textMuted }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceStrip.width - Theme.px(50)

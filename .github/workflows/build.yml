@@ -94,9 +94,6 @@ jobs:
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
-          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
-          tor() { timeout 330 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --tor-selftest; }
-          tor > /dev/null 2>&1 || run tor
           exit $bad
       - name: Draw the project banner (both ravens)
         if: always()
@@ -222,12 +219,6 @@ jobs:
       run:
         shell: bash
     env:
-      # Tor Expert Bundle (the official tor.exe for Windows). Pin the version here; after the first
-      # run, copy the sha256 the job prints into TOR_BUNDLE_SHA256. Until then the download is
-      # checked against the Tor Browser Developers signing key instead.
-      TOR_BUNDLE_VERSION: "15.0.24"
-      TOR_BUNDLE_SHA256: "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65"
-      TOR_SIGNING_KEY: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
       VCPKG_PACKAGES: openssl opus sdl2 libqrencode
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
@@ -302,42 +293,6 @@ jobs:
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
           Copy-Item "$($crt.FullName)/*.dll" $out
           Copy-Item LICENSE "$out/LICENSE.txt"
-      - name: Tor (official Expert Bundle, pinned and checked)
-        run: |
-          v="$TOR_BUNDLE_VERSION"
-          f="tor-expert-bundle-windows-x86_64-$v.tar.gz"
-          mkdir -p torbundle && cd torbundle
-          for base in "https://dist.torproject.org/torbrowser/$v" "https://archive.torproject.org/tor-package-archive/torbrowser/$v"; do
-            curl -fsSL --retry 3 -o "$f" "$base/$f" && curl -fsSL --retry 3 -o "$f.asc" "$base/$f.asc" && break
-            rm -f "$f" "$f.asc"
-          done
-          [ -f "$f" ] || { echo "::error title=Tor bundle::Couldn't download $f (is TOR_BUNDLE_VERSION right?)"; exit 1; }
-          sum=$(sha256sum "$f" | cut -d' ' -f1)
-          if [ -n "$TOR_BUNDLE_SHA256" ]; then
-            [ "$sum" = "$TOR_BUNDLE_SHA256" ] || { echo "::error title=Tor bundle checksum::expected $TOR_BUNDLE_SHA256, got $sum"; exit 1; }
-          else
-            export GNUPGHOME="$PWD/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
-            gpg --batch --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org \
-              || gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$TOR_SIGNING_KEY"
-            gpg --batch --status-fd 1 --verify "$f.asc" "$f" 2>/dev/null | grep -q "VALIDSIG.*$TOR_SIGNING_KEY" \
-              || { echo "::error title=Tor bundle signature::$f is not signed by the Tor Browser Developers key"; exit 1; }
-            echo "::warning title=Pin the Tor bundle::Signature checked. Set TOR_BUNDLE_SHA256: \"$sum\" in build.yml"
-          fi
-          mkdir -p x && tar -xzf "$f" -C x
-          exe=$(find x -name tor.exe | head -n1)
-          [ -n "$exe" ] || { echo "::error::tor.exe isn't in $f"; exit 1; }
-          dir=$(dirname "$exe")
-          cp "$exe" ../dist/Huginn/tor.exe
-          # Any DLLs tor.exe needs go beside it, but never over one of ours (same name, other build).
-          for d in "$dir"/*.dll; do
-            [ -f "$d" ] || continue
-            n=$(basename "$d")
-            if [ -f "../dist/Huginn/$n" ]; then echo "::error title=Tor DLL clash::$n is both Tor's and Huginn's"; exit 1; fi
-            cp "$d" ../dist/Huginn/
-          done
-          mkdir -p ../dist/Huginn/licenses/tor
-          find x -iname "*LICENSE*" -type f -exec cp {} ../dist/Huginn/licenses/tor/ \; || true
-          echo "Tor $v: $(../dist/Huginn/tor.exe --version | head -n1)"
       - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
         run: |
           h=dist/Huginn/Huginn.exe
@@ -357,8 +312,6 @@ jobs:
           run "$h" --privacy-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
-          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
-          timeout 330 "$h" --tor-selftest > /dev/null 2>&1 || run timeout 330 "$h" --tor-selftest
           exit $bad
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true

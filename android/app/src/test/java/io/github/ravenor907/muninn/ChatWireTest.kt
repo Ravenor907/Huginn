@@ -180,6 +180,21 @@ class ChatWireTest {
     }
 
     @Test
+    fun codeFromTheAddPageLink() {
+        val x = (System.currentTimeMillis() / 1000 + 3600) * 1000
+        val code = ChatWire.code("Bob", bPub, "e".repeat(64), "tok", x)
+        val link = io.github.ravenor907.muninn.net.Contacts.link(code)
+        assertTrue(link.startsWith("https://") && link.contains("#" + ChatWire.PREFIX))
+        // The bare code, the link, the link in a message, and a link with ":" written as "%3A" all read the same.
+        for (t in listOf(code, link, "Message me on Muninn:\n$link", link.replace("MUNINN1:", "MUNINN1%3a"))) {
+            val c = io.github.ravenor907.muninn.net.Contacts.parse(t)
+            assertNotNull(t, c); assertEquals(bPub, c!!.chatKey); assertEquals("tok", c.invite)
+            assertEquals(x, io.github.ravenor907.muninn.net.Contacts.expires(t))
+        }
+        assertNull(io.github.ravenor907.muninn.net.Contacts.parse(io.github.ravenor907.muninn.net.Contacts.PAGE))
+    }
+
+    @Test
     fun nicknameNeverSent() {
         val c = Contact(bPub, "Bob", "e".repeat(64), true, nickname = "Grandpa Zed")
         assertEquals("Grandpa Zed", c.shown)
