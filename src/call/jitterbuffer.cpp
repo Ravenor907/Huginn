@@ -11,6 +11,7 @@ const size_t kMaxSamples = 200;
 const size_t kMaxPackets = 100;     // 2 s of audio at most
 const int kResyncSlots = 50;        // a second off: jump instead of creeping
 const int kQuietAfter = 5;          // concealed frames in a row before going silent
+const qint64 kShrinkEveryMs = 2000; // the delay goes down by at most one frame this often
 
 qint64 floorDiv(qint64 a, qint64 b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 }
@@ -23,7 +24,8 @@ void JitterBuffer::reset()
     m_transit.clear();
     m_started = m_playing = false;
     m_play = m_offset = 0;
-    m_cooldown = m_quiet = 0;
+    m_cooldown = m_quiet = m_late = 0;
+    m_shrunk = 0;
     m_target = m_start;
 }
 
@@ -40,7 +42,10 @@ void JitterBuffer::push(quint32 ts, const QByteArray &opus, qint64 nowMs)
         m_offset = transit + m_start;
     }
     if (m_playing && slot < m_play) {
+        // Came after its turn: hold one more frame from now on (until calmer times shrink it).
         ++m_stats.late;
+        m_late = std::min(m_late + 1, 4);
+        m_shrunk = nowMs;
         return;
     }
     if (m_packets.count(slot)) {
@@ -67,8 +72,16 @@ void JitterBuffer::adapt(qint64 nowMs)
     const qint64 p95 = t[std::min(t.size() - 1, size_t(double(t.size() - 1) * 0.95 + 0.5))];
     // Room for the wander plus one frame, in whole frames.
     const qint64 spread = p95 - lo;
-    const int want = int(((spread + kFrameMs - 1) / kFrameMs) * kFrameMs + kFrameMs);
-    m_target = std::clamp(want, m_min, m_max);
+    const int want = std::clamp(int(((spread + kFrameMs - 1) / kFrameMs) * kFrameMs + kFrameMs) + m_late * kFrameMs, m_min, m_max);
+    if (want > m_target) {
+        m_target = want;          // rougher: at once
+        m_shrunk = nowMs;
+    } else if (want < m_target && nowMs - m_shrunk >= kShrinkEveryMs) {
+        m_target -= kFrameMs;     // calmer: a frame at a time
+        m_shrunk = nowMs;
+        if (m_late > 0)
+            --m_late;
+    }
     m_offset = lo + m_target;
 }
 
@@ -195,6 +208,34 @@ Run simulate(int frames, int jitter, int lossPct, double drift, int pauseFrom, i
     r.stats = jb.stats();
     return r;
 }
+
+// A phone on a busy radio: calm, then every 2 s a burst where packets bunch up for up to 120 ms.
+Run simulateBursts(int frames)
+{
+    JitterBuffer jb;
+    std::multimap<qint64, std::pair<quint32, QByteArray>> inflight;
+    Run r;
+    for (int i = 0; i < frames; ++i) {
+        const qint64 sentAt = qint64(i) * 20;
+        const int inBurst = int(sentAt % 2000);
+        const qint64 extra = inBurst < 120 ? 120 - inBurst : rnd(8);
+        inflight.emplace(sentAt + 30 + extra, std::make_pair(quint32(i * 20), QByteArray(1, char(i & 0x7F))));
+    }
+    const qint64 end = qint64(frames) * 20 + 500;
+    for (qint64 t = 0; t < end; ++t) {
+        while (!inflight.empty() && inflight.begin()->first <= t) {
+            jb.push(inflight.begin()->second.first, inflight.begin()->second.second, t);
+            inflight.erase(inflight.begin());
+        }
+        if (t % 20 == 0) {
+            jb.pop(t);
+            r.maxTarget = std::max(r.maxTarget, jb.targetMs());
+            r.minTarget = std::min(r.minTarget, jb.targetMs());
+        }
+    }
+    r.stats = jb.stats();
+    return r;
+}
 }
 
 bool JitterBuffer::selfTest()
@@ -205,9 +246,11 @@ bool JitterBuffer::selfTest()
     check(calm.stats.played == 500 && calm.stats.concealed <= 5 && calm.stats.late == 0 && calm.stats.skipped == 0 && calm.minTarget == 40,
           "steady network: every frame played, delay at the 40 ms floor");
     Run wobbly = simulate(1500, 60, 0, 1.0, -1, -1);
-    check(wobbly.maxTarget >= 60 && wobbly.maxTarget <= 120 && wobbly.stats.late < 1500 / 20, "60 ms of jitter: the delay grows, few frames late");
+    check(wobbly.maxTarget >= 60 && wobbly.maxTarget <= 200 && wobbly.stats.late < 1500 / 40, "60 ms of jitter: the delay grows, few frames late");
     Run wild = simulate(1500, 400, 0, 1.0, -1, -1);
-    check(wild.maxTarget == 120, "400 ms of jitter: the delay stops at 120 ms");
+    check(wild.maxTarget == 200, "400 ms of jitter: the delay stops at 200 ms");
+    Run burst = simulateBursts(1500);
+    check(burst.stats.late < 1500 / 50 && burst.maxTarget <= 200, "bursts every 2 s (phone radios): few frames late, the delay holds between them");
     Run lossy = simulate(1500, 10, 10, 1.0, -1, -1);
     check(lossy.stats.fec > 50 && lossy.stats.concealed > 0 && lossy.stats.played > 1200, "10 % loss: rebuilt from FEC or concealed");
     Run fast = simulate(3000, 10, 0, 1.002, -1, -1);

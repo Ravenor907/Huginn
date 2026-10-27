@@ -13,7 +13,7 @@ import org.junit.Test
 import java.net.InetAddress
 import java.net.InetSocketAddress
 
-/** Call signaling, the relay-only candidate rule, the jitter buffer and the speaking indicator. */
+/** Call signaling, the relay-only candidate rule and the speaking indicator (the jitter buffer: JitterTest). */
 class CallLogicTest {
     private val me = ChatCrypto.newKeyPair()
     private val myKey = ChatCrypto.b64(me.public.encoded)
@@ -98,41 +98,41 @@ class CallLogicTest {
         assertTrue(CallLogic.fresh(1_120_000, 1_000_000)); assertFalse(CallLogic.fresh(1_120_001, 1_000_000))
     }
 
+    /** 5.8: c2 fields in offer and answer, and direct candidates only with internet addresses. */
     @Test
-    fun jitterInOrderWithLossAndFec() {
-        var now = 0L
-        val j = CallLogic.Jitter { now }
-        assertTrue(j.next() is CallLogic.Play.Silence)
-        // Packets 0..11 every 20 ms, but 4 is lost and 6 comes after 7. The player pulls every 20 ms.
-        val arrivals = mapOf(0 to 5L, 1 to 25L, 2 to 45L, 3 to 65L, 5 to 105L, 7 to 145L, 6 to 150L, 8 to 165L, 9 to 185L, 10 to 205L, 11 to 225L)
-        val out = ArrayList<CallLogic.Play>()
-        for (t in 0..240 step 5) {
-            now = t.toLong()
-            arrivals.filter { it.value == now }.forEach { (i, _) -> j.put(i * 20L, byteArrayOf(i.toByte())) }
-            if (t % 20 == 10) out += j.next()
-        }
-        val played = out.dropWhile { it is CallLogic.Play.Silence }
-        assertTrue(out.size - played.size in 2..4)                      // waited about the 60 ms target
-        assertEquals(0, (played[0] as CallLogic.Play.Packet).data[0].toInt())
-        assertEquals(3, (played[3] as CallLogic.Play.Packet).data[0].toInt())
-        assertEquals(5, (played[4] as CallLogic.Play.Fec).next[0].toInt())   // 4 rebuilt from 5's FEC
-        assertEquals(5, (played[5] as CallLogic.Play.Packet).data[0].toInt())
-        assertEquals(6, (played[6] as CallLogic.Play.Packet).data[0].toInt())
-        while (j.next().let { it is CallLogic.Play.Packet }) {}
-        // Then nothing arrives: after a second of nothing, silence.
-        now += 2_000
-        assertTrue(j.next() is CallLogic.Play.Silence)
-        assertTrue(j.targetMs in 40..200)
-    }
-
-    @Test
-    fun jitterSkipsWhenFarBehind() {
-        var now = 0L
-        val j = CallLogic.Jitter { now }
-        for (i in 0 until 40) { now = i * 20L; j.put(i * 20L, byteArrayOf(i.toByte())) }
-        val first = j.next() as CallLogic.Play.Packet
-        // 800 ms queued is far over the target: it jumps close to the newest packet.
-        assertTrue(first.data[0] > 30)
+    fun c2AndDirectCandidates() {
+        val id = CallCrypto.newCallId()
+        val eph = ChatCrypto.b64(CallCrypto.newEphemeral().public.encoded)
+        val srflx = InetSocketAddress(InetAddress.getByName("203.0.113.7"), 51820)
+        val o = CallLogic.offer(id, eph, CallCrypto.sign(me.private, "offer", id, eph), 1234, relay, null, false,
+            CallLogic.Extras(vp8 = true, video = true, p2p = true), listOf(CallLogic.Direct("srflx", srflx)))
+        assertTrue(o.getBoolean("c2")); assertEquals("vp8", o.getString("vc")); assertTrue(o.getBoolean("vid")); assertTrue(o.getBoolean("p2p"))
+        val s = CallLogic.parse(myKey, o.toString())
+        assertTrue(s.c2 && s.vp8 && s.video && s.p2p)
+        assertEquals(relay, s.relay); assertEquals(listOf(srflx), s.direct)
+        // Without c2 (a 0.7 app): none of it, and its srflx/host are never used.
+        val plain = CallLogic.offer(id, eph, CallCrypto.sign(me.private, "offer", id, eph), 1234, relay, null, false)
+        assertFalse(plain.has("c2") || plain.has("p2p") || plain.has("vc"))
+        assertFalse(CallLogic.parse(myKey, plain.toString()).c2)
+        // Local addresses are never direct candidates: a peer can't make this phone send into its LAN.
+        val msg = JSONObject().put("t", "cands").put("call", id).put("cands", org.json.JSONArray()
+            .put(JSONObject().put("t", "host").put("a", "192.168.1.20").put("p", 40312))
+            .put(JSONObject().put("t", "host").put("a", "fe80::1").put("p", 40312))
+            .put(JSONObject().put("t", "host").put("a", "fd00::5").put("p", 40312))
+            .put(JSONObject().put("t", "srflx").put("a", "127.0.0.1").put("p", 40312))
+            .put(JSONObject().put("t", "srflx").put("a", "evil.example").put("p", 40312))
+            .put(JSONObject().put("t", "host").put("a", "2001:db8::17").put("p", 40312))
+            .put(JSONObject().put("t", "srflx").put("a", "203.0.113.7").put("p", 51820)))
+        assertEquals(listOf(InetSocketAddress(InetAddress.getByName("2001:db8::17"), 40312), srflx), CallLogic.parse(myKey, msg.toString()).direct)
+        assertTrue(CallLogic.isLocal(InetAddress.getByName("100.64.1.1")) && !CallLogic.isLocal(InetAddress.getByName("8.8.8.8")))
+        // The relay rests while a free path is fresh (5.8.3): no relay destination then.
+        val wifi = CallLogic.Path(CallLogic.Kind.WIFI, InetSocketAddress(InetAddress.getByName("192.168.1.9"), 4000))
+        val r = CallLogic.Path(CallLogic.Kind.RELAY, relay)
+        assertEquals(listOf(CallLogic.Kind.WIFI), CallLogic.udpSends(listOf(r, wifi), listOf(relay), restRelay = true).map { it.kind })
+        assertEquals(2, CallLogic.udpSends(listOf(r, wifi), listOf(relay)).size)
+        val d = CallLogic.Path(CallLogic.Kind.DIRECT, srflx)
+        d.lastIn = System.currentTimeMillis(); d.lastPing = d.lastIn
+        assertFalse(CallLogic.pingDue(d, d.lastIn + 200)); assertTrue(CallLogic.pingDue(d, d.lastIn + 250))
     }
 
     @Test

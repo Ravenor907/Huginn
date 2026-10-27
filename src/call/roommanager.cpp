@@ -6,7 +6,11 @@
 #include "callsession.h"
 #include "callsignal.h"
 #include "opuscodec.h"
+#include "videoengine.h"
+#include "vpxcodec.h"
 #include "../groupwire.h"
+
+#include <QVideoSink>
 #include "../platform/chime.h"
 #include "../platform/notify.h"
 
@@ -264,6 +268,14 @@ void RoomManager::leave()
     m_announce.stop();
     m_ticker.stop();
     m_clock.invalidate();
+    stopShare();
+    if (m_view) {
+        m_view->deleteLater();
+        m_view = nullptr;
+    }
+    m_sharer.clear();
+    if (m_screenSink)
+        m_screenSink->setVideoFrame(QVideoFrame());
     if (m_audio) {
         m_audio->stop();
         m_audio->deleteLater();
@@ -456,6 +468,10 @@ CallSession *RoomManager::newSession(const QString &key)
 {
     auto *s = new CallSession(m_signal, key, m_login, this);
     s->useDevices = false;   // this class has the microphone and the speaker
+    // Two people in a room who trust each other may go direct too (5.8.2); everyone else: relay only.
+    s->trusted = m_calls && m_calls->trusted(key);
+    s->videoCodec = vpxAvailable();   // screen share (5.8.7)
+    watchMedia(key, s);
     connect(s, &CallSession::stateChanged, this, [this, s] {
         // Muted before the pair's call was up: tell them once it is.
         if (s->state() == CallSession::Active && m_muted)
@@ -504,6 +520,8 @@ void RoomManager::peerEnded(const QString &key, CallSession *s)
     const int retries = it->retries;
     m_peers.erase(it);
     s->deleteLater();
+    if (key == m_sharer)
+        QTimer::singleShot(0, this, &RoomManager::pickSharer);
     const QString why = s->endText();
     // A pair that lost its connection while both stay: the lower key calls again (6.3 step 7).
     if (inRoom() && (why == QLatin1String("Can't connect") || why == QLatin1String("Call dropped")) && retries < 3
@@ -630,5 +648,158 @@ void RoomManager::onRoomOffer(const QString &from, const QJsonObject &msg)
         s->setMuted(true);
     s->takeOffer(msg);
     s->answer();   // no ringing inside a room (6.3 step 3)
+    Q_EMIT changed();
+}
+
+// ------------------------------------------------------------------ screen share (5.8.7)
+
+bool RoomManager::canShare() const { return vpxAvailable(); }
+
+QString RoomManager::sharerName() const { return m_sharer.isEmpty() ? QString() : nameOf(m_g, m_sharer); }
+
+void RoomManager::setScreenSink(QObject *sink)
+{
+    m_screenSink = qobject_cast<QVideoSink *>(sink);
+    if (m_view)
+        m_view->setSink(m_screenSink);
+    const Peer p = m_peers.value(m_sharer);
+    if (m_screenSink && p.s && p.s->media())
+        p.s->media()->requestKeyframe(VideoWire::Screen);
+}
+
+void RoomManager::watchMedia(const QString &key, CallSession *s)
+{
+    connect(s, &CallSession::mediaStarted, this, [this, key, s] {
+        CallMedia *m = s->media();
+        if (!m)
+            return;
+        connect(m, &CallMedia::videoFrame, this, [this, key](int stream, const QByteArray &vp8, bool isKey, int rotation) {
+            if (stream == VideoWire::Screen && key == m_sharer && m_view)
+                m_view->frame(vp8, isKey, rotation);
+        });
+        connect(m, &CallMedia::peerVideoChanged, this, &RoomManager::pickSharer);
+        connect(m, &CallMedia::keyframeWanted, this, [this](int stream) {
+            if (stream == VideoWire::Screen && m_share)
+                m_share->requestKey();
+        });
+        if (m_share)
+            shareTo(s, true);   // joined while we share: they see it too
+    });
+}
+
+void RoomManager::shareTo(CallSession *s, bool on)
+{
+    if (!s || !s->media() || !s->videoBoth())
+        return;
+    s->media()->setVideoSending(VideoWire::Screen, on);
+    if (on && m_share)
+        m_share->requestKey();
+}
+
+void RoomManager::toggleShare()
+{
+    if (m_share) {
+        stopShare();
+        Q_EMIT changed();
+        return;
+    }
+    if (!inRoom() || !vpxAvailable())
+        return;
+    m_share = new VideoSender(VideoSender::Screen, this);
+    connect(m_share, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
+        // Encoded once, sealed for each person with that pair's keys.
+        for (const Peer &p : std::as_const(m_peers))
+            if (p.s && p.s->media() && p.s->videoBoth())
+                p.s->media()->sendVideo(VideoWire::Screen, key, 0, vp8);
+    });
+    connect(m_share, &VideoSender::failed, this, [this](const QString &) {
+        stopShare();
+        Q_EMIT finished(QStringLiteral("Screen sharing stopped: the screen can't be captured"));
+        Q_EMIT changed();
+    });
+    // The size and bitrate everyone can take: the relay profile as soon as one of them is on the relay.
+    auto profile = [this] {
+        bool allFree = !m_peers.isEmpty();
+        for (const Peer &p : std::as_const(m_peers))
+            if (p.s && p.s->media() && p.s->media()->profile(VideoWire::Screen).capKbps == VideoWire::screenProfile(false).capKbps)
+                allFree = false;
+        return VideoWire::screenProfile(allFree);
+    };
+    m_share->setProfile(profile());
+    if (!m_share->start()) {
+        m_share->deleteLater();
+        m_share = nullptr;
+        Q_EMIT finished(QStringLiteral("There is no screen to share"));
+        return;
+    }
+    for (const Peer &p : std::as_const(m_peers))
+        shareTo(p.s, true);
+    m_shareRate.disconnect(this);
+    m_shareRate.setInterval(1000);
+    connect(&m_shareRate, &QTimer::timeout, this, [this, profile] {
+        if (!m_share)
+            return;
+        int kbps = 0;
+        for (const Peer &p : std::as_const(m_peers))
+            if (p.s && p.s->media() && p.s->videoBoth()) {
+                const int k = p.s->media()->videoKbps(VideoWire::Screen);
+                kbps = kbps ? std::min(kbps, k) : k;
+            }
+        if (kbps)
+            m_share->setKbps(kbps);
+        m_share->setProfile(profile());
+    });
+    m_shareRate.start();
+    Q_EMIT changed();
+}
+
+void RoomManager::stopShare()
+{
+    m_shareRate.stop();
+    if (!m_share)
+        return;
+    for (const Peer &p : std::as_const(m_peers))
+        shareTo(p.s, false);
+    m_share->stop();
+    m_share->deleteLater();
+    m_share = nullptr;
+}
+
+void RoomManager::pickSharer()
+{
+    // The one shown stays while they share; otherwise the first who does.
+    auto sharesNow = [this](const QString &k) {
+        const Peer p = m_peers.value(k);
+        return p.s && p.s->media() && p.s->media()->peerSending(VideoWire::Screen);
+    };
+    if (!m_sharer.isEmpty() && sharesNow(m_sharer))
+        return;
+    QString next;
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
+        if (sharesNow(it.key())) {
+            next = it.key();
+            break;
+        }
+    if (next == m_sharer)
+        return;
+    m_sharer = next;
+    if (m_view) {
+        m_view->deleteLater();
+        m_view = nullptr;
+    }
+    if (m_screenSink)
+        m_screenSink->setVideoFrame(QVideoFrame());
+    if (!next.isEmpty()) {
+        m_view = new VideoReceiver(this);
+        m_view->setSink(m_screenSink);
+        const Peer p = m_peers.value(next);
+        QPointer<CallMedia> pm = p.s ? p.s->media() : nullptr;
+        connect(m_view, &VideoReceiver::needKey, this, [pm] {
+            if (pm)
+                pm->requestKeyframe(VideoWire::Screen);
+        });
+        if (pm)
+            pm->requestKeyframe(VideoWire::Screen);
+    }
     Q_EMIT changed();
 }

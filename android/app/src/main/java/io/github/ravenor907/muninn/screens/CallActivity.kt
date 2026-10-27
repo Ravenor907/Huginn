@@ -37,6 +37,21 @@ class CallActivity : ComponentActivity() {
         }
     }
 
+    private var pendingCamera: Pair<() -> Unit, () -> Unit>? = null
+    private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val p = pendingCamera; pendingCamera = null
+        if (ok) p?.first?.invoke() else {
+            Toast.makeText(this, "Video needs the camera. Allow it in Android's settings for Muninn.", Toast.LENGTH_LONG).show()
+            p?.second?.invoke()
+        }
+    }
+
+    /** [f] once the camera may be used; [otherwise] when it may not (the call goes on without video). */
+    private fun withCamera(f: () -> Unit, otherwise: () -> Unit = {}) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) f()
+        else { pendingCamera = f to otherwise; askCamera.launch(Manifest.permission.CAMERA) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }
@@ -49,7 +64,9 @@ class CallActivity : ComponentActivity() {
                 if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { withMic { CallManager.answer() } }, onClose = { close() })
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                }, onAnswer = { withMic { CallManager.answer() } }, hideName = Panic.locked.value || privateName())
+                }, onAnswer = { withMic { CallManager.answer() } }, hideName = Panic.locked.value || privateName(),
+                    onAnswerVideo = { withMic { withCamera({ CallManager.answer(video = true) }, { CallManager.answer() }) } },
+                    onCamera = { on -> if (on) withCamera({ CallManager.setCamera(true) }) else CallManager.setCamera(false) })
             }
         }
         // Gone once the call is over (after the short "Call ended" moment).
@@ -69,11 +86,13 @@ class CallActivity : ComponentActivity() {
             ANSWER -> withMic { CallManager.answer() }
             CALL -> {
                 val key = i.getStringExtra(KEY) ?: return finish()
+                val video = i.getBooleanExtra(VIDEO, false)
                 i.action = SHOW   // a rotation or a return must not start a second call
-                withMic {
+                val go = { withVideo: Boolean ->
                     if (Opus.loadError != null) { Toast.makeText(this, "Calling isn't working on this phone", Toast.LENGTH_LONG).show(); finish() }
-                    else if (!CallManager.start(key) && CallManager.call.value?.peerKey != key) { Toast.makeText(this, "You're already on a call", Toast.LENGTH_SHORT).show() }
+                    else if (!CallManager.start(key, withVideo) && CallManager.call.value?.peerKey != key) { Toast.makeText(this, "You're already on a call", Toast.LENGTH_SHORT).show() }
                 }
+                withMic { if (video) withCamera({ go(true) }, { go(false) }) else go(false) }
             }
             else -> if (CallManager.call.value == null) finish()
         }
@@ -89,10 +108,11 @@ class CallActivity : ComponentActivity() {
         const val ANSWER = "io.github.ravenor907.muninn.call.ANSWER"
         const val CALL = "io.github.ravenor907.muninn.call.CALL"
         private const val KEY = "peerKey"
+        private const val VIDEO = "video"
 
-        /** Calls [peerKey]: opens the call screen, asks for the microphone if needed, and starts the call. */
-        fun call(c: Context, peerKey: String) = c.startActivity(Intent(c, CallActivity::class.java).setAction(CALL).putExtra(KEY, peerKey)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        /** Calls [peerKey]: opens the call screen, asks for the microphone (and for [video] the camera) if needed, and starts the call. */
+        fun call(c: Context, peerKey: String, video: Boolean = false) = c.startActivity(Intent(c, CallActivity::class.java).setAction(CALL).putExtra(KEY, peerKey)
+            .putExtra(VIDEO, video).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
 
         /** Back to the call going on (a "Return to call" bar). */
         fun show(c: Context) = c.startActivity(Intent(c, CallActivity::class.java).setAction(SHOW).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))

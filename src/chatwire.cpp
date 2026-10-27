@@ -8,7 +8,7 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
-const char ChatWire::kCaps[] = "r1 g1 c1 t1 v1 m1";
+const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1";
 
 namespace
 {

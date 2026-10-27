@@ -808,9 +808,11 @@ Rectangle {
         if (Rooms.isIn(gid, r.id)) {
             Ui.pickFrom(r.name, [{ header: Rooms.statusText, items: [
                 { name: Rooms.muted ? "Unmute" : "Mute", url: "mute" },
+                { name: Rooms.sharing ? "Stop sharing your screen" : "Share your screen", detail: Rooms.canShare ? "Everyone in the room sees it, encrypted to each" : "Not in this build", url: "share" },
                 { name: "Output: " + Rooms.outputName, detail: "Choose again for the next one", url: "output" },
                 { name: "Leave " + r.name, detail: "You stop hearing and being heard", url: "leave" }] }], a => {
                 if (a === "mute") Rooms.toggleMute()
+                else if (a === "share" && Rooms.canShare) Rooms.toggleShare()
                 else if (a === "output") Rooms.nextOutput()
                 else if (a === "leave") Rooms.leave()
             })

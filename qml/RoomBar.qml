@@ -1,9 +1,12 @@
 import QtQuick
+import QtMultimedia
 import Huginn
 
 // In a voice room or a group call: along the bottom of every page while it lasts. Who's in it (a gold
 // ring while someone talks, dimmed while they're muted), how long, and Mute, Output, Open and Leave.
 // On a controller the same things are in the voice room's options on its group page (A on the room).
+// Share screen sends this computer's screen to everyone in the room; when someone else shares theirs it
+// shows above the bar (docs/protocol-0.6.md 5.8.7), encrypted to each person like the sound.
 Rectangle {
     id: bar
     visible: Rooms.inRoom
@@ -13,6 +16,34 @@ Rectangle {
     border.color: Theme.line
 
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
+    property bool screenShown: true
+
+    // Someone else's shared screen, above the bar.
+    Rectangle {
+        id: screenPanel
+        visible: Rooms.inRoom && Rooms.sharerName !== "" && bar.screenShown
+        anchors.bottom: parent.top
+        anchors.left: parent.left; anchors.right: parent.right
+        height: Math.min(Theme.px(560), (bar.parent ? bar.parent.height : 800) * 0.6)
+        color: "#000000"
+        border.width: 1; border.color: Theme.line
+        VideoOutput {
+            id: screenOut
+            anchors.fill: parent
+            anchors.margins: 1
+            fillMode: VideoOutput.PreserveAspectFit
+            Component.onCompleted: Rooms.setScreenSink(screenOut.videoSink)
+            Accessible.role: Accessible.Graphic
+            Accessible.name: Rooms.sharerName + "'s screen"
+        }
+        Text {
+            anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(10)
+            text: Rooms.sharerName + " is sharing their screen"
+            color: Theme.text
+            style: Text.Outline; styleColor: "#000000"
+            font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+        }
+    }
 
     Row {
         id: who
@@ -93,6 +124,8 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(8)
         HButton { text: Rooms.muted ? "Unmute" : "Mute"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleMute() }
+        HButton { visible: Rooms.canShare; text: Rooms.sharing ? "Stop sharing" : "Share screen"; kind: Rooms.sharing ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleShare() }
+        HButton { visible: Rooms.sharerName !== ""; text: bar.screenShown ? "Hide screen" : "Show screen"; implicitHeight: Theme.px(44); onClicked: bar.screenShown = !bar.screenShown }
         HButton { visible: bar.width > Theme.px(900); text: "Output: " + Rooms.outputName; implicitHeight: Theme.px(44); onClicked: Rooms.nextOutput() }
         HButton { text: "Open"; implicitHeight: Theme.px(44); onClicked: Ui.openPage("g:" + Rooms.group, { voice: true }) }
         HButton { text: "Leave"; kind: "danger"; implicitHeight: Theme.px(44); onClicked: Rooms.leave() }

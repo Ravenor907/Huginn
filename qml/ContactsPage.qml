@@ -125,6 +125,8 @@ Rectangle {
         const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" },
                        { name: "Folders", detail: inFolders.length ? "In " + inFolders.join(", ") : "Family, Work, Kindred or your own", url: "folders" }]
         if (!p.verified) items.push({ name: "Check code", detail: "Make sure nobody is in between", url: "code" })
+        items.push({ name: "Direct calls: " + Calls.trustText(p.key), detail: Calls.trusted(p.key) ? "Calls skip the relay when they trust you too. A turns it off"
+                                                                                                : "Calls go through the relay; neither of you sees the other's IP. A turns direct on", url: "trust" })
         items.push({ name: "Block", detail: "Nothing from them reaches you. They aren't told", url: "block" })
         if (p.contact) items.push({ name: "Remove contact", detail: "Your chat with them stays", url: "remove" })
         Ui.pickFrom(p.name, [{ header: "", items: items }], a => {
@@ -135,6 +137,11 @@ Rectangle {
                 Ui.ask("Rename " + Chat.realNameOf(p.key), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
                        t => Chat.setNickname(p.key, t), false, true)
             else if (a === "folders") pickFolders(p)
+            else if (a === "trust") {
+                const on = !Calls.trusted(p.key)
+                Calls.setTrusted(p.key, on)
+                Ui.say(on ? "Calls with " + p.name + " go direct when they trust you too." : "Calls with " + p.name + " go through the relay only.")
+            }
             else if (a === "block") { Chat.block(p.key, true); Ui.say(p.name + " blocked.") }
             else if (a === "remove") { Chat.removeContact(p.key); Ui.say(p.name + " removed. Your chat with them stays.") }
         })

@@ -747,10 +747,12 @@ Rectangle {
                 "It matches", () => Chat.verify(k))
     }
     function conversationItems() {
-        const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" },
+        const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" }]
+        if (Calls.canVideo(openKey)) items.push({ name: "Video call", detail: "Encrypted, 480p through the relay to save data", url: "video" })
+        items.push(
                        { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
-                       { name: "Folders", detail: folderNames(openKey), url: "folders" }]
+                       { name: "Folders", detail: folderNames(openKey), url: "folders" })
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -762,6 +764,7 @@ Rectangle {
         const k = openKey
         Ui.pickFrom(openName, [{ header: "", items: conversationItems() }], a => {
             if (a === "call") startCall()
+            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
             else if (a === "picture") pickPicture()
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)

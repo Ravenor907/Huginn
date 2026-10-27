@@ -436,7 +436,7 @@ QString CallCrypto::Receiver::open(const QByteArray &pkt, Packet *out)
     if (quint8(pkt[0]) != kVersion)
         return QStringLiteral("version");
     const int type = quint8(pkt[1]);
-    if (type != Audio && type != Ping && type != Pong)
+    if (type < Audio || type > Nack)
         return QStringLiteral("type");
     if (pkt.mid(2, 2) != m_tag)
         return QStringLiteral("other call");
