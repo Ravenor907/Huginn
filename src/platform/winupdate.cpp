@@ -15,7 +15,12 @@
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
+// Qt's zip reader: in QtCore from Qt 6.8 on, in QtGui before.
+#if __has_include(<QtCore/private/qzipreader_p.h>)
+#include <QtCore/private/qzipreader_p.h>
+#else
 #include <QtGui/private/qzipreader_p.h>
+#endif
 #include <windows.h>
 #endif
 

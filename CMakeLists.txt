@@ -16,7 +16,7 @@ if(WIN32)
     enable_language(RC)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network WebSockets Bluetooth Multimedia)
     # The updater unpacks the release zip itself with Qt's zip reader (src/platform/winupdate.cpp).
-    find_package(Qt6 6.6 REQUIRED COMPONENTS GuiPrivate)
+    find_package(Qt6 6.6 REQUIRED COMPONENTS CorePrivate GuiPrivate)
     # Only needed while main.cpp still sends notifications over D-Bus (it should call Platform::notify).
     find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS DBus)
     find_package(OpenSSL REQUIRED)
@@ -126,7 +126,7 @@ if(WIN32)
     target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc ${CMAKE_CURRENT_BINARY_DIR}/Huginn.exe.manifest)
     # Our manifest says asInvoker itself; the linker's own would be a second copy.
     target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/MANIFESTUAC:NO>)
-    target_link_libraries(huginn PRIVATE Qt6::GuiPrivate)
+    target_link_libraries(huginn PRIVATE Qt6::CorePrivate Qt6::GuiPrivate)
     if(HUGINN_WINDOWS_PORTABLE)
         # Qt finds its plugins and QML modules in lib\ (packaging/windows/qt.conf, built in as :/qt/etc/qt.conf).
         qt_add_resources(huginn "huginn_qtconf" PREFIX "/qt/etc" BASE packaging/windows FILES packaging/windows/qt.conf)
