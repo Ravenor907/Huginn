@@ -50,9 +50,11 @@ object TvMic {
      * toward full scale (tanh) and never wraps around. Pure Kotlin, so the unit tests can run it.
      * [offsetDb] shifts the whole range ([PROCESSED_OFFSET_DB] after [TvVoice]).
      */
-    class Gain(private val level: () -> Int, private val offsetDb: Float = 0f) {
+    class Gain(private val offsetDb: Float, private val level: () -> Int) {
+        /** Following [level] live, no offset. */
+        constructor(level: () -> Int) : this(0f, level)
         /** A fixed level (tests, a clip that is already recording). */
-        constructor(level: Int, offsetDb: Float = 0f) : this({ level }, offsetDb)
+        constructor(level: Int, offsetDb: Float = 0f) : this(offsetDb, { level })
 
         private var at = Int.MIN_VALUE
         private var g = 1f
@@ -82,7 +84,7 @@ object TvMic {
     }
 
     /** The gain stage that goes after [p] (or alone, without it), following [level] live. */
-    fun gainFor(p: TvVoice.Processor?): Gain = Gain({ level }, if (p != null && p.flags and TvVoice.AGC != 0) PROCESSED_OFFSET_DB else 0f)
+    fun gainFor(p: TvVoice.Processor?): Gain = Gain(if (p != null && p.flags and TvVoice.AGC != 0) PROCESSED_OFFSET_DB else 0f) { level }
 
     /** The microphone's loudness for a level meter, 0..1 (about -60 dBFS to full scale). */
     @Volatile var meter = 0f; private set
@@ -134,8 +136,8 @@ object TvMic {
         val playFrame = playRate / 50
         @Volatile private var proc: TvVoice.Processor? = null
         /** The level after TvVoice's automatic gain, or on its own. */
-        private val afterAgc = Gain({ TvMic.level }, PROCESSED_OFFSET_DB)
-        private val plain = Gain({ TvMic.level })
+        private val afterAgc = Gain(PROCESSED_OFFSET_DB) { TvMic.level }
+        private val plain = Gain { TvMic.level }
         private val gain: Gain get() = if ((proc?.flags ?: 0) and TvVoice.AGC != 0) afterAgc else plain
 
         internal fun start() {

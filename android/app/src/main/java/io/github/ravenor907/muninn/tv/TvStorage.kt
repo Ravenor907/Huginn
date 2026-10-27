@@ -48,7 +48,7 @@ object TvStorage {
     fun trim(app: Muninn) {
         if (!app.ready.value) return
         val now = System.currentTimeMillis()
-        app.chat.trimHistory(KEEP, now - VOICE_DAYS * DAY, MAX_BLOBS, SHRINK_OVER, ::shrink)
+        app.chat.trimHistory(KEEP, now - VOICE_DAYS * DAY, MAX_BLOBS, SHRINK_OVER) { shrink(it) }
         val caches = listOfNotNull(app.cacheDir, app.externalCacheDir)
         val all = caches.sumOf { size(it) } > MAX_CACHE
         for (c in caches) c.listFiles()?.forEach { f -> if (f.name !in KEEP_CACHES && (all || now - f.lastModified() > DAY)) f.deleteRecursively() }

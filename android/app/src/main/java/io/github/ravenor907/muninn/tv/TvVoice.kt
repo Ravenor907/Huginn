@@ -110,4 +110,28 @@ object TvVoice {
             }
         }
     }
+
+    /**
+     * Test builds (CI on an emulator): loads the library and runs a second of a call through everything.
+     * "ok ..." or what went wrong.
+     */
+    fun selfCheck(): String {
+        loadError?.let { return "can't load: $it" }
+        val p = Processor.open(48_000, 16_000, 16_000, 48_000, AEC or RNNOISE or AGC) ?: return "can't open 48 kHz"
+        val mic = ShortArray(960); val out = ShortArray(320); val far = ShortArray(320); val play = ShortArray(960)
+        var phase = 0.0
+        for (f in 0 until 50) {
+            for (i in mic.indices) { phase += 2 * Math.PI * 220 / 48_000; mic[i] = (3000 * kotlin.math.sin(phase)).toInt().toShort() }
+            for (i in far.indices) far[i] = (2000 * kotlin.math.sin(i * 0.3 + f)).toInt().toShort()
+            if (p.render(far, far.size, play) != 960) { p.close(); return "render length" }
+            if (p.capture(mic, mic.size, out) != 320) { p.close(); return "capture length" }
+        }
+        val v = p.voice()
+        p.close()
+        val clip = Processor.open(44_100, 44_100, 16_000, 16_000, RNNOISE or AGC) ?: return "can't open 44.1 kHz"
+        val c = ShortArray(882)
+        val n = clip.capture(c, c.size, ShortArray(882))
+        clip.close()
+        return if (n == 882) "ok (voice $v)" else "clip length $n"
+    }
 }
