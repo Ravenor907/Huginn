@@ -334,9 +334,10 @@ jobs:
             if [ $s -ne 0 ]; then
               e=$(tail -n 30 t.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
               echo "::error title=Windows self-test failed: ${2} (exit $s)::$e"
-              exit 1
+              bad=1
             fi
           }
+          bad=0
           run "$h" --chat-selftest tests/chat-vectors.json
           run "$h" --ratchet-selftest tests/ratchet-vectors.json
           run "$h" --nostr-selftest tests/nostr-vectors.json
@@ -344,6 +345,7 @@ jobs:
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
           run timeout 330 "$h" --tor-selftest
+          exit $bad
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true
         env:

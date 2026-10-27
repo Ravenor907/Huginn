@@ -457,7 +457,8 @@ void Nostr::handle(const QJsonObject &ev)
 
 int Nostr::publish(const QString &mailboxHex, const QString &content)
 {
-    const QJsonArray tags{QJsonArray{QStringLiteral("p"), mailboxHex}};
+    // QJsonValue(...) keeps the inner array nested: MSVC treats QJsonArray{QJsonArray{...}} as a copy.
+    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
     // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
     const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), now() - QRandomGenerator::global()->bounded(600));
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
@@ -494,7 +495,7 @@ bool Nostr::selfTest(const QString &vectorsPath)
     const bool officialSig = Schnorr::hex(osig) == s(o, "sig") && Schnorr::verify(b(o, "msg"), b(o, "pubkey"), osig);
 
     // An event made by the reference code, the same one Muninn's tests check.
-    const QJsonArray tags{QJsonArray{QStringLiteral("p"), s(v, "recipient")}};
+    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), s(v, "recipient")})};
     const qint64 createdAt = v.value(QStringLiteral("created_at")).toInteger();
     const int kind = v.value(QStringLiteral("kind")).toInt();
     const bool serialized = serialize(s(v, "pubkey"), createdAt, kind, tags, s(v, "content")) == s(v, "serialized").toUtf8();
@@ -508,7 +509,7 @@ bool Nostr::selfTest(const QString &vectorsPath)
     // NIP-01 escaping: seven escapes, "/" and non-ASCII left as they are.
     const QString tricky = QString::fromUtf8("q\"b\\n\nr\rt\tb\bf\f a/b caf\xc3\xa9");
     const QByteArray expected = "[0,\"ab\",1,1,[[\"t\",\"a/b\"]],\"q\\\"b\\\\n\\nr\\rt\\tb\\bf\\f a/b caf\xc3\xa9\"]";
-    const bool escaping = serialize(QStringLiteral("ab"), 1, 1, QJsonArray{QJsonArray{QStringLiteral("t"), QStringLiteral("a/b")}}, tricky) == expected;
+    const bool escaping = serialize(QStringLiteral("ab"), 1, 1, QJsonArray{QJsonValue(QJsonArray{QStringLiteral("t"), QStringLiteral("a/b")})}, tricky) == expected;
 
     // A changed signature must fail.
     const QByteArray sk = Schnorr::newSecret();

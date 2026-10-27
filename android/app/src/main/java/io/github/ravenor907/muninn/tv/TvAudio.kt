@@ -17,7 +17,7 @@ object TvAudio {
         add(AudioDeviceInfo.TYPE_REMOTE_SUBMIX); add(AudioDeviceInfo.TYPE_TELEPHONY); add(AudioDeviceInfo.TYPE_FM_TUNER)
         add(AudioDeviceInfo.TYPE_TV_TUNER); add(AudioDeviceInfo.TYPE_HDMI); add(AudioDeviceInfo.TYPE_HDMI_ARC)
         add(AudioDeviceInfo.TYPE_LINE_ANALOG); add(AudioDeviceInfo.TYPE_LINE_DIGITAL); add(AudioDeviceInfo.TYPE_AUX_LINE)
-        if (Build.VERSION.SDK_INT >= 31) { add(AudioDeviceInfo.TYPE_HDMI_EARC); add(AudioDeviceInfo.TYPE_ECHO_REFERENCE) }
+        if (Build.VERSION.SDK_INT >= 31) { add(AudioDeviceInfo.TYPE_HDMI_EARC) }
     }
 
     /** True if some microphone is connected right now. */
