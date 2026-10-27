@@ -17,7 +17,6 @@
 class Ble;
 class LocalSend;
 class Nostr;
-class Tor;
 class Vault;
 
 // Huginn's messaging, the same as Muninn's (net/Chat.kt) so the two work together:
@@ -34,8 +33,6 @@ class Vault;
 //  - Groups (0.6, chatgroups.cpp): a signed state per group, every message sealed separately to
 //    each member over that member's own session. See docs/protocol-0.6.md and GroupWire.
 //  - Contact folders: local only, never sent.
-//  - Over Tor (when it's running) the internet route tries their onion address first, and the
-//    Nostr relays become the mailbox for when they're offline.
 //  - Everything kept is encrypted in the Vault.
 class Chat : public QObject
 {
@@ -61,10 +58,6 @@ class Chat : public QObject
     Q_PROPERTY(QVariantList groups READ groups NOTIFY changed)
     Q_PROPERTY(QVariantList groupInvites READ groupInvites NOTIFY changed)
     Q_PROPERTY(QVariantList folders READ folders NOTIFY changed)
-    // Tor: torOn when Huginn has it at all; "Connecting privately 40%" until it's ready.
-    Q_PROPERTY(bool torOn READ torOn NOTIFY changed)
-    Q_PROPERTY(bool torReady READ torReady NOTIFY changed)
-    Q_PROPERTY(int torProgress READ torProgress NOTIFY changed)
     Q_PROPERTY(QString netStatus READ netStatus NOTIFY changed)
 
 public:
@@ -97,12 +90,6 @@ public:
     QString mailbox() const;
     // A new code with an invite good for an hour: a leaked code stops working after that.
     Q_INVOKABLE QString newLink();
-    // Tor, from main.cpp. Messages for the onion address come in like those over Wi-Fi.
-    void setTor(Tor *tor);
-    QString onion() const;
-    bool torOn() const { return m_tor != nullptr; }
-    bool torReady() const;
-    int torProgress() const;
     QString netStatus() const;
 
     // Messages
@@ -206,9 +193,7 @@ public:
     Q_INVOKABLE void forgetGroup(const QString &g);
 
     static const int kMax = 2000;
-    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0,
-                        const QString &onion = QString());
-    static bool isOnion(const QString &o);
+    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
 
 Q_SIGNALS:
     void changed();
@@ -220,7 +205,6 @@ Q_SIGNALS:
     void callMessage(const QString &fromKey, const QJsonObject &msg);
 
 private:
-    Q_SLOT void torChanged();
     void start();
     int receive(const QByteArray &body, const QString &via);
     int receiveEnvelope(const QJsonObject &o, const QString &via);
@@ -272,13 +256,10 @@ private:
     bool inviteOk(const QString &token) const;
     void saveInvites();
     QString mailboxOf(const QString &key) const;
-    QString onionOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
-    // Sends over the internet: their onion first when Tor is ready (then the relays only if that
-    // fails, or always with alsoMailbox), otherwise the relays. False when there's no way.
-    bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, bool alsoMailbox,
+    // Sends over the internet: to their mailbox on the relays. False when they have none.
+    bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
                       std::function<void()> sent = nullptr);
-    void learnOnions();
     void noteCaps(const QString &key, bool present, const QStringList &caps);
     void loadFolders();
     void saveFolders();
@@ -365,17 +346,14 @@ private:
     QString m_openedFrom;
     bool m_openedCap = false, m_openedHasCaps = false;
     QStringList m_openedCaps;
-    QString m_openedOnion;   // "o" in an envelope that just opened: where they are reached over Tor
     QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
     QHash<QString, qint64> m_probed;                    // key -> last caps probe
     QList<QVariantMap> m_folders;                       // {id, name, keys}
-    Tor *m_tor = nullptr;
-    QString m_lastOnion;
     QHash<QString, Group> m_groups;
     QHash<QString, QString> m_gidx;                     // group message id -> group
-    QHash<QString, QVariantMap> m_gpeers;               // members who aren't contacts: key -> {key, name, mailbox, onion}
+    QHash<QString, QVariantMap> m_gpeers;               // members who aren't contacts: key -> {key, name, mailbox}
     QHash<QString, QVariantMap> m_ginvites;             // invites from contacts: group -> {g, from, fromName, name, count, inv}
-    QHash<QString, QVariantMap> m_joining;              // groups being joined: group -> {admin, adminName, mailbox, onion, token, name, since}
+    QHash<QString, QVariantMap> m_joining;              // groups being joined: group -> {admin, adminName, mailbox, token, name, since}
     QHash<QString, QVariantMap> m_gtokens;              // my invites and group codes: token -> {g, x, for}
     QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
     QHash<QString, qint64> m_syncAsked;                 // group|key -> when

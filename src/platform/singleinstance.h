@@ -8,7 +8,7 @@ class QLockFile;
 
 // One Huginn per user. A second copy (a double click on Huginn.exe while it already runs)
 // asks the first one to come to the front and then quits, so two copies never fight over
-// the chat folder or start two Tor processes on the same data directory.
+// the chat folder and vault files.
 // Works the same on Linux and Windows (a lock file in the app data folder plus a local socket).
 class SingleInstance : public QObject
 {

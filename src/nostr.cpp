@@ -1,6 +1,5 @@
 #include "nostr.h"
 #include "schnorr.h"
-#include "tor.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -214,26 +213,6 @@ void Nostr::setKeepAlive(bool on)
 
 // ------------------------------------------------------------------ relays
 
-void Nostr::setTor(Tor *tor)
-{
-    if (m_tor == tor)
-        return;
-    if (m_tor)
-        QObject::disconnect(m_tor, nullptr, this, nullptr);
-    m_tor = tor;
-    if (!tor)
-        return;
-    connect(tor, &Tor::readyChanged, this, [this] {
-        if (!m_tor || !m_tor->ready())
-            return;   // sockets through a Tor that went away fail by themselves and retry
-        if (m_keepAlive || m_wanted) {
-            m_wanted = false;
-            m_retries.clear();
-            connectRelays();
-        }
-    });
-}
-
 void Nostr::connectRelays()
 {
     for (const QString &url : relays())
@@ -245,13 +224,7 @@ void Nostr::open(const QString &url)
     // One socket per relay, never two: only opens if there isn't one already.
     if (m_links.contains(url))
         return;
-    // Only through Tor. Until it is ready nothing opens; readyChanged connects everything then.
-    if (!m_tor || !m_tor->ready()) {
-        m_wanted = true;
-        return;
-    }
     auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
-    ws->setProxy(m_tor->proxy(QStringLiteral("nostr ") + url));
     m_links.insert(url, Link{ws, true});
     connect(ws, &QWebSocket::connected, this, [this, url, ws] { opened(url, ws); });
     connect(ws, &QWebSocket::disconnected, this, [this, url, ws] { gone(url, ws); });
@@ -262,8 +235,8 @@ void Nostr::open(const QString &url)
         if (it != m_links.end() && it->ws == ws)
             it->ponged = true;
     });
-    // A relay that never answers counts as down after 30 s (circuits through Tor take a while), so the retry can start.
-    QTimer::singleShot(30000, ws, [this, url, ws] {
+    // A relay that never answers counts as down after 10 s, so the retry can start.
+    QTimer::singleShot(10000, ws, [this, url, ws] {
         if (ws->state() != QAbstractSocket::ConnectedState)
             gone(url, ws);
     });
@@ -358,7 +331,6 @@ void Nostr::reconnectNow()
 void Nostr::disconnect()
 {
     setKeepAlive(false);
-    m_wanted = false;
     const QHash<QString, Link> links = m_links;
     m_links.clear();
     for (const Link &l : links) {
