@@ -172,6 +172,14 @@ Window {
 
     // ------------------------------------------------------------- overlays
     ListPicker { id: picker; z: 25 }
+    // Ctrl+K (desktop): jump to any chat or channel by typing part of its name.
+    QuickSwitcher { id: switcher; z: 26 }
+    Shortcut {
+        sequence: "Ctrl+K"
+        context: Qt.ApplicationShortcut
+        enabled: !app.touring && !updating.visible
+        onActivated: switcher.visible ? switcher.close() : switcher.open()
+    }
     TextPrompt { id: prompt; z: 30 }
     CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
@@ -267,7 +275,9 @@ Window {
         function onNotice(text) { Ui.say(text) }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
-            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : "New message. Open Direct messages to read it.")
+            // An @mention always says so (without the text unless previews are on).
+            const mention = name.indexOf(" mentioned you in ") > 0
+            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : mention && !Vault.screenLocked ? name + "." : "New message. Open Direct messages to read it.")
         }
     }
     // Calls: how a call ended, as a toast.
@@ -285,6 +295,7 @@ Window {
         function onPanicked() {
             if (prompt.visible) prompt.cancel()
             if (picker.visible) picker.close()
+            if (switcher.visible) switcher.close()
             Ui.say("Chat locked.")
         }
     }
@@ -310,6 +321,7 @@ Window {
         if (callPage.visible) return callPage
         if (prompt.visible) return prompt
         if (picker.visible) return picker
+        if (switcher.visible) return switcher
         return null
     }
     function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }

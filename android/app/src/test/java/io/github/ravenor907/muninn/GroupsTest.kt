@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn
 import io.github.ravenor907.muninn.net.ChatCrypto
 import io.github.ravenor907.muninn.net.Groups
 import io.github.ravenor907.muninn.net.Proto06
+import io.github.ravenor907.muninn.net.Rich
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -38,7 +39,10 @@ class GroupsTest {
         override fun notice(text: String) { notices.add(text) }
         override fun arrived(g: String, title: String, text: String) {}
         override fun deleteBlob(id: String) {}
+        override fun hasM1(k: String) = k !in noM1
     }
+    /** Phones whose app doesn't have m1 (reactions and edits aren't sent to them). */
+    private val noM1 = HashSet<String>()
 
     private val wire = ArrayList<Pair<Phone, Groups.Out>>()
     private val a = Phone("Raven", KeyPair(ChatCrypto.publicFrom(chat.getString("pubA")), ChatCrypto.privateFrom(chat.getString("privA"))), "a1".repeat(32))
@@ -113,6 +117,41 @@ class GroupsTest {
         pump()
         assertEquals("On my way", a.groups.messages.value[g]!!.last().text)
         assertEquals("Delivered", Groups.status(c.groups.messages.value[g]!!.last()))
+    }
+
+    @Test
+    fun reactionsEditsRepliesAndDirectAdd() {
+        val g = family()
+        assertTrue(a.groups.sendText(g, Proto06.MAIN, "Dinner at six")); pump()
+        val id = a.groups.messages.value[g]!!.single().id
+        assertTrue(b.groups.react(g, id, "❤️")); pump()
+        assertEquals(mapOf(b.key to "❤️"), Rich.shown(a.groups.messages.value[g]!!.single().reactions))
+        assertEquals(mapOf(b.key to "❤️"), Rich.shown(c.groups.messages.value[g]!!.single().reactions))
+        assertTrue(b.groups.react(g, id, "")); pump()
+        assertTrue(Rich.shown(a.groups.messages.value[g]!!.single().reactions).isEmpty())
+        // A reply carries the id it answers; older apps just see the text.
+        assertTrue(c.groups.sendText(g, Proto06.MAIN, "Count me in", re = id)); pump()
+        assertEquals(id, a.groups.messages.value[g]!!.last().re)
+        // Only the author can edit; everyone who got it sees the new text, marked edited.
+        assertNull(a.groups.editText(g, id, "Dinner at seven")); pump()
+        val atB = b.groups.messages.value[g]!!.first { it.id == id }
+        assertEquals("Dinner at seven", atB.text); assertTrue(atB.edited > 0)
+        assertNotNull(b.groups.editText(g, id, "hacked"))
+        assertEquals("Dinner at seven", c.groups.messages.value[g]!!.first { it.id == id }.text)
+        // Someone without m1 gets no reactions (their app would refuse them).
+        noM1.add(c.key)
+        assertTrue(b.groups.react(g, id, "👍"))
+        assertTrue(wire.none { it.second.to == c.key && it.second.room == "group" })
+        pump()
+        // A contact puts someone straight in a new group (op "add"), no invite to accept.
+        val g2 = a.groups.create("Pals")!!
+        assertNull(a.groups.addDirect(g2, b.key, "Moose", b.mailbox)); pump()
+        same(g2, a, b)
+        assertTrue(b.notices.contains("Raven added you to Pals"))
+        // Someone who isn't a contact can't.
+        val g3 = c.groups.create("Spam")!!
+        assertNull(c.groups.addDirect(g3, b.key, "Moose", b.mailbox)); pump()
+        assertNull(b.groups.group(g3))
     }
 
     @Test
