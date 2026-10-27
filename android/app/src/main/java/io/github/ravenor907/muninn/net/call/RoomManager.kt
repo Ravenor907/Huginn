@@ -532,7 +532,7 @@ object RoomManager {
             if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return false }
             record = rec
             if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
-            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = CallManager.noiseRemoval(c) } } catch (e: Exception) { null }
             mic = Thread({ captureLoop(rec) }, "muninn-room-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
             return true
         }

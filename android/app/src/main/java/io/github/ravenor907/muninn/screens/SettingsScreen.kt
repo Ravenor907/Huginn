@@ -121,6 +121,16 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
+        Section("Calls")
+        Panel {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
+            ToggleRow("Noise removal", if (noise) "Background noise is taken out of your voice. Turn it off if people say you sound quiet"
+                else "Off: Muninn asks your phone not to filter noise out of your voice. Background sound comes through too", noise) {
+                noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
+            }
+            Text("Changes start with your next call.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        }
         Section("Lock")
         Panel {
             Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
