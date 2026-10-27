@@ -37,8 +37,12 @@ public:
     // messages are still saved (encrypted) in the background.
     Q_INVOKABLE void lockScreen() { m_screenLocked = true; Q_EMIT changed(); }
     // Leaving Chat (or Huginn going to the background) starts the clock; back after a minute = locked again.
-    Q_INVOKABLE void away() { if (!locked()) m_awaySince = QDateTime::currentMSecsSinceEpoch(); }
-    Q_INVOKABLE void back() { if (m_awaySince && QDateTime::currentMSecsSinceEpoch() - m_awaySince > 60000) lockScreen(); m_awaySince = 0; }
+    // The lock also goes up while still away, once the minute is past, so the window's last picture
+    // (shown again on wake before Huginn draws) is already the lock and never the chat.
+    Q_INVOKABLE void away() { if (!locked()) { m_awaySince = QDateTime::currentMSecsSinceEpoch(); m_awayTimer.start(); } }
+    Q_INVOKABLE void back() { checkAway(); m_awaySince = 0; m_awayTimer.stop(); }
+    // Wall clock, so time asleep counts. True when the lock went up.
+    bool checkAway() { if (m_awaySince && !m_screenLocked && QDateTime::currentMSecsSinceEpoch() - m_awaySince > 60000) { lockScreen(); return true; } return false; }
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
     bool screenLocked() const { return m_screenLocked || locked(); }
     // Erases every message, photo, voice message, contact and key. Huginn's other settings stay.
@@ -117,6 +121,7 @@ private:
     bool m_restarting = false;   // restored: nothing may be saved until Huginn starts again
     Files m_opened;
     QTimer m_combo;
+    QTimer m_awayTimer;
     bool m_l3 = false;
     bool m_r3 = false;
 };

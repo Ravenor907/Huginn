@@ -278,8 +278,11 @@ QByteArray Chat::unwrap(const QString &content) const
     return ok ? plain : QByteArray();
 }
 
-QVariantMap Chat::parseCode(const QString &text) const
+QVariantMap Chat::parseCode(const QString &link) const
 {
+    // A bare code, or the add page's link with the code after "#" (some apps write its ":" as "%3A").
+    QString text = link;
+    text.replace(QStringLiteral("MUNINN1%3A"), kPrefix, Qt::CaseInsensitive);
     const int i = text.indexOf(kPrefix);
     if (i < 0)
         return {};
