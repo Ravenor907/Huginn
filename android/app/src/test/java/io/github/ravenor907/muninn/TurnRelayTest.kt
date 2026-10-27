@@ -210,4 +210,22 @@ class TurnRelayTest {
         assertTrue(p.advertise(r2))
         assertEquals(listOf(r2), p.targets())
     }
+
+    @Test
+    fun eachRelayedAddressGetsAPacketOnce() {
+        val r1 = InetSocketAddress(InetAddress.getByName("141.101.90.1"), 50000)
+        val r2 = InetSocketAddress(InetAddress.getByName("141.101.90.1"), 50002)
+        val lan = InetSocketAddress(InetAddress.getByName("192.168.1.20"), 40000)
+        val peer = CallLogic.RelayPeer().apply { advertise(r1); heard(r2) }
+        // Two relay paths (the advertised one and one added when a translated packet came in), plus Wi-Fi twice.
+        val paths = listOf(CallLogic.Path(CallLogic.Kind.RELAY, r1), CallLogic.Path(CallLogic.Kind.RELAY, r2),
+            CallLogic.Path(CallLogic.Kind.WIFI, lan), CallLogic.Path(CallLogic.Kind.WIFI, lan), CallLogic.Path(CallLogic.Kind.BLUETOOTH, null))
+        val sends = CallLogic.udpSends(paths, peer.targets())
+        assertEquals(listOf(CallLogic.Dest(CallLogic.Kind.WIFI, lan), CallLogic.Dest(CallLogic.Kind.RELAY, r1), CallLogic.Dest(CallLogic.Kind.RELAY, r2)), sends)
+        // Relay only, no translation: one send.
+        val one = CallLogic.RelayPeer().apply { advertise(r1) }
+        assertEquals(1, CallLogic.udpSends(paths.take(2), one.targets()).size)
+        // No relayed address known yet: nothing goes to the relay.
+        assertTrue(CallLogic.udpSends(paths.take(2), emptyList()).isEmpty())
+    }
 }

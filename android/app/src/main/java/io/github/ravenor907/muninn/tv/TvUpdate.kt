@@ -56,7 +56,13 @@ object TvUpdate {
                 val pi = c.packageManager.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                     setAppPackageName(c.packageName)
-                    if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+                    // Muninn stays the installer of record, so every later update can skip the prompt.
+                    if (Build.VERSION.SDK_INT >= 30) setInstallerPackageName(c.packageName)
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        // Needs UPDATE_PACKAGES_WITHOUT_USER_ACTION (manifest). Android still asks once
+                        // (STATUS_PENDING_USER_ACTION below) while another app is the installer of record.
+                        setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+                    }
                 }
                 val id = pi.createSession(params)
                 pi.openSession(id).use { s ->

@@ -48,4 +48,23 @@ class TvMicTest {
         // Voice.check takes what the recorder makes.
         assertTrue(io.github.ravenor907.muninn.net.Voice.check(listOf(h + ByteArray(100))) != null)
     }
+
+    @Test
+    fun aNewLevelReachesARunningGain() {
+        var level = 0
+        val g = TvMic.Gain { level }
+        val a = shortArrayOf(1000); g.process(a)
+        assertEquals(1000, a[0].toInt())
+        level = 50   // the parent turned it up during the call
+        val b = shortArrayOf(1000); g.process(b)
+        assertTrue(abs(b[0] - 5623) < 3)
+    }
+
+    @Test
+    fun callMicFallsBackToMicOnlyOnTheTv() {
+        val vc = android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        val mic = android.media.MediaRecorder.AudioSource.MIC
+        assertEquals(listOf(vc), TvMic.callSources(false).toList())
+        assertEquals(listOf(vc, mic), TvMic.callSources(true).toList())
+    }
 }

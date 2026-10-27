@@ -115,7 +115,7 @@ class TvSpeech(private val context: Context) {
         fun start() {
             thread = Thread({
                 val agc = TvMic.clipAgc(record.audioSessionId)
-                val gain = TvMic.Gain(TvMic.level)
+                val gain = TvMic.Gain { TvMic.level }
                 val pcm = ShortArray(FRAME)
                 val bytes = ByteArray(FRAME * 2)
                 try {
