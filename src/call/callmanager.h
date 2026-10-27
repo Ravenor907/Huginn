@@ -64,6 +64,9 @@ public:
     // "" when the call is starting, otherwise what to tell the person.
     Q_INVOKABLE QString call(const QString &key);
     Q_INVOKABLE bool canCall(const QString &key) const;
+    // A conversation with key is open: fetch the relay login now (cached for two hours), so a call
+    // doesn't wait for the relay Worker. At most one try a minute.
+    Q_INVOKABLE void prepare(const QString &key);
     Q_INVOKABLE void answer();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangup();
@@ -103,6 +106,7 @@ private:
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
     qint64 m_seen = 0;           // missed calls after this (ms) count in the badge
     qint64 m_started = 0;
+    qint64 m_preparedAt = 0;
     uint m_notification = 0;
     QSet<QString> m_handled;     // call ids already answered with busy or logged as missed
     bool m_loaded = false;

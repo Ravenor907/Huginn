@@ -8,6 +8,7 @@
 
 #include <QElapsedTimer>
 #include <QHostAddress>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
@@ -43,10 +44,18 @@ public:
     // A random port on all interfaces, for the Wi-Fi path; nullptr when none can be had.
     static QUdpSocket *bindLan(QObject *parent);
     void setLanPeer(const QHostAddress &host, quint16 port);   // port 0: learned from their first packet
+    // peerRelayed: the relayed address the peer advertised. Some relays translate addresses between
+    // their sites (Cloudflare anchors each allocation at the nearest data center), so its packets may
+    // come from another port or address: the first authentic one from there makes that address a
+    // second target (permitted and sent to as well). Media is end-to-end authenticated, so a source
+    // can't be faked into this.
     void setRelay(TurnClient *turn, const Stun::Address &peerRelayed);
     void setBle(std::function<bool(const QByteArray &)> send) { m_bleSend = std::move(send); }
     // A media packet that came in over the relay or Bluetooth (Wi-Fi packets arrive by themselves).
-    void receive(const QByteArray &pkt, Path from);
+    // relayFrom: the peer address the relay says it came from.
+    void receive(const QByteArray &pkt, Path from, const Stun::Address &relayFrom = Stun::Address());
+    // The relay addresses media goes to: the advertised one, then the one its packets come from.
+    QList<Stun::Address> relayTargets() const;
 
     // devices false: no microphone or speaker (self-test); use feed() and played() instead.
     void start(bool devices = true);
@@ -87,7 +96,7 @@ private:
     void tick();
     void sendOn(Path p, const QByteArray &pkt);
     bool candidate(Path p) const;
-    void handle(const QByteArray &pkt, Path from, const QHostAddress &host, quint16 port);
+    void handle(const QByteArray &pkt, Path from, const QHostAddress &host, quint16 port, const Stun::Address &relayFrom = Stun::Address());
     void sendPing(Path p);
     void forgetOld();
     qint64 now() const { return m_clock.elapsed(); }
@@ -104,7 +113,7 @@ private:
     QHostAddress m_lanHost;
     quint16 m_lanPeerPort = 0;
     QPointer<TurnClient> m_turn;
-    Stun::Address m_peerRelayed;
+    Stun::Address m_peerRelayed, m_seenRelayed;
     std::function<bool(const QByteArray &)> m_bleSend;
     PathState m_paths[3];
     bool m_wasLive[3] = {false, false, false};

@@ -90,6 +90,7 @@ Rectangle {
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
         if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
+        if (openKey !== "" && !tour) Calls.prepare(openKey)   // the relay login is ready before Call is pressed
         Chat.openChat = openKey
     }
     // Read only counts when someone is actually looking: not while a game is in front.

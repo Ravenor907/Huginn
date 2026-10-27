@@ -67,7 +67,7 @@ class CallMedia(
     // ------------------------------------------------------------------ transports
 
     @Volatile private var turn: TurnClient? = null
-    @Volatile private var peerRelay: InetSocketAddress? = null
+    private val peerRelay = CallLogic.RelayPeer()
     /** The Wi-Fi socket: open for the whole call, bound to a random port on all interfaces. */
     val lan: DatagramSocket? = try { DatagramSocket(0) } catch (e: Exception) { null }
     val lanPort: Int? get() = lan?.localPort
@@ -75,18 +75,20 @@ class CallMedia(
     /** Allocates on the relay (blocking). The relayed address, or null if no relay could be had. */
     fun startRelay(login: TurnCreds.Login, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
         if (stopped) return null
-        val t = TurnClient(login, resolve) { from, data -> if (from == peerRelay) incoming(data, CallLogic.Kind.RELAY, from) }
+        // Only peers we gave a permission can reach our allocation, and every packet must still open
+        // (tag, AEAD) before it counts, so the source isn't matched here: a relay between sites may
+        // translate the peer's address (see CallLogic.RelayPeer).
+        val t = TurnClient(login, resolve) { from, data -> incoming(data, CallLogic.Kind.RELAY, from) }
         if (!t.start()) { t.close(); return null }
         if (stopped) { t.close(); return null }
         turn = t
-        peerRelay?.let { t.permit(it); addPath(CallLogic.Kind.RELAY, it) }
+        peerRelay.advertised?.let { t.permit(it); addPath(CallLogic.Kind.RELAY, it) }
         return t.relayed
     }
 
     /** The peer's relayed address (from their offer, answer or cands). Never anything but a relay. */
     fun setPeerRelay(a: InetSocketAddress?) {
-        if (a == null || a == peerRelay) return
-        peerRelay = a
+        if (!peerRelay.advertise(a) || a == null) return
         paths.removeAll { it.kind == CallLogic.Kind.RELAY }
         turn?.let { it.permit(a); addPath(CallLogic.Kind.RELAY, a) }
     }
@@ -137,6 +139,8 @@ class CallMedia(
             return
         }
         markLive(kind, from)
+        // Authentic, relayed from an address the peer didn't advertise: answer there too.
+        if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it) }
         if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
         when (o.type) {
             CallCrypto.AUDIO -> jitter.put(o.ts, o.payload)
@@ -156,6 +160,8 @@ class CallMedia(
         var p = path(kind, from)
         // A Wi-Fi packet from an address we didn't know (a second interface): it's a path now.
         if (p == null && kind == CallLogic.Kind.WIFI && from != null && paths.count { it.kind == kind } < 3) { p = CallLogic.Path(kind, from); paths += p }
+        // Relayed before their cands reached us: the relay is a path already.
+        if (p == null && kind == CallLogic.Kind.RELAY && from != null) { p = CallLogic.Path(kind, from); paths += p }
         p?.lastIn = now
     }
 
@@ -198,7 +204,7 @@ class CallMedia(
         val udp = targets.filter { it.kind != CallLogic.Kind.BLUETOOTH }
             .sortedWith(compareBy({ if (it.kind == CallLogic.Kind.WIFI) 0 else 1 }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs })).take(3)
         for (t in udp) when (t.kind) {
-            CallLogic.Kind.RELAY -> t.addr?.let { turn?.send(it, p) }
+            CallLogic.Kind.RELAY -> turn?.let { tc -> for (a in peerRelay.targets()) tc.send(a, p) }
             CallLogic.Kind.WIFI -> t.addr?.let { a -> try { lan?.send(DatagramPacket(p, p.size, a)) } catch (_: Exception) {} }
             else -> {}
         }

@@ -58,6 +58,8 @@ void CallMedia::setLanPeer(const QHostAddress &host, quint16 port)
 void CallMedia::setRelay(TurnClient *turn, const Stun::Address &peerRelayed)
 {
     m_turn = turn;
+    if (peerRelayed == m_seenRelayed)
+        m_seenRelayed = Stun::Address();
     m_peerRelayed = peerRelayed;
     if (turn && peerRelayed.valid())
         turn->addPeer(peerRelayed);
@@ -117,7 +119,8 @@ void CallMedia::sendOn(Path p, const QByteArray &pkt)
     switch (p) {
     case Relay:
         if (m_turn)
-            m_turn->send(m_peerRelayed, pkt);
+            for (const Stun::Address &a : relayTargets())
+                m_turn->send(a, pkt);
         break;
     case Wifi:
         if (m_lan && m_lanPeerPort)
@@ -225,9 +228,19 @@ void CallMedia::onLan()
     }
 }
 
-void CallMedia::receive(const QByteArray &pkt, Path from) { handle(pkt, from, QHostAddress(), 0); }
+void CallMedia::receive(const QByteArray &pkt, Path from, const Stun::Address &relayFrom) { handle(pkt, from, QHostAddress(), 0, relayFrom); }
 
-void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, quint16 port)
+QList<Stun::Address> CallMedia::relayTargets() const
+{
+    QList<Stun::Address> out;
+    if (m_peerRelayed.valid())
+        out << m_peerRelayed;
+    if (m_seenRelayed.valid() && m_seenRelayed != m_peerRelayed)
+        out << m_seenRelayed;
+    return out;
+}
+
+void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, quint16 port, const Stun::Address &relayFrom)
 {
     if (pkt.isEmpty() || quint8(pkt[0]) != CallCrypto::kVersion)
         return;
@@ -245,6 +258,12 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, q
     }
     if (from == Wifi && port)
         m_lanPeerPort = port;   // a NAT or a firewall may have changed it: answer where it came from
+    if (from == Relay && relayFrom.valid() && relayFrom != m_peerRelayed && relayFrom != m_seenRelayed) {
+        // Authentic, but relayed from an address they didn't advertise: send there too.
+        m_seenRelayed = relayFrom;
+        if (m_turn)
+            m_turn->addPeer(relayFrom);
+    }
     const bool wasLive = live(from);
     m_paths[from].lastRx = now();
     if (!wasLive)

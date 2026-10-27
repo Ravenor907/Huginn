@@ -78,6 +78,21 @@ object CallManager {
         return true
     }
 
+    @Volatile private var preparedAt = 0L
+
+    /**
+     * A conversation with [peerKey] is open: fetch the relay login now (it is cached for two hours), so
+     * pressing Call doesn't wait for the relay Worker. At most one try a minute; nothing is fetched when
+     * internet calls are off or the contact can't take calls.
+     */
+    fun prepare(peerKey: String) {
+        val a = app ?: return
+        val now = System.currentTimeMillis()
+        if (now - preparedAt < 60_000 || !internetCalls(a) || !RelayConfig.configured || !canCall(peerKey)) return
+        preparedAt = now
+        work.execute { try { host.relayLogin() } catch (_: Exception) {} }
+    }
+
     fun answer() { exec.execute { session?.let { s -> app?.let { Ringer.stop(it) }; s.answer(); app?.let { CallService.start(it) } } } }
     fun decline() { exec.execute { session?.decline() } }
     fun hangup() { exec.execute { session?.hangup() } }

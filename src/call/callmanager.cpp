@@ -6,6 +6,7 @@
 #include "callsession.h"
 #include "callsignal.h"
 #include "opuscodec.h"
+#include "relayconfig.h"
 #include "turnclient.h"
 #include "../vault.h"
 
@@ -165,6 +166,15 @@ int CallManager::missedCount() const
 // ------------------------------------------------------------------ actions
 
 bool CallManager::canCall(const QString &key) const { return available() && !key.isEmpty() && m_signal->canCall(key); }
+
+void CallManager::prepare(const QString &key)
+{
+    const qint64 now = nowMs();
+    if (now - m_preparedAt < 60000 || !canCall(key) || !RelayConfig::configured() || m_signal->myKey().isEmpty())
+        return;
+    m_preparedAt = now;
+    getLogin([](const TurnLogin &, const QString &) {});
+}
 
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {

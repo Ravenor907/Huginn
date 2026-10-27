@@ -218,6 +218,36 @@ object CallLogic {
 
     // ------------------------------------------------------------------ paths (5.6)
 
+    /**
+     * Where the peer is on the relay (5.6). [advertised] is the relayed address from its offer, answer or
+     * cands. Some relays translate addresses between their sites (Cloudflare anchors each allocation at
+     * the nearest data center), so the peer's packets can arrive from a different port, or even a
+     * different address, than the one it advertised. Media is authenticated end to end, so the first
+     * authentic packet from such an address makes it [seen], and media goes to both from then on.
+     */
+    class RelayPeer {
+        @Volatile var advertised: InetSocketAddress? = null; private set
+        @Volatile var seen: InetSocketAddress? = null; private set
+
+        /** A new advertised address (from signaling). True when it changed. */
+        fun advertise(a: InetSocketAddress?): Boolean {
+            if (a == null || a == advertised) return false
+            advertised = a
+            if (seen == a) seen = null
+            return true
+        }
+
+        /** An authentic packet came relayed from [from]. True when it is a new address to permit and send to. */
+        fun heard(from: InetSocketAddress?): Boolean {
+            if (from == null || from == advertised || from == seen) return false
+            seen = from
+            return true
+        }
+
+        /** Every relayed address to send to: the advertised one, then the one its packets come from. */
+        fun targets(): List<InetSocketAddress> = listOfNotNull(advertised, seen?.takeIf { it != advertised })
+    }
+
     enum class Kind { RELAY, WIFI, BLUETOOTH }
 
     /** One way to reach the peer. Live while an authentic packet came on it within 4 s. */

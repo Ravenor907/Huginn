@@ -118,6 +118,7 @@ private:
     quint16 m_peerLanPort = 0;
     QTimer m_resend, m_give, m_noPath, m_watch;
     qint64 m_lastCands = 0;
+    bool m_candsQueued = false;
     int m_answerSends = 0;
     bool m_muted = false, m_peerMuted = false, m_answered = false, m_offerSent = false, m_answerSent = false;
     QElapsedTimer m_activeClock, m_downSince;
