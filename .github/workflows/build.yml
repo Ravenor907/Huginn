@@ -226,6 +226,8 @@ jobs:
           v=$(head -n1 VERSION | tr -d '\r')
           echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
           echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          # Windows file names ignore case, so MSVC would take this file for the C++ <version> header.
+          rm VERSION
       - name: Qt 6.10 (same modules as the Flatpak)
         uses: jurplel/install-qt-action@v4
         with:
