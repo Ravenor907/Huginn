@@ -8,17 +8,51 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-9C978D?style=for-the-badge&labelColor=101112" alt="GPL-3.0"></a>
 </p>
 
+<h3 align="center">Private messaging for your family.</h3>
+
+<p align="center">
+  Chats, calls, video and file sharing, end-to-end encrypted.<br>
+  No accounts. No phone numbers. No ads. No tracking. Nothing to sign up for.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk"><b>Muninn for Android and Google TV</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip"><b>Huginn for Windows</b></a> &nbsp;·&nbsp;
+  <a href="#install"><b>Huginn for Linux and SteamOS</b></a>
+</p>
+
 Odin sends two ravens out every morning: Huginn (thought) and Muninn (memory). They fly the world and come back with what he needs to know.
 
-These two do the same for you. **Huginn** runs on Windows and Linux, and works with a controller on handhelds like the Steam Deck. **Muninn** runs on Android phones, tablets and Google TV. Together they are a private place to talk: messages, groups, calls and file sharing, with no accounts, no phone numbers, no servers that can read anything, and no tracking.
+These two do the same for you. **Huginn** runs on Windows and Linux, and works with a controller on handhelds like the Steam Deck. **Muninn** runs on Android phones, tablets and Google TV. Together they are a private place for your family and friends to talk: messages, groups, calls and file sharing, with no accounts, no phone numbers, no servers that can read anything, and no tracking.
 
-## Why
+## Made for families
+
+Turn a Google TV into a simple screen your kids can use to reach Mom and Dad. No sign-in, no strangers, no ads: big buttons for a TV remote, and only the people a parent approves. Parents set it up and manage it from their own phones.
+
+<p align="center"><img src="docs/panels/05-muninn-tv.png" width="100%" alt="Muninn on Google TV: kids pick who they want to talk to"></p>
+<p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, talk, or send a quick message"></p>
+<p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, apps"></p>
+
+## Private by default
+
+<p align="center"><img src="docs/panels/09-private.png" width="100%" alt="How it stays private"></p>
 
 - **Private by design.** Every message, photo, voice note and call is end-to-end encrypted. Only the people talking can read or hear it.
 - **Relays see only a sealed envelope.** Internet messages go through public Nostr relays, end-to-end encrypted and sealed so a relay sees only a mailbox id, never who sent it or what it says. Relay servers can see the IP address that connects to them. The app never shows anyone's IP address.
 - **Calls without showing your address.** Internet calls go through the Cloudflare call relay, so the person you call never sees your IP address. Close by, calls go straight over Wi-Fi.
 - **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
+
+## On every screen you have
+
+<p align="center"><img src="docs/panels/01-muninn-phone.png" width="100%" alt="Muninn on your phone: chats, calls and file sharing"></p>
+<p align="center"><img src="docs/panels/02-muninn-tablet.png" width="100%" alt="Muninn on tablets: groups, channels and voice rooms"></p>
+<p align="center"><img src="docs/panels/03-huginn-desktop.png" width="100%" alt="Huginn on Windows and Linux"></p>
+<p align="center"><img src="docs/panels/04-huginn-handheld.png" width="100%" alt="Huginn on handhelds with a controller"></p>
+
+## Easy on the battery
+
+<p align="center"><img src="docs/panels/08-battery.png" width="100%" alt="Choose how often Muninn checks for messages, quiet hours and a battery report"></p>
 
 ## What's new in 0.92
 
@@ -32,7 +66,10 @@ These two do the same for you. **Huginn** runs on Windows and Linux, and works w
 | **True black** | A pure black background under Display, which saves a little on OLED screens. |
 | **Video calls on the speaker** | Video calls start on the speaker unless a Bluetooth headset or headphones are connected, and use less battery when it's low. |
 
-## Also in 0.91
+<details>
+<summary><b>Earlier releases: 0.91, 0.9, 0.8, 0.7 and 0.6</b></summary>
+
+### Also in 0.91
 
 | | |
 |---|---|
@@ -43,7 +80,7 @@ These two do the same for you. **Huginn** runs on Windows and Linux, and works w
 
 Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phones still on 0.8 need the one-time reinstall described under 0.9.
 
-## Also in 0.9
+### Also in 0.9
 
 > **Muninn needs reinstalling once.** From 0.9 Muninn is signed with a private key instead of the shared test key, so nobody else can make an update your phone would accept. Android won't install it over 0.8, so on each phone: Settings › **Back up chats**, uninstall Muninn, install Muninn.apk from this release, then **Restore from backup**. A Kids' TV is reinstalled the same way and added again from the parent's phone. Updates after this one install as normal. Huginn updates as usual.
 
@@ -60,7 +97,7 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | **Clearer calls on the PC** | Huginn now cancels echo and removes background noise, like Muninn. |
 | **Safer updates and files** | Every update is checked against its SHA-256 before it installs, the Flatpak only sees your Downloads, Documents, Pictures, Videos and Music folders, and with a password set, Panic lock now locks your keys away too. |
 
-## Also in 0.8
+### Also in 0.8
 
 | | |
 |---|---|
@@ -76,7 +113,7 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | **Windows** | No more antivirus false alarms from the updater, a cleaner folder, updates checked before they install, and it runs on Linux through Proton and Wine. |
 | **Linux and SteamOS** | The Flatpak is back. |
 
-## Also in 0.7
+### Also in 0.7
 
 | | |
 |---|---|
@@ -93,7 +130,7 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | **Tidy Windows folder** | The Windows zip holds just Huginn.exe and a lib folder, and the message sound crash is fixed. |
 | **Sharing stays home** | Huginn's Wi-Fi sharing listens only on your home network. |
 
-## Also in 0.6
+### Also in 0.6
 
 | | |
 |---|---|
@@ -103,6 +140,8 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | **Kids' TV** | Muninn on a Google TV becomes a simple screen for children to reach Mom and Dad: big buttons, quick messages, voice clips and dictation. No sign-in. A parent pairs it once from their phone, edits its quick messages, and is the only one who can unlock it. |
 | **Windows** | Huginn as a portable zip: unzip anywhere and run, nothing to install. |
 | **New layouts** | Huginn, and Muninn on tablets, use a Discord-style rail of groups, channels and members. |
+
+</details>
 
 ## The messenger (both apps)
 
