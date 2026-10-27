@@ -83,6 +83,28 @@ class Muninn : Application() {
         if (vault.openDefault()) start()
         dropOldTools()
         dropTorFiles()
+        // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
+        try {
+            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) { nostr.reconnectNow() }
+            })
+        } catch (_: Exception) {}
+        io.github.ravenor907.muninn.net.MessageService.start(this)
+        // Every 15 minutes (Android's shortest), check the internet inbox even when Muninn is closed.
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<InboxWorker>(15, TimeUnit.MINUTES).build())
+    }
+
+    /** Called once the vault is open. */
+    @Synchronized
+    fun start() {
+        if (ready.value) return
+        net = LocalSend(this, identity)
+        net.mailbox = nostr.publicKey
+        close = Close(this, identity)
+        ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
+        contacts = Contacts(this, vault)
+        chat = Chat(this, net, close, ble, nostr, contacts, vault)
         io.github.ravenor907.muninn.tv.Tv.install(this)
         io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
         closeFiles = CloseFiles(this, close, net)
