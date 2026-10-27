@@ -147,7 +147,11 @@ class GroupsTest {
         pump()
         // A contact puts someone straight in a new group (op "add"), no invite to accept.
         val g2 = a.groups.create("Pals")!!
-        assertNull(a.groups.addDirect(g2, b.key, "Moose", b.mailbox)); pump()
+        assertNull(a.groups.addDirect(g2, b.key, "Moose", b.mailbox))
+        // A group call waits for the state to reach B (B's delivered receipt), then rings.
+        assertEquals(setOf(b.key), a.groups.stateWaiting(g2))
+        pump()
+        assertEquals(emptySet<String>(), a.groups.stateWaiting(g2))
         same(g2, a, b)
         assertTrue(b.notices.contains("Raven added you to Pals"))
         // Someone who isn't a contact can't.

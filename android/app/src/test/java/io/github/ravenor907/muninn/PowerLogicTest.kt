@@ -29,7 +29,8 @@ class PowerLogicTest {
         val p = PowerLogic.plan(phoneAway)
         assertEquals(Why.SCREEN_OFF, p.why)
         assertEquals(2, p.relays)
-        assertTrue(p.pingMs in 240_000L..300_000L)
+        // Every two minutes, so a dead socket is found (and calls ring again) within about two minutes.
+        assertEquals(120_000L, p.pingMs)
         assertEquals(Radio.LOW, p.radio)
         assertEquals(Radio.LOW, p.wifi)
         assertEquals("Saving battery while the screen is off", p.label)
@@ -50,14 +51,21 @@ class PowerLogicTest {
     }
 
     @Test
-    fun batterySaverDropsLiveConnections() {
-        val p = PowerLogic.plan(phoneAway.copy(batterySaver = true))
-        assertEquals(Why.BATTERY_SAVER, p.why)
-        assertEquals(0, p.relays)
-        assertEquals(Radio.OFF, p.radio)
-        assertEquals(Radio.OFF, p.wifi)
-        // Even when Muninn may run unrestricted: the person asked the phone to save.
-        assertEquals(0, PowerLogic.plan(phoneAway.copy(batterySaver = true, unrestricted = true)).relays)
+    fun batterySaverSavesLikeTheScreenOffButCallsStillRing() {
+        for (screen in listOf(false, true)) for (wifi in listOf(false, true)) {
+            // Screen on with Muninn in the background, or screen off: two relays, the slow check, radios low.
+            val p = PowerLogic.plan(phoneAway.copy(screenOn = screen, onWifi = wifi, batterySaver = true))
+            assertEquals(Why.BATTERY_SAVER, p.why)
+            assertEquals(PowerLogic.SAVING_RELAYS, p.relays)
+            assertEquals(PowerLogic.SLOW_PING_MS, p.pingMs)
+            assertEquals(Radio.LOW, p.radio)
+            assertEquals(Radio.OFF, p.wifi)
+        }
+        assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, unrestricted = true)).relays)
+        // Battery Saver and Doze without the exemption: Android cuts the network, so no live sockets.
+        assertEquals(Why.DOZE, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).why)
+        assertEquals(0, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).relays)
+        assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true, unrestricted = true)).relays)
         // Open on screen it still works normally.
         assertNull(PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
     }
@@ -88,11 +96,12 @@ class PowerLogicTest {
 
     @Test
     fun callsStillRingInNormalBackground() {
-        // Without Battery Saver, at least one relay socket is always live in the background.
-        for (screen in listOf(true, false)) for (wifi in listOf(true, false)) for (doze in listOf(false, true)) {
-            val p = PowerLogic.plan(Inputs(screenOn = screen, onWifi = wifi, doze = doze && !screen, unrestricted = true))
+        // Battery Saver or not, at least one relay socket is always live in the background (unless Doze cuts the network).
+        for (screen in listOf(true, false)) for (wifi in listOf(true, false)) for (doze in listOf(false, true)) for (saver in listOf(false, true)) {
+            val p = PowerLogic.plan(Inputs(screenOn = screen, onWifi = wifi, doze = doze && !screen, unrestricted = true, batterySaver = saver))
             assertTrue(p.relays == null || p.relays!! >= 1)
         }
+        for (saver in listOf(false, true)) assertTrue(PowerLogic.plan(Inputs(screenOn = true, batterySaver = saver)).relays!! >= 1)
     }
 
     @Test
@@ -111,6 +120,7 @@ class PowerLogicTest {
         val full = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true))
         val off = PowerLogic.plan(phoneAway)
         val saver = PowerLogic.plan(phoneAway.copy(batterySaver = true))
+        val doze = PowerLogic.plan(phoneAway.copy(doze = true))
         val bg = PowerLogic.plan(phoneAway.copy(screenOn = true))
         assertTrue(PowerLogic.saves(full, off))
         assertTrue(PowerLogic.saves(off, saver))
@@ -120,6 +130,8 @@ class PowerLogicTest {
         assertFalse(PowerLogic.saves(saver, off))
         assertFalse(PowerLogic.saves(off, bg))
         assertFalse(PowerLogic.saves(off, off))
+        assertTrue(PowerLogic.saves(saver, doze))
+        assertFalse(PowerLogic.saves(doze, saver))
     }
 
     private val relays = listOf("wss://a", "wss://b", "wss://c", "wss://d", "wss://e")
@@ -153,6 +165,20 @@ class PowerLogicTest {
         assertFalse(PowerLogic.silent(0, 0))           // never asked
         assertTrue(PowerLogic.silent(1_000, 500))      // asked, no answer since
         assertFalse(PowerLogic.silent(1_000, 1_200))   // answered
+    }
+
+    @Test
+    fun oneMissedCheckReplacesASocket() {
+        val a = PowerLogic.ANSWER_MS
+        assertTrue(a <= 15_000L)
+        // Asked at 1000, opened before, no answer: dead once the answer time has passed, not a whole period later.
+        assertTrue(PowerLogic.dead(probedAt = 1_000, heardAt = 500, openedAt = 0, now = 1_000 + a))
+        assertFalse(PowerLogic.dead(probedAt = 1_000, heardAt = 500, openedAt = 0, now = 1_000 + a - 1))   // still waiting
+        assertFalse(PowerLogic.dead(probedAt = 1_000, heardAt = 1_100, openedAt = 0, now = 1_000 + a))    // answered
+        assertFalse(PowerLogic.dead(probedAt = 1_000, heardAt = 0, openedAt = 1_500, now = 1_000 + a))    // opened after the check
+        assertFalse(PowerLogic.dead(probedAt = 0, heardAt = 0, openedAt = 0, now = a))                    // never asked
+        // A dead socket is found within one check period plus the answer time.
+        assertTrue(PowerLogic.SLOW_PING_MS + a <= 135_000L)
     }
 
     @Test

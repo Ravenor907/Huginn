@@ -246,6 +246,24 @@ object RoomManager {
         return null
     }
 
+    /** Who in [group] a group call can ring now (in its current state, with an app that takes rooms). */
+    fun ringable(group: String): Set<String> = members(group).toSet()
+
+    /**
+     * In a group call of [group] going on here: ring [keys] too (people the group reached late). Returns
+     * who will be rung (empty when no call of [group] is going on yet).
+     */
+    fun ringMore(group: String, keys: Collection<String>): Set<String> {
+        val room = ch
+        if (g != group || !RoomLogic.isGroupCall(room)) return emptySet()
+        val ok = members(group).filter { it in keys }.toSet()
+        if (ok.isNotEmpty()) exec.execute {
+            if (g != group || ch != room) return@execute
+            for (k in ok) if (!peers.containsKey(k) && k !in declined) { rung += k; sendRoom("vring", k, group, room) }
+        }
+        return ok
+    }
+
     /** Join the group call that's ringing. Null when joining, otherwise what to tell the person. */
     fun answerRing(): String? {
         val r = _ring.value ?: return null

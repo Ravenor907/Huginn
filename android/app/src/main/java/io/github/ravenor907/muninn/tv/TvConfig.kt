@@ -246,23 +246,41 @@ object TvRules {
     fun disconnectMessage(d: JSONObject): String = JSONObject().put("t", "disconnect").put("d", d).toString()
 
     // ---- k3 (7.7): the TV's microphone level set on the TV, its storage, and Clear history
-    /** TV to parents: the level in use and the bytes Muninn takes on the TV; [ts] when the level last changed (TV clock). */
-    fun statusMessage(mic: Int, used: Long, ts: Long): String =
-        JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT)).toString()
+    /**
+     * TV to parents: the level in use and the bytes Muninn takes on the TV; [ts] when the level last changed
+     * (TV clock). [own]: the level was set on the TV itself ("own":true), so a parent's phone takes it
+     * without comparing clocks.
+     */
+    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false): String =
+        JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT))
+            .apply { if (own) put("own", true) }.toString()
     /** Parent to TV: "send me your status". */
     fun usageMessage(): String = JSONObject().put("t", "usage").toString()
     /** Parent to TV: erase the messages, photos, voice messages and caches (pairing and contacts stay). */
     fun clearMessage(): String = JSONObject().put("t", "clear").toString()
 
-    /** A TV's status as (mic, used, ts), or null if it isn't well-formed (7.7). */
-    fun status(o: JSONObject): Triple<Int, Long, Long>? {
+    /** A TV's status (7.7). [own]: the level was set on the TV (absent in older apps: false). */
+    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false)
+
+    /** A TV's status, or null if it isn't well-formed (7.7). "own", when present, must be a boolean. */
+    fun status(o: JSONObject): Status? {
         if (o.optString("t") != "status") return null
         val mic = o.opt("mic"); val used = o.opt("used"); val ts = o.opt("ts")
         if (!Canon.isInt(mic) || !Canon.isInt(used) || !Canon.isInt(ts)) return null
         val m = (mic as Number).toLong(); val u = (used as Number).toLong(); val t = (ts as Number).toLong()
         if (m !in 0..MAX_MIC.toLong() || u !in 0..MAX_INT || t !in 0..MAX_INT) return null
-        return Triple(m.toInt(), u, t)
+        val own = if (o.has("own")) (o.get("own") as? Boolean ?: return null) else false
+        return Status(m.toInt(), u, t, own)
     }
+
+    /**
+     * A parent's phone takes the TV's level (7.7) when it differs from its own and: the TV says it was set
+     * there ([Status.own]) and the TV already has this phone's latest config ([synced], so a change made
+     * here that is still on its way wins); or, from an older TV without "own", its [Status.ts] is newer than
+     * [myMicAt].
+     */
+    fun adoptMic(s: Status, myMic: Int, myMicAt: Long, synced: Boolean): Boolean =
+        s.mic != myMic && (if (s.own) synced else s.ts > myMicAt)
 
     private const val MAX_INT = (1L shl 53) - 1
 }
