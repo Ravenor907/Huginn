@@ -162,9 +162,9 @@ void sendFirst(Run *run)
 void begin(Run *run)
 {
     run->check("home-network address rules", Lan::selfTest());
-#ifdef Q_OS_WIN
     std::printf("wifi resources: %s, %s\n", qPrintable(Platform::resource(QStringLiteral("raven_message.wav"))),
                 qPrintable(Platform::resource(QStringLiteral("raven-gold.png"))));
+#ifdef Q_OS_WIN
     run->check("tray icon found", !Platform::resource(QStringLiteral("raven-gold.png")).isEmpty());
 #endif
     run->check("raven call loaded", run->chime->ready());
