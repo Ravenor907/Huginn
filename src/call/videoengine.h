@@ -11,14 +11,8 @@
 #include <QThread>
 #include <QVideoFrame>
 #include <QVideoSink>
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-#include <QtMultimedia/qtvideo.h>
-#define HUGINN_MAP_READ QtVideo::MapMode::ReadOnly
-#define HUGINN_MAP_WRITE QtVideo::MapMode::WriteOnly
-#else
 #define HUGINN_MAP_READ QVideoFrame::ReadOnly
 #define HUGINN_MAP_WRITE QVideoFrame::WriteOnly
-#endif
 #include <memory>
 
 class QCamera;
