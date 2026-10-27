@@ -208,9 +208,12 @@ void CallSession::startRelay()
             self->relayReady();
             Q_EMIT self->pathsChanged();
         });
+        // Every packet the relay delivers goes to media, whatever its source: only peers we gave a
+        // permission can reach our allocation, and media opens nothing that isn't authentic. A relay
+        // between sites may translate the peer's address (CallMedia::setRelay).
         connect(self->m_turn, &TurnClient::data, self, [self](const Stun::Address &from, const QByteArray &bytes) {
-            if (self->m_media && from == self->m_peerRelayed)
-                self->m_media->receive(bytes, CallMedia::Relay);
+            if (self->m_media)
+                self->m_media->receive(bytes, CallMedia::Relay, from);
         });
         self->m_turn->start();
     });
@@ -223,7 +226,16 @@ void CallSession::relayReady()
         sendOffer();
         return;
     }
-    if ((m_offerSent || m_answerSent) && m_state != Ended && wallMs() - m_lastCands >= 2000) {
+    if ((m_offerSent || m_answerSent) && m_state != Ended) {
+        // At most one "cands" per 2 s; a later one waits instead of being lost.
+        const qint64 wait = 2000 - (wallMs() - m_lastCands);
+        if (wait > 0) {
+            if (!m_candsQueued) {
+                m_candsQueued = true;
+                QTimer::singleShot(int(wait), this, [this] { m_candsQueued = false; relayReady(); });
+            }
+            return;
+        }
         m_lastCands = wallMs();
         QJsonObject o{{QStringLiteral("t"), QStringLiteral("cands")}, {QStringLiteral("call"), m_callId}};
         addCands(o);
@@ -246,7 +258,9 @@ void CallSession::start()
         if (!m_offerSent)
             sendOffer();
     });
-    m_give.start(4000);
+    // Ring them at once if the relay is quick (the login is usually cached); otherwise the offer goes
+    // without it after 1.5 s and the relay follows in "cands".
+    m_give.start(1500);
 }
 
 void CallSession::sendOffer()
@@ -417,6 +431,11 @@ void CallSession::handle(const QJsonObject &msg)
         return;
     }
     if (t == QLatin1String("answer")) {
+        if (m_offerer && m_answered && QByteArray::fromBase64(str(msg, "eph").toLatin1()) == m_theirEph) {
+            // A resent answer: same keys, maybe with the relay that wasn't up the first time.
+            applyCands(msg);
+            return;
+        }
         if (!m_offerer || (m_state != Calling && m_state != Ringing))
             return;
         const QString eph = str(msg, "eph");

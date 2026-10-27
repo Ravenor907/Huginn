@@ -17,7 +17,11 @@
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QHash>
+#include <QSet>
 #include <QUdpSocket>
+#include <memory>
+#include <vector>
 #include <cstdio>
 #include <functional>
 
@@ -283,6 +287,256 @@ void signalingLoopback()
     delete a.sig;
     delete b.sig;
 }
+
+// A small TURN server (RFC 8656 over UDP, long-term credentials) that translates addresses like a
+// relay with several sites: each allocation sends from another port than the relayed address it
+// reported (Cloudflare anchors each allocation at the nearest data center). Its first ChannelBind or
+// CreatePermission gets a 438 (stale nonce) without MESSAGE-INTEGRITY, as servers send it.
+class FakeTurn
+{
+public:
+    struct Alloc {
+        QHostAddress client;
+        quint16 clientPort = 0;
+        QUdpSocket *in = nullptr, *out = nullptr;
+        QSet<QByteArray> perms;   // per IP address
+        QHash<quint16, Stun::Address> chans;
+    };
+    QUdpSocket main;
+    const QString realm = QStringLiteral("test.relay");
+    QString nonce = QStringLiteral("nonce-1");
+    int stale = 0, channelDataIn = 0, dataOut = 0;
+    std::vector<std::unique_ptr<Alloc>> allocs;
+
+    FakeTurn()
+    {
+        main.bind(QHostAddress(QHostAddress::LocalHost), 0);
+        QObject::connect(&main, &QUdpSocket::readyRead, &main, [this] { onMain(); });
+    }
+    ~FakeTurn()
+    {
+        for (auto &a : allocs) {
+            delete a->in;
+            delete a->out;
+        }
+    }
+    quint16 port() const { return main.localPort(); }
+
+    Alloc *find(const QHostAddress &h, quint16 p)
+    {
+        for (auto &a : allocs)
+            if (a->clientPort == p && a->client.isEqual(h, QHostAddress::TolerantConversion))
+                return a.get();
+        return nullptr;
+    }
+    void out(Alloc *a, const Stun::Address &peer, const QByteArray &data)
+    {
+        if (a && a->perms.contains(peer.ip))
+            a->out->writeDatagram(data, CallNet::toHost(peer), peer.port);
+    }
+    void onRelay(Alloc *a, QUdpSocket *s)
+    {
+        while (s->hasPendingDatagrams()) {
+            QByteArray b(int(s->pendingDatagramSize()), 0);
+            QHostAddress from;
+            quint16 port = 0;
+            b.resize(int(s->readDatagram(b.data(), b.size(), &from, &port)));
+            const Stun::Address src = CallNet::fromHost(from, port);
+            if (!a->perms.contains(src.ip))
+                continue;
+            quint16 ch = 0;
+            for (auto it = a->chans.cbegin(); it != a->chans.cend(); ++it)
+                if (it.value() == src)
+                    ch = it.key();
+            QByteArray msg;
+            if (ch) {
+                msg = Stun::channelData(ch, b, false);
+            } else {
+                Stun::Message m;
+                m.method = Stun::Data;
+                m.cls = Stun::Indication;
+                m.tid = Stun::newTid();
+                m.addAddress(Stun::XorPeerAddress, src);
+                m.add(Stun::DataAttr, b);
+                msg = Stun::encode(m);
+                ++dataOut;
+            }
+            main.writeDatagram(msg, a->client, a->clientPort);
+        }
+    }
+    void error(const Stun::Message &req, int code, const QHostAddress &to, quint16 port)
+    {
+        Stun::Message e;
+        e.method = req.method;
+        e.cls = Stun::Error;
+        e.tid = req.tid;
+        QByteArray ec(4, 0);
+        ec[2] = char(code / 100);
+        ec[3] = char(code % 100);
+        e.add(Stun::ErrorCode, ec + "x");
+        e.addText(Stun::Realm, realm);
+        e.addText(Stun::Nonce, nonce);
+        main.writeDatagram(Stun::encode(e), to, port);
+    }
+    void onMain()
+    {
+        while (main.hasPendingDatagrams()) {
+            QByteArray b(int(main.pendingDatagramSize()), 0);
+            QHostAddress from;
+            quint16 port = 0;
+            b.resize(int(main.readDatagram(b.data(), b.size(), &from, &port)));
+            Alloc *a = find(from, port);
+            if (Stun::isChannelData(b)) {
+                quint16 ch = 0;
+                QByteArray data;
+                if (a && Stun::parseChannelData(b, &ch, &data) && a->chans.contains(ch)) {
+                    ++channelDataIn;
+                    out(a, a->chans.value(ch), data);
+                }
+                continue;
+            }
+            Stun::Message m;
+            if (!Stun::parse(b, &m))
+                continue;
+            if (m.cls == Stun::Indication && m.method == Stun::Send) {
+                out(a, m.address(Stun::XorPeerAddress), m.get(Stun::DataAttr));
+                continue;
+            }
+            if (m.cls != Stun::Request)
+                continue;
+            const QByteArray key = Stun::longTermKey(m.text(Stun::Username), realm, QStringLiteral("secret"));
+            if (!m.has(Stun::MessageIntegrity) || !Stun::checkIntegrity(b, key)) {
+                error(m, 401, from, port);
+                continue;
+            }
+            if (m.text(Stun::Nonce) != nonce) {
+                error(m, 438, from, port);
+                continue;
+            }
+            if ((m.method == Stun::ChannelBind || m.method == Stun::CreatePermission) && stale == 0) {
+                ++stale;
+                nonce = QStringLiteral("nonce-2");
+                error(m, 438, from, port);
+                continue;
+            }
+            Stun::Message r;
+            r.method = m.method;
+            r.cls = Stun::Success;
+            r.tid = m.tid;
+            if (m.method == Stun::Allocate) {
+                if (!a) {
+                    auto n = std::make_unique<Alloc>();
+                    n->client = from;
+                    n->clientPort = port;
+                    n->in = new QUdpSocket;
+                    n->in->bind(QHostAddress(QHostAddress::LocalHost), 0);
+                    n->out = new QUdpSocket;
+                    n->out->bind(QHostAddress(QHostAddress::LocalHost), 0);
+                    a = n.get();
+                    for (QUdpSocket *s : {a->in, a->out})
+                        QObject::connect(s, &QUdpSocket::readyRead, s, [this, a, s] { onRelay(a, s); });
+                    allocs.push_back(std::move(n));
+                }
+                r.addAddress(Stun::XorRelayedAddress, CallNet::fromHost(QHostAddress(QHostAddress::LocalHost), a->in->localPort()));
+                r.addAddress(Stun::XorMappedAddress, CallNet::fromHost(from, port));
+                r.addU32(Stun::Lifetime, 600);
+            } else if (m.method == Stun::Refresh) {
+                r.addU32(Stun::Lifetime, 600);
+            } else if (m.method == Stun::CreatePermission || m.method == Stun::ChannelBind) {
+                if (!a)
+                    continue;
+                const Stun::Address peer = m.address(Stun::XorPeerAddress);
+                a->perms.insert(peer.ip);
+                if (m.method == Stun::ChannelBind) {
+                    const QByteArray c = m.get(Stun::ChannelNumber);
+                    a->chans.insert(quint16((quint8(c.at(0)) << 8) | quint8(c.at(1))), peer);
+                }
+            }
+            main.writeDatagram(Stun::encode(r, key, true), from, port);
+        }
+    }
+};
+
+// A whole call between two sessions with no Wi-Fi path: everything goes through the relay, which
+// translates addresses and lets a nonce go stale.
+void relayCall()
+{
+    std::printf("relay-only call (TURN with address translation)\n");
+    FakeTurn turn;
+    TurnLogin login;
+    login.urls << QStringLiteral("turn:127.0.0.1:%1?transport=udp").arg(turn.port());
+    login.username = QStringLiteral("user");
+    login.credential = QStringLiteral("secret");
+    login.expiresMs = QDateTime::currentMSecsSinceEpoch() + 3600000;
+    auto fetch = [login](std::function<void(const TurnLogin &, const QString &)> done) {
+        QTimer::singleShot(10, [done, login] { done(login, QString()); });
+    };
+    Side a, b;
+    a.id = CallCrypto::newEphemeral();
+    b.id = CallCrypto::newEphemeral();
+    const QString keyA = QString::fromLatin1(a.id.publicDer.toBase64()), keyB = QString::fromLatin1(b.id.publicDer.toBase64());
+    a.sig = new CallSignalHooks();
+    b.sig = new CallSignalHooks();
+    for (Side *s : {&a, &b}) {
+        Side *other = s == &a ? &b : &a;
+        const QString mine = s == &a ? keyA : keyB;
+        s->sig->onMyKey = [mine] { return mine; };
+        s->sig->onSign = [s](const QByteArray &bytes) { return CallCrypto::signDer(s->id.privateDer, bytes); };
+        s->sig->onNameOf = [](const QString &) { return QStringLiteral("Test"); };
+        s->sig->onCanCall = [](const QString &) { return true; };
+        QPointer<CallSignalHooks> to = other->sig;
+        s->sig->onSend = [to, mine](const QString &, const QJsonObject &m) {
+            QTimer::singleShot(5, to, [to, mine, m] { if (to) to->deliver(mine, m); });
+        };
+    }
+    QObject::connect(b.sig, &CallSignal::received, b.sig, [&b, fetch](const QString &from, const QJsonObject &m) {
+        if (b.session) {
+            b.session->handle(m);
+            return;
+        }
+        if (m.value(QStringLiteral("t")).toString() != QLatin1String("offer") || !CallSession::checkOffer(m, from, QDateTime::currentMSecsSinceEpoch()).isEmpty())
+            return;
+        b.session = new CallSession(b.sig, from, fetch, b.sig);
+        b.session->useDevices = false;
+        b.session->takeOffer(m);
+        QTimer::singleShot(300, b.session, [&b] { b.session->answer(); });
+    });
+    QObject::connect(a.sig, &CallSignal::received, a.sig, [&a](const QString &, const QJsonObject &m) {
+        if (a.session)
+            a.session->handle(m);
+    });
+    a.session = new CallSession(a.sig, keyB, fetch, a.sig);
+    a.session->useDevices = false;
+    a.session->start();
+    check(waitFor([&] { return a.session && b.session && a.session->state() == CallSession::Active && b.session->state() == CallSession::Active; }, 10000),
+          "both sides connected over the relay alone");
+    check(a.session && a.session->media() && a.session->media()->live(CallMedia::Relay) && !a.session->media()->live(CallMedia::Wifi), "A: the relay path is live, no Wi-Fi");
+    check(b.session && b.session->media() && b.session->media()->live(CallMedia::Relay), "B: the relay path is live");
+    if (a.session && b.session && a.session->media() && b.session->media()) {
+        CallMedia *ma = a.session->media(), *mb = b.session->media();
+        const int inB = mb->stats().audioIn, inA = ma->stats().audioIn;
+        qint64 phA = 0, phB = 0;
+        for (int i = 0; i < 25; ++i) {
+            qint16 pcm[AudioDsp::kFrame];
+            AudioDsp::tone(pcm, AudioDsp::kFrame, 440, 0.4, &phA);
+            ma->feed(pcm);
+            AudioDsp::tone(pcm, AudioDsp::kFrame, 660, 0.4, &phB);
+            mb->feed(pcm);
+            waitFor([] { return false; }, 20);
+        }
+        waitFor([&] { return mb->stats().audioIn >= inB + 20 && ma->stats().audioIn >= inA + 20; }, 3000);
+        check(mb->stats().audioIn >= inB + 20, "A's audio reaches B through the relay");
+        check(ma->stats().audioIn >= inA + 20, "B's audio reaches A through the relay");
+        check(turn.dataOut > 0 && ma->relayTargets().size() == 2 && mb->relayTargets().size() == 2,
+              "translated sources accepted and answered (advertised and seen address)");
+        check(turn.stale == 1 && turn.channelDataIn > 0, "a stale nonce (438 without integrity) doesn't stop the channel");
+    }
+    if (a.session)
+        a.session->hangup();
+    waitFor([&] { return !b.session || b.session->state() == CallSession::Ended; }, 3000);
+    delete a.sig;
+    delete b.sig;
+}
 }
 
 bool CallSelfTest::run(const QString &vectorsPath)
@@ -296,6 +550,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     relayChecks();
     mediaLoopback();
     signalingLoopback();
+    relayCall();
     const bool ok = vectors && rooms && stun && jitter && dsp && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");
     std::fflush(stdout);

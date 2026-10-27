@@ -392,8 +392,11 @@ Candidates (the final 0.6 format, the same in both apps):
 - At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
 - Receivers take the first `relay` whose `a` is an IP literal (a peer's candidate never makes an app look a
   name up, so a name is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
-- Send the offer with what is ready (an app may wait up to 4 s for its relay), and anything later in
-  `cands`. Resent offers and answers carry the newest candidates.
+- Send the offer with what is ready (an app may wait up to 1.5 s for its relay), and anything later in
+  `cands`. Resent offers and answers carry the newest candidates, and the caller takes the candidates of
+  a resent answer too (same `eph` as the first), not only of `cands`. A `cands` that would come sooner than
+  2 s after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
+  answer carries the relay when it is ready.
 
 ### 5.3 Key derivation
 
@@ -475,16 +478,26 @@ One UDP socket for the Wi-Fi path per call, bound to a random port on all interf
 call is active. Incoming UDP: first byte 0x81 is media; anything else is dropped. The relay has its own
 socket or TLS connection (below).
 
-**Relay (internet).** On starting or answering a call (the callee may start while it rings), get a TURN
+**Relay (internet).** On starting a call, and on an offer arriving (the callee allocates while it rings,
+so answering doesn't wait for the relay), get a TURN
 login from the relay Worker over HTTPS (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
 Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
 peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
 any other `turns:` URL. The TURN server's host name is looked up with the system resolver,
 retried a few times; if it can't be looked up, there is no relay for this call ("Can't reach the call relay
 right now"). Media to the peer goes to the peer's `relay`
-candidate through this side's own allocation; media from it arrives as relayed data from that address,
-and anything relayed from another address is dropped. Both sides need an allocation for the relay path to
-work. The allocation is released when the call ends.
+candidate through this side's own allocation. Media from it arrives as relayed data; the relay only
+lets in addresses this side gave a permission, and every packet must pass the checks of 5.4 (tag, replay
+window, AEAD) before it counts, so the relayed source address is **not** required to match the peer's
+`relay` candidate. A relay with several sites may translate addresses between them (Cloudflare anchors
+each allocation at the nearest data center, so a phone on a carrier and a PC on home Wi-Fi can land on
+different ones): when an authentic packet arrives relayed from an address other than the peer's `relay`
+candidate, that address becomes a second target (permission and ChannelBind for it too) and media goes
+to both from then on; the receiver drops the copies (5.4). Both sides need an allocation for the relay
+path to work. The allocation is released when the call ends. A TURN error answer (for example 438, stale
+nonce) is used even without MESSAGE-INTEGRITY (many servers send it without); only success answers must
+carry a valid one. Cloudflare hands out IPv4 relayed addresses only (it ignores REQUESTED-ADDRESS-FAMILY),
+so both sides always get the same family, whatever network the device is on.
 
 **Wi-Fi.** When Chat reaches the peer on the shared Wi-Fi, send to the peer's Wi-Fi address (from Chat's
 discovery) at the port of its `lan` candidate or `lp`. Packets on this path are accepted only from that

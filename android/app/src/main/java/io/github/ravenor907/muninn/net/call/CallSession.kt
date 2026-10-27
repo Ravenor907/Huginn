@@ -107,8 +107,9 @@ class CallSession(
         peerRelay = s.relay; peerLanPort = s.lanPort
         host.send(peerKey, CallLogic.simple("ring", callId))
         later(CallLogic.RING_MS) { if (phase == Phase.INCOMING) end("missed", send = false) }
-        // Get the relay login ready while it rings (cached for two hours, so this costs nothing later).
-        if (host.internetAllowed()) work.execute { try { host.relayLogin() } catch (_: Exception) {} }
+        // Get the relay ready while it rings (login and allocation), so answering doesn't wait for it.
+        // Nothing is sent on it until the person answers; declining or missing the call releases it.
+        if (host.internetAllowed()) { media = host.newMedia(this); startRelay() }
     }
 
     /** The person tapped Answer. */
@@ -118,11 +119,12 @@ class CallSession(
         val kp = CallCrypto.newEphemeral(); eph = kp
         myEph = ChatCrypto.b64(kp.public.encoded)
         val root = try { CallCrypto.root(kp.private, theirEph, callId, theirEph, myEph) } catch (e: Exception) { end("error", send = true); return }
-        val m = host.newMedia(this); media = m
+        val m = media ?: host.newMedia(this).also { media = it }
         m.begin(CallCrypto.Keys(root)); root.fill(0)
         applyPeer()
         val sig = CallCrypto.sign(host.chatPrivate, "answer", callId, myEph)
-        answerJson = CallLogic.answer(callId, myEph, sig, null, lanPortIfClose(), host.bluetoothFor())
+        // The relay is usually up by now (it started while ringing): the answer carries it.
+        answerJson = CallLogic.answer(callId, myEph, sig, myRelay, lanPortIfClose(), host.bluetoothFor())
         host.send(peerKey, answerJson!!)
         answeredAt = System.currentTimeMillis()
         // Resend the answer every 2 s until the first authentic media packet, for up to 15 s.
@@ -150,6 +152,8 @@ class CallSession(
             }
             "ring" -> if (outgoing && phase == Phase.CALLING) set(Phase.RINGING)
             "answer" -> if (outgoing && (phase == Phase.CALLING || phase == Phase.RINGING)) onAnswer(s)
+                // A resent answer: the same keys, maybe with the relay that wasn't up the first time.
+                else if (outgoing && answered && s.eph == theirEph) { if (s.relay != null) peerRelay = s.relay; if (s.lanPort != null) peerLanPort = s.lanPort; applyPeer() }
             "cands" -> { if (s.relay != null) peerRelay = s.relay; if (s.lanPort != null) peerLanPort = s.lanPort; applyPeer() }
             "mute" -> { peerMuted = s.on; host.changed(this) }
             "decline" -> if (outgoing) end("declined", send = false)
@@ -163,7 +167,7 @@ class CallSession(
         theirEph = s.eph
         val root = try { CallCrypto.root(kp.private, theirEph, callId, myEph, theirEph) } catch (e: Exception) { end("error", send = true); return }
         answered = true
-        peerRelay = s.relay; peerLanPort = s.lanPort; theirBle = s.ble
+        s.relay?.let { peerRelay = it }; s.lanPort?.let { peerLanPort = it }; theirBle = s.ble
         val m = media ?: return
         m.begin(CallCrypto.Keys(root)); root.fill(0)
         applyPeer()
@@ -181,9 +185,12 @@ class CallSession(
         if (lanIp != null && lp != null) m.setPeerLan(InetSocketAddress(lanIp, lp))
     }
 
+    private var relayStarted = false
+
     private fun startRelay() {
-        if (!host.internetAllowed()) return
+        if (!host.internetAllowed() || relayStarted) return
         val m = media ?: return
+        relayStarted = true
         work.execute {
             val login = try { host.relayLogin() } catch (e: Exception) { null }
             val r = login?.let { m.startRelay(it, host::resolve) }
@@ -196,7 +203,8 @@ class CallSession(
                 offerJson?.put("cands", CallLogic.cands(r, lp))
                 answerJson?.put("cands", CallLogic.cands(r, lp))
                 if (lp != null) { offerJson?.put("lp", lp); answerJson?.put("lp", lp) }
-                sendCands()
+                // Still ringing here: the answer will carry it. Otherwise tell the peer now.
+                if (outgoing || answered) sendCands()
             }
         }
     }

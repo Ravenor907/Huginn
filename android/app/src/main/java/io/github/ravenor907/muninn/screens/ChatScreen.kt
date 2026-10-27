@@ -593,6 +593,8 @@ private fun NearbyRoom(app: Muninn) {
 
 @Composable
 private fun Conversation(app: Muninn, key: String) {
+    // Calls start faster when the relay login is already here.
+    LaunchedEffect(key) { io.github.ravenor907.muninn.net.call.CallManager.prepare(key) }
     val convos by app.chat.conversations.collectAsState()
     val c = app.chat.contacts.get(key)
     val met by app.chat.met.collectAsState()
