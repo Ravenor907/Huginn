@@ -26,9 +26,9 @@
 #include <QDBusReply>
 #include <QVariantMap>
 #else
-#include "../platform/chime.h"
 #include "../platform/notify.h"
 #endif
+#include "../platform/chime.h"
 
 namespace
 {

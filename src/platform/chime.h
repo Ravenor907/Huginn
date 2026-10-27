@@ -27,6 +27,6 @@ public:
     bool ready() const;   // the sound loaded (for the self-test)
 
 private:
-    QByteArray m_wav;                 // Windows: the file itself, kept while it may be playing
+    QByteArray m_wav;                 // Windows: the file itself, kept while it may be playing; Linux: its header
     QSoundEffect *m_effect = nullptr; // Linux
 };

@@ -13,8 +13,6 @@ permissions:
 jobs:
   flatpak:
     name: Flatpak
-    # Paused by the owner: Muninn and the Windows zip come first. Set back to true to build it again.
-    if: false
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
@@ -82,12 +80,17 @@ jobs:
             s=0; "$@" > t.log 2>&1 || s=$?
             cat t.log
             if [ $s -ne 0 ]; then
-              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-              echo "::error title=Self-test failed: $* (exit $s)::$e"
+              name=$(echo "$*" | grep -oE -- '--[a-z]+-selftest' || echo "$*")
+              echo "::error title=Self-test failed::$name (exit $s)"
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | tr -cd '[:print:]\n' | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=$name output::$e"
               bad=1
             fi
           }
           bad=0
+          # The runtime's Qt (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          q=$(flatpak run --command=sh io.github.ravenor907.Huginn -c 'ls /usr/lib/*/libQt6Core.so.6.* /usr/lib/libQt6Core.so.6.* 2>/dev/null' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          echo "::notice title=Flatpak runtime::Qt ${q:-unknown}"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
@@ -416,8 +419,8 @@ jobs:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
-    # Muninn and the Windows zip must both pass. (The Flatpak is paused; add flatpak back here when it returns.)
-    needs: [muninn, muninn-screens, windows]
+    # The Flatpak, Muninn and the Windows zip must all pass.
+    needs: [flatpak, muninn, muninn-screens, windows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -437,6 +440,10 @@ jobs:
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
         with:
+          name: Huginn.flatpak
+      - uses: actions/download-artifact@v4
+        if: steps.v.outputs.new == '1'
+        with:
           name: muninn-apk
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.new == '1'
@@ -449,6 +456,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
+            Huginn.flatpak
             Huginn-Windows.zip
             Muninn.apk
           fail_on_unmatched_files: false
@@ -456,5 +464,6 @@ jobs:
           make_latest: true
           generate_release_notes: true
           body: |
+            **Huginn** (Linux and SteamOS): Huginn.flatpak. Installed copies update themselves at launch.
             **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
