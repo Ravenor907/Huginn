@@ -7,7 +7,6 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -89,7 +88,7 @@ class TurnClient(
 
     /** Allocates a relayed address, trying each server in turn. Blocks; false if none worked. */
     fun start(): Boolean {
-        // Each name is looked up once (through Tor); a name Tor can't answer is never asked of anyone else.
+        // Each name is looked up once; a name that can't be looked up isn't asked again in this call.
         val ips = HashMap<String, InetAddress?>()
         var unresolved = false
         for (s in order(login.urls.mapNotNull(::parseUrl))) {
@@ -288,46 +287,26 @@ class TurnClient(
             return (udp + tls443 + list).distinct()
         }
 
-        /** What the call screen says when the relay's name couldn't be looked up through Tor. */
+        /** What the call screen says when the relay's name couldn't be looked up. */
         const val CANT_REACH = "Can't reach the call relay right now"
 
         /** Why the last [start] failed ([CANT_REACH] or ""), for the call screen. Never an address. */
         @Volatile var lastProblem = ""; private set
 
         /**
-         * Looks [host] up inside Tor (SOCKS5 RESOLVE, Tor's 0xF0 extension), so no DNS server near this
-         * phone sees it. Tries Tor [tries] times, a second apart; if Tor can't answer, the answer is null.
-         * Never the system resolver: that would tell the local network and its DNS server who we call
-         * through. An IP literal is used as it is (no lookup at all).
+         * Looks [host] up with the system resolver (IPv4 first), [tries] times a second apart; null if
+         * it can't. An IP literal is used as it is (no lookup at all).
          */
-        fun torResolve(proxy: Proxy, host: String, tries: Int = 3): InetAddress? {
+        fun lookup(host: String, tries: Int = 3): InetAddress? {
             if (host.all { it.isDigit() || it == '.' } || host.contains(':')) return CallLogic.literal(host)
             repeat(tries) { n ->
                 if (n > 0) try { Thread.sleep(1_000) } catch (e: InterruptedException) { return null }
-                torResolveOnce(proxy, host)?.let { return it }
+                try {
+                    val all = InetAddress.getAllByName(host)
+                    (all.firstOrNull { it is java.net.Inet4Address } ?: all.firstOrNull())?.let { return it }
+                } catch (e: Exception) {}
             }
             return null
-        }
-
-        private fun torResolveOnce(proxy: Proxy, host: String): InetAddress? {
-            return try {
-                val pa = proxy.address() as InetSocketAddress
-                Socket().use { s ->
-                    s.connect(pa, 3000)
-                    s.soTimeout = 15_000
-                    val o = s.getOutputStream(); val i = DataInputStream(s.getInputStream())
-                    o.write(byteArrayOf(5, 1, 0)); o.flush()
-                    val hello = ByteArray(2).also { i.readFully(it) }
-                    if (hello[0].toInt() != 5 || hello[1].toInt() != 0) return@use null
-                    val name = host.toByteArray(Charsets.US_ASCII)
-                    o.write(byteArrayOf(5, 0xF0.toByte(), 0, 3, name.size.toByte()) + name + byteArrayOf(0, 0)); o.flush()
-                    val head = ByteArray(4).also { i.readFully(it) }
-                    if (head[1].toInt() != 0) return@use null
-                    val ip = when (head[3].toInt()) { 1 -> ByteArray(4); 4 -> ByteArray(16); else -> return@use null }
-                    i.readFully(ip)
-                    InetAddress.getByAddress(ip)
-                }
-            } catch (e: Exception) { null }
         }
     }
 }

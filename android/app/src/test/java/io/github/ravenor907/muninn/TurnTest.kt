@@ -183,14 +183,12 @@ class TurnTest {
         if (!RelayConfig.configured) assertNull(TurnCreds.get(der, { _, _ -> error("must not post") }))
     }
 
-    /** The relay's name is only ever looked up through Tor: with Tor unreachable there is no answer at all. */
+    /** The relay's name is looked up with the system resolver; an IP literal needs no lookup. */
     @Test
-    fun resolveOnlyThroughTor() {
-        val noTor = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), 1))
-        // "localhost" is in every system resolver; a fallback to it would answer.
-        assertNull(TurnClient.torResolve(noTor, "localhost", tries = 2))
-        assertEquals(InetAddress.getByAddress(byteArrayOf(104, 30, 1, 2)), TurnClient.torResolve(noTor, "104.30.1.2"))
-        assertNull(TurnClient.torResolve(noTor, "999.1.1.1"))
+    fun resolvesTheRelay() {
+        assertTrue(TurnClient.lookup("localhost", tries = 2)!!.isLoopbackAddress)
+        assertEquals(InetAddress.getByAddress(byteArrayOf(104, 30, 1, 2)), TurnClient.lookup("104.30.1.2"))
+        assertNull(TurnClient.lookup("999.1.1.1"))
         // Every server's name unreachable: start() fails with the call screen's message, never tries a server.
         val login = TurnCreds.Login(listOf("turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:443?transport=tcp"), "u", "p", Long.MAX_VALUE)
         val t = TurnClient(login, { null }) { _, _ -> }

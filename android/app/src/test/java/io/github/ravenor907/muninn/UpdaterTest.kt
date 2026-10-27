@@ -32,4 +32,11 @@ class UpdaterTest {
         assertTrue(Updater.rank("0.3") > Updater.rank("0.3 Test 1"))
         assertTrue(Updater.rank("0.3 Test 1") > Updater.rank("0.2"))
     }
+
+    @Test
+    fun readsTagFromLatestLink() {
+        assertEquals("v0.6", Updater.tagFromLatest("https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.6"))
+        assertEquals("v0.61", Updater.tagFromLatest("https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.61?x=1"))
+        assertNull(Updater.tagFromLatest("https://github.com/Ravenor907/Huginn-Muninn/releases"))
+    }
 }

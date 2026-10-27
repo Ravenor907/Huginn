@@ -129,10 +129,6 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <!-- Tor runs in Muninn's own process; only Muninn can reach it. -->
-        <service
-            android:name="org.torproject.jni.TorService"
-            android:exported="false" />
         <service
             android:name=".net.NearbyService"
             android:exported="false"

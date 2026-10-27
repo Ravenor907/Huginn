@@ -14,12 +14,11 @@ import java.util.concurrent.ConcurrentHashMap
  * [groupOnly]: a group peer (protocol 0.6, 3.7): someone in a group with me who isn't a contact. Kept here so
  *   they can be reached, never shown in the contact list, and private messages from them need the usual asking.
  * [caps]: what their app said it speaks ("caps" in their envelopes: r1 g1 c1 k1), empty until known.
- * [onion]: their Tor onion address (from their code or envelopes), for the private internet route.
  */
 data class Contact(
     val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null,
     val ratchet: Boolean = false, val nickname: String? = null, val keyChanged: Boolean = false,
-    val groupOnly: Boolean = false, val caps: Set<String> = emptySet(), val onion: String? = null,
+    val groupOnly: Boolean = false, val caps: Set<String> = emptySet(),
 ) {
     /** What this phone shows for them. */
     val shown: String get() = nickname ?: name
@@ -86,9 +85,6 @@ object ChatWire {
     /** The 0.6 tokens an envelope says its app speaks ("caps"), plus r1 from the old field. */
     fun capsOf(o: JSONObject): Set<String> = Proto06.caps(o.optString("caps")) + (if (capable(o)) setOf(CAP) else emptySet())
 
-    /** A v3 onion address as it travels ("o" in codes and envelopes): 56 base32 letters, no ".onion". Null if it isn't one. */
-    fun onion(s: String?): String? = s?.trim()?.lowercase()?.removeSuffix(".onion")?.takeIf { it.length == 56 && it.all { c -> c in 'a'..'z' || c in '2'..'7' } }
-
     /** Never show a network address: anything that looks like an IPv4 or IPv6 address becomes [instead]. */
     fun noIp(text: String, instead: String = "a device"): String =
         text.replace(IPV6_BRACKET, instead).replace(IPV4, instead).replace(IPV6_FULL, instead).replace(IPV6_SHORT, instead)
@@ -107,11 +103,11 @@ object ChatWire {
 
     fun contactToJson(c: Contact): JSONObject = JSONObject().put("k", c.chatKey).put("n", c.name).put("p", c.mailbox ?: "")
         .put("v", c.verified).put("i", c.invite ?: "").put("r", c.ratchet).put("nick", c.nickname ?: "").put("kc", c.keyChanged)
-        .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" ")).put("o", c.onion ?: "")
+        .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" "))
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
         o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
-        o.optBoolean("go"), Proto06.caps(o.optString("cp")), onion(o.optString("o")))
+        o.optBoolean("go"), Proto06.caps(o.optString("cp")))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
@@ -119,7 +115,7 @@ object ChatWire {
         return c.copy(verified = !kc && (c.verified || old.verified), mailbox = c.mailbox ?: old.mailbox, name = c.name.ifBlank { old.name },
             invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc,
             // Adding a group peer as a contact just clears groupOnly; a contact never turns into a group peer.
-            groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps, onion = c.onion ?: old.onion)
+            groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps)
     }
 
     /**
@@ -136,7 +132,7 @@ object ChatWire {
 
     /** The contact after their key changed: same person on this phone (nickname kept), not trusted, no ratchet yet. */
     fun afterKeyChange(old: Contact, c: Contact) = Contact(c.chatKey, c.name.ifBlank { old.name }, c.mailbox, verified = false,
-        invite = c.invite, ratchet = false, nickname = old.nickname, keyChanged = true, onion = c.onion)
+        invite = c.invite, ratchet = false, nickname = old.nickname, keyChanged = true)
 
     fun keyChangedText(name: String) = "$name's security key changed. Check the code with them before trusting new messages."
 
@@ -153,10 +149,9 @@ object ChatWire {
 
     const val PREFIX = "MUNINN1:"
 
-    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0, onion: String? = null): String {
+    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
         val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
-            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }
-            .apply { onion(onion)?.let { put("o", it) } }.toString()
+            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
         return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
     }
 
