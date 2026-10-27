@@ -1,8 +1,9 @@
 import QtQuick
 import Huginn
 
-// Desktop: what can be done with a message, over its top right corner while the pointer is on it,
-// Discord style: react, reply, a thread (groups), edit (mine), pin, and everything else.
+// What can be done with a message, over its top right corner while the pointer (a mouse or the
+// right stick's) is on it, or while the controller has it picked, Discord style: react, reply, a
+// thread, edit (mine), pin, and everything else.
 Rectangle {
     id: bar
     property bool canEdit: false
