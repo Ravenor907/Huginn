@@ -1130,6 +1130,29 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         Q_EMIT callMessage(fromKey, msg);
         return 200;
     }
+    // Kids' TV card (0.6, 7.6): a contact invited this person to talk with their kids' TV and sent the
+    // TV's contact code. Taken only from a contact, never as a key change; anything else in the room is
+    // for Muninn (TVs and the parents who run them) and refused.
+    if (room == QLatin1String("tvconfig")) {
+        const QJsonObject msg = QJsonDocument::fromJson(plain).object();
+        if (!isContact(fromKey) || msg.value(QStringLiteral("t")).toString() != QLatin1String("card")) {
+            m_pendingPeer.reset();
+            return 403;
+        }
+        commitPeer();
+        const QString code = msg.value(QStringLiteral("code")).toString().left(2000);
+        const QVariantMap tv = parseCode(code);
+        const QString tvKey = str(tv, "key");
+        if (!tv.isEmpty() && !tv.value(QStringLiteral("mine")).toBool() && !tv.value(QStringLiteral("expired")).toBool()
+            && !isContact(tvKey) && contactWithMailbox(str(tv, "mailbox"), tvKey).isEmpty()) {
+            addContact(code);
+            const QString who = nameOf(fromKey), tvName = str(tv, "name");
+            systemNote(tvKey, QStringLiteral("%1 added you to %2. You can talk with the kids here.").arg(who, tvName));
+            Q_EMIT notice(QStringLiteral("%1 added you to %2").arg(who, tvName));
+            Q_EMIT arrived(who, QStringLiteral("Added you to %1: you can talk with the kids there now").arg(tvName), tvKey);
+        }
+        return 200;
+    }
     // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room. Counted only
     // once a message proved it's really from them, so nobody can use it to block a real contact.
     if (room != QLatin1String("receipt")) {

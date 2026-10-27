@@ -27,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +84,11 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     var editing by remember { mutableStateOf<Quick?>(null) }
     var choosing by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
+    var inviting by remember { mutableStateOf(false) }
+    /** People to put in a family group (just invited, or picked under Family groups). */
+    var grouping by remember { mutableStateOf<List<String>?>(null) }
+    var micLevel by remember(t.mic) { mutableFloatStateOf(t.mic.toFloat()) }
+    val k2 = TvParent.k2(app, tvKey)
     var order by remember(t.quick) { mutableStateOf(t.quick) }
     var dragId by remember { mutableStateOf("") }
     var dragY by remember { mutableFloatStateOf(0f) }
@@ -177,12 +185,43 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                 ToggleRow("Talk with the remote's mic", "Speech to text on the TV, sent as a normal private message.", t.dictation) { on ->
                     TvParent.change(tvKey) { it.copy(dictation = on) }
                 }
+                ToggleRow("Calls", "The kids can call the people they can reach, and those people can call the TV.", t.calls) { on ->
+                    TvParent.change(tvKey) { it.copy(calls = on) }
+                }
+                Text("Microphone level", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 10.dp))
+                Text(when {
+                    micLevel < 1f -> "As the TV hears it, no boost"
+                    else -> "Louder by about ${(TvMic.gainDb(micLevel.toInt()) + 0.5f).toInt()} dB. Turn it up if the TV barely hears the kids."
+                }, style = Type.small.copy(fontSize = 13.sp))
+                Slider(micLevel, { micLevel = it }, valueRange = 0f..TvRules.MAX_MIC.toFloat(), steps = 9,
+                    onValueChangeFinished = { val v = micLevel.toInt(); TvParent.change(tvKey) { it.copy(mic = v) } },
+                    colors = SliderDefaults.colors(thumbColor = Palette.gold, activeTrackColor = Palette.gold, inactiveTrackColor = Palette.lineMuted),
+                    modifier = Modifier.semantics { contentDescription = "Microphone level ${micLevel.toInt()} of 100" })
+                if (!k2) Text("Calls and the microphone level reach the TV once it runs the newest Muninn.", style = Type.small.copy(fontSize = 13.sp))
                 Setting("Share the TV's code", "So people you add can add the TV too") {
                     TvParent.shareText(app, tvKey)?.let { text ->
                         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Share the TV's code"))
                     }
                 }
                 Text("The TV has no lock: anyone in the room can read what's on it.", style = Type.small.copy(fontSize = 13.sp),
+                    modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+            }
+
+            Label("Family")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Setting("Invite someone", "Talk with the kids on the TV") { inviting = true }
+                Setting("Family groups", "Add people to a group") { grouping = emptyList() }
+                Text("Invite someone you have as a contact: the TV adds them and their Muninn or Huginn adds the TV. Nothing to do on the TV.",
+                    style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+            }
+
+            Label("Updates")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Setting("Update TV", if (t.app.isNotEmpty()) "Muninn ${t.app} on the TV" else "Look for a new Muninn now") {
+                    if (TvParent.updateTv(app, tvKey)) Ui.say("The TV is looking for a new Muninn. It installs it by itself.")
+                    else Ui.say("This TV's Muninn is too old to be asked. Update it once on the TV.", true)
+                }
+                Text("The TV also looks for updates every day by itself.", style = Type.small.copy(fontSize = 13.sp),
                     modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
             }
         }
@@ -206,9 +245,105 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
         val choices = contacts.filter { it.chatKey != tvKey && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) }
             .sortedBy { it.shown.lowercase() }
         PeopleDialog(choices.map { it.chatKey to it.shown }, t.reach.toSet(), onCancel = { choosing = false }) { picked ->
+            val added = picked - t.reach.toSet()
             TvParent.change(tvKey) { it.copy(reach = choices.map { c -> c.chatKey }.filter { k -> k in picked }) }; choosing = false
+            // Newly on the list: their app gets the TV's code too.
+            if (added.isNotEmpty()) TvParent.invite(app, tvKey, added)
         }
     }
+    if (inviting) {
+        val choices = contacts.filter { it.chatKey != tvKey && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) && it.chatKey !in t.reach }
+            .sortedBy { it.shown.lowercase() }
+        InviteDialog(choices.map { it.chatKey to it.shown }, onCancel = { inviting = false }) { k ->
+            inviting = false
+            TvParent.invite(app, tvKey, listOf(k))
+            Ui.say("${app.chat.nameOf(k)} can talk with the kids now. Their app adds the TV by itself.")
+            grouping = listOf(k)
+        }
+    }
+    grouping?.let { start ->
+        val people = TvParent.people(app, t).drop(1).map { it.k to it.n }
+        FamilyGroupDialog(app, people, start.toSet(), onClose = { grouping = null })
+    }
+}
+
+/** Pick one contact to invite. */
+@Composable
+private fun InviteDialog(choices: List<Pair<String, String>>, onCancel: () -> Unit, onPick: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = Palette.panel,
+        title = { Text("Invite someone", style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (choices.isEmpty()) Text("Everyone in your contacts can already reach the TV. Add the person as a contact first.", style = Type.small)
+                choices.forEach { (k, name) ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { onPick(k) }, verticalAlignment = Alignment.CenterVertically) {
+                        MIcon("user", Palette.accent, 20.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { MButton("Cancel", onClick = onCancel) },
+    )
+}
+
+/**
+ * Put people in a family group from the Kids' TV screen: tick the people (who can reach the TV) and a
+ * group you run, or make a new one called Family.
+ */
+@Composable
+private fun FamilyGroupDialog(app: Muninn, people: List<Pair<String, String>>, start: Set<String>, onClose: () -> Unit) {
+    val groups by app.chat.groups.all.collectAsState()
+    val me = app.identity.publicKey
+    val mine = groups.values.filter { !it.readOnly && it.state.isAdmin(me) }.sortedBy { it.state.name.lowercase() }
+    var picked by remember { mutableStateOf(start) }
+    var group by remember { mutableStateOf(mine.firstOrNull { it.state.name.contains("family", ignoreCase = true) }?.g ?: mine.firstOrNull()?.g ?: "") }
+    val box = CheckboxDefaults.colors(checkedColor = Palette.gold, checkmarkColor = Palette.onGold, uncheckedColor = Palette.lineMuted)
+    AlertDialog(
+        onDismissRequest = onClose,
+        containerColor = Palette.panel,
+        title = { Text("Add to a family group", style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Who", style = Type.small)
+                if (people.isEmpty()) Text("Invite someone first.", style = Type.small)
+                people.forEach { (k, name) ->
+                    val on = k in picked
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Checkbox) { picked = if (on) picked - k else picked + k },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(on, null, colors = box)
+                        Text(name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Text("Group", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                mine.forEach { grp ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.RadioButton) { group = grp.g },
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(group == grp.g, null, colors = box)
+                        Text(grp.state.name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.RadioButton) { group = "" }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(group.isEmpty(), null, colors = box)
+                    Text("A new group called Family", style = Type.normal.copy(color = Palette.text))
+                }
+            }
+        },
+        confirmButton = {
+            MButton("Add", kind = Kind.Accent, enabled = picked.isNotEmpty()) {
+                val g = group.ifEmpty { app.chat.groups.create("Family") ?: "" }
+                if (g.isEmpty()) { Ui.say("The group couldn't be made.", true); return@MButton }
+                val why = picked.mapNotNull { k -> app.chat.inviteToGroup(g, k) }
+                if (why.isEmpty()) Ui.say("Invited. They join when they accept.") else Ui.say(why.first(), true)
+                onClose()
+            }
+        },
+        dismissButton = { MButton("Not now", onClick = onClose) },
+    )
 }
 
 @Composable

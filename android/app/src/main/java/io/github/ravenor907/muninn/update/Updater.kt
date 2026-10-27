@@ -32,6 +32,8 @@ class Updater(private val context: Context, private val identity: Identity) {
     private var url: String? = null
     private var lastCheck = 0L
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    /** A Kids' TV installs through its own PackageInstaller session (tv/TvUpdate); true when it took the file. */
+    @Volatile var installer: ((File) -> Boolean)? = null
 
     /** Called whenever Muninn comes to the front. Checks at most every few minutes. */
     fun checkOnOpen() {
@@ -89,7 +91,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                     }
                 }
                 _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
-                main.post { install(out) }
+                main.post { if (installer?.invoke(out) != true) install(out) }
             } catch (e: Exception) {
                 _state.value = _state.value.copy(busy = false, status = "The download stopped. Try again.")
             }

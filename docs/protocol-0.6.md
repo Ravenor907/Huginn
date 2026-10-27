@@ -58,7 +58,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1"
+"caps": "r1 g1 c1 k1 k2 t1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -69,6 +69,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `g1` | group chats (section 3) |
 | `c1` | 1:1 calls and voice rooms (sections 5, 6) |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
+| `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
+| `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -89,7 +91,8 @@ opens a contact's chat and the caps are unknown.
 ### 1.3 Fallback for 0.5 peers
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
-  token (`g1` for the group rooms, `c1` for `call`, `k1` for `tvconfig`). 0.5 would answer 400 and drop it.
+  token (`g1` for the group rooms, `c1` for `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
+  and for a config with `calls` or `mic`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work exactly as in 0.5 with everyone.
@@ -554,7 +557,7 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 ## 7. Kids' TV
 
 The TV is a Muninn install set to Kids' TV mode on first start (for example on an Android TV box). It has a
-chat key like any device and caps `r1 k1`.
+chat key like any device and the same caps as any Muninn (`k1` and `k2` matter here).
 
 ### 7.1 Pairing
 
@@ -587,7 +590,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields; `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`
+(7.5); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -601,8 +605,9 @@ dropped with their chats); the screen shows the quick messages in order; the dic
 with `{"t":"applied","v":<v>}` so their apps can show "TV is up to date".
 
 On the TV: private messages are accepted only from keys in `contacts` (and parents), and sent only to them.
-No Nearby room, no Keep in touch, no groups, no calls in 0.6. A listed person still has to have the TV as a
-contact on their side; the parent's app shares the TV's code with them.
+No Nearby room, no Keep in touch, no groups. Calls (room `call`, section 5) only with those same keys, and
+only while `calls` is not false (7.5). A listed person still has to have the TV as a contact on their side:
+the parent's app sends them a card (7.6), or shares the TV's code.
 
 ### 7.3 Disconnect
 
@@ -617,6 +622,43 @@ screen. To drop just one of two parents, the other sends a config without them.
 The TV has no app lock, panic lock or hidden erase: anyone in the room can read what's on it. Parents'
 apps say so when pairing. Nothing secret is in the config, and messages on the TV follow the "Delete
 messages after" setting the parent sets on the TV during setup.
+
+### 7.5 Calls, microphone level and updates (`k2`)
+
+A TV whose app says `k2` takes two more config fields. A parent's app puts them in only for such a TV (a
+`k1`-only TV would refuse the config as malformed); until the TV's caps are known it leaves them out, and
+sends a config with them once the TV's `applied` shows `k2`.
+
+| field | type | absent | meaning |
+|---|---|---|---|
+| `calls` | true or false | true | the kids can call people in `contacts` (and parents), and those people can call the TV |
+| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls |
+
+Anything else that's extra is still malformed. Vectors: `tv.configs.cfg4` (calls off, mic 80), and step 7 of
+`tv.accept`.
+
+The TV adds its Muninn version to every answer: `{"t":"applied","v":<v>,"app":"0.61"}` (text, at most 16
+characters; apps without `k2` ignore it). A parent may send `{"t":"update"}`: the TV, if the sender is one of
+its parents, looks for a new Muninn release at once, installs it, and answers with `applied` for its current
+version. The TV also looks every day by itself.
+
+### 7.6 Inviting someone to talk with the kids (`t1`)
+
+A parent invites a contact (say the other parent, or a grandparent) from their phone, without touching the TV:
+
+1. The parent's app adds the person to `contacts` and sends the TV a new config (7.2). The TV now has their
+   chat key and mailbox and accepts them.
+2. The parent's app sends the person, in room `tvconfig`, a card:
+   `{"t":"card","code":"MUNINN1:..."}`, the TV's contact code (name, chat key, mailbox; no invite token and no
+   `"tv":1`, so it never offers to set the TV up).
+3. The person's app (Muninn or Huginn with `t1`) takes a card only from someone who is already a contact,
+   only if the TV isn't a contact yet and the code isn't a key change of another contact (same mailbox,
+   other key: ignored). It adds the TV as a contact and says who added them.
+
+Now each has the other's key: messages and calls work both ways. A person whose app hasn't said `t1` (caps
+still unknown a minute after a probe, 1.2) gets the TV's link as a private message instead. A card is sent
+once on every route (the relays hold it for an offline phone); the parent can always share the TV's code too.
+To put the person in a family group, the parent's app uses the normal group invite (3.5).
 
 ## 8. Message types
 
@@ -633,6 +675,8 @@ messages after" setting the parent sets on the TV during setup.
 | `call` | `offer` `ring` `answer` `decline` `busy` `cands` `mute` `hangup` | 5.2 | yes | short, 5.2 | call id + t; Seen | c1 |
 | `call` | `vjoin` `vleave` `full` | 6 | yes | no | Seen | c1 |
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
+| `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
+| `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
 
 ## 9. Size limits
 
@@ -655,6 +699,7 @@ messages after" setting the parent sets on the TV during setup.
 | quick messages | 24, each 80 characters |
 | TV contacts | 50 |
 | TV config, canonical | 16 KB |
+| TV microphone level (`mic`) | 0 to 100 |
 | group code / invite token | 1 hour |
 
 Characters means Unicode code points. Anything over a limit is malformed and refused, not cut.
