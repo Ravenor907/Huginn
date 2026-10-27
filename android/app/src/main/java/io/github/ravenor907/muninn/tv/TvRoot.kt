@@ -134,7 +134,9 @@ fun TvRoot(app: Muninn) {
             val cfg = st.cfg
             when {
                 wiping -> TvNote("This TV was disconnected", "Starting over…")
-                st.parents.isEmpty() || cfg == null -> TvPairing(app)
+                st.parents.isEmpty() -> TvPairing(app)
+                // Paired, but its settings couldn't be read: still a Kids' TV; the parents' phones send them again.
+                cfg == null -> TvNote("Getting this TV ready", "Ask a parent to open Muninn on their phone.")
                 else -> TvKids(app, cfg)
             }
         }
@@ -213,11 +215,14 @@ private fun TvPairing(app: Muninn) {
                 TvChip("Delete messages after: ${ageName(after)}", first) {
                     after = nextAge(after); app.identity.deleteAfter = after
                 }
+                // Once a parent has paired this TV, only they can let it be used normally (Disconnect on their phone).
+                if (!KidMode.paired(app)) {
                 Spacer(Modifier.height(12.dp))
                 TvChip("Use Muninn normally instead", null, quiet = true) {
                     Ui.sure(Ask("Use Muninn normally?",
                         "This TV then works like Muninn on a phone, with a lock and Settings. It can only become a Kids' TV again if Muninn's data is cleared in the TV's settings.",
                         "Use normally") { KidMode.useNormally(app) })
+                }
                 }
             }
             if (code.isNotEmpty()) Qr(Contacts.link(code), 260.dp)
@@ -282,7 +287,7 @@ private fun TvSetup(needs: List<TvUpdate.Need>, onDone: () -> Unit) {
                     when (n.id) {
                         "mic" -> { asked = n.id; perm.launch(Manifest.permission.RECORD_AUDIO) }
                         "notify" -> { asked = n.id; if (android.os.Build.VERSION.SDK_INT >= 33) perm.launch(Manifest.permission.POST_NOTIFICATIONS) }
-                        else -> if (!TvUpdate.open(context, n.id)) Ui.say("This TV doesn't have that setting. Look under Settings, Apps, Muninn.", true)
+                        else -> if (!TvUpdate.open(context, n.id)) Ui.say("This TV doesn't have that screen. A parent can turn it on in the TV's Settings, under Apps, Muninn.", true)
                     }
                 }
             }

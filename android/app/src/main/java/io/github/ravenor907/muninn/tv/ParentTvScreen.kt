@@ -85,6 +85,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
     var choosing by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf(false) }
     var inviting by remember { mutableStateOf(false) }
+    var addingParent by remember { mutableStateOf(false) }
     /** People to put in a family group (just invited, or picked under Family groups). */
     var grouping by remember { mutableStateOf<List<String>?>(null) }
     var micLevel by remember(t.mic) { mutableFloatStateOf(t.mic.toFloat()) }
@@ -212,6 +213,22 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                     modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
             }
 
+            Label("Parents")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                val me = app.identity.publicKey
+                t.parents.sortedBy { if (it == me) "" else app.chat.nameOf(it).lowercase() }.forEach { k ->
+                    if (k == me) Setting("You", "Parent") {}
+                    else Setting(app.chat.nameOf(k), "Take off") {
+                        Ui.sure(Ask("Take ${app.chat.nameOf(k)} off as a parent?",
+                            "They can't change what the TV shows any more. They can still talk with the kids if they're on its list.",
+                            "Take off", danger = true) { TvParent.removeParent(app, tvKey, k) })
+                    }
+                }
+                Setting("Add a parent", "They can change the TV too") { addingParent = true }
+                Text("Another parent with Muninn on their phone can look after the TV as well. Every parent sees the same settings.",
+                    style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+            }
+
             Label("Family")
             Column(Modifier.padding(horizontal = 16.dp)) {
                 Setting("Invite someone", "Talk with the kids on the TV") { inviting = true }
@@ -250,8 +267,10 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
         }
 
         MButton("Disconnect this TV", Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp), Kind.Danger) {
-            Ui.sure(Ask("Disconnect this TV?", "It erases its messages and contacts and goes back to the pairing screen. A parent can pair it again any time.",
-                "Disconnect", danger = true, hold = true) { TvParent.disconnect(tvKey); onBack() })
+            Ui.sure(Ask("Disconnect this TV?", "It erases its messages and contacts and goes back to the pairing screen, where only a parent can pair it again. " +
+                "Choose \"Make it a normal TV\" if it should work like Muninn on a phone afterwards, with a lock and Settings.",
+                "Disconnect", danger = true, hold = true,
+                extra = "Make it a normal TV", onExtra = { TvParent.disconnect(tvKey, free = true); onBack() }) { TvParent.disconnect(tvKey); onBack() })
         }
     }
 
@@ -273,7 +292,9 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
             onCancel = { choosing = false }) { picked ->
             val waitingNow = pending.map { it.first }.filter { it in picked }
             val added = picked - t.reach.toSet() - waitingNow.toSet()
-            TvParent.change(tvKey) { it.copy(reach = choices.map { c -> c.chatKey }.filter { k -> k in picked }) }; choosing = false
+            // People on the list this phone can't choose here (another parent's contacts) stay on it.
+            val choosable = choices.map { c -> c.chatKey }.toSet()
+            TvParent.change(tvKey) { it.copy(reach = it.reach.filter { k -> k !in choosable } + choices.map { c -> c.chatKey }.filter { k -> k in picked }) }; choosing = false
             TvParent.dropWaiting(tvKey, t.waiting.keys - picked)
             TvParent.inviteLater(tvKey, waitingNow)
             // Newly on the list: their app gets the TV's code too.
@@ -295,6 +316,15 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
             }
         }
     }
+    if (addingParent) {
+        val choices = contacts.filter { !it.groupOnly && it.chatKey != tvKey && it.chatKey != app.identity.publicKey && it.chatKey !in t.parents && !TvParent.isManaged(it.chatKey) }
+            .sortedBy { it.shown.lowercase() }
+        InviteDialog(choices.map { it.chatKey to it.shown }, emptyList(), title = "Add a parent", onCancel = { addingParent = false }) { k ->
+            addingParent = false
+            val why = TvParent.addParent(app, tvKey, k)
+            Ui.say(why ?: "${app.chat.nameOf(k)} is a parent of the TV now. Their Muninn adds it by itself.", why != null)
+        }
+    }
     grouping?.let { start ->
         val people = TvParent.people(app, t).drop(1).map { it.k to it.n }
         FamilyGroupDialog(app, people, start.toSet(), onClose = { grouping = null })
@@ -303,14 +333,15 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
 
 /** Pick one contact to invite; [waiting]: people who haven't accepted this phone yet. */
 @Composable
-private fun InviteDialog(choices: List<Pair<String, String>>, waiting: List<Pair<String, String>>, onCancel: () -> Unit, onPick: (String) -> Unit) {
+private fun InviteDialog(choices: List<Pair<String, String>>, waiting: List<Pair<String, String>>, title: String = "Invite someone",
+                         onCancel: () -> Unit, onPick: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Palette.panel,
-        title = { Text("Invite someone", style = Type.big) },
+        title = { Text(title, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (choices.isEmpty() && waiting.isEmpty()) Text("Everyone in your contacts can already reach the TV. Add the person as a contact first.", style = Type.small)
+                if (choices.isEmpty() && waiting.isEmpty()) Text("Nobody else to pick. Add the person as a contact first.", style = Type.small)
                 choices.forEach { (k, name) -> PersonRow(name, null) { onPick(k) } }
                 waiting.forEach { (k, name) -> PersonRow(name, WAITING) { onPick(k) } }
             }

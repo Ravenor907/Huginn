@@ -125,7 +125,11 @@ object TvUpdate {
             add(Need("install", "Install updates", "So Muninn can keep itself up to date on this TV."))
     }
 
-    /** Opens the Android setting for [id]. False if this TV has no such screen (some TVs hide them). */
+    /**
+     * Opens the Android setting for [id]. False if this TV has no such screen (some TVs hide them). Never
+     * Muninn's own app page: a child can reach this list, and that page has "Clear storage", which would
+     * start the TV over.
+     */
     fun open(c: Context, id: String): Boolean {
         val pkg = Uri.parse("package:${c.packageName}")
         val tries = when (id) {
@@ -133,7 +137,7 @@ object TvUpdate {
             "fullscreen" -> if (Build.VERSION.SDK_INT >= 34) listOf(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg)) else emptyList()
             "install" -> listOf(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg), Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES))
             else -> emptyList()
-        } + Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+        }
         for (i in tries) try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return true } catch (_: Exception) {}
         return false
     }

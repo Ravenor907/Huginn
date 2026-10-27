@@ -380,7 +380,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (fromKey in id.muted()) return 200 to "{}"   // blocked: dropped quietly
         val room = o.optString("room")
         // A Kids' TV only talks to the people its parents listed, and only about what it allows.
-        if (tvHandler?.allow(fromKey, room) == false) return 403 to "{}"
+        // Before the TV side is hooked up, a Kids' TV still takes nothing but configs (which it checks itself).
+        val tv = tvHandler
+        if (if (tv != null) !tv.allow(fromKey, room) else room != "tvconfig" && io.github.ravenor907.muninn.tv.KidMode.saved(context)) return 403 to "{}"
         if (room == "photo") return receivePiece(o, fromKey, name, via)
         if (room == "gphoto") return receiveGroupPiece(o, fromKey, name)
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
