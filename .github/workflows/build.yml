@@ -76,13 +76,26 @@ jobs:
       - name: Chat encryption matches Muninn (shared test vectors)
         shell: bash
         run: |
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
-          timeout 330 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --tor-selftest
+          run() {
+            s=0; "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Self-test failed: $* (exit $s)::$e"
+              bad=1
+            fi
+          }
+          bad=0
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
+          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
+          tor() { timeout 330 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --tor-selftest; }
+          tor > /dev/null 2>&1 || run tor
+          exit $bad
       - name: Draw the project banner (both ravens)
         if: always()
         shell: bash
@@ -344,7 +357,8 @@ jobs:
           run "$h" --privacy-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
-          run timeout 330 "$h" --tor-selftest
+          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
+          timeout 330 "$h" --tor-selftest > /dev/null 2>&1 || run timeout 330 "$h" --tor-selftest
           exit $bad
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true
