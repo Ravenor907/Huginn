@@ -40,16 +40,19 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
     val folders by app.chat.folders.all.collectAsState()
+    val trashed by app.chat.trash.all.collectAsState()
+    var showTrash by remember { mutableStateOf(false) }
+    if (showTrash) { TrashScreen(app) { showTrash = false }; return }
     data class P(val key: String, val name: String, val detail: String, val contact: Boolean)
     var picked by remember { mutableStateOf<P?>(null) }
     var foldering by remember { mutableStateOf<P?>(null) }
     var renaming by remember { mutableStateOf<P?>(null) }
     fun inFolders(k: String) = folders.filter { k in it.keys }.joinToString(", ") { it.name }.let { if (it.isEmpty()) "" else " · $it" }
-    // A nickname shows as "Nickname (their name)". Group peers aren't contacts: they're not listed.
-    val real = contacts.filter { !it.groupOnly }
+    // A nickname shows as "Nickname (their name)". Group peers aren't contacts: they're not listed, and nor is anyone in the trash.
+    val real = contacts.filter { !it.groupOnly && it.chatKey !in trashed }
     val people = (real.map { P(it.chatKey, ChatWire.listName(it),
         when { it.keyChanged -> "In touch · security key changed"; it.verified -> "In touch · verified"; else -> "In touch" } + inFolders(it.chatKey), true) } +
-        met.filterKeys { k -> real.none { it.chatKey == k } }.map { (k, m) -> P(k, m.name, "Met close by" + inFolders(k), false) })
+        met.filterKeys { k -> real.none { it.chatKey == k } && k !in trashed }.map { (k, m) -> P(k, m.name, "Met close by" + inFolders(k), false) })
     val active = people.filter { it.key !in blocked }.sortedBy { it.name.lowercase() }
     val off = blocked.map { k -> people.firstOrNull { it.key == k } ?: P(k, app.chat.nameOf(k), "", false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -59,6 +62,10 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
             if (active.isEmpty()) item { Text("Nobody yet. People you chat with show up here.", style = Type.normal) }
             items(active, key = { "a" + it.key }) { p ->
                 Line(p.name, p.detail, icon = "user", onLong = { foldering = p }) { picked = p }
+            }
+            item {
+                Line("Trash", if (trashed.isEmpty()) "Empty" else "${trashed.size} · deleted for good after ${io.github.ravenor907.muninn.net.Trash.DAYS} days",
+                    icon = "delete") { showTrash = true }
             }
             if (off.isNotEmpty()) item { Section("Blocked") }
             items(off, key = { "b" + it.key }) { p ->
@@ -80,10 +87,10 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
                     // A name for them on this phone only: it's never sent.
                     if (p.contact) MButton("Rename", Modifier.fillMaxWidth(), icon = "user") { picked = null; renaming = p }
                     MButton("Folders", Modifier.fillMaxWidth(), icon = "folder") { picked = null; foldering = p }
-                    if (p.contact) MButton("Remove contact", Modifier.fillMaxWidth()) {
+                    if (p.contact) MButton("Move to trash", Modifier.fillMaxWidth(), icon = "delete") {
                         picked = null
-                        Ui.sure(Ask("Remove ${p.name}?", "They're no longer a contact. Your chat with them stays.", "Remove", danger = true,
-                            onConfirm = { app.chat.removeContact(p.key); Ui.say("${p.name} removed. Your chat with them stays.") }))
+                        Ui.sure(Ask("Move ${p.name} to the trash?", TRASH_NOTE, "Move to trash", danger = true,
+                            onConfirm = { app.chat.trashContact(p.key); Ui.say("${p.name} is in the trash.") }))
                     }
                     MButton("Block", Modifier.fillMaxWidth(), Kind.Danger) {
                         picked = null
