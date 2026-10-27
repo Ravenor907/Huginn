@@ -18,7 +18,7 @@ class CallManager;
 class CallSession;
 class CallSignal;
 class Chime;
-class QVideoSink;
+#include <QVideoSink>
 class VideoReceiver;
 class VideoSender;
 struct TurnLogin;

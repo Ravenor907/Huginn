@@ -10,7 +10,7 @@
 
 class CallSession;
 class CallSignal;
-class QVideoSink;
+#include <QVideoSink>
 class VideoReceiver;
 class VideoSender;
 class Chime;
