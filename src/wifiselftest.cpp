@@ -10,6 +10,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -161,6 +162,12 @@ void sendFirst(Run *run)
 void begin(Run *run)
 {
     run->check("home-network address rules", Lan::selfTest());
+    if (!run->chime->ready()) {
+        QDirIterator it(QStringLiteral(":/qt/qml/Huginn"), QDir::Files, QDirIterator::Subdirectories);
+        int shown = 0;
+        while (it.hasNext() && shown++ < 40)
+            std::printf("wifi resource: %s\n", qPrintable(it.next()));
+    }
     run->check("raven call loaded", run->chime->ready());
     run->check("Huginn is listening on the home network", run->net->listening());
     run->ip = Lan::firstIPv4();
