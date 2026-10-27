@@ -139,6 +139,24 @@ flatpak-builder --user --install --force-clean build packaging/io.github.ravenor
 
 Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Windows builds (Huginn.exe in Huginn-Windows.zip) are built from this repository by GitHub Actions and signed only after a person approves each release.
+
+- Committers and reviewers: [Ravenor907](https://github.com/Ravenor907)
+- Approvers: [Ravenor907](https://github.com/Ravenor907)
+
+## Privacy
+
+Huginn and Muninn collect nothing about you: no accounts, no analytics, no ads, no tracking. This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. What leaves your device, and only to do what you asked:
+
+- **Messages, photos and voice clips** are end-to-end encrypted and sealed before they reach the public Nostr relays that carry them. Relays see only a sealed mailbox id and the IP address that connects to them.
+- **Calls** go through the Cloudflare call relay ([Cloudflare privacy policy](https://www.cloudflare.com/privacypolicy/)), or straight between devices for contacts you trust. Audio and video are end-to-end encrypted. The relay login service keeps no logs.
+- **Updates** are downloaded from GitHub ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
+- **Nearby sharing** stays on your home Wi-Fi or Bluetooth.
+
 ## License
 
 GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic, under the SIL Open Font License.
