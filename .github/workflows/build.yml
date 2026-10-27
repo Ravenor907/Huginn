@@ -329,7 +329,7 @@ jobs:
         run: |
           h=dist/Huginn/Huginn.exe
           run() {
-            "$@" > t.log 2>&1; s=$?
+            s=0; "$@" > t.log 2>&1 || s=$?
             cat t.log
             if [ $s -ne 0 ]; then
               e=$(tail -n 30 t.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
