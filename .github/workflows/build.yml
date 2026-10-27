@@ -80,12 +80,17 @@ jobs:
             s=0; "$@" > t.log 2>&1 || s=$?
             cat t.log
             if [ $s -ne 0 ]; then
-              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-              echo "::error title=Self-test failed: $* (exit $s)::$e"
+              name=$(echo "$*" | grep -oE -- '--[a-z]+-selftest' || echo "$*")
+              echo "::error title=Self-test failed::$name (exit $s)"
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | tr -cd '[:print:]\n' | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=$name output::$e"
               bad=1
             fi
           }
           bad=0
+          # The runtime's Qt (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          q=$(flatpak run --command=sh io.github.ravenor907.Huginn -c 'ls /usr/lib/*/libQt6Core.so.6.* /usr/lib/libQt6Core.so.6.* 2>/dev/null' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          echo "::notice title=Flatpak runtime::Qt ${q:-unknown}"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
