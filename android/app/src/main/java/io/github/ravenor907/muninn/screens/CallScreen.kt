@@ -6,6 +6,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -115,22 +118,17 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
     val video by CallVideo.state.collectAsState()
     val c = ui
     val showRemote = c != null && c.video && video.peerCamera && c.phase != Phase.ENDED
+    val showSelf = c != null && c.video && video.cameraOn && c.phase != Phase.ENDED
+    // Once either camera is on: the picture on top, then a strip with who, how and how long, then the buttons.
+    // Nothing is drawn over the picture but the small self view. A voice call keeps the big avatar.
+    if (c != null && c.phase != Phase.INCOMING && (showRemote || showSelf)) {
+        VideoCall(c, video, showRemote, showSelf, if (hideName) "Muninn call" else c.name, onBack, onMessage, onAnswer, onAnswerVideo, onCamera)
+        return
+    }
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
-    if (showRemote) RemoteVideo(video, Modifier.fillMaxSize())
-    if (c != null && c.video && video.cameraOn && c.phase != Phase.ENDED)
-        SelfView(Modifier.align(Alignment.TopEnd).systemBarsPadding().padding(top = 64.dp, end = 16.dp).size(width = 108.dp, height = 144.dp))
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
-                contentAlignment = Alignment.Center) { Glyph(CallIcons.down, Palette.text, 24.dp) }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Glyph(CallIcons.shield, CallColors.encrypted, 14.dp, 2f)
-                Spacer(Modifier.width(6.dp))
-                Text("End-to-end encrypted", style = Type.small.copy(fontSize = 13.sp, color = CallColors.encrypted))
-            }
-            Spacer(Modifier.width(44.dp))
-        }
+        TopBar(onBack)
         if (c == null) {
             Spacer(Modifier.weight(1f))
             Text("No call right now", style = Type.big)
@@ -139,11 +137,9 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             val name = if (hideName) "Muninn call" else c.name
-            if (showRemote) Spacer(Modifier.height(8.dp)) else {
-                Spacer(Modifier.height(56.dp))
-                Avatar(name, c.peerSpeaking && c.phase == Phase.LIVE)
-                Spacer(Modifier.height(36.dp))
-            }
+            Spacer(Modifier.height(56.dp))
+            Avatar(name, c.peerSpeaking && c.phase == Phase.LIVE)
+            Spacer(Modifier.height(36.dp))
             Text(name, style = Type.title.copy(fontSize = 30.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 340.dp))
             Spacer(Modifier.height(6.dp))
@@ -151,45 +147,123 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             if (c.phase != Phase.INCOMING && c.phase != Phase.ENDED) {
                 Spacer(Modifier.height(24.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Direct only between two people who trust each other; while it (or Wi-Fi) carries the call the relay rests.
-                    if (c.directTried) Chip("Direct", "straight over the internet", c.direct)
-                    Chip(if (c.directTried) "Relay" else "Internet", "through the relay", c.relay && !c.direct && !c.wifi)
-                    Chip("Wi-Fi", "same Wi-Fi", c.wifi)
-                    Chip("Bluetooth", "close by", c.bluetooth)
-                }
+                Paths(c)
                 Spacer(Modifier.height(10.dp))
                 Text("Every path at once, so walking away doesn't drop the call", style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
             }
             if (c.note.isNotEmpty() && c.phase != Phase.ENDED) Text(c.note, style = Type.small.copy(color = Palette.danger), textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 10.dp))
         }
-        when (c.phase) {
-            Phase.INCOMING -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Round(CallIcons.hangup, "Decline", CallColors.end, Color.White, 76.dp) { CallManager.decline() }
-                // A video call can be taken with the camera, or as a voice call.
-                if (c.videoCall && Vp8.available) Round(CallIcons.camera, "Video", CallColors.answer, Color.White, 76.dp, onClick = onAnswerVideo)
-                Round(CallIcons.answer, if (c.videoCall) "Voice only" else "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
-            }
-            Phase.ENDED -> Spacer(Modifier.height(106.dp))
-            else -> {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute" else "Mute", if (c.muted) Palette.accent else Palette.coolTint,
-                        if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
-                    Round(CallIcons.speaker, "Speaker", if (c.speaker) Palette.accent else Palette.coolTint, if (c.speaker) Palette.ground else Palette.text, 68.dp,
-                        on = c.speaker) { CallManager.setSpeaker(!c.speaker) }
-                    if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",
-                        if (video.cameraOn) Palette.accent else Palette.coolTint, if (video.cameraOn) Palette.ground else Palette.text, 68.dp, on = video.cameraOn) {
-                        onCamera(!video.cameraOn)
-                    }
-                    if (c.video && video.cameraOn) Round(CallIcons.flip, "Flip", Palette.coolTint, Palette.text, 68.dp) { CallManager.switchCamera() }
-                    else Round(CallIcons.message, "Message", Palette.coolTint, Palette.text, 68.dp) { onMessage(c.peerKey) }
+        Buttons(c, video, onMessage, onAnswer, onAnswerVideo, onCamera, 30.dp)
+    }
+    }
+}
+
+/** Back to the chat, and the "End-to-end encrypted" line. */
+@Composable
+private fun TopBar(onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
+            contentAlignment = Alignment.Center) { Glyph(CallIcons.down, Palette.text, 24.dp) }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Glyph(CallIcons.shield, CallColors.encrypted, 14.dp, 2f)
+            Spacer(Modifier.width(6.dp))
+            Text("End-to-end encrypted", style = Type.small.copy(fontSize = 13.sp, color = CallColors.encrypted))
+        }
+        Spacer(Modifier.width(44.dp))
+    }
+}
+
+/** Which paths carry the call right now. */
+@Composable
+private fun Paths(c: CallManager.Ui) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Direct only between two people who trust each other; while it (or Wi-Fi) carries the call the relay rests.
+        if (c.directTried) Chip("Direct", "straight over the internet", c.direct)
+        Chip(if (c.directTried) "Relay" else "Internet", "through the relay", c.relay && !c.direct && !c.wifi)
+        Chip("Wi-Fi", "same Wi-Fi", c.wifi)
+        Chip("Bluetooth", "close by", c.bluetooth)
+    }
+}
+
+/** Decline and Answer while it rings; Mute, Speaker, Camera, Flip or Message and End once it's on ([gap] above End). */
+@Composable
+private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit,
+                    onCamera: (Boolean) -> Unit, gap: Dp) {
+    when (c.phase) {
+        Phase.INCOMING -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Round(CallIcons.hangup, "Decline", CallColors.end, Color.White, 76.dp) { CallManager.decline() }
+            // A video call can be taken with the camera, or as a voice call.
+            if (c.videoCall && Vp8.available) Round(CallIcons.camera, "Video", CallColors.answer, Color.White, 76.dp, onClick = onAnswerVideo)
+            Round(CallIcons.answer, if (c.videoCall) "Voice only" else "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
+        }
+        Phase.ENDED -> Spacer(Modifier.height(106.dp))
+        else -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute" else "Mute", if (c.muted) Palette.accent else Palette.coolTint,
+                    if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
+                Round(CallIcons.speaker, "Speaker", if (c.speaker) Palette.accent else Palette.coolTint, if (c.speaker) Palette.ground else Palette.text, 68.dp,
+                    on = c.speaker) { CallManager.setSpeaker(!c.speaker) }
+                if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",
+                    if (video.cameraOn) Palette.accent else Palette.coolTint, if (video.cameraOn) Palette.ground else Palette.text, 68.dp, on = video.cameraOn) {
+                    onCamera(!video.cameraOn)
                 }
-                Spacer(Modifier.height(30.dp))
-                Round(CallIcons.hangup, "End call", CallColors.end, Color.White, 76.dp, label = false) { CallManager.hangup() }
+                if (c.video && video.cameraOn) Round(CallIcons.flip, "Flip", Palette.coolTint, Palette.text, 68.dp) { CallManager.switchCamera() }
+                else Round(CallIcons.message, "Message", Palette.coolTint, Palette.text, 68.dp) { onMessage(c.peerKey) }
             }
+            Spacer(Modifier.height(gap))
+            Round(CallIcons.hangup, "End call", CallColors.end, Color.White, 76.dp, label = false) { CallManager.hangup() }
         }
     }
+}
+
+/**
+ * A call with video: their picture fills the top (your own small in its corner), a solid strip under it with the
+ * name, the paths and the time, then the buttons. Side by side when the phone is turned sideways, so the picture
+ * keeps most of the screen.
+ */
+@Composable
+private fun VideoCall(c: CallManager.Ui, video: CallVideo.State, showRemote: Boolean, showSelf: Boolean, name: String, onBack: () -> Unit,
+                      onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit, onCamera: (Boolean) -> Unit) {
+    val picture: @Composable (Modifier) -> Unit = { m ->
+        Box(m.background(Palette.groundDeep)) {
+            if (showRemote) RemoteVideo(video, Modifier.fillMaxSize())
+            // Their camera is off: just who it is, small, so the self view still has room.
+            else Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Avatar(name, c.peerSpeaking && c.phase == Phase.LIVE)
+            }
+            if (showSelf) SelfView(Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp).size(width = 96.dp, height = 128.dp))
+        }
+    }
+    val strip: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(name, style = Type.title.copy(fontSize = 20.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(status(c), style = Type.normal.copy(fontSize = 15.sp, color = Palette.textMuted), maxLines = 1, modifier = Modifier.padding(start = 12.dp))
+            }
+            if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
+            Box(Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState())) { Paths(c) }
+            if (c.note.isNotEmpty()) Text(c.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Palette.ground).systemBarsPadding()) {
+        if (maxWidth > maxHeight) Row(Modifier.fillMaxSize()) {
+            picture(Modifier.weight(1f).fillMaxHeight())
+            Column(Modifier.width(340.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+                Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) { TopBar(onBack) }
+                strip()
+                Spacer(Modifier.height(16.dp))
+                Buttons(c, video, onMessage, onAnswer, onAnswerVideo, onCamera, 16.dp)
+            }
+        } else Column(Modifier.fillMaxSize().padding(bottom = 16.dp)) {
+            Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) { TopBar(onBack) }
+            picture(Modifier.weight(1f).fillMaxWidth())
+            strip()
+            Spacer(Modifier.height(16.dp))
+            Buttons(c, video, onMessage, onAnswer, onAnswerVideo, onCamera, 16.dp)
+        }
     }
 }
 
