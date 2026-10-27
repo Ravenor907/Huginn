@@ -41,7 +41,7 @@ Window {
         { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
         { id: "exit", kind: "icon", icon: "power", label: "Exit Huginn", bottom: true, action: true }
     ])
-    // LB and RB step through the sections and groups (New group and Exit are reached with the D-pad).
+    // LB steps through the sections and groups (New group and Exit are reached with the D-pad).
     readonly property var cycle: railItems.filter(e => !e.action).map(e => e.id)
 
     // ------------------------------------------------------------- pages
@@ -161,13 +161,14 @@ Window {
         prompts: {
             if (incomingCall.visible) return incomingCall.prompts
             if (callPage.visible) return callPage.prompts
-            const lbrb = [{ key: "lbrb", label: "Sections" }]
+            const lb = [{ key: "lb", label: "Next section" }]
             if (app.focusZone === "rail")
-                return lbrb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }])
+                return lb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }])
             const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts : []
-            return lbrb.concat(p)
+            return lb.concat(p)
         }
-        onPrompt: k => k === "lbrb" ? app.stepSection(1) : app.press(k)
+        // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section.
+        onPrompt: k => k === "lb" && !app.overlay() ? app.stepSection(1) : app.press(k)
     }
 
     // ------------------------------------------------------------- overlays
@@ -185,6 +186,13 @@ Window {
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
+    // The right stick's mouse pointer, over everything.
+    StickPointer {
+        id: stick
+        z: 1000
+        host: app
+        onClicked: (x, y) => { if (app.focusZone === "rail" && x > rail.width) app.focusZone = "content" }
+    }
 
     // The privacy cover (see Vault.covered): Huginn is in the background with Chat open behind a lock.
     // Nothing under it is drawn, so a minimized window, a taskbar preview or the picture Windows
@@ -335,29 +343,100 @@ Window {
         case "start": openPage("settings", {}); break
         }
     }
+    // LB on its own goes to the next section when it's let go; held, the D-pad's left and right
+    // go back and forward instead (and it doesn't move on when let go).
+    property bool lbHeld: false
+    property bool lbUsed: false
     function press(b) {
         const o = overlay()
         if (o) { if (o.handleButton) o.handleButton(b); return }
         const p = page()
-        // LB and RB move between rail items, unless the page needs them right now (the chat lock).
-        if ((b === "lb" || b === "rb") && !(p && p.ownsShoulders && focusZone === "content")) { stepSection(b === "lb" ? -1 : 1); return }
+        // The page has LB right now (the chat lock's pattern or password).
+        const pageShoulders = p && p.ownsShoulders && focusZone === "content"
+        if (b === "lb" && !pageShoulders) { lbHeld = true; lbUsed = false; return }
+        if (lbHeld && (b === "left" || b === "right")) { lbUsed = true; stepSection(b === "left" ? -1 : 1); return }
+        // Tab and Shift+Tab on the keyboard.
+        if ((b === "next" || b === "prev") && !pageShoulders) { stepSection(b === "prev" ? -1 : 1); return }
         if (focusZone === "rail") { railButton(b); return }
+        // LT opens the options, which pages know as X.
+        if (b === "lt") b = "x"
         if (p && p.handleButton && p.handleButton(b)) return
         // What the page didn't use: Left and B go to the rail, Menu opens Settings.
         if (b === "left" || b === "b") focusRail()
         else if (b === "start") openPage("settings", {})
     }
     function release(b) {
+        if (b === "lb" && lbHeld) {
+            lbHeld = false
+            if (!lbUsed && !overlay()) stepSection(1)
+            return
+        }
         const o = overlay()
         if (o) { if (o.handleRelease) o.handleRelease(b); return }
         const p = page()
         if (focusZone === "content" && p && p.handleRelease) p.handleRelease(b)
     }
 
+    // The right stick's buttons belong to the pointer: RB and R3 click, RT right-clicks.
+    // L3 goes along too, so R3 doesn't click when both are held for the panic lock.
+    function isPointerButton(b) { return b === "rb" || b === "rt" || b === "rs" || b === "ls" }
     Connections {
         target: Gamepad
-        function onPressed(button) { app.padInUse = true; app.press(button) }
-        function onReleased(button) { app.release(button) }
+        function onPressed(button) {
+            app.padInUse = true
+            if (app.isPointerButton(button)) stick.press(button)
+            else app.press(button)
+        }
+        function onReleased(button) {
+            if (app.isPointerButton(button)) stick.release(button)
+            else app.release(button)
+        }
+        function onConnectedChanged() { if (!Gamepad.connected) { app.lbHeld = false; stick.hide(true) } }
+    }
+
+    // ------------------------------------------------------------- left stick: scroll
+    // The list in front: under the pointer while it shows, else what the page says has the
+    // focus, else whatever is in the middle of the page (or of the window, under an overlay).
+    function flickableAt(x, y) {
+        let found = null
+        let item = app.contentItem, px = x, py = y
+        for (let depth = 0; item && depth < 64; depth++) {
+            if (item instanceof Flickable && item.contentHeight > item.height + 1) found = item
+            const child = item.childAt(px, py)
+            if (!child) break
+            const p = item.mapToItem(child, px, py)
+            px = p.x; py = p.y
+            item = child
+        }
+        return found
+    }
+    function scrollTarget() {
+        if (stick.shown) { const f = flickableAt(stick.x, stick.y); if (f) return f }
+        if (overlay()) return flickableAt(app.width / 2, app.height / 2)
+        if (focusZone === "rail") return flickableAt(rail.width / 2, rail.height / 2)
+        const p = page()
+        if (p && p.scrollView) { const f = p.scrollView(); if (f) return f }
+        const c = pageLoader.mapToItem(null, pageLoader.width / 2, pageLoader.height / 2)
+        return flickableAt(c.x, c.y)
+    }
+    function scrollBy(dy) {
+        const f = scrollTarget()
+        if (!f) return
+        const top = f.originY - f.topMargin
+        const bottom = Math.max(top, f.originY + f.contentHeight + f.bottomMargin - f.height)
+        f.contentY = Math.max(top, Math.min(bottom, f.contentY + dy))
+    }
+    Timer {
+        readonly property real dead: 0.2
+        interval: 16
+        repeat: true
+        running: Math.abs(Gamepad.stickY) > dead
+        // Slow near the middle, quick pushed all the way.
+        onTriggered: {
+            const v = Gamepad.stickY
+            const t = Math.min(1, (Math.abs(v) - dead) / (1 - dead))
+            if (t > 0) app.scrollBy((v < 0 ? -1 : 1) * Theme.px(1500) * t * t * interval / 1000)
+        }
     }
     // Keyboard stands in for the controller in Desktop Mode.
     Item {
@@ -369,6 +448,9 @@ Window {
         HoverHandler {
             onPointChanged: {
                 if (app.touring) return
+                // The stick pointer's own hover isn't a mouse.
+                if (stick.isOwn(point.position.x, point.position.y)) return
+                stick.hide(false)
                 if (app.padInUse) app.padInUse = false
                 if (app.focusZone === "rail" && point.position.x > rail.width) app.focusZone = "content"
             }
@@ -378,8 +460,15 @@ Window {
             const map = {}
             map[Qt.Key_Up] = "up"; map[Qt.Key_Down] = "down"; map[Qt.Key_Left] = "left"; map[Qt.Key_Right] = "right"
             map[Qt.Key_Return] = "a"; map[Qt.Key_Enter] = "a"; map[Qt.Key_Escape] = "b"; map[Qt.Key_Backspace] = "b"
-            map[Qt.Key_Space] = "x"; map[Qt.Key_Menu] = "y"; map[Qt.Key_F10] = "y"; map[Qt.Key_Tab] = "rb"
-            map[Qt.Key_Backtab] = "lb"; map[Qt.Key_PageUp] = "lt"; map[Qt.Key_PageDown] = "rt"; map[Qt.Key_F1] = "start"
+            map[Qt.Key_Space] = "x"; map[Qt.Key_Menu] = "y"; map[Qt.Key_F10] = "y"; map[Qt.Key_Tab] = "next"
+            map[Qt.Key_Backtab] = "prev"; map[Qt.Key_F1] = "start"
+            // Page Up and Page Down scroll like the left stick, a screenful at a time.
+            if (event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+                const f = app.scrollTarget()
+                if (f) app.scrollBy((event.key === Qt.Key_PageUp ? -0.9 : 0.9) * f.height)
+                event.accepted = true
+                return
+            }
             const b = map[event.key]
             if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
         }

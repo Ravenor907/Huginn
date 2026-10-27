@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // A group, Discord style: the channel column (TEXT channels, VOICE rooms), the open channel's
-// conversation, and on the desktop the member column. X opens the group's options (invite, the
+// conversation, and on the desktop the member column. LT opens the group's options (invite, the
 // group code, channels, members, rename, leave). D-pad left and right move between the columns.
 Rectangle {
     id: page
@@ -104,9 +104,9 @@ Rectangle {
     readonly property string chatKey: "g:" + gid + ":" + channelId
 
     readonly property var prompts: shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
-        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "x", label: "Group options" }, { key: "b", label: "Back" }]
-        : zone === "members" ? [{ key: "a", label: "Choose" }, { key: "x", label: "Group options" }, { key: "b", label: "Back" }]
-        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "x", label: "Options" }, { key: "b", label: "Back" }])
+        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
+        : zone === "members" ? [{ key: "a", label: "Choose" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
+        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "lt", label: "Options" }, { key: "b", label: "Back" }])
     readonly property string status: Chat.netStatus
 
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
@@ -517,6 +517,7 @@ Rectangle {
         readonly property var ordered: admins.concat(rest)
 
         Flickable {
+            id: memFlick
             anchors.fill: parent
             anchors.topMargin: Theme.px(18)
             anchors.leftMargin: Theme.px(14)
@@ -909,6 +910,8 @@ Rectangle {
         do { i += dir } while (i >= 0 && i < rows.length && !selectable(i))
         if (i >= 0 && i < rows.length) chRow = i
     }
+    // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
+    function scrollView() { return zone === "messages" ? list : zone === "members" ? memFlick : chanList }
     function handleButton(b) {
         if (locked) {
             if (b === "a") { Ui.openPage("dms", {}); return true }

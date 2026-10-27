@@ -34,14 +34,14 @@ Rectangle {
     function tryUnlock(secret) {
         if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
         if (Vault.unlock(secret)) { note = ""; bad = false; finished("unlock") }
-        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds }
+        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
     }
     function onPattern(dots) {
         const secret = "pattern:" + dots.join(",")
         if (mode === "unlock") { tryUnlock(secret); return }
-        if (dots.length < 4) { note = "Connect at least 4 dots."; bad = true; return }
+        if (dots.length < 4) { note = "Connect at least 4 dots."; bad = true; pad.shake(); return }
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
-        if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; return }
+        if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
         saveSecret(secret, true)
     }
     function typePassword() {
@@ -102,7 +102,7 @@ Rectangle {
         Text {
             width: parent.width; wrapMode: Text.WordWrap
             visible: Gamepad.connected && panel.usePattern
-            text: "Controller: D-pad to move, A to connect a dot, X to start over, Y when done."
+            text: "Controller: move with the D-pad, A starts on a dot, move to the next dots, A again when done. B starts over."
             color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
     }
@@ -110,7 +110,7 @@ Rectangle {
     function handleButton(b) {
         if (usePattern && pad.handleButton(b)) return true
         if (b === "a" && !usePattern) { typePassword(); return true }
-        if ((b === "lb" || b === "rb") && mode !== "unlock") { usePattern = !usePattern; first = null; note = ""; return true }
+        if ((b === "lb" || b === "next" || b === "prev") && mode !== "unlock") { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "b") { cancelled(); return true }
         return false
     }
