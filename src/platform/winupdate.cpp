@@ -1,17 +1,21 @@
 #include "winupdate.h"
 
 #include <QObject>
+#include <QRegularExpression>
 
 #ifdef Q_OS_WIN
 #include "singleinstance.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
-#include <QStandardPaths>
+#include <QSet>
 #include <QStringList>
+#include <QTimer>
+#include <QtGui/private/qzipreader_p.h>
 #include <windows.h>
 #endif
 
@@ -22,9 +26,23 @@ QString assetName()
     return QStringLiteral("Huginn-Windows.zip");
 }
 
+QString digestName()
+{
+    return assetName() + QStringLiteral(".sha256");
+}
+
+QByteArray parseDigest(const QByteArray &text)
+{
+    // "sha256:<hex>" (GitHub's asset digest) or "<hex>  Huginn-Windows.zip" (sha256sum).
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("(?:^|[^0-9a-fA-F])([0-9a-fA-F]{64})(?:$|[^0-9a-fA-F])"))
+                                          .match(QString::fromLatin1(text.trimmed()));
+    return m.hasMatch() ? m.captured(1).toLower().toLatin1() : QByteArray();
+}
+
 #ifndef Q_OS_WIN
 
 bool supported() { return false; }
+void cleanUp() {}
 void tidyOldLayout() {}
 QString folderProblem() { return {}; }
 void install(const QString &, QObject *, std::function<void(bool, const QString &)> done)
@@ -37,70 +55,132 @@ void install(const QString &, QObject *, std::function<void(bool, const QString 
 
 namespace
 {
-// The portable folder people unzipped: the one with the launcher Huginn.exe. Huginn itself runs
-// from its lib\ folder; an older zip had everything at the top.
+// What an update moves aside; deleted at the next start.
+const QString kAside = QStringLiteral(".huginn-old");
+
+// The portable folder people unzipped: the one with Huginn.exe. Works before Qt has started.
 QString appDir()
 {
-    const QDir d(QCoreApplication::applicationDirPath());
-    if (d.dirName().compare(QLatin1String("lib"), Qt::CaseInsensitive) == 0 && QFileInfo::exists(d.absoluteFilePath(QStringLiteral("../Huginn.exe"))))
-        return QDir::cleanPath(d.absoluteFilePath(QStringLiteral("..")));
-    return d.absolutePath();
+    std::wstring self(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
+    if (n == 0 || n >= self.size())
+        return QCoreApplication::instance() ? QCoreApplication::applicationDirPath() : QString();
+    self.resize(n);
+    return QFileInfo(QDir::fromNativeSeparators(QString::fromStdWString(self))).absolutePath();
 }
 QString stagingDir() { return appDir() + QStringLiteral("/update-staging"); }
 
-// PowerShell single-quoted literal: only ' needs doubling.
-QString psQuote(const QString &s)
+// A file name from the zip, made safe: relative, no "..", no drive letters or streams.
+QString safeRelative(QString p)
 {
-    QString n = QDir::toNativeSeparators(s);
-    return QLatin1Char('\'') + n.replace(QLatin1Char('\''), QStringLiteral("''")) + QLatin1Char('\'');
+    p.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    while (p.startsWith(QLatin1Char('/')))
+        p.remove(0, 1);
+    p = QDir::cleanPath(p);
+    if (p.isEmpty() || p == QLatin1String(".") || p.startsWith(QLatin1String("../")) || p == QLatin1String("..") || p.contains(QLatin1Char(':')))
+        return {};
+    return p;
 }
 
-// The folder in the zip that holds Huginn.exe: the staging folder itself or one level down (Huginn/).
-QString payloadRoot(const QString &staging)
+struct Moved {
+    QString target, aside;   // aside empty: there was no old file
+};
+
+// Puts back what was moved, after a failed swap.
+void rollBack(const QList<Moved> &moved)
 {
-    if (QFileInfo::exists(staging + QStringLiteral("/Huginn.exe")))
-        return staging;
-    for (const QFileInfo &d : QDir(staging).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
-        if (QFileInfo::exists(d.absoluteFilePath() + QStringLiteral("/Huginn.exe")))
-            return d.absoluteFilePath();
-    return {};
+    for (auto it = moved.crbegin(); it != moved.crend(); ++it) {
+        QFile::remove(it->target);
+        if (!it->aside.isEmpty())
+            QFile::rename(it->aside, it->target);
+    }
 }
 
-bool writeScript(const QString &path, const QString &from)
+// Moves a file aside so a new one can take its name; true if the name is free afterwards.
+bool moveAside(const QString &target, QString *aside)
 {
-    const QString log = QDir::tempPath() + QStringLiteral("/huginn-update.log");
-    const QString script = QStringLiteral(
-        "$ErrorActionPreference = 'SilentlyContinue'\r\n"
-        "$src = %1\r\n"
-        "$dst = %2\r\n"
-        "$stage = %3\r\n"
-        "$log = %4\r\n"
-        "$huginn = %5\r\n"
-        "# Wait for Huginn to close.\r\n"
-        "Wait-Process -Id $huginn -Timeout 60\r\n"
-        "& robocopy $src $dst /E /IS /IT /R:20 /W:1 /NP /NFL /NDL /LOG:$log | Out-Null\r\n"
-        "$ok = $LASTEXITCODE -lt 8\r\n"
-        "if ($ok) { Remove-Item -LiteralPath $stage -Recurse -Force }\r\n"
-        "Start-Process -FilePath (Join-Path $dst 'Huginn.exe') -WorkingDirectory $dst\r\n"
-        "Remove-Item -LiteralPath $PSCommandPath -Force\r\n")
-        .arg(psQuote(from), psQuote(appDir()), psQuote(stagingDir()), psQuote(log), QString::number(QCoreApplication::applicationPid()));
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
-    // A byte order mark, so Windows PowerShell 5 reads non-English folder names correctly.
-    f.write("\xEF\xBB\xBF");
-    f.write(script.toUtf8());
-    f.close();
-    return f.error() == QFile::NoError;
+    aside->clear();
+    if (!QFileInfo::exists(target))
+        return true;
+    const QString to = target + kAside;
+    QFile::remove(to);
+    if (QFile::rename(target, to)) {
+        *aside = to;
+        return true;
+    }
+    return QFile::remove(target);
 }
 
-bool startHidden(const QString &program, const QStringList &args)
+// Unpacks the zip into the staging folder. Returns the files it holds (relative to the folder with
+// Huginn.exe, e.g. "Huginn.exe", "lib/Qt6Core.dll") or an empty list with *why set.
+QStringList unpack(const QString &zipPath, const QString &staging, QString *why)
 {
-    QProcess p;
-    p.setProgram(program);
-    p.setArguments(args);
-    p.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) { a->flags |= CREATE_NO_WINDOW; });
-    return p.startDetached();
+    QZipReader zip(zipPath);
+    if (!zip.isReadable() || zip.status() != QZipReader::NoError) {
+        *why = QStringLiteral("The update couldn't be opened. Try again.");
+        return {};
+    }
+    const QList<QZipReader::FileInfo> entries = zip.fileInfoList();
+    // Huginn.exe sits at the top of the zip or one folder down (Huginn/Huginn.exe).
+    QString prefix;
+    bool found = false;
+    for (const QZipReader::FileInfo &e : entries) {
+        const QString p = safeRelative(e.filePath);
+        if (!e.isFile || p.isEmpty())
+            continue;
+        if (p.compare(QLatin1String("Huginn.exe"), Qt::CaseInsensitive) == 0 || (p.count(QLatin1Char('/')) == 1 && p.endsWith(QLatin1String("/Huginn.exe"), Qt::CaseInsensitive))) {
+            prefix = p.left(p.size() - int(qstrlen("Huginn.exe")));
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        *why = QStringLiteral("The update doesn't hold Huginn.exe.");
+        return {};
+    }
+    QStringList files;
+    for (const QZipReader::FileInfo &e : entries) {
+        if (e.isSymLink) {
+            *why = QStringLiteral("The update holds a link, which Huginn doesn't accept.");
+            return {};
+        }
+        if (!e.isFile)
+            continue;
+        const QString p = safeRelative(e.filePath);
+        if (p.isEmpty() || !p.startsWith(prefix, Qt::CaseInsensitive))
+            continue;
+        const QString rel = p.mid(prefix.size());
+        if (rel.isEmpty() || rel.endsWith(kAside, Qt::CaseInsensitive))
+            continue;
+        const QByteArray data = zip.fileData(e.filePath);
+        if (data.size() != e.size) {
+            *why = QStringLiteral("The update is damaged (%1). Try again.").arg(rel);
+            return {};
+        }
+        const QString out = staging + QLatin1Char('/') + rel;
+        QDir().mkpath(QFileInfo(out).absolutePath());
+        QFile f(out);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(data) != data.size() || !f.flush()) {
+            *why = QStringLiteral("Couldn't write the update (%1). Is the disk full?").arg(rel);
+            return {};
+        }
+        files << rel;
+    }
+    if (!files.contains(QStringLiteral("lib/lib.manifest"), Qt::CaseInsensitive)) {
+        *why = QStringLiteral("The update is missing lib\\lib.manifest.");
+        return {};
+    }
+    return files;
+}
+
+void deleteAsides(const QString &root)
+{
+    // The top of the folder (not below it: Huginn.exe could have been put somewhere big) and all of lib\.
+    for (const QFileInfo &fi : QDir(root).entryInfoList({QLatin1Char('*') + kAside}, QDir::Files | QDir::Hidden))
+        QFile::remove(fi.absoluteFilePath());
+    QDirIterator it(root + QStringLiteral("/lib"), {QLatin1Char('*') + kAside}, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+    while (it.hasNext())
+        QFile::remove(it.next());
 }
 }
 
@@ -127,16 +207,35 @@ QString folderProblem()
     return {};
 }
 
+void cleanUp()
+{
+#ifdef HUGINN_WINDOWS_PORTABLE
+    const QString root = appDir();
+    if (root.isEmpty())
+        return;
+    QDir(stagingDir()).removeRecursively();
+    deleteAsides(root);
+    tidyOldLayout();
+#endif
+}
+
 void tidyOldLayout()
 {
 #ifdef HUGINN_WINDOWS_PORTABLE
+    const QString root = appDir(), lib = root + QStringLiteral("/lib");
+    if (root.isEmpty() || !QFileInfo(lib).isDir())
+        return;
+    // 0.7 ran a small launcher at the top that started lib\Huginn.exe; Huginn.exe at the top is the app now.
+    if (QFileInfo::exists(lib + QStringLiteral("/Huginn.exe"))) {
+        QString aside;
+        moveAside(lib + QStringLiteral("/Huginn.exe"), &aside);
+        QFile::remove(aside);
+    }
     // Updating from the 0.6 zip, which had everything at the top, leaves its files beside the new lib\.
     // Remove only names that zip had at the top (or that lib\ now has a copy of), so anything the
-    // owner put in the folder stays. Huginn.exe and LICENSE.txt are the new zip's own.
-    const QString root = appDir(), lib = QCoreApplication::applicationDirPath();
-    if (QDir(root) == QDir(lib))
-        return;
-    static const QStringList keep{QStringLiteral("Huginn.exe"), QStringLiteral("LICENSE.txt"), QStringLiteral("lib"), QStringLiteral("update-staging")};
+    // owner put in the folder stays.
+    static const QStringList keep{QStringLiteral("Huginn.exe"), QStringLiteral("LICENSE.txt"), QStringLiteral("lib"),
+                                  QStringLiteral("update-staging"), QStringLiteral("Huginn-start.log")};
     // Everything else at the top of Huginn-Windows.zip 0.6: Qt, FFmpeg, OpenSSL, Opus, SDL2,
     // libqrencode and the Visual C++ runtime DLLs, Qt's plugin and QML folders, and Tor.
     static const QStringList old06Files{
@@ -157,7 +256,7 @@ void tidyOldLayout()
                                        QStringLiteral("qml"), QStringLiteral("qmltooling"), QStringLiteral("styles"), QStringLiteral("tls")};
     for (const QFileInfo &fi : QDir(root).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
         const QString n = fi.fileName();
-        if (keep.contains(n, Qt::CaseInsensitive))
+        if (keep.contains(n, Qt::CaseInsensitive) || n.endsWith(kAside, Qt::CaseInsensitive))
             continue;
         const QFileInfo twin(lib + QLatin1Char('/') + n);
         const bool sameInLib = twin.exists() && twin.isDir() == fi.isDir();
@@ -174,58 +273,67 @@ void tidyOldLayout()
 
 void install(const QString &zipPath, QObject *context, std::function<void(bool, const QString &)> done)
 {
-    const QString problem = folderProblem();
-    if (!problem.isEmpty()) {
-        done(false, problem);
-        return;
-    }
-    const QString staging = stagingDir();
-    QDir(staging).removeRecursively();
-    if (!QDir().mkpath(staging)) {
-        done(false, QStringLiteral("Couldn't make a folder for the update."));
-        return;
-    }
-    // Windows 10 (1803) and later ship bsdtar, which unpacks zips; PowerShell covers anything older.
-    const QString tar = qEnvironmentVariable("SystemRoot", QStringLiteral("C:\\Windows")) + QStringLiteral("\\System32\\tar.exe");
-    auto *p = new QProcess(context);
-    p->setProcessChannelMode(QProcess::MergedChannels);
-    if (QFileInfo::exists(tar)) {
-        p->setProgram(tar);
-        p->setArguments({QStringLiteral("-xf"), QDir::toNativeSeparators(zipPath), QStringLiteral("-C"), QDir::toNativeSeparators(staging)});
-    } else {
-        p->setProgram(QStringLiteral("powershell.exe"));
-        p->setArguments({QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"), QStringLiteral("-Command"),
-                         QStringLiteral("Expand-Archive -LiteralPath %1 -DestinationPath %2 -Force").arg(psQuote(zipPath), psQuote(staging))});
-    }
-    p->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) { a->flags |= CREATE_NO_WINDOW; });
-    QObject::connect(p, &QProcess::finished, context, [p, zipPath, staging, done](int code, QProcess::ExitStatus st) {
-        p->deleteLater();
-        const QString root = payloadRoot(staging);
-        if (st != QProcess::NormalExit || code != 0 || root.isEmpty()) {
-            qWarning("update: unpacking failed (%d): %s", code, p->readAll().constData());
+    // On the next turn of the event loop, so "Installing…" is on screen while the zip unpacks.
+    QTimer::singleShot(0, context, [zipPath, done] {
+        const QString problem = folderProblem();
+        if (!problem.isEmpty()) {
+            done(false, problem);
+            return;
+        }
+        const QString root = appDir(), staging = stagingDir();
+        QDir(staging).removeRecursively();
+        if (!QDir().mkpath(staging)) {
+            done(false, QStringLiteral("Couldn't make a folder for the update."));
+            return;
+        }
+        QString why;
+        const QStringList files = unpack(zipPath, staging, &why);
+        if (files.isEmpty()) {
+            qWarning("update: %s", qPrintable(why));
             QDir(staging).removeRecursively();
-            done(false, QStringLiteral("The update couldn't be unpacked. Try again."));
+            done(false, why);
             return;
         }
+
+        // Swap: each old file is moved aside (fine even while it runs) and the new one moved in.
+        QList<Moved> moved;
+        QSet<QString> fresh;
+        for (const QString &rel : files) {
+            const QString target = root + QLatin1Char('/') + rel;
+            fresh.insert(QDir::cleanPath(target).toLower());
+            QDir().mkpath(QFileInfo(target).absolutePath());
+            Moved m{target, {}};
+            if (!moveAside(target, &m.aside) || !QFile::rename(staging + QLatin1Char('/') + rel, target)) {
+                if (!m.aside.isEmpty())
+                    QFile::rename(m.aside, target);
+                rollBack(moved);
+                QDir(staging).removeRecursively();
+                qWarning("update: couldn't replace %s", qPrintable(rel));
+                done(false, QStringLiteral("Couldn't replace %1. Close anything using the Huginn folder and try again.").arg(QDir::toNativeSeparators(rel)));
+                return;
+            }
+            moved << m;
+        }
+        // Whatever lib\ held that the new version doesn't (old plugins Qt would still find) goes aside too.
+        QDirIterator old(root + QStringLiteral("/lib"), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+        while (old.hasNext()) {
+            const QString f = old.next();
+            if (f.endsWith(kAside, Qt::CaseInsensitive) || fresh.contains(QDir::cleanPath(f).toLower()))
+                continue;
+            QString aside;
+            moveAside(f, &aside);
+        }
+        QDir(staging).removeRecursively();
         QFile::remove(zipPath);
-        const QString script = QDir::tempPath() + QStringLiteral("/huginn-update-%1.ps1").arg(QCoreApplication::applicationPid());
-        if (!writeScript(script, root)
-            || !startHidden(QStringLiteral("powershell.exe"),
-                            {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
-                             QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-File"), QDir::toNativeSeparators(script)})) {
-            done(false, QStringLiteral("Couldn't start the update."));
+
+        // The new Huginn.exe, started the ordinary way in its own folder.
+        SingleInstance::releaseForRestart();
+        if (!QProcess::startDetached(root + QStringLiteral("/Huginn.exe"), {}, root)) {
+            done(true, QStringLiteral("Updated. Open Huginn again to use the new version."));
             return;
         }
-        SingleInstance::releaseForRestart();
         done(true, QStringLiteral("Updated. Restarting…"));
     });
-    QObject::connect(p, &QProcess::errorOccurred, context, [p, done](QProcess::ProcessError e) {
-        if (e != QProcess::FailedToStart)
-            return;
-        p->deleteLater();
-        done(false, QStringLiteral("Windows couldn't unpack the update."));
-    });
-    p->start();
 }
 
 #endif

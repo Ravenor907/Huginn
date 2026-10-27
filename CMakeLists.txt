@@ -15,6 +15,8 @@ set(CMAKE_AUTOMOC ON)
 if(WIN32)
     enable_language(RC)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network WebSockets Bluetooth Multimedia)
+    # The updater unpacks the release zip itself with Qt's zip reader (src/platform/winupdate.cpp).
+    find_package(Qt6 6.6 REQUIRED COMPONENTS GuiPrivate)
     # Only needed while main.cpp still sends notifications over D-Bus (it should call Platform::notify).
     find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS DBus)
     find_package(OpenSSL REQUIRED)
@@ -90,6 +92,7 @@ target_sources(huginn PRIVATE
     src/platform/powerwatch.h
     src/platform/singleinstance.cpp src/platform/singleinstance.h
     src/platform/winupdate.cpp src/platform/winupdate.h
+    src/platform/winstart.cpp src/platform/winstart.h
 )
 if(WIN32)
     target_sources(huginn PRIVATE
@@ -112,7 +115,22 @@ if(WIN32)
     endif()
     set(HUGINN_RC_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/huginn.ico")
     configure_file(packaging/windows/huginn.rc.in ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc @ONLY)
-    target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
+    # The application manifest: runs as the person (asInvoker), Windows 10/11, per-monitor DPI.
+    # The portable zip keeps Huginn.exe alone at the top and its DLLs in lib\, a private assembly
+    # (lib\lib.manifest, written by the Windows job in build.yml) that Windows loads them from.
+    set(HUGINN_MANIFEST_LIB "")
+    if(HUGINN_WINDOWS_PORTABLE)
+        set(HUGINN_MANIFEST_LIB "  <dependency>\n    <dependentAssembly>\n      <assemblyIdentity type=\"win32\" name=\"lib\" version=\"1.0.0.0\" processorArchitecture=\"amd64\"/>\n    </dependentAssembly>\n  </dependency>\n")
+    endif()
+    configure_file(packaging/windows/huginn.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/Huginn.exe.manifest @ONLY)
+    target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc ${CMAKE_CURRENT_BINARY_DIR}/Huginn.exe.manifest)
+    # Our manifest says asInvoker itself; the linker's own would be a second copy.
+    target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/MANIFESTUAC:NO>)
+    target_link_libraries(huginn PRIVATE Qt6::GuiPrivate)
+    if(HUGINN_WINDOWS_PORTABLE)
+        # Qt finds its plugins and QML modules in lib\ (packaging/windows/qt.conf, built in as :/qt/etc/qt.conf).
+        qt_add_resources(huginn "huginn_qtconf" PREFIX "/qt/etc" BASE packaging/windows FILES packaging/windows/qt.conf)
+    endif()
     # Sources are UTF-8 (they use … and · in strings); MSVC needs to be told.
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Zc:__cplusplus /permissive->)
     target_compile_definitions(huginn PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN SDL_MAIN_HANDLED)
@@ -123,16 +141,6 @@ if(WIN32)
     # Release: no debug info or PDB, unused code dropped, the same bytes for the same source.
     target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Brepro>)
-
-    # The Huginn.exe people open: a tiny launcher at the top of the zip that starts lib/Huginn.exe,
-    # so Qt, OpenSSL and the rest stay out of sight in lib/ (see the Windows job in build.yml).
-    add_executable(huginn-launcher WIN32 src/platform/launcher_windows.cpp ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
-    set_target_properties(huginn-launcher PROPERTIES OUTPUT_NAME HuginnLauncher AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
-                          MSVC_RUNTIME_LIBRARY MultiThreaded)
-    target_compile_definitions(huginn-launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_compile_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Brepro>)
-    target_link_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
-    target_link_libraries(huginn-launcher PRIVATE user32)
 else()
     target_sources(huginn PRIVATE
         src/platform/notify_linux.cpp
