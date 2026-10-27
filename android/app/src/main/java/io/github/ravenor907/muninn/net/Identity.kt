@@ -59,6 +59,14 @@ class Identity(context: Context, private val vault: Vault) {
     /** The Nostr secret (internet inbox). */
     fun nostrSecret(): String = secret("nostrSecret") { Schnorr.hex(Schnorr.newSecret()) }
 
+    /**
+     * The call relay's id for this phone: random, made once. Not the chat key, so nobody who knows that key
+     * can use up this phone's relay logins, and the relay can't tell who is calling.
+     */
+    fun relayId(): ByteArray = secret("relayId") {
+        Schnorr.hex(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) })
+    }.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
     /** Stay connected in the background so messages arrive right away (an ongoing, silent notification). */
     var stayConnected: Boolean
         get() = prefs.getBoolean("stayConnected", true)

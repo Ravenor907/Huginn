@@ -78,7 +78,7 @@ dash.cloudflare.com. If a button has a slightly different name, pick the closest
 
 ## Good to know
 
-- Limits: each app identity gets at most 30 logins a day, and everyone together at most 3000 a day.
+- Limits: each app install gets at most 30 logins a day, and everyone together at most 3000 a day.
   The day resets at midnight UTC. When a limit is hit the Worker answers 429.
 - If the KV store is missing or not working, the Worker refuses every request (answers 503).
   So if step F is skipped, nothing works. That is on purpose.

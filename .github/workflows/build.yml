@@ -551,6 +551,14 @@ jobs:
 
 
 
+  relay:
+    name: Relay Worker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Relay Worker tests
+        run: node relay-worker/test.mjs
+
   site:
     name: Add page (GitHub Pages)
     # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
@@ -573,7 +581,7 @@ jobs:
     # and only after every check above passed.
     name: Release
     # The Flatpak, Muninn and the Windows zip must all pass.
-    needs: [flatpak, muninn, muninn-screens, windows, wine]
+    needs: [flatpak, muninn, muninn-screens, windows, wine, relay]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

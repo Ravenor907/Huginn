@@ -232,7 +232,7 @@ object CallManager {
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null
-            return TurnCreds.get(a.identity.keys.public.encoded, { url, body -> post(url, body) })
+            return TurnCreds.get(a.identity.relayId(), { url, body -> post(url, body) })
         }
         override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false

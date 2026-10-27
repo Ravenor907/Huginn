@@ -122,6 +122,7 @@ public:
     std::function<bool()> busyElsewhere;
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
+    QByteArray relayId();
 
 Q_SIGNALS:
     void changed();
