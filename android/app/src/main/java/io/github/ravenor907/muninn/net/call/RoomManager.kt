@@ -540,7 +540,7 @@ object RoomManager {
                         }
                     }
                     // Peers that left: their decoders go.
-                    decoders.keys.filter { it !in medias }.forEach { decoders.remove(it)?.close(); talk.remove(it) }
+                    decoders.keys.filter { !medias.containsKey(it) }.forEach { decoders.remove(it)?.close(); talk.remove(it) }
                     for (i in 0 until Opus.FRAME) out[i] = mix[i].coerceIn(-32768, 32767).toShort()
                     t.write(out, 0, Opus.FRAME)   // blocking: the audio clock paces this loop
                 }
