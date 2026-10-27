@@ -25,7 +25,7 @@ val opusSrc = File(opusDir, "opus-$opusVersion")
 
 android {
     namespace = "io.github.ravenor907.muninn"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.ravenor907.muninn"
