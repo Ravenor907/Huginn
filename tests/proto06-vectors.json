@@ -13,7 +13,8 @@
     "group": "huginn-muninn group v1",
     "call": "huginn-muninn call v1",
     "tvconfig": "huginn-muninn tvconfig v1",
-    "tvdisconnect": "huginn-muninn tvdisconnect v1"
+    "tvdisconnect": "huginn-muninn tvdisconnect v1",
+    "room": "huginn-muninn vroom v1"
   },
   "canonical": {
     "good": [
@@ -804,6 +805,438 @@
         "frame": 9,
         "packet": null,
         "result": "duplicate"
+      }
+    ]
+  },
+  "room": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "voiceRoom": "oKGio6Slpqc",
+    "groupCall": "4OHi4-Tl5ufo6err7O3u7w",
+    "maxPeople": 8,
+    "freshPastMs": 60000,
+    "freshAheadMs": 120000,
+    "presenceTtlMs": 1500000,
+    "messages": {
+      "joinB": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEYCIQDPy1LQ9s4jqG81YQAT/LCn5hDQGyGUPZJgu0gHqrXJawIhAIh3vvfmrRmN7VFFcsD7d7Vq2TbvGsP4mBOyIKsRqVCU"
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinC": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500401000,
+          "sig": "MEUCIC39eYU/Rrc3tsQeI/x26krISRYot7/OZIQG5XBJVgPOAiEA16e1ODcSfNVWGSsHwZgvZNNjyprb8pFIvzJz/WMRSuo="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500401000}"
+      },
+      "leaveB": {
+        "msg": {
+          "t": "vleave",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500405000,
+          "sig": "MEYCIQCgp64rRJfIA6BSFZQpSNFq+Xa47FDkThhpEi7w/5iEqAIhAO7gWj7pld6TW88NorhdGyB9IjDhTN0t8NhTQXJ0lw9K"
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vleave\",\"ts\":1761500405000}"
+      },
+      "joinB2": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500406000,
+          "sig": "MEUCIE8HufNlC2ZY1A8KKSMz4pMz8IZ/+ty4Sb0teQFbqoauAiEAhpyi2F590TJ5y1lD+AYOlgT9A1nm8cGXeSmufQe1aRc="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500406000}"
+      },
+      "ringA": {
+        "msg": {
+          "t": "vring",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500400000,
+          "sig": "MEUCIG5ppCoZL7BM4fs0eamIamZdxni7zyZCa9OzON+0ej6bAiEAzX8MDlVql3VyNU6Fc3VS+DQ2l6pLVX8IWoQGQK1cYDY="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vring\",\"ts\":1761500400000}"
+      },
+      "joinA": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500400000,
+          "sig": "MEUCIQChkERNoL0OsztuU5a5cUN52uNdWr73t6m4cFvLGsL82gIgEH1iSOVSYPfyrWQmR9O1Z+qjcl/xB5Xzb+1gXEogn8o="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "declineB": {
+        "msg": {
+          "t": "vdecline",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500403000,
+          "sig": "MEUCIQDgaIpyU5B8f5Vt3oea9WUjBKkKtd+Jqx1nQkyAxlIV9wIgFDAgzBSdPFDmzf+136z2L0OVg3CRhJ6UpCa2VQGM46w="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vdecline\",\"ts\":1761500403000}"
+      },
+      "fullC": {
+        "msg": {
+          "t": "full",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500402000,
+          "sig": "MEUCIQD+vyAQtZ5hl6P8lYdYhSL4GI+ZzwfgcXRKb2DjmMOPHwIgXz7sI8iMzRmCFIv0e3MnJkgKBI+vxSN9pC0eL0idriM="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"full\",\"ts\":1761500402000}"
+      },
+      "joinBnoRoom": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "kJGSk5SVlpc",
+          "ts": 1761500400000,
+          "sig": "MEUCIFsMIGeFUe1jJO239zMBfYEjewQQRWRUm+8kRUiYpf2ZAiEAt+IQrjX/gBmpWeLZgVISngglN5PdwJ+tShjVP1V+N4k="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"kJGSk5SVlpc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBmain": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "main",
+          "ts": 1761500400000,
+          "sig": "MEQCIGAwWxl16jk9LC63evHIBUXdJ4GAzMHed+/e2KO90uK5AiBIaBl2ZVfDGBuEUa0a7vH56mng2CPGKJL47F5T6i4RoA=="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"main\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBold": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761499800000,
+          "sig": "MEUCIFF2xpvQ9v68gRHLC8kGzHpbbRo8Fj4X6Abnq6FC+G4sAiEAhyezToIlPzWjAbcUwH5zSkfrthytATqFktjJwp23rUg="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761499800000}"
+      },
+      "joinBextra": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "n": "x",
+          "sig": "MEUCIA+GeucNU1aeQg1iMHF9zl1HELzE5GtHCh1mOqsfyjTjAiEAyU0KTjn2ixISAybjfFWp0UBVGL2x64aKNj8dwgxiAEo="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"n\":\"x\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBcall": {
+        "msg": {
+          "t": "vjoin",
+          "call": "wMHCw8TFxsfIycrLzM3Ozw",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEUCIBMyf7Wi1slMmThH8WqOz2AnBNpwu1PuJp18TzuzQFI7AiEAxuOlDzEynTrqCl/Zh+D+8km0I8RxK6T7kZDI7xKEtyU="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "waveB": {
+        "msg": {
+          "t": "wave",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEQCIEFq4NyT5i/4lCFntEvJBDsDOrrlCI4KpHsgZjLQurdQAiAQG7ZP1wO4zz9h7rWiFcMnFWv8KkucxKZ7gdE/tuBhwQ=="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"wave\",\"ts\":1761500400000}"
+      },
+      "joinAasB": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEUCIHXURCCp5y4OJgoYEkrN5j0YgKNDm/EfapfSqXoW27usAiEAoJ9mf43mwHAFcvJpWVmt94EKB0MnqVhgHaclhW+aWHE="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      }
+    },
+    "accept": [
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400500,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401500,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "leaveB",
+        "now": 1761500405000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "B",
+        "from": "A",
+        "msg": "ringA",
+        "now": 1761500400100,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "C",
+        "from": "A",
+        "msg": "ringA",
+        "now": 1761500461000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "declineB",
+        "now": 1761500403000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "B",
+        "from": "C",
+        "msg": "fullC",
+        "now": 1761500402000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500279000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBold",
+        "now": 1761500400000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBnoRoom",
+        "now": 1761500400000,
+        "result": "not a voice room"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBmain",
+        "now": 1761500400000,
+        "result": "malformed: room id"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBextra",
+        "now": 1761500400000,
+        "result": "malformed: fields"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBcall",
+        "now": 1761500400000,
+        "result": "malformed: call"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "waveB",
+        "now": 1761500400000,
+        "result": "malformed: type"
+      },
+      {
+        "state": "s2",
+        "me": "C",
+        "from": "B",
+        "msg": "joinAasB",
+        "now": 1761500400000,
+        "result": "bad signature"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "A",
+        "msg": "joinA",
+        "now": 1761500400000,
+        "result": "from myself"
+      },
+      {
+        "state": "s4b",
+        "me": "A",
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401000,
+        "result": "sender not a member"
+      },
+      {
+        "state": "s4b",
+        "me": "C",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400000,
+        "result": "not a member"
+      },
+      {
+        "state": null,
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400000,
+        "result": "unknown group"
+      }
+    ],
+    "presence": [
+      {
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400400,
+        "changed": true,
+        "in": [
+          "B"
+        ]
+      },
+      {
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401200,
+        "changed": true,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "leaveB",
+        "now": 1761500405100,
+        "changed": true,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinBold",
+        "now": 1761500405200,
+        "changed": false,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500405300,
+        "changed": false,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinB2",
+        "now": 1761500406100,
+        "changed": true,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501901199,
+        "changed": false,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501901201,
+        "changed": false,
+        "in": [
+          "B"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501906101,
+        "changed": false,
+        "in": []
+      }
+    ],
+    "glare": [
+      {
+        "a": "A",
+        "b": "B",
+        "wins": "B"
+      },
+      {
+        "a": "B",
+        "b": "C",
+        "wins": "B"
+      },
+      {
+        "a": "C",
+        "b": "A",
+        "wins": "A"
       }
     ]
   },
