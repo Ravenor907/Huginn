@@ -73,7 +73,9 @@ Rectangle {
             spacing: Theme.px(10)
             visible: !page.ended
             Repeater {
-                model: [{ label: "Internet (relay)", on: Calls.relayLive }, { label: "Wi-Fi", on: Calls.wifiLive }, { label: "Bluetooth", on: Calls.bleLive }]
+                model: (Calls.directTried ? [{ label: "Internet (direct)", on: Calls.directLive }] : [])
+                       .concat([{ label: "Internet (relay)", on: Calls.relayLive && !(Calls.directLive || Calls.wifiLive) }, { label: "Wi-Fi", on: Calls.wifiLive },
+                                { label: "Bluetooth", on: Calls.bleLive }])
                 Rectangle {
                     height: Theme.px(32)
                     width: chip.implicitWidth + Theme.px(34)

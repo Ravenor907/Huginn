@@ -12,9 +12,11 @@
 //  - Conceal: lost with nothing to rebuild it from: Opus packet loss concealment.
 //  - Nothing: silence (before the first packet, or a long DTX pause).
 // The delay adapts between minMs and maxMs from how much the arrival times wander (the 95th
-// percentile over the last few seconds), starting at startMs. Being too far behind drops a frame,
-// too far ahead plays one concealed frame, at most once every 100 ms, so it follows a sender whose
-// clock runs a little fast or slow.
+// percentile over the last few seconds), starting at startMs. It grows at once when the network gets
+// rougher (and by a frame for every packet that came too late to play), but shrinks only one frame
+// every 2 s, so a single calm moment doesn't pull it back under the next burst. Being too far behind
+// drops a frame, too far ahead plays one concealed frame, at most once every 100 ms, so it follows a
+// sender whose clock runs a little fast or slow.
 class JitterBuffer
 {
 public:
@@ -25,7 +27,7 @@ public:
     };
     static const int kFrameMs = 20;
 
-    explicit JitterBuffer(int minMs = 40, int maxMs = 120, int startMs = 60);
+    explicit JitterBuffer(int minMs = 40, int maxMs = 200, int startMs = 60);
     void push(quint32 ts, const QByteArray &opus, qint64 nowMs);
     Frame pop(qint64 nowMs);
     void reset();
@@ -51,5 +53,7 @@ private:
     qint64 m_offset = 0;         // local ms minus sender ts at which a frame is due
     int m_cooldown = 0;          // pops until the next drop or stretch is allowed
     int m_quiet = 0;             // concealed frames in a row
+    int m_late = 0;              // frames of extra delay owed to packets that came too late
+    qint64 m_shrunk = 0;         // when the delay last went down
     Stats m_stats;
 };

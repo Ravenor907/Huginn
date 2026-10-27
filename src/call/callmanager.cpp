@@ -29,6 +29,7 @@
 namespace
 {
 const char kFile[] = "calls.json";
+const char kTrustFile[] = "calltrust.json";
 const int kMaxHistory = 200;
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 QString str(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
@@ -56,6 +57,7 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     connect(&m_ringer, &QTimer::timeout, m_ringtone, &Chime::play);
     if (m_vault) {
         connect(m_vault, &Vault::opened, this, &CallManager::load);
+        connect(m_vault, &Vault::opened, this, &CallManager::loadTrust);
         // Panic lock: the call ends at once and nothing about it stays on screen.
         connect(m_vault, &Vault::panicked, this, [this] {
             if (m_session)
@@ -63,8 +65,10 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
             m_endText.clear();
             Q_EMIT changed();
         });
-        if (!m_vault->locked())
+        if (!m_vault->locked()) {
             load();
+            loadTrust();
+        }
     }
 #ifdef Q_OS_LINUX
     QDBusConnection::sessionBus().connect(QString(), QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"),
@@ -124,7 +128,7 @@ QString CallManager::statusText() const
     if (s == QLatin1String("connecting")) return QStringLiteral("Connecting…");
     if (s == QLatin1String("reconnecting")) return QStringLiteral("Reconnecting…");
     if (s == QLatin1String("ended")) return m_endText;
-    if (s == QLatin1String("active")) return duration(elapsed());
+    if (s == QLatin1String("active")) return QStringLiteral("Connected · ") + duration(elapsed());
     return QString();
 }
 
@@ -135,6 +139,8 @@ bool CallManager::peerSpeaking() const { return m_session && m_session->media() 
 bool CallManager::relayLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Relay); }
 bool CallManager::wifiLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Wifi); }
 bool CallManager::bleLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Ble); }
+bool CallManager::directLive() const { return m_session && m_session->media() && m_session->media()->live(CallMedia::Direct); }
+bool CallManager::directTried() const { return m_session && m_session->directTried(); }
 
 QString CallManager::outputName() const
 {
@@ -191,6 +197,7 @@ QString CallManager::call(const QString &key)
     if (!m_signal->canCall(key))
         return QStringLiteral("Needs Muninn or Huginn 0.6");
     auto *s = new CallSession(m_signal, key, [this](auto done) { getLogin(std::move(done)); }, this);
+    prime(s);
     adopt(s);
     m_started = nowMs();
     s->start();
@@ -325,6 +332,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         return;
     }
     auto *s = new CallSession(m_signal, from, [this](auto done) { getLogin(std::move(done)); }, this);
+    prime(s);
     adopt(s);
     m_started = nowMs();
     s->takeOffer(msg);
@@ -383,6 +391,67 @@ void CallManager::onNotificationAction(uint id, const QString &action)
         answer();
     else if (action == QLatin1String("decline"))
         decline();
+}
+
+// ------------------------------------------------------------------ trust (5.8.1)
+
+bool CallManager::trusted(const QString &key) const
+{
+    if (m_trustOn.contains(key))
+        return true;
+    if (m_trustOff.contains(key))
+        return false;
+    return m_signal->inFamily(key);
+}
+
+QString CallManager::trustText(const QString &key) const
+{
+    if (m_trustOn.contains(key))
+        return QStringLiteral("On");
+    if (m_trustOff.contains(key))
+        return QStringLiteral("Off");
+    return m_signal->inFamily(key) ? QStringLiteral("On (Family folder)") : QStringLiteral("Off");
+}
+
+void CallManager::setTrusted(const QString &key, bool on)
+{
+    if (key.isEmpty())
+        return;
+    m_trustOn.remove(key);
+    m_trustOff.remove(key);
+    (on ? m_trustOn : m_trustOff).insert(key);
+    saveTrust();
+    Q_EMIT changed();
+}
+
+void CallManager::prime(CallSession *s)
+{
+    s->trusted = trusted(s->peerKey());
+    s->c2Local = true;
+}
+
+void CallManager::loadTrust()
+{
+    if (!m_vault || m_vault->locked())
+        return;
+    const QJsonObject o = QJsonDocument::fromJson(m_vault->read(QString::fromLatin1(kTrustFile))).object();
+    for (const QJsonValue &v : o.value(QStringLiteral("on")).toArray())
+        m_trustOn.insert(v.toString());
+    for (const QJsonValue &v : o.value(QStringLiteral("off")).toArray())
+        m_trustOff.insert(v.toString());
+    m_trustOff.subtract(m_trustOn);
+}
+
+void CallManager::saveTrust()
+{
+    if (!m_vault || m_vault->locked())
+        return;
+    QJsonArray on, off;
+    for (const QString &k : std::as_const(m_trustOn))
+        on << k;
+    for (const QString &k : std::as_const(m_trustOff))
+        off << k;
+    m_vault->write(QString::fromLatin1(kTrustFile), QJsonDocument(QJsonObject{{QStringLiteral("on"), on}, {QStringLiteral("off"), off}}).toJson(QJsonDocument::Compact));
 }
 
 // ------------------------------------------------------------------ history

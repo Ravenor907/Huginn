@@ -59,7 +59,8 @@ qt_add_executable(huginn
     src/tls.cpp src/tls.h
     src/lan.cpp src/lan.h
     src/wifiselftest.cpp src/wifiselftest.h
-    # 1:1 voice calls (docs/protocol-0.6.md section 5, TURN relay only over the internet)
+    # 1:1 calls (docs/protocol-0.6.md section 5: TURN relay over the internet, direct between trusted
+    # contacts, video and screen share between two c2 apps, 5.8)
     src/call/relayconfig.h
     src/call/callsignal.h
     src/call/callcrypto.cpp src/call/callcrypto.h
@@ -69,6 +70,8 @@ qt_add_executable(huginn
     src/call/audiodsp.cpp src/call/audiodsp.h
     src/call/opuscodec.cpp src/call/opuscodec.h
     src/call/audioio.cpp src/call/audioio.h
+    src/call/directpath.cpp src/call/directpath.h
+    src/call/videowire.cpp src/call/videowire.h
     src/call/callmedia.cpp src/call/callmedia.h
     src/call/callsession.cpp src/call/callsession.h
     src/call/callmanager.cpp src/call/callmanager.h

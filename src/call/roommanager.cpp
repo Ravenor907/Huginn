@@ -456,6 +456,8 @@ CallSession *RoomManager::newSession(const QString &key)
 {
     auto *s = new CallSession(m_signal, key, m_login, this);
     s->useDevices = false;   // this class has the microphone and the speaker
+    // Two people in a room who trust each other may go direct too (5.8.2); everyone else: relay only.
+    s->trusted = m_calls && m_calls->trusted(key);
     connect(s, &CallSession::stateChanged, this, [this, s] {
         // Muted before the pair's call was up: tell them once it is.
         if (s->state() == CallSession::Active && m_muted)

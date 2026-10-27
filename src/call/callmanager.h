@@ -35,6 +35,9 @@ class CallManager : public QObject
     Q_PROPERTY(bool relayLive READ relayLive NOTIFY changed)
     Q_PROPERTY(bool wifiLive READ wifiLive NOTIFY changed)
     Q_PROPERTY(bool bleLive READ bleLive NOTIFY changed)
+    // The direct internet path between two people who trust each other (docs/protocol-0.6.md 5.8.2).
+    Q_PROPERTY(bool directLive READ directLive NOTIFY changed)
+    Q_PROPERTY(bool directTried READ directTried NOTIFY changed)
     Q_PROPERTY(QString outputName READ outputName NOTIFY changed)
     Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
     Q_PROPERTY(int missedCount READ missedCount NOTIFY historyChanged)
@@ -56,6 +59,8 @@ public:
     bool relayLive() const;
     bool wifiLive() const;
     bool bleLive() const;
+    bool directLive() const;
+    bool directTried() const;
     QString outputName() const;
     QVariantList history() const { return m_history; }
     int missedCount() const;
@@ -76,6 +81,13 @@ public:
     Q_INVOKABLE void deleteEntry(const QString &id);
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE QString duration(int seconds) const;
+    // Trusted contacts are called directly over the internet when both trust each other (saves the
+    // relay's data); everyone else only through the relay, so they never learn your IP address.
+    // Default: everyone in the Family folder. The switch overrides it, on or off.
+    Q_INVOKABLE bool trusted(const QString &key) const;
+    Q_INVOKABLE void setTrusted(const QString &key, bool on);
+    // "On (Family folder)", "On", "Off": for the contact menus.
+    Q_INVOKABLE QString trustText(const QString &key) const;
 
     // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
     std::function<bool()> busyElsewhere;
@@ -114,4 +126,8 @@ private:
     uint m_notification = 0;
     QSet<QString> m_handled;     // call ids already answered with busy or logged as missed
     bool m_loaded = false;
+    QSet<QString> m_trustOn, m_trustOff;   // the switch, where it was set (calltrust.json in the Vault)
+    void loadTrust();
+    void saveTrust();
+    void prime(CallSession *s);  // trust and codecs for a new session
 };

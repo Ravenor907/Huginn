@@ -190,6 +190,17 @@ int main(int argc, char *argv[])
     cs->onNameOf = [chat](const QString &k) { return chat->nameOf(k); };
     cs->onCanCall = [chat](const QString &k) { return chat->canCall(k); };
     cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
+    // Trusted for direct calls by default: anyone in a folder called "Family" (docs/protocol-0.6.md 5.8.1).
+    cs->onInFamily = [chat](const QString &k) {
+        const QStringList in = chat->foldersOf(k);
+        for (const QVariant &v : chat->folders()) {
+            const QVariantMap f = v.toMap();
+            if (in.contains(f.value(QStringLiteral("id")).toString()) && f.value(QStringLiteral("name")).toString().trimmed().compare(QLatin1String("Family"), Qt::CaseInsensitive) == 0)
+                return true;
+        }
+        return false;
+    };
+    cs->onHasCap = [chat](const QString &k, const QString &c) { return chat->hasCap(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.

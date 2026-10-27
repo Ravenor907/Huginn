@@ -145,6 +145,7 @@ public:
     // What their app can do (the "caps" of their envelopes). Unknown until they send something
     // from 0.6 or answer probeCaps (at most once an hour each).
     Q_INVOKABLE bool capsKnown(const QString &key) const { return m_caps.contains(key); }
+    bool hasCap(const QString &key, const QString &cap) const { return m_caps.value(key).contains(cap); }
     Q_INVOKABLE bool canGroup(const QString &key) const;
     Q_INVOKABLE void probeCaps(const QString &key);
 

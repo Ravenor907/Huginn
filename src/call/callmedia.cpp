@@ -12,6 +12,10 @@ namespace
 const qint64 kLiveMs = 4000;          // a path with nothing authentic for this long is dead
 const qint64 kSilenceEveryMs = 400;   // DTX: one silent packet this often
 const qint64 kEagerMs = 15000;        // pings to paths not live yet: fast at first
+const qint64 kFreshMs = 750;          // a free path that carried something this recently rests the relay
+const qint64 kReportEveryMs = 1000;   // receiver reports (c2)
+const int kKeepFrames = 64;           // sent video frames kept for resends
+const int kMaxResendPerTick = 120;
 }
 
 CallMedia::CallMedia(const QByteArray &root, const QByteArray &tag, bool offerer, QObject *parent)
@@ -19,8 +23,13 @@ CallMedia::CallMedia(const QByteArray &root, const QByteArray &tag, bool offerer
       m_rx(&m_keys, offerer ? CallCrypto::A2O : CallCrypto::O2A, tag)
 {
     m_clock.start();
-    m_tick.setInterval(50);
+    m_tick.setInterval(25);
+    m_tick.setTimerType(Qt::PreciseTimer);
     connect(&m_tick, &QTimer::timeout, this, &CallMedia::tick);
+    m_asm[0].stream = VideoWire::Camera;
+    m_asm[1].stream = VideoWire::Screen;
+    m_rate[0].setCap(VideoWire::cameraProfile(false).capKbps);
+    m_rate[1].setCap(VideoWire::screenProfile(false).capKbps);
 }
 
 CallMedia::~CallMedia()
@@ -57,6 +66,8 @@ void CallMedia::setLanPeer(const QHostAddress &host, quint16 port)
 
 void CallMedia::setRelay(TurnClient *turn, const Stun::Address &peerRelayed)
 {
+    if (turn != m_turn)
+        m_seenRelayed = Stun::Address();   // a new allocation: what the old one heard is gone
     m_turn = turn;
     if (peerRelayed == m_seenRelayed)
         m_seenRelayed = Stun::Address();
@@ -65,12 +76,30 @@ void CallMedia::setRelay(TurnClient *turn, const Stun::Address &peerRelayed)
         turn->addPeer(peerRelayed);
 }
 
+void CallMedia::enableDirect(const QList<Stun::Address> &cands)
+{
+    if (!m_direct)
+        m_paths[Direct].lastPing = -1000000;
+    m_direct = true;
+    for (const Stun::Address &a : cands)
+        if (a.valid() && !m_directCands.contains(a) && m_directCands.size() < 4)
+            m_directCands << a;
+}
+
+void CallMedia::setC2(bool on, bool room)
+{
+    m_c2 = on;
+    m_room = room;
+    pickBitrate();
+}
+
 void CallMedia::start(bool devices)
 {
     if (m_running)
         return;
     m_running = true;
     m_started = now();
+    m_lastReport = now();
     if (devices) {
         m_audio = new AudioIO(this);
         m_audio->pull = [this](qint16 *pcm) { onPull(pcm); };
@@ -98,9 +127,17 @@ void CallMedia::stop()
         m_lan->deleteLater();
         m_lan = nullptr;
     }
+    for (auto &m : m_sentFrames)
+        m.clear();
 }
 
 bool CallMedia::live(Path p) const { return now() - m_paths[p].lastRx < kLiveMs; }
+
+bool CallMedia::freeFresh() const
+{
+    const qint64 t = now();
+    return t - m_paths[Wifi].lastRx < kFreshMs || t - m_paths[Direct].lastRx < kFreshMs;
+}
 
 bool CallMedia::candidate(Path p) const
 {
@@ -108,6 +145,7 @@ bool CallMedia::candidate(Path p) const
     case Relay: return m_turn && m_turn->ready() && m_peerRelayed.valid();
     case Wifi: return m_lan && !m_lanHost.isNull() && m_lanPeerPort != 0;
     case Ble: return bool(m_bleSend);
+    case Direct: return m_lan && m_direct && (!m_directCands.isEmpty() || m_directAddr.valid());
     }
     return false;
 }
@@ -130,6 +168,33 @@ void CallMedia::sendOn(Path p, const QByteArray &pkt)
         if (m_bleSend)
             m_bleSend(pkt);
         break;
+    case Direct:
+        if (!m_lan)
+            break;
+        if (m_directAddr.valid() && live(Direct)) {
+            m_lan->writeDatagram(pkt, CallNet::toHost(m_directAddr), m_directAddr.port);
+        } else {
+            // Still punching: every candidate gets it (the replay window drops the copies).
+            for (const Stun::Address &a : std::as_const(m_directCands))
+                m_lan->writeDatagram(pkt, CallNet::toHost(a), a.port);
+            if (m_directAddr.valid() && !m_directCands.contains(m_directAddr))
+                m_lan->writeDatagram(pkt, CallNet::toHost(m_directAddr), m_directAddr.port);
+        }
+        break;
+    }
+}
+
+void CallMedia::sendMedia(const QByteArray &pkt, bool video)
+{
+    // Free paths first: while Wi-Fi or Direct carries the call, the relay only gets pings (5.8.3).
+    const bool rest = freeFresh();
+    for (int i = 0; i < kPaths; ++i) {
+        const Path p = Path(i);
+        if (!live(p) || (p == Relay && rest) || (p == Ble && video))
+            continue;
+        sendOn(p, pkt);
+        if (p == Relay && !video)
+            ++m_stats.relayAudio;
     }
 }
 
@@ -151,24 +216,53 @@ void CallMedia::sendPing(Path p)
 void CallMedia::tick()
 {
     const qint64 t = now();
-    for (int i = 0; i < 3; ++i) {
+    m_resentThisTick = 0;
+    for (int i = 0; i < kPaths; ++i) {
         const Path p = Path(i);
         if (!candidate(p))
             continue;
-        const qint64 every = live(p) ? 1000 : (t - m_started < kEagerMs ? 250 : 2000);
+        // Live: Wi-Fi and Direct every 250 ms (so the relay takes over within a second if they
+        // stop), the others every second. Not live yet: 50 ms for 2 s, then 250 ms to 15 s, then 2 s.
+        const qint64 age = t - m_started;
+        const qint64 every = live(p) ? ((p == Wifi || p == Direct) ? 250 : 1000) : (age < 2000 ? 50 : age < kEagerMs ? 250 : 2000);
         if (t - m_paths[i].lastPing >= every)
             sendPing(p);
     }
     bool changed = false;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kPaths; ++i) {
         const bool l = live(Path(i));
         if (l != m_wasLive[i]) {
             m_wasLive[i] = l;
             changed = true;
         }
     }
+    const bool free = live(Wifi) || live(Direct);
+    if (free != m_wasFree) {
+        m_wasFree = free;
+        m_rate[0].setCap(profile(VideoWire::Camera).capKbps);
+        m_rate[1].setCap(profile(VideoWire::Screen).capKbps);
+        Q_EMIT profileChanged();
+    }
     if (changed)
         Q_EMIT pathsChanged();
+    pickBitrate();
+    if (m_c2 && m_gotMedia && t - m_lastReport >= kReportEveryMs)
+        sendReport();
+    if (m_c2)
+        pollVideo();
+}
+
+void CallMedia::pickBitrate()
+{
+    if (!m_c2 || m_room) {
+        m_enc.setBitrate(16000);   // 5.5, and every peer of a room gets its own copy
+        m_enc.setLossPercent(10);
+        return;
+    }
+    // 5.8.4: 32 kbps on a free path, 24 through the relay; FEC sized to the loss they see.
+    m_enc.setBitrate(freeFresh() ? 32000 : 24000);
+    const int loss = m_peerReport.lossPct;
+    m_enc.setLossPercent(std::clamp(loss + loss / 2 + 3, 5, 30));
 }
 
 void CallMedia::onFrame(const qint16 *pcm)
@@ -188,9 +282,7 @@ void CallMedia::onFrame(const qint16 *pcm)
     ++m_stats.audioSent;
     if (dropEvery > 0 && m_stats.audioSent % dropEvery == 0)
         return;
-    for (int i = 0; i < 3; ++i)
-        if (live(Path(i)))
-            sendOn(Path(i), pkt);
+    sendMedia(pkt, false);
     forgetOld();
 }
 
@@ -221,11 +313,27 @@ void CallMedia::onLan()
         if (n <= 0)
             continue;
         b.resize(int(n));
-        // Only from the address Chat knows them at (5.6: the source has to fit).
-        if (m_lanHost.isNull() || !from.isEqual(m_lanHost, QHostAddress::TolerantConversion))
-            continue;
-        handle(b, Wifi, from, port);
+        lanDatagram(b, from, port);
     }
+}
+
+void CallMedia::lanDatagram(const QByteArray &b, const QHostAddress &from, quint16 port)
+{
+    if (b.isEmpty())
+        return;
+    if (quint8(b[0]) != CallCrypto::kVersion) {
+        if (onOther)
+            onOther(b, from, port);
+        return;
+    }
+    // Wi-Fi: only from the address Chat knows them at (5.6: the source has to fit).
+    if (!m_lanHost.isNull() && from.isEqual(m_lanHost, QHostAddress::TolerantConversion)) {
+        handle(b, Wifi, from, port);
+        return;
+    }
+    // Direct: only when both trust each other; any internet source, as authentic packets prove who it is.
+    if (m_direct)
+        handle(b, Direct, from, port);
 }
 
 void CallMedia::receive(const QByteArray &pkt, Path from, const Stun::Address &relayFrom) { handle(pkt, from, QHostAddress(), 0, relayFrom); }
@@ -240,7 +348,7 @@ QList<Stun::Address> CallMedia::relayTargets() const
     return out;
 }
 
-void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, quint16 port, const Stun::Address &relayFrom)
+void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &host, quint16 port, const Stun::Address &relayFrom)
 {
     if (pkt.isEmpty() || quint8(pkt[0]) != CallCrypto::kVersion)
         return;
@@ -252,12 +360,17 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, q
         else
             ++m_stats.refused;
         // A duplicate is still proof this path works.
-        if (why == QLatin1String("duplicate"))
+        if (why == QLatin1String("duplicate")) {
             m_paths[from].lastRx = now();
+            if (from == Direct && port)
+                m_directAddr = CallNet::fromHost(host, port);
+        }
         return;
     }
     if (from == Wifi && port)
         m_lanPeerPort = port;   // a NAT or a firewall may have changed it: answer where it came from
+    if (from == Direct && port)
+        m_directAddr = CallNet::fromHost(host, port);   // where their NAT sends from: answer there
     if (from == Relay && relayFrom.valid() && relayFrom != m_peerRelayed && relayFrom != m_seenRelayed) {
         // Authentic, but relayed from an address they didn't advertise: send there too.
         m_seenRelayed = relayFrom;
@@ -272,6 +385,7 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, q
         m_gotMedia = true;
         Q_EMIT firstMedia();
     }
+    m_bytesIn += pkt.size();
     switch (p.type) {
     case CallCrypto::Ping:
         sendOn(from, m_tx.seal(CallCrypto::Pong, quint32(now() - m_started), p.payload));
@@ -281,12 +395,198 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &, q
         if (p.payload == m_pingPayload)
             m_rtt = int(now() - m_pingSentAt);
         break;
-    case CallCrypto::Audio:
+    case CallCrypto::Audio: {
         ++m_stats.audioIn;
+        // Loss for the report: gaps of up to 10 frames are lost packets, longer ones a DTX pause.
+        const qint64 slot = (qint64(p.ts) + 10) / 20;
+        if (m_lastSlot >= 0) {
+            const qint64 d = slot - m_lastSlot;
+            if (d >= 1 && d <= 10) {
+                m_audioDue += int(d);
+                m_audioLost += int(d - 1);
+            } else if (d > 10) {
+                m_audioDue += 1;
+            } else if (m_audioLost > 0) {
+                --m_audioLost;   // one counted lost came late after all
+            }
+        }
+        if (slot > m_lastSlot)
+            m_lastSlot = slot;
         m_jitter.push(p.ts, p.payload, now());
         break;
     }
+    case CallCrypto::Video:
+        if (m_c2)
+            onVideo(p.payload);
+        break;
+    case CallCrypto::Report: {
+        VideoWire::Report r;
+        if (m_c2 && VideoWire::decodeReport(p.payload, &r))
+            onReport(r);
+        break;
+    }
+    case CallCrypto::KeyRequest:
+        if (m_c2 && p.payload.size() >= 1 && quint8(p.payload[0]) <= 1) {
+            ++m_stats.keyRequests;
+            Q_EMIT keyframeWanted(quint8(p.payload[0]));
+        }
+        break;
+    case CallCrypto::Nack:
+        if (m_c2)
+            onNack(p.payload);
+        break;
+    }
     forgetOld();
+}
+
+// ------------------------------------------------------------------ reports (5.8.4)
+
+void CallMedia::sendReport()
+{
+    const qint64 t = now();
+    const qint64 span = std::max<qint64>(1, t - m_lastReport);
+    m_lastReport = t;
+    VideoWire::Report r;
+    const int due = m_audioDue + m_videoDue, lost = m_audioLost + m_videoLost;
+    r.lossPct = due > 0 ? std::clamp(lost * 100 / due, 0, 100) : 0;
+    r.camera = m_sending[0];
+    r.screen = m_sending[1];
+    r.jitterMs = m_jitter.targetMs();
+    r.kbps = int(m_bytesIn * 8 / span);
+    r.rttMs = m_rtt;
+    m_audioDue = m_audioLost = m_videoDue = m_videoLost = 0;
+    m_bytesIn = 0;
+    ++m_stats.reports;
+    sendMedia(m_tx.seal(CallCrypto::Report, quint32(t - m_started), VideoWire::encodeReport(r)), false);
+}
+
+void CallMedia::onReport(const VideoWire::Report &r)
+{
+    m_peerReport = r;
+    if (r.camera != m_peerSending[0] || r.screen != m_peerSending[1]) {
+        m_peerSending[0] = r.camera;
+        m_peerSending[1] = r.screen;
+        if (!r.camera)
+            m_asm[0].reset();
+        if (!r.screen)
+            m_asm[1].reset();
+        Q_EMIT peerVideoChanged();
+    }
+    for (int s = 0; s < 2; ++s)
+        if (m_sending[s])
+            m_rate[s].onReport(r.lossPct, now());
+    pickBitrate();
+}
+
+// ------------------------------------------------------------------ video (5.8.5 to 5.8.7)
+
+VideoWire::Profile CallMedia::profile(int stream) const
+{
+    const bool free = live(Wifi) || live(Direct);
+    return (stream & 1) == VideoWire::Screen ? VideoWire::screenProfile(free) : VideoWire::cameraProfile(free);
+}
+
+void CallMedia::setVideoSending(int stream, bool on)
+{
+    stream &= 1;
+    if (m_sending[stream] == on)
+        return;
+    m_sending[stream] = on;
+    if (!on) {
+        m_sentFrames[stream].clear();
+        m_sentOrder[stream].clear();
+    }
+    // Tell them now rather than at the next report.
+    if (m_c2 && m_running && m_gotMedia)
+        sendReport();
+}
+
+bool CallMedia::sendVideo(int stream, bool key, int rotation, const QByteArray &vp8)
+{
+    stream &= 1;
+    if (!m_c2 || !m_running || !m_sending[stream])
+        return false;
+    const quint16 n = m_videoFrame[stream]++;
+    const QList<QByteArray> parts = VideoWire::split(stream, n, key, rotation, vp8);
+    if (parts.isEmpty())
+        return false;
+    m_sentFrames[stream][n] = parts;
+    m_sentOrder[stream].push_back(n);
+    while (int(m_sentOrder[stream].size()) > kKeepFrames) {
+        m_sentFrames[stream].erase(m_sentOrder[stream].front());
+        m_sentOrder[stream].pop_front();
+    }
+    const quint32 ts = quint32(now() - m_started);
+    for (const QByteArray &part : parts) {
+        ++m_stats.videoSent;
+        if (dropVideoEvery > 0 && m_stats.videoSent % dropVideoEvery == 0)
+            continue;
+        sendMedia(m_tx.seal(CallCrypto::Video, ts, part), true);
+    }
+    forgetOld();
+    return true;
+}
+
+void CallMedia::onVideo(const QByteArray &payload)
+{
+    VideoWire::Fragment f;
+    if (!VideoWire::decode(payload, &f))
+        return;
+    ++m_stats.videoIn;
+    ++m_videoDue;
+    if (!m_peerSending[f.stream]) {
+        // Video before the report that says so: it's on.
+        m_peerSending[f.stream] = true;
+        Q_EMIT peerVideoChanged();
+    }
+    VideoWire::Assembler &a = m_asm[f.stream];
+    a.add(f, now());
+    VideoWire::Assembler::Frame out;
+    while (a.next(&out))
+        Q_EMIT videoFrame(f.stream, out.data, out.key, out.rotation);
+}
+
+void CallMedia::pollVideo()
+{
+    const qint64 t = now();
+    for (int s = 0; s < 2; ++s) {
+        if (!m_peerSending[s])
+            continue;
+        const VideoWire::Assembler::Ask ask = m_asm[s].poll(t, m_rtt);
+        for (const VideoWire::Nack &n : ask.nacks) {
+            if (n.first)
+                m_videoLost += std::max<int>(1, int(n.indexes.size()));
+            sendMedia(m_tx.seal(CallCrypto::Nack, quint32(t - m_started), VideoWire::encodeNack(n)), false);
+        }
+        if (ask.keyframe)
+            sendMedia(m_tx.seal(CallCrypto::KeyRequest, quint32(t - m_started), QByteArray(1, char(s))), false);
+        VideoWire::Assembler::Frame out;
+        while (m_asm[s].next(&out))
+            Q_EMIT videoFrame(s, out.data, out.key, out.rotation);
+    }
+}
+
+void CallMedia::onNack(const QByteArray &payload)
+{
+    VideoWire::Nack n;
+    if (!VideoWire::decodeNack(payload, &n))
+        return;
+    const auto it = m_sentFrames[n.stream].find(n.frame);
+    if (it == m_sentFrames[n.stream].end())
+        return;   // too old: their next keyframe request covers it
+    const QList<QByteArray> &parts = it->second;
+    QList<int> which = n.indexes;
+    if (which.isEmpty())
+        for (int i = 0; i < parts.size(); ++i)
+            which << i;
+    const quint32 ts = quint32(now() - m_started);
+    for (int i : std::as_const(which)) {
+        if (i < 0 || i >= parts.size() || m_resentThisTick >= kMaxResendPerTick)
+            continue;
+        ++m_resentThisTick;
+        ++m_stats.resent;
+        sendMedia(m_tx.seal(CallCrypto::Video, ts, parts.at(i)), true);
+    }
 }
 
 void CallMedia::forgetOld()

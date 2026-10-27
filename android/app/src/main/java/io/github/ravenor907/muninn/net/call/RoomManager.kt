@@ -301,6 +301,7 @@ object RoomManager {
 
     private fun newSession(callId: String, key: String, outgoing: Boolean, retries: Int): CallSession {
         val s = CallSession(callId, key, outgoing, host, exec, work)
+        s.inRoom = true
         peers[key] = Peer(s, retries)
         return s
     }
@@ -526,10 +527,10 @@ object RoomManager {
                     for ((id, m) in medias) {
                         val dec = decoders.getOrPut(id) { try { Opus.Decoder() } catch (e: Throwable) { return } }
                         val n = when (val f = m.nextPlay()) {
-                            is CallLogic.Play.Packet -> dec.decode(f.data, one)
-                            is CallLogic.Play.Fec -> dec.decode(f.next, one, fec = true)
-                            CallLogic.Play.Conceal -> dec.decode(null, one)
-                            CallLogic.Play.Silence -> { one.fill(0); Opus.FRAME }
+                            is Play.Packet -> dec.decode(f.data, one)
+                            is Play.Fec -> dec.decode(f.next, one, fec = true)
+                            Play.Conceal -> dec.decode(null, one)
+                            Play.Silence -> { one.fill(0); Opus.FRAME }
                         }
                         if (n <= 0) one.fill(0)
                         for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()

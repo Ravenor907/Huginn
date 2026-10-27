@@ -143,9 +143,37 @@ class CallTest {
         assertEquals("size", try { r.open(ByteArray(27)); "ok" } catch (e: CallCrypto.Dropped) { e.why })
         val wrongVersion = pkt(3001).also { it[0] = 0x80.toByte() }
         assertEquals("version", try { r.open(wrongVersion); "ok" } catch (e: CallCrypto.Dropped) { e.why })
-        val wrongType = pkt(3002).also { it[1] = 3 }
+        val wrongType = pkt(3002).also { it[1] = 7 }   // 0 to 6 are known (3 to 6 from c2, 5.8.4)
         assertEquals("type", try { r.open(wrongType); "ok" } catch (e: CallCrypto.Dropped) { e.why })
         assertEquals(epochOfBottom(3000), r.neededEpoch())
+    }
+
+    /** The c2 part of the vectors (5.8): video fragments, report, NACK and the sealed packets, as Huginn checks them. */
+    @Test
+    fun c2Vectors() {
+        val x = call.getJSONObject("c2")
+        val frags = io.github.ravenor907.muninn.net.call.VideoWire.split(x.getInt("stream"), x.getInt("frame"), x.getBoolean("key"), x.getInt("rotation"), h(x.getString("vp8")))
+        assertEquals((0 until x.getJSONArray("fragments").length()).map { x.getJSONArray("fragments").getString(it) }, frags.map { CallCrypto.hex(it) })
+        val r = x.getJSONObject("report")
+        assertEquals(r.getString("bytes"), CallCrypto.hex(io.github.ravenor907.muninn.net.call.VideoWire.encodeReport(io.github.ravenor907.muninn.net.call.VideoWire.Report(
+            r.getInt("loss"), r.getBoolean("camera"), r.getBoolean("screen"), r.getInt("jitter"), r.getInt("kbps"), r.getInt("rtt")))))
+        val n = x.getJSONObject("nack")
+        val idx = n.getJSONArray("indexes")
+        assertEquals(n.getString("bytes"), CallCrypto.hex(io.github.ravenor907.muninn.net.call.VideoWire.encodeNack(
+            io.github.ravenor907.muninn.net.call.VideoWire.Nack(n.getInt("stream"), n.getInt("frame"), (0 until idx.length()).map { idx.getInt(it) }))))
+        val k = CallCrypto.Keys(root())
+        val tag = CallCrypto.tag(callId)
+        val toB = CallCrypto.Receiver(CallCrypto.Keys(root()), true, tag)
+        val toA = CallCrypto.Receiver(CallCrypto.Keys(root()), false, tag)
+        val packets = x.getJSONArray("packets")
+        assertEquals(6, packets.length())
+        for (i in 0 until packets.length()) {
+            val f = packets.getJSONObject(i)
+            val o2a = f.getString("dir") == "o2a"
+            assertEquals("c2 packet $i", f.getString("packet"), CallCrypto.hex(CallCrypto.seal(k, o2a, tag, f.getInt("type"), f.getLong("seq"), f.getLong("ts"), h(f.getString("payload")))))
+            val o = (if (o2a) toB else toA).open(h(f.getString("packet")))
+            assertEquals(f.getInt("type"), o.type); assertArrayEquals(h(f.getString("payload")), o.payload)
+        }
     }
 
     private fun epochOfBottom(high: Long) = CallCrypto.epochOf(high - 1023)

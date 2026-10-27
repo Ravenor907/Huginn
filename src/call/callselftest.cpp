@@ -5,6 +5,8 @@
 #include "callmedia.h"
 #include "callsession.h"
 #include "callsignal.h"
+#include "directpath.h"
+#include "videowire.h"
 #include "jitterbuffer.h"
 #include "opuscodec.h"
 #include "roomwire.h"
@@ -12,10 +14,14 @@
 #include "turnclient.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QStringList>
 #include <QPointer>
 #include <QHash>
 #include <QSet>
@@ -288,6 +294,284 @@ void signalingLoopback()
     delete b.sig;
 }
 
+// Two c2 apps on one computer: receiver reports, the higher Opus bitrate, and video fragments with
+// a lost packet now and then (resent after a NACK) arriving whole and in order.
+void c2Media()
+{
+    std::printf("c2 media: reports, bitrate, video with resends\n");
+    if (!opusAvailable()) {
+        check(false, "built with Opus");
+        return;
+    }
+    QByteArray root(32, 0);
+    for (int i = 0; i < 32; ++i)
+        root[i] = char(i * 5 + 3);
+    const QByteArray tag = CallCrypto::tag(QByteArray(16, 'v'));
+    CallMedia a(root, tag, true), b(root, tag, false);
+    QUdpSocket *sa = CallMedia::bindLan(nullptr), *sb = CallMedia::bindLan(nullptr);
+    if (!sa || !sb) {
+        check(false, "two UDP sockets");
+        return;
+    }
+    const quint16 pa = sa->localPort(), pb = sb->localPort();
+    a.adoptLan(sa);
+    b.adoptLan(sb);
+    a.setLanPeer(QHostAddress(QHostAddress::LocalHost), pb);
+    b.setLanPeer(QHostAddress(QHostAddress::LocalHost), pa);
+    a.setC2(true, false);
+    b.setC2(true, false);
+    a.start(false);
+    b.start(false);
+    check(waitFor([&] { return a.live(CallMedia::Wifi) && b.live(CallMedia::Wifi); }, 3000), "Wi-Fi path live both ways");
+    qint64 ph = 0;
+    QTimer clock;
+    clock.setInterval(20);
+    QObject::connect(&clock, &QTimer::timeout, [&] {
+        qint16 pcm[AudioDsp::kFrame];
+        AudioDsp::tone(pcm, AudioDsp::kFrame, 440, 0.4, &ph);
+        a.feed(pcm);
+        b.feed(pcm);
+        qint16 out[AudioDsp::kFrame];
+        a.playFrame(out);
+        b.playFrame(out);
+    });
+    clock.start();
+    waitFor([] { return false; }, 2300);
+    check(a.stats().reports >= 1 && b.stats().reports >= 1, "both send a receiver report every second");
+    check(a.encoder().bitrate() == 32000, "Opus at 32 kbps on a free path (Wi-Fi)");
+    check(a.freeFresh() && a.stats().relayAudio == 0, "the relay rests while Wi-Fi carries the call");
+
+    // Video: 60 frames of made-up "VP8", every 9th packet lost on the way.
+    std::vector<QByteArray> sent, got;
+    bool keyAsked = false, peerSees = false;
+    QObject::connect(&b, &CallMedia::videoFrame, [&](int stream, const QByteArray &data, bool, int rotation) {
+        if (stream == VideoWire::Camera && rotation == 90)
+            got.push_back(data);
+    });
+    QObject::connect(&a, &CallMedia::keyframeWanted, [&](int) { keyAsked = true; });
+    QObject::connect(&b, &CallMedia::peerVideoChanged, [&] { peerSees = b.peerSending(VideoWire::Camera); });
+    a.setVideoSending(VideoWire::Camera, true);
+    a.dropVideoEvery = 9;
+    for (int i = 0; i < 60; ++i) {
+        QByteArray f(1500 + (i % 7) * 900, 0);
+        for (int k = 0; k < f.size(); ++k)
+            f[k] = char((k + i * 13) & 0xFF);
+        sent.push_back(f);
+        const bool ok = a.sendVideo(VideoWire::Camera, i == 0 || keyAsked, 90, f);
+        keyAsked = false;
+        if (i == 0)
+            check(ok, "a keyframe goes out");
+        waitFor([] { return false; }, 25);
+    }
+    waitFor([&] { return got.size() >= 60; }, 3000);
+    std::printf("       video: sent %d packets, resent %d, B put together %d frames, asked %d times\n", a.stats().videoSent, a.stats().resent,
+                int(got.size()), b.assembler(VideoWire::Camera).stats().nacked);
+    check(peerSees, "B knows A's camera is on");
+    check(got.size() == 60 && got == sent, "every frame arrives whole and in order, lost packets resent after a NACK");
+    check(a.stats().resent > 0 && b.assembler(VideoWire::Camera).stats().abandoned == 0, "losses repaired by resending, nothing given up");
+    a.setVideoSending(VideoWire::Camera, false);
+    check(waitFor([&] { return !b.peerSending(VideoWire::Camera); }, 2000), "camera off reaches B");
+    clock.stop();
+    a.stop();
+    b.stop();
+}
+
+// The c2 part of tests/proto06-vectors.json ("call" > "c2"), which Muninn's CallTest checks too.
+void c2Vectors(const QString &path)
+{
+    std::printf("c2 vectors (video fragments, report, NACK, sealed packets)\n");
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        check(false, "vectors file opens");
+        return;
+    }
+    const QJsonObject call = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("call")).toObject();
+    const QJsonObject x = call.value(QStringLiteral("c2")).toObject();
+    const QByteArray vp8 = QByteArray::fromHex(x.value(QStringLiteral("vp8")).toString().toLatin1());
+    const QList<QByteArray> frags = VideoWire::split(x.value(QStringLiteral("stream")).toInt(), quint16(x.value(QStringLiteral("frame")).toInt()),
+                                                     x.value(QStringLiteral("key")).toBool(), x.value(QStringLiteral("rotation")).toInt(), vp8);
+    QStringList hex;
+    for (const QByteArray &b : frags)
+        hex << QString::fromLatin1(b.toHex());
+    QStringList want;
+    for (const QJsonValue &v : x.value(QStringLiteral("fragments")).toArray())
+        want << v.toString();
+    check(!want.isEmpty() && hex == want, "a frame splits into the same fragments as the reference");
+    const QJsonObject r = x.value(QStringLiteral("report")).toObject();
+    VideoWire::Report rep;
+    rep.lossPct = r.value(QStringLiteral("loss")).toInt();
+    rep.camera = r.value(QStringLiteral("camera")).toBool();
+    rep.screen = r.value(QStringLiteral("screen")).toBool();
+    rep.jitterMs = r.value(QStringLiteral("jitter")).toInt();
+    rep.kbps = r.value(QStringLiteral("kbps")).toInt();
+    rep.rttMs = r.value(QStringLiteral("rtt")).toInt();
+    check(QString::fromLatin1(VideoWire::encodeReport(rep).toHex()) == r.value(QStringLiteral("bytes")).toString(), "the report's 8 bytes match");
+    const QJsonObject nk = x.value(QStringLiteral("nack")).toObject();
+    VideoWire::Nack n;
+    n.stream = nk.value(QStringLiteral("stream")).toInt();
+    n.frame = quint16(nk.value(QStringLiteral("frame")).toInt());
+    for (const QJsonValue &v : nk.value(QStringLiteral("indexes")).toArray())
+        n.indexes << v.toInt();
+    check(QString::fromLatin1(VideoWire::encodeNack(n).toHex()) == nk.value(QStringLiteral("bytes")).toString(), "the NACK's bytes match");
+    const QByteArray root = QByteArray::fromHex(call.value(QStringLiteral("root")).toString().toLatin1());
+    const QByteArray tag = QByteArray::fromHex(call.value(QStringLiteral("tag")).toString().toLatin1());
+    CallCrypto::Keyring ka(root), kb(root);
+    CallCrypto::Receiver toB(&kb, CallCrypto::O2A, tag), toA(&ka, CallCrypto::A2O, tag);
+    bool all = true;
+    int count = 0;
+    for (const QJsonValue &v : x.value(QStringLiteral("packets")).toArray()) {
+        const QJsonObject p = v.toObject();
+        const bool o2a = p.value(QStringLiteral("dir")).toString() == QLatin1String("o2a");
+        CallCrypto::Sender tx(o2a ? &ka : &kb, o2a ? CallCrypto::O2A : CallCrypto::A2O, tag);
+        const QByteArray payload = QByteArray::fromHex(p.value(QStringLiteral("payload")).toString().toLatin1());
+        const QByteArray sealed = tx.sealAt(p.value(QStringLiteral("type")).toInt(), quint32(p.value(QStringLiteral("seq")).toDouble()),
+                                            quint32(p.value(QStringLiteral("ts")).toDouble()), payload);
+        CallCrypto::Receiver::Packet got;
+        const QString why = (o2a ? toB : toA).open(QByteArray::fromHex(p.value(QStringLiteral("packet")).toString().toLatin1()), &got);
+        all = all && QString::fromLatin1(sealed.toHex()) == p.value(QStringLiteral("packet")).toString() && why.isEmpty() && got.payload == payload
+              && got.type == p.value(QStringLiteral("type")).toInt();
+        ++count;
+    }
+    check(count == 6 && all, "video, report, NACK and keyframe request packets seal and open like the reference");
+}
+
+// The fake STUN server of the direct test: answers every Binding with the address it came from.
+class FakeStun
+{
+public:
+    QUdpSocket sock;
+    int answered = 0;
+    FakeStun()
+    {
+        sock.bind(QHostAddress(QHostAddress::LocalHost), 0);
+        QObject::connect(&sock, &QUdpSocket::readyRead, &sock, [this] {
+            while (sock.hasPendingDatagrams()) {
+                QByteArray b(int(sock.pendingDatagramSize()), 0);
+                QHostAddress from;
+                quint16 port = 0;
+                b.resize(int(sock.readDatagram(b.data(), b.size(), &from, &port)));
+                Stun::Message m;
+                if (!Stun::parse(b, &m) || m.method != Stun::Binding || m.cls != Stun::Request)
+                    continue;
+                Stun::Message r;
+                r.method = Stun::Binding;
+                r.cls = Stun::Success;
+                r.tid = m.tid;
+                r.addAddress(Stun::XorMappedAddress, CallNet::fromHost(from, port));
+                sock.writeDatagram(Stun::encode(r, QByteArray(), true), from, port);
+                ++answered;
+            }
+        });
+    }
+};
+
+// Two people who trust each other, with no Wi-Fi and no relay between them: the call goes direct
+// (STUN answer, candidates in offer and answer, pings both ways). Then one side doesn't trust the
+// other: nothing about either address is sent, and nothing is tried.
+void directCall()
+{
+    std::printf("direct call between trusted contacts (fake STUN, no relay, no Wi-Fi)\n");
+    DirectPath::g_testLocal = true;
+    FakeStun stun;
+    const QString stunAt = QStringLiteral("127.0.0.1:%1").arg(stun.sock.localPort());
+    for (int round = 0; round < 3; ++round) {
+        // round 0: both trust; 1: the callee doesn't trust the caller; 2: the callee is a 0.7 app.
+        Side a, b;
+        a.id = CallCrypto::newEphemeral();
+        b.id = CallCrypto::newEphemeral();
+        const QString keyA = QString::fromLatin1(a.id.publicDer.toBase64()), keyB = QString::fromLatin1(b.id.publicDer.toBase64());
+        a.sig = new CallSignalHooks();
+        b.sig = new CallSignalHooks();
+        QList<QJsonObject> fromB, fromA;
+        for (Side *s : {&a, &b}) {
+            Side *other = s == &a ? &b : &a;
+            const QString mine = s == &a ? keyA : keyB;
+            QList<QJsonObject> *log = s == &a ? &fromA : &fromB;
+            s->sig->onMyKey = [mine] { return mine; };
+            s->sig->onSign = [s](const QByteArray &bytes) { return CallCrypto::signDer(s->id.privateDer, bytes); };
+            s->sig->onCanCall = [](const QString &) { return true; };
+            QPointer<CallSignalHooks> to = other->sig;
+            s->sig->onSend = [to, mine, log](const QString &, const QJsonObject &m) {
+                log->append(m);
+                QTimer::singleShot(5, to, [to, mine, m] { if (to) to->deliver(mine, m); });
+            };
+        }
+        QObject::connect(b.sig, &CallSignal::received, b.sig, [&b, &stunAt, round](const QString &from, const QJsonObject &m) {
+            if (b.session) {
+                b.session->handle(m);
+                return;
+            }
+            if (m.value(QStringLiteral("t")).toString() != QLatin1String("offer") || !CallSession::checkOffer(m, from, QDateTime::currentMSecsSinceEpoch()).isEmpty())
+                return;
+            b.session = new CallSession(b.sig, from, nullptr, b.sig);
+            b.session->useDevices = false;
+            b.session->lanHostOverride = [](const QString &) { return QString(); };
+            b.session->stunHost = stunAt;
+            b.session->trusted = round != 1;
+            b.session->c2Local = round != 2;
+            b.session->takeOffer(m);
+            QTimer::singleShot(300, b.session, [&b] { b.session->answer(); });
+        });
+        QObject::connect(a.sig, &CallSignal::received, a.sig, [&a](const QString &, const QJsonObject &m) {
+            if (a.session)
+                a.session->handle(m);
+        });
+        a.session = new CallSession(a.sig, keyB, nullptr, a.sig);
+        a.session->useDevices = false;
+        a.session->lanHostOverride = [](const QString &) { return QString(); };
+        a.session->stunHost = stunAt;
+        a.session->trusted = true;
+        a.session->start();
+        auto hasAddr = [](const QList<QJsonObject> &msgs, const char *type) {
+            for (const QJsonObject &m : msgs)
+                for (const QJsonValue &v : m.value(QStringLiteral("cands")).toArray())
+                    if (v.toObject().value(QStringLiteral("t")).toString() == QLatin1String(type))
+                        return true;
+            return false;
+        };
+        if (round == 0) {
+            check(waitFor([&] { return a.session->state() == CallSession::Active && b.session && b.session->state() == CallSession::Active; }, 8000),
+                  "both trust each other: connected with no relay and no Wi-Fi");
+            check(a.session->directTried() && b.session->directTried() && a.session->media() && a.session->media()->live(CallMedia::Direct)
+                      && b.session->media()->live(CallMedia::Direct),
+                  "over the direct path, both ways");
+            check(hasAddr(fromA, "srflx") && hasAddr(fromB, "srflx") && stun.answered >= 2, "each side sent what the STUN server saw (srflx)");
+            CallMedia *ma = a.session->media(), *mb = b.session->media();
+            const int inB = mb->stats().audioIn;
+            qint64 ph = 0;
+            for (int i = 0; i < 25; ++i) {
+                qint16 pcm[AudioDsp::kFrame];
+                AudioDsp::tone(pcm, AudioDsp::kFrame, 440, 0.4, &ph);
+                ma->feed(pcm);
+                waitFor([] { return false; }, 20);
+            }
+            check(waitFor([&] { return mb->stats().audioIn >= inB + 20; }, 3000) && ma->stats().relayAudio == 0, "A's audio reaches B directly");
+            check(a.session->bothC2() && ma->c2(), "both speak c2");
+        } else if (round == 1) {
+            waitFor([&] { return b.session && b.session->state() == CallSession::Connecting; }, 4000);
+            waitFor([] { return false; }, 600);
+            check(hasAddr(fromA, "srflx") && !hasAddr(fromB, "srflx") && !hasAddr(fromB, "host"), "the callee who doesn't trust sends no address of its own");
+            bool noP2p = true;
+            for (const QJsonObject &m : fromB)
+                noP2p = noP2p && !m.contains(QStringLiteral("p2p"));
+            check(noP2p && b.session && !b.session->directTried() && !a.session->directTried(), "and neither side tries the direct path");
+        } else {
+            check(waitFor([&] { return b.session && b.session->state() == CallSession::Connecting; }, 4000), "a 0.7 callee answers");
+            waitFor([] { return false; }, 600);
+            bool plain = true;
+            for (const QJsonObject &m : fromB)
+                plain = plain && !m.contains(QStringLiteral("c2")) && !m.contains(QStringLiteral("p2p"));
+            check(plain && !a.session->bothC2() && a.session->media() && !a.session->media()->c2() && !a.session->directTried(),
+                  "with a 0.7 app: no c2 features, no direct path, a 0.7 call");
+        }
+        a.session->hangup();
+        waitFor([&] { return !b.session || b.session->state() == CallSession::Ended; }, 3000);
+        delete a.sig;
+        delete b.sig;
+    }
+    DirectPath::g_testLocal = false;
+}
+
 // A small TURN server (RFC 8656 over UDP, long-term credentials) that translates addresses like a
 // relay with several sites: each allocation sends from another port than the relayed address it
 // reported (Cloudflare anchors each allocation at the nearest data center). Its first ChannelBind or
@@ -547,11 +831,15 @@ bool CallSelfTest::run(const QString &vectorsPath)
     const bool stun = Stun::selfTest();
     const bool jitter = JitterBuffer::selfTest();
     const bool dsp = AudioDsp::selfTest();
+    const bool video = VideoWire::selfTest();
     relayChecks();
+    c2Vectors(vectorsPath);
     mediaLoopback();
+    c2Media();
     signalingLoopback();
+    directCall();
     relayCall();
-    const bool ok = vectors && rooms && stun && jitter && dsp && g_fail == 0;
+    const bool ok = vectors && rooms && stun && jitter && dsp && video && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");
     std::fflush(stdout);
     return ok;

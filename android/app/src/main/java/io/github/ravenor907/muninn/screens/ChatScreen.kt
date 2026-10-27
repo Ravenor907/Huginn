@@ -673,6 +673,17 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
+            // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off means relay only.
+            if (c != null) {
+                val trustText = io.github.ravenor907.muninn.net.call.CallManager.trustText(key)
+                DropdownMenuItem(text = { Text("Direct calls: $trustText", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
+                    onClick = {
+                        close()
+                        val on = !io.github.ravenor907.muninn.net.call.CallManager.trusted(key)
+                        io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, on)
+                        Ui.say(if (on) "Calls with $name go direct when they trust you too. Saves the relay's data." else "Calls with $name go through the relay only. Neither of you sees the other's IP address.")
+                    })
+            }
             if (isTv) DropdownMenuItem(text = { Text("Kids' TV", style = bodyStyle) }, leadingIcon = { MIcon("gear", Palette.accent, 20.dp) },
                 onClick = { close(); tvSettings = true })
         }

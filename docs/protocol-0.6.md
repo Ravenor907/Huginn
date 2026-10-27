@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1 k2 t1 v1"
+"caps": "r1 g1 c1 c2 k1 k2 t1 v1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -56,6 +56,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `r1` | message ratchet (same as `cap:"r1"`) |
 | `g1` | group chats (section 3) |
 | `c1` | 1:1 calls (section 5) |
+| `c2` | call extras after 0.7 (5.8): the direct path between trusted contacts, receiver reports and the higher Opus bitrate, video calls and screen share. Implies `c1`. |
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
@@ -332,8 +333,9 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
 - Audio is Opus, 20 ms frames. Every packet goes out on every live path at once: UDP on the shared Wi-Fi,
   UDP through the TURN relay over the internet, and Bluetooth LE when connected. The receiver keeps the
   first copy of each sequence number.
-- **Relay only over the internet.** Nothing is ever sent straight to a peer's internet address: no STUN,
-  no hole punching, no `host` or `srflx` candidates. Each side allocates its own address on the TURN relay
+- **Relay only over the internet**, unless both people trust each other (5.8.1). Nothing is ever sent
+  straight to the internet address of someone who isn't trusted: no STUN, no hole punching, no `host` or
+  `srflx` candidates. Each side allocates its own address on the TURN relay
   (Cloudflare, logins from the relay Worker, see `docs/relay.md`) and sends to the other side's relayed
   address through it. So the person you call never learns your IP address, and you never learn theirs.
 - If no path works the call fails with "Can't connect".
@@ -394,11 +396,12 @@ Candidates (the final 0.6 format, the same in both apps):
   and differ, `lp` wins.
 - At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
 - Receivers take the first `relay` whose `a` is an IP literal (a peer's candidate never makes an app look a
-  name up, so a name is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
-- Send the offer with what is ready (an app may wait up to 1.5 s for its relay), and anything later in
-  `cands`. Resent offers and answers carry the newest candidates, and the caller takes the candidates of
-  a resent answer too (same `eph` as the first), not only of `cands`. A `cands` that would come sooner than
-  2 s after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
+  name up, so a name is skipped) and ignore every other type. With `c2`, `srflx` and `host` come back, only
+  between trusted contacts that both speak `c2` (5.8.2); a 0.7 app ignores them as before.
+- Send the offer with what is ready (an app may wait up to 400 ms for its relay and its STUN answer; 0.7
+  waited up to 1.5 s), and anything later in `cands`. Resent offers and answers carry the newest candidates,
+  and the caller takes the candidates of a resent answer too (same `eph` as the first), not only of
+  `cands`. A `cands` that would come sooner than 1 s (0.7: 2 s) after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
   answer carries the relay when it is ready.
 
 ### 5.3 Key derivation
@@ -468,6 +471,12 @@ Wideband is what phone calls with "HD voice" use; speech gains little above 8 kH
 
 Jitter buffer: play in seq order, target delay adaptive between 40 and 200 ms (start at 60 ms). A missing
 frame is rebuilt from the next packet's FEC when it is there, otherwise Opus packet loss concealment.
+After 0.7 both apps use the same buffer (Huginn `JitterBuffer`, Muninn `Jitter`, one algorithm, the same
+simulated-network tests): the delay is the 95th percentile of how much arrival times wander over the last
+3 s plus one frame; it grows at once (and by one frame for every packet that came too late to play, at most
+4), and shrinks by one frame every 2 s at most. Playout follows the sender's clock: too far behind drops a
+frame, too far ahead plays one concealed frame, at most once every 100 ms. Muninn sends a DTX silence
+packet every 400 ms too (0.7 sent none), so the other side's decoder makes comfort noise.
 With DTX, silence sends a packet about every 400 ms; `ts` shows the gap.
 
 Speaking indicator: from the decoded audio, never sent. Speaking while the 20 ms level is above -45 dBFS
@@ -520,7 +529,9 @@ is dropped. Two Muninns close by may also use their Nearby Connections link (BYT
 These paths are live by the same rule (authentic packet within 4 s). Optional: an app without it sends
 `ble:false` and uses the relay and Wi-Fi only.
 
-**Sending.** Every audio packet goes out on every live path (relay, Wi-Fi, Bluetooth).
+**Sending.** Every audio packet goes out on every live path (relay, Wi-Fi, Bluetooth), except that after
+0.7 the relay rests while a free path carries the call (5.8.3). That is the sender's choice alone, so it
+works with 0.7 peers too.
 
 **No path.** If no path is live 15 s after the answer was sent or received, both sides show "Can't connect"
 and send `hangup` `why:"nopath"`. During a call, if every path is dead, show "Reconnecting"; after 20 s,
@@ -529,7 +540,9 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 ### 5.7 IP addresses (shown to the user before the first internet call)
 
 - The person you call never learns your IP address, and you never learn theirs: offers and answers carry
-  only the relay's address and, on the same Wi-Fi, a port.
+  only the relay's address and, on the same Wi-Fi, a port. The one exception is someone you both trust
+  (5.8.1): then each of you sends your internet address so the call can skip the relay. Neither app ever
+  shows an IP address on screen.
 - The TURN relay (Cloudflare) sees your public address, because the audio goes from your device to it
   directly. It can't hear the call: media is encrypted end to end (5.3, 5.4).
 - The relay Worker sees your public address (an HTTPS request), a hash of your chat key and the time.
@@ -538,6 +551,174 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 - Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
   candidate is sent, and calls work only over Wi-Fi and Bluetooth.
+
+### 5.8 Call extras (cap `c2`)
+
+Everything here is used in a call only when **both** the offer and the answer carry `"c2": true`. A 0.7
+app never sends it and never gets anything below: its calls work exactly as in 5.1 to 5.7.
+
+New fields in `offer` and `answer` (all optional; the signature still covers only `t`, `call`, `eph`):
+
+| field | meaning |
+|---|---|
+| `c2` | `true`: this side speaks this section |
+| `vc` | `"vp8"`: this side can send and show video (5.8.5). Missing: sound only |
+| `vid` | `true`: its camera is on from the start (a video call; the callee's screen says "Video call") |
+| `p2p` | `true`: this side trusts the other and offers the direct path (5.8.1); its `cands` carry `srflx`/`host` |
+
+#### 5.8.1 Trusted contacts
+
+Each app keeps, per contact and only on that device, whether it trusts them for direct calls:
+
+- Default: trusted when the contact is in a folder named "Family" (section 4, any case).
+- A per-contact switch "Direct calls" overrides it, on or off (Huginn `calltrust.json`, Muninn
+  `calltrust.json`, both in the Vault).
+- The caller puts `p2p` and its direct candidates in the offer only when it trusts the callee. The callee
+  puts `p2p` and its own in the answer only when the offer had `p2p` **and** it trusts the caller.
+- The direct path is tried only when both did (`p2p` both ways). Anyone else is relay only: they never get
+  your address, and you never send anything to theirs. A caller who trusts the callee has shared its own
+  address with them by its own choice, even if the callee doesn't trust back.
+
+#### 5.8.2 Direct path
+
+Candidates, only in messages to someone trusted (and never more than 8 in all, 5.2):
+
+```json
+{"t": "srflx", "a": "203.0.113.7", "p": 51820}
+{"t": "host", "a": "2001:db8::17", "p": 40312}
+```
+
+- `srflx`: the call socket's address as a STUN server saw it: one Binding request (RFC 8489, no
+  authentication) from the call socket (the Wi-Fi one of 5.6) to `stun.cloudflare.com:3478`, looked up with
+  the system resolver, resent after 300, 900 and 1800 ms, given up after 3 s. Only the server's answer
+  to that transaction id counts; the XOR-MAPPED-ADDRESS is the candidate. The callee asks while it rings.
+- `host`: up to 2 global unicast IPv6 addresses (2000::/3) of this device, with the call socket's port. No
+  IPv4 host candidates: a private address is the Wi-Fi path, a public one is the `srflx`.
+- Receivers take up to 3, IP literals only, and never a local address (private, shared, loopback or
+  link-local IPv4, `::1`, `fe80::/10`, `fc00::/7`, multicast): a peer can't make an app send to its LAN.
+- Connectivity checks are the pings of 5.6, from the call socket to every direct candidate of the peer,
+  on the same schedule (50 ms for 2 s, then 250 ms to 15 s, then 2 s). Both sides ping at once, which
+  opens both NATs (hole punching). Once an authentic packet arrives on the call socket from an address
+  that isn't the peer's Wi-Fi address, that address is the Direct path and replies go there (the peer's
+  NAT may have picked another port than its `srflx`). Only between two trusted sides; otherwise such
+  packets are dropped as in 5.6.
+- Live by the same rule as every path (an authentic packet within 4 s). A symmetric NAT on both sides
+  means no direct path: the relay carries the call, nothing else changes.
+- During "Reconnecting" (every path dead for 1.5 s), after 4 s an app makes a new relay allocation and asks
+  the STUN server again (the network may have changed, Wi-Fi to mobile data), at most 3 times a call,
+  6 s apart, and sends the new candidates in `cands`. 0.7 peers take a new `relay` candidate from `cands`
+  too. A relay allocation that fails is tried once more after 2 s.
+
+#### 5.8.3 Free paths first
+
+Sound, video and the packets below go out on every live path, except:
+
+- the relay is left out while Wi-Fi or Direct had an authentic packet within the last 750 ms;
+- video (and its resends) never goes over Bluetooth.
+
+So the relay is a standby: it keeps its 1 s pings (it stays live) and takes over within a second when the
+free path stops. A live Wi-Fi or Direct path is pinged every 250 ms (not 1 s) so that its silence is noticed
+quickly. Pings, pongs and resends follow the same rules as the media they belong to.
+
+#### 5.8.4 Receiver reports and Opus
+
+New media packet types (5.4; a 0.7 receiver refuses them as "type", nobody sends them to one):
+
+| type | name | plaintext |
+|---|---|---|
+| 3 | video | a video fragment (5.8.5) |
+| 4 | report | 8 bytes, below |
+| 5 | keyframe request | 1 byte: the stream (0 camera, 1 screen) |
+| 6 | resend request (NACK) | stream (1), frame (2, big-endian), n (1), then n fragment indexes (1 each); n = 0 asks for the whole frame |
+
+Each side sends a **report** every second, from the first authentic packet on:
+
+```
+offset size
+0      1    loss: percent of the packets due since the last report that didn't arrive (0 to 100)
+1      1    flags: bit 0 my camera is on (sending video), bit 1 I'm sharing my screen; others 0
+2      2    jitter: my jitter buffer's delay in ms
+4      2    kbps of media I received since the last report (all paths, copies not counted)
+6      2    my round trip in ms, 0 when unknown
+```
+
+Loss counts audio by its `ts`: a gap of 2 to 10 frames between two packets is that many lost, a longer one
+is a DTX pause (one packet due), a late packet takes one back. Video counts fragments, and the fragments
+asked for again the first time as lost. Reports are how each side knows whether the other's camera or
+screen share is on, so the picture appears and goes away even if a signaling message is slow.
+
+Opus in a 1:1 call between two `c2` apps: still 16 kHz wideband, 20 ms, VBR, DTX, but **32 kbps** while a
+free path carries the call and **24 kbps** over the relay (16 kbps stays the rule in voice rooms, where
+every peer gets its own copy, and with 0.7). The expected loss given to the encoder (and so how much in-band
+FEC it adds) is `clamp(loss * 1.5 + 3, 5, 30)` percent from the other side's latest report (10 % before the
+first). A decoder of any 0.6 or 0.7 app plays these packets as they are.
+
+#### 5.8.5 Video
+
+VP8 (RFC 6386 bitstream), both ways, when both sides said `"vc": "vp8"`. Encoded at the profile of 5.8.6,
+realtime, error resilient, a keyframe at the start, on request and at least every 10 s. Each encoded frame
+is cut into at most 255 even fragments of at most 1166 bytes, each the plaintext of one type 3 packet:
+
+```
+offset size
+0      1    stream: 0 camera, 1 screen
+1      1    flags: bit 0 keyframe; bits 1-2 rotation, the quarter turns clockwise that show it upright
+            (0, 90, 180, 270 degrees); others 0
+2      2    frame number, uint16 big-endian, per stream, +1 for every encoded frame (wraps)
+4      1    fragment index, from 0
+5      1    fragment count, 1 to 255
+6      n    VP8 data
+```
+
+A sealed video packet is at most 12 + 6 + 1166 + 16 = 1200 bytes. Video uses the call's per-direction keys
+like sound (5.3, 5.4): it is end-to-end encrypted, and its seqs share the one replay window. A frame that
+would need more than 255 fragments isn't sent.
+
+The receiver (reference: Huginn `VideoWire::Assembler`, Muninn `VideoWire.Assembler`; their self-tests
+match) puts each stream's fragments back together and hands whole frames to the decoder in order:
+
+- A frame with a fragment missing, once a later frame has started (or 30 ms after its last fragment), is
+  asked for again with a NACK for just the missing indexes (the whole frame when nothing of it came), at
+  most 3 times, `max(40 ms, 1.2 x round trip)` apart. The sender keeps the last 64 frames' fragments and
+  resends them (as new packets, new seqs).
+- A frame that still isn't whole `max(250 ms, 2 x round trip + 120 ms)` after it was missed is given up:
+  the receiver asks for a keyframe (type 5), at most every `max(300 ms, 2 x round trip)`, and shows
+  nothing new until a whole keyframe arrives. A whole keyframe ahead of a hole is taken at once.
+- A new receiver (or a stream that was off) asks for a keyframe first.
+
+Camera on or off: the sender's report flags say it (and the sender sends a report at once when it
+changes); the receiver shows the picture while the flag is on and the person's initial otherwise.
+Switching between the front and the back camera is the sender's business (a keyframe follows).
+
+#### 5.8.6 Size and bitrate
+
+| | over the relay | on a free path (Wi-Fi or Direct live) |
+|---|---|---|
+| camera | 640 x 480, 24 fps, at most 700 kbps | 1280 x 720, 30 fps, at most 2000 kbps |
+| screen | 1280 x 720, 8 fps, at most 800 kbps | 1920 x 1080, 10 fps, at most 2500 kbps |
+
+480p over the relay is about 0.4 GB an hour with the sound, to save data. Sizes are the largest; a camera
+that can't do them sends what it can. The bitrate starts at 60 % of the cap and follows the other side's
+reports: 10 % loss or more takes a quarter off, 4 % or more takes 8 % off, under 2 % for 3 s adds 8 % +
+10 kbps a second, never below 120 kbps or above the cap. When a free path comes or goes the encoder starts
+again at the other size (with a keyframe).
+
+#### 5.8.7 Screen share in voice rooms
+
+In a voice room or group call (section 6) someone can share their screen (Huginn on Windows); everyone
+else in the room sees it (Muninn and Huginn). It is the video of 5.8.5 with stream 1, sent separately to
+every peer whose pair call speaks `c2` with `vc`, sealed with that pair's keys like the room's sound:
+encrypted per recipient, nothing to rekey when someone leaves. The sharer encodes once and sends the same
+fragments to everyone; a keyframe request from anyone makes the next frame a keyframe for all. The size and
+bitrate are the lowest any peer allows (the relay profile as soon as one peer is on the relay). A peer
+without `c2` keeps hearing the room and simply doesn't see the screen.
+
+#### 5.8.8 Timing
+
+- Offer: sent once the relay and the STUN answer are in, or after 400 ms with what is there.
+- `cands`: at most one a second (0.7 peers accept any rate up to the room limit of 2.4).
+- States the apps show: "Calling" (offer out), "Ringing" (they rang), "Connecting" (answered, no path
+  yet), "Connected" with the time (a path is live), "Reconnecting", then the end text.
 
 ## 6. Voice rooms and group calls (cap `v1`)
 

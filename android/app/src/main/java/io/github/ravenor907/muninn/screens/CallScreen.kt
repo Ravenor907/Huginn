@@ -127,7 +127,9 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             if (c.phase != Phase.INCOMING && c.phase != Phase.ENDED) {
                 Spacer(Modifier.height(24.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Internet", "through the relay", c.relay)
+                    // Direct only between two people who trust each other; while it (or Wi-Fi) carries the call the relay rests.
+                    if (c.directTried) Chip("Direct", "straight over the internet", c.direct)
+                    Chip(if (c.directTried) "Relay" else "Internet", "through the relay", c.relay && !c.direct && !c.wifi)
                     Chip("Wi-Fi", "same Wi-Fi", c.wifi)
                     Chip("Bluetooth", "close by", c.bluetooth)
                 }
@@ -168,7 +170,7 @@ private fun status(c: CallManager.Ui): String {
         Phase.INCOMING -> "Incoming call"
         Phase.CONNECTING -> "Connecting"
         Phase.RECONNECTING -> "Reconnecting"
-        Phase.LIVE -> clock(((now - c.connectedAt) / 1000).coerceAtLeast(0))
+        Phase.LIVE -> "Connected · " + clock(((now - c.connectedAt) / 1000).coerceAtLeast(0))
         Phase.ENDED -> when (c.endWhy) {
             "declined" -> if (c.outgoing) "Declined" else "Call declined"
             "busy" -> "Busy on another call"

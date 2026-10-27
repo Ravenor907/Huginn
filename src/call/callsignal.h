@@ -18,6 +18,8 @@
 //  nameOf(key)             what to show for them (the nickname when there is one).
 //  canCall(key)            a contact (or group peer) whose caps include c1.
 //  lanHost(key)            the IP of the Wi-Fi route Chat already knows for them, or "".
+//  inFamily(key)           they are in a contact folder named "Family" (trusted by default, 5.8.1).
+//  hasCap(key, token)      their caps include token (c2: video and the direct path can be offered).
 //  bleReady(key) / sendMedia(key, packet) / mediaReceived(key, packet)
 //                          the Bluetooth LE MEDIA characteristic (5.6). Optional: without it,
 //                          bleReady is false and calls use the relay and Wi-Fi only.
@@ -32,6 +34,8 @@ public:
     virtual QString nameOf(const QString &contactKey) const = 0;
     virtual bool canCall(const QString &contactKey) const = 0;
     virtual QString lanHost(const QString &) const { return QString(); }
+    virtual bool inFamily(const QString &) const { return false; }
+    virtual bool hasCap(const QString &, const QString &) const { return false; }
     virtual bool bleReady(const QString &) const { return false; }
     virtual bool sendMedia(const QString &, const QByteArray &) { return false; }
 
@@ -53,6 +57,8 @@ public:
     std::function<QString(const QString &)> onNameOf;
     std::function<bool(const QString &)> onCanCall;
     std::function<QString(const QString &)> onLanHost;
+    std::function<bool(const QString &)> onInFamily;
+    std::function<bool(const QString &, const QString &)> onHasCap;
     std::function<bool(const QString &)> onBleReady;
     std::function<bool(const QString &, const QByteArray &)> onSendMedia;
 
@@ -62,6 +68,8 @@ public:
     QString nameOf(const QString &k) const override { return onNameOf ? onNameOf(k) : QString(); }
     bool canCall(const QString &k) const override { return onCanCall && onCanCall(k); }
     QString lanHost(const QString &k) const override { return onLanHost ? onLanHost(k) : QString(); }
+    bool inFamily(const QString &k) const override { return onInFamily && onInFamily(k); }
+    bool hasCap(const QString &k, const QString &c) const override { return onHasCap && onHasCap(k, c); }
     bool bleReady(const QString &k) const override { return onBleReady && onBleReady(k); }
     bool sendMedia(const QString &k, const QByteArray &p) override { return onSendMedia && onSendMedia(k, p); }
 

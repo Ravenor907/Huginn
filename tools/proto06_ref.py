@@ -50,6 +50,8 @@ HEADER_LEN = 12
 TAG_LEN = 16
 MAX_PACKET = 1200
 T_AUDIO, T_PING, T_PONG = 0, 1, 2
+# c2 only (5.8): video fragments, receiver reports, keyframe requests, resend requests.
+T_VIDEO, T_REPORT, T_KEYREQ, T_NACK = 3, 4, 5, 6
 
 D_GROUP = "huginn-muninn group v1"
 D_CALL = "huginn-muninn call v1"
@@ -185,6 +187,26 @@ def seal_packet(root, direction, tag, ptype, seq, ts, payload):
     if len(pkt) > MAX_PACKET: raise ValueError("packet too big")
     return pkt
 
+# ---- call extras (cap c2, docs/protocol-0.6.md 5.8)
+VIDEO_HEADER = 6
+VIDEO_MAX_FRAGMENT = MAX_PACKET - HEADER_LEN - 16 - VIDEO_HEADER   # 1166
+
+def video_fragment(stream, key, rotation, frame, index, count, data):
+    assert stream in (0, 1) and rotation in (0, 90, 180, 270) and 0 <= index < count <= 255 and 0 < len(data) <= VIDEO_MAX_FRAGMENT
+    return struct.pack(">BBHBB", stream, (1 if key else 0) | ((rotation // 90) << 1), frame & 0xFFFF, index, count) + data
+
+def video_split(stream, frame, key, rotation, vp8):
+    n = (len(vp8) + VIDEO_MAX_FRAGMENT - 1) // VIDEO_MAX_FRAGMENT
+    if not vp8 or n > 255: return []
+    each = (len(vp8) + n - 1) // n
+    return [video_fragment(stream, key, rotation, frame, i, n, vp8[i * each:(i + 1) * each]) for i in range(n)]
+
+def video_report(loss, camera, screen, jitter_ms, kbps, rtt_ms):
+    return struct.pack(">BBHHH", loss, (1 if camera else 0) | (2 if screen else 0), jitter_ms, kbps, rtt_ms)
+
+def video_nack(stream, frame, indexes):
+    return struct.pack(">BHB", stream, frame & 0xFFFF, len(indexes)) + bytes(indexes)
+
 class Receiver:
     """One direction of one call. open() returns (ptype, seq, ts, payload) or raises ValueError(reason)."""
     def __init__(self, root, direction, tag):
@@ -195,7 +217,7 @@ class Receiver:
         if len(pkt) < HEADER_LEN + TAG_LEN or len(pkt) > MAX_PACKET: raise ValueError("size")
         ver, ptype, tag, seq, ts = struct.unpack(">BB2sII", pkt[:HEADER_LEN])
         if ver != MEDIA_VERSION: raise ValueError("version")
-        if ptype not in (T_AUDIO, T_PING, T_PONG): raise ValueError("type")
+        if ptype not in (T_AUDIO, T_PING, T_PONG, T_VIDEO, T_REPORT, T_KEYREQ, T_NACK): raise ValueError("type")
         if tag != self.tag: raise ValueError("other call")
         if self.high >= 0 and seq + REPLAY_WINDOW <= self.high: raise ValueError("too old")
         if 0 <= seq <= self.high and (self.bits >> (self.high - seq)) & 1: raise ValueError("duplicate")
@@ -456,12 +478,30 @@ def main():
         expect(got == want, "receive %s %s: wanted %s, got %s" % (who, idx, want, got))
         rx_vec.append({"receiver": who, "frame": idx if not isinstance(idx, str) else None,
                        "packet": pkt.hex() if isinstance(idx, str) else None, "result": got})
+
+    # ---- call extras (c2): video fragments, a report, a NACK, sealed with this call's keys
+    vp8 = bytes((i * 31 + 7) & 0xFF for i in range(2500))
+    frags = video_split(0, 65535, True, 90, vp8)
+    expect(len(frags) == 3 and all(len(f) <= VIDEO_HEADER + VIDEO_MAX_FRAGMENT for f in frags), "2500 bytes of video in 3 fragments")
+    c2_sends = [("o2a", T_VIDEO, 40, 1000, frags[0]), ("o2a", T_VIDEO, 41, 1000, frags[1]), ("o2a", T_VIDEO, 42, 1000, frags[2]),
+                ("a2o", T_REPORT, 50, 2000, video_report(7, False, True, 80, 812, 45)),
+                ("a2o", T_NACK, 51, 2010, video_nack(0, 65535, [1])), ("a2o", T_KEYREQ, 52, 2020, bytes([1]))]
+    c2_packets = []
+    for d, t, seq, ts, p in c2_sends:
+        pkt = seal_packet(rootA if d == "o2a" else rootB, d, tag, t, seq, ts, p)
+        c2_packets.append({"dir": d, "type": t, "seq": seq, "ts": ts, "payload": p.hex(), "packet": pkt.hex()})
+    c2_vec = {
+        "vp8": vp8.hex(), "stream": 0, "frame": 65535, "key": True, "rotation": 90, "fragments": [f.hex() for f in frags],
+        "report": {"loss": 7, "camera": False, "screen": True, "jitter": 80, "kbps": 812, "rtt": 45, "bytes": video_report(7, False, True, 80, 812, 45).hex()},
+        "nack": {"stream": 0, "frame": 65535, "indexes": [1], "bytes": video_nack(0, 65535, [1]).hex()},
+        "packets": c2_packets,
+    }
     call_vec = {
         "callId": call_id, "tag": tag.hex(), "offerEphPriv": "0x3001", "answerEphPriv": "0x4001",
         "offer": offer, "offerSigned": signed_bytes(D_CALL, offer).decode(),
         "answer": answer, "answerSigned": signed_bytes(D_CALL, answer).decode(),
         "ecdh": ephA.exchange(ec.ECDH(), load_pub(eB)).hex(), "root": rootA.hex(), "epochs": epochs,
-        "frames": frames, "receive": rx_vec,
+        "frames": frames, "receive": rx_vec, "c2": c2_vec,
     }
 
     # ---- voice rooms and group calls
@@ -613,6 +653,10 @@ def check_file(path):
         try: (rB if s["receiver"] == "B" else rA).open(pkt); got = "ok"
         except ValueError as e: got = str(e)
         assert got == s["result"], (s, got); n += 1
+    x = c["c2"]
+    assert [f.hex() for f in video_split(x["stream"], x["frame"], x["key"], x["rotation"], bytes.fromhex(x["vp8"]))] == x["fragments"]; n += 1
+    for f in x["packets"]:
+        assert seal_packet(bytes.fromhex(c["root"]), f["dir"], tag, f["type"], f["seq"], f["ts"], bytes.fromhex(f["payload"])).hex() == f["packet"]; n += 1
     for f in c["frames"]:
         root = bytes.fromhex(c["root"])
         assert seal_packet(root, f["dir"], tag, f["type"], f["seq"], f["ts"], bytes.fromhex(f["payload"])).hex() == f["packet"]; n += 1
