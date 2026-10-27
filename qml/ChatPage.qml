@@ -325,12 +325,12 @@ Rectangle {
                         anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         Text {
-                            width: parent.width; elide: Text.ElideRight; text: modelData.name
+                            width: parent.width; elide: Text.ElideRight; text: modelData.name || ""
                             color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
                             font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.DemiBold
                         }
                         Text {
-                            width: parent.width; elide: Text.ElideRight; text: modelData.detail
+                            width: parent.width; elide: Text.ElideRight; text: modelData.detail || ""   // folder headers and some rows have none
                             color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
                             font.family: Theme.body; font.pixelSize: Theme.fs(13)
                         }
