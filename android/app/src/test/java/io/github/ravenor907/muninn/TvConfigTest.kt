@@ -162,7 +162,7 @@ class TvConfigTest {
         assertEquals(TvRules.Status(70, 123_456_789L, 1_761_500_100_000L, own = false), TvRules.status(m))
         assertFalse(m.has("own"))   // older apps never see a new field unless the level was set on the TV
         // Out of range levels are held to 0..100 when made; anything else is refused when read.
-        assertEquals(100, TvRules.status(JSONObject(TvRules.statusMessage(250, 1, 1)))!!.first)
+        assertEquals(100, TvRules.status(JSONObject(TvRules.statusMessage(250, 1, 1)))!!.mic)
         assertEquals(null, TvRules.status(JSONObject(m.toString()).put("mic", 101)))
         assertEquals(null, TvRules.status(JSONObject(m.toString()).put("used", -1)))
         assertEquals(null, TvRules.status(JSONObject(m.toString()).put("ts", "soon")))
