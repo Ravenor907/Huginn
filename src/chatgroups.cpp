@@ -501,7 +501,7 @@ QString Chat::groupCode(const QString &g)
     const qint64 x = now() + GroupWire::kTokenLife;
     m_gtokens.insert(token, {{QStringLiteral("g"), g}, {QStringLiteral("x"), x}});
     saveGroups();
-    return GroupWire::code(g, groupName(g), myKey(), username(), mailbox(), token, x, onion());
+    return GroupWire::code(g, groupName(g), myKey(), username(), mailbox(), token, x);
 }
 
 QVariantMap Chat::parseGroupCode(const QString &text) const
@@ -536,7 +536,7 @@ QString Chat::joinWithCode(const QString &text)
         m_groups[g].history.clear();
     }
     m_joining.insert(g, {{QStringLiteral("g"), g}, {QStringLiteral("admin"), admin}, {QStringLiteral("adminName"), str(c, "adminName")},
-                         {QStringLiteral("mailbox"), str(c, "mailbox")}, {QStringLiteral("onion"), str(c, "onion")},
+                         {QStringLiteral("mailbox"), str(c, "mailbox")},
                          {QStringLiteral("token"), str(c, "token")}, {QStringLiteral("name"), str(c, "name")}, {QStringLiteral("since"), now()}});
     sendControl(g, admin, {{QStringLiteral("t"), QStringLiteral("join")}, {QStringLiteral("inv"), str(c, "token")}, {QStringLiteral("n"), username()},
                            {QStringLiteral("p"), mailbox()}});
@@ -556,7 +556,7 @@ QString Chat::acceptGroupInvite(const QString &g)
         m_groups[g].history.clear();
     }
     m_joining.insert(g, {{QStringLiteral("g"), g}, {QStringLiteral("admin"), from}, {QStringLiteral("adminName"), nameOf(from)},
-                         {QStringLiteral("mailbox"), mailboxOf(from)}, {QStringLiteral("onion"), onionOf(from)}, {QStringLiteral("token"), str(inv, "inv")},
+                         {QStringLiteral("mailbox"), mailboxOf(from)}, {QStringLiteral("token"), str(inv, "inv")},
                          {QStringLiteral("name"), str(inv, "name")}, {QStringLiteral("since"), now()}});
     sendControl(g, from, {{QStringLiteral("t"), QStringLiteral("join")}, {QStringLiteral("inv"), str(inv, "inv")}, {QStringLiteral("n"), username()},
                           {QStringLiteral("p"), mailbox()}});
@@ -663,7 +663,7 @@ void Chat::groupAttempt(const QString &envId)
             });
     }
     if ((!media || !any || o.count >= 2) && bodies.size() <= Photos::kInternetPieces)
-        sendInternet(o.to, bodies, mailboxOf(o.to), o.count >= 2, sent);
+        sendInternet(o.to, bodies, mailboxOf(o.to), sent);
 }
 
 void Chat::groupRetry()

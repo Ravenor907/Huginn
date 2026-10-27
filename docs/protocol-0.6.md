@@ -27,25 +27,13 @@ does otherwise still interoperates.
 All new payloads in this document are UTF-8 JSON plaintext inside `data`, sealed exactly like a private
 message. "Send to X" always means: build an envelope for X, seal it pairwise for X, send it on all routes.
 
-### 0.1 Onion addresses (`o`, `onion`)
+### 0.1 Onion addresses (`o`, `onion`): retired
 
-From 0.6 each app runs a Tor onion service and the internet route tries the peer's onion address first
-(`POST /api/huginn/v1/message` to `http://<onion>.onion`), with the Nostr mailbox as the fallback for when
-they're offline. The address travels as 56 lowercase base32 characters (`a`-`z`, `2`-`7`), without
-`.onion`; receivers also accept it with the suffix and in upper case, and ignore anything else.
-
-| where | field | notes |
-|---|---|---|
-| contact code `MUNINN1:<base64url JSON>` | `"o"` | next to `n` name, `k` chat key, `p` mailbox, `i` invite, `x` expiry (s) |
-| group code `MUNINNG1:<base64url JSON>` (3.5) | `"o"` | the admin's onion address; Huginn sends and reads it, Muninn doesn't yet (its join is answered over the mailbox, and the admin's envelopes then carry `o`) |
-| envelope | `"o"` | the sender's onion address; only to contacts and group peers, never in room `nearby` |
-| Bluetooth LE hello `{"t":"hello", name, chatKey, mailbox, app, ...}` | `"onion"` | both apps send it |
-| Wi-Fi (LocalSend) announcement and `/register` answer | `"onion"` | next to `chatKey`, `chatName`, `chatApp`, `mailbox`; Huginn sends it, Muninn doesn't yet |
-
-All of them are optional: 0.5 apps ignore them, and an app without Tor leaves them out. A receiver keeps the
-`o` of an **authentic** envelope (after it opened) as that contact's or group peer's onion address, so it
-follows a reinstall. Codes give the first value. A hello or announcement isn't authenticated, so it is a
-hint only (an app that learns from it SHOULD let the next authentic envelope correct it).
+The first 0.6 builds ran a Tor onion service and sent its address as `"o"` (contact codes, group codes,
+envelopes) and `"onion"` (Bluetooth LE hellos, Wi-Fi announcements). That is gone: internet messages go
+straight to the Nostr relays again, as in 0.5. Apps MUST NOT send `o` or `onion` any more, and MUST accept
+codes, envelopes and hellos that still carry them (from those early 0.6 builds), ignoring the field. There
+is no caps token for it.
 
 ## 1. Capabilities
 
@@ -262,7 +250,7 @@ Two ways in:
 
    ```
    MUNINNG1:<base64url(JSON {"g", "gn": group name, "a": admin chat key, "an": admin name,
-                              "p": admin mailbox, "i": token, "x": expiry seconds, ["o": admin onion]})>
+                              "p": admin mailbox, "i": token, "x": expiry seconds})>
    ```
 
    valid for 1 hour, usable by several people until it expires (the admin can revoke it). The joiner sends
@@ -400,8 +388,8 @@ Candidates (the final 0.6 format, the same in both apps):
   Muninn sent only `lp`, an early Huginn only the `lan` candidate) and accept either; when both are there
   and differ, `lp` wins.
 - At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
-- Receivers take the first `relay` whose `a` is an IP literal (a name would mean a DNS lookup outside Tor,
-  so it is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
+- Receivers take the first `relay` whose `a` is an IP literal (a peer's candidate never makes an app look a
+  name up, so a name is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
 - Send the offer with what is ready (an app may wait up to 4 s for its relay), and anything later in
   `cands`. Resent offers and answers carry the newest candidates.
 
@@ -486,12 +474,12 @@ call is active. Incoming UDP: first byte 0x81 is media; anything else is dropped
 socket or TLS connection (below).
 
 **Relay (internet).** On starting or answering a call (the callee may start while it rings), get a TURN
-login from the relay Worker through Tor (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
+login from the relay Worker over HTTPS (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
 Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
 peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
-any other `turns:` URL. The TURN server's host name is looked up **through Tor only** (SOCKS5 RESOLVE),
-retried a few times; if Tor can't answer, there is no relay for this call ("Can't reach the call relay
-right now") and the system resolver is never asked. Media to the peer goes to the peer's `relay`
+any other `turns:` URL. The TURN server's host name is looked up with the system resolver,
+retried a few times; if it can't be looked up, there is no relay for this call ("Can't reach the call relay
+right now"). Media to the peer goes to the peer's `relay`
 candidate through this side's own allocation; media from it arrives as relayed data from that address,
 and anything relayed from another address is dropped. Both sides need an allocation for the relay path to
 work. The allocation is released when the call ends.
@@ -525,10 +513,10 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 - The person you call never learns your IP address, and you never learn theirs: offers and answers carry
   only the relay's address and, on the same Wi-Fi, a port.
 - The TURN relay (Cloudflare) sees your public address, because the audio goes from your device to it
-  directly (not through Tor). It can't hear the call: media is encrypted end to end (5.3, 5.4).
-- The relay Worker gets its requests through Tor: it sees a hash of your chat key and the time, never your
-  address. The TURN server's name is looked up through Tor too, so your DNS server doesn't see it.
-- Nostr relays and onion routes see nothing new: signaling is sealed like any message.
+  directly. It can't hear the call: media is encrypted end to end (5.3, 5.4).
+- The relay Worker sees your public address (an HTTPS request), a hash of your chat key and the time.
+  Your DNS server sees the TURN server's name being looked up.
+- Nostr relays see nothing new: signaling is sealed like any message.
 - Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
   candidate is sent, and calls work only over Wi-Fi and Bluetooth.

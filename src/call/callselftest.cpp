@@ -56,13 +56,12 @@ void relayChecks()
           "Worker request id and sig match Muninn's");
     {
         QObject ctx;
-        QHostAddress got(QStringLiteral("1.1.1.1")), lit;
+        QHostAddress got, lit;
         bool done = false, litDone = false;
-        // No Tor here: a name must get no answer at all (the system resolver knows "localhost").
-        CallNet::resolveViaTor(QStringLiteral("localhost"), &ctx, [&](const QHostAddress &a) { got = a; done = true; }, 1);
-        CallNet::resolveViaTor(QStringLiteral("104.30.1.2"), &ctx, [&](const QHostAddress &a) { lit = a; litDone = true; });
-        waitFor([&] { return done && litDone; }, 3000);
-        check(done && got.isNull(), "the relay's name is looked up through Tor only (no Tor: no answer)");
+        CallNet::resolve(QStringLiteral("localhost"), &ctx, [&](const QHostAddress &a) { got = a; done = true; }, 1);
+        CallNet::resolve(QStringLiteral("104.30.1.2"), &ctx, [&](const QHostAddress &a) { lit = a; litDone = true; });
+        waitFor([&] { return done && litDone; }, 5000);
+        check(done && got.isLoopback(), "the relay's name is looked up (localhost answers)");
         check(litDone && lit == QHostAddress(QStringLiteral("104.30.1.2")), "an IP literal needs no lookup");
     }
     const auto s = TurnClient::servers({QStringLiteral("turn:turn.cloudflare.com:3478?transport=udp"), QStringLiteral("turn:turn.cloudflare.com:3478?transport=tcp"),

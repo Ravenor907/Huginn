@@ -124,7 +124,7 @@ QList<LocalSend::Peer> LocalSend::chatPeers() const
     QList<Peer> out;
     for (const Device &d : m_devices)
         if (!d.chatKey.isEmpty())
-            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type, d.onion};
+            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type};
     return out;
 }
 
@@ -430,7 +430,6 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.chatKey = o.value(QStringLiteral("chatKey")).toString();
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
-    d.onion = o.value(QStringLiteral("onion")).toString().left(70);
     d.seen = QDateTime::currentDateTime();
     m_devices.insert(id, d);
     Q_EMIT devicesChanged();

@@ -57,7 +57,6 @@ qt_add_executable(huginn
     src/ble.cpp src/ble.h
     src/bleframes.cpp src/bleframes.h
     src/tls.cpp src/tls.h
-    src/tor.cpp src/tor.h
     src/lan.cpp src/lan.h
     src/wifiselftest.cpp src/wifiselftest.h
     # 1:1 voice calls (docs/protocol-0.6.md section 5, TURN relay only over the internet)

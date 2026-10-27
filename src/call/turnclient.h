@@ -20,9 +20,9 @@ namespace CallNet
 {
 QHostAddress toHost(const Stun::Address &a);
 Stun::Address fromHost(const QHostAddress &h, quint16 port);
-// Looks host up through Tor only (SOCKS5 RESOLVE), up to tries times a second apart; an IP literal is
-// used as it is. done gets a null address when Tor couldn't answer. Never the system resolver.
-void resolveViaTor(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries = 3);
+// Looks host up (DNS), up to tries times a second apart; an IP literal is used as it is.
+// done gets a null address when the name couldn't be looked up.
+void resolve(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries = 3);
 }
 
 // A TURN login from the relay Worker (docs/relay.md).
@@ -33,7 +33,7 @@ struct TurnLogin {
     bool valid() const { return !username.isEmpty() && !credential.isEmpty() && !urls.isEmpty(); }
 };
 
-// Asks the relay Worker for a TURN login, through Tor only, when a call needs one; keeps it in
+// Asks the relay Worker for a TURN login (HTTPS) when a call needs one; keeps it in
 // memory until 5 minutes before it expires. Follows the Worker's rules: after 429 nothing until the
 // next UTC day, after a 5xx at least 60 s. The credential is never logged.
 class RelayCredentials : public QObject
@@ -140,6 +140,6 @@ private:
     quint16 m_nextChannel = 0x4000;
     QTimer m_refresh, m_rebind, m_giveUp;
     bool m_stopped = false;
-    QHash<QString, QHostAddress> m_resolved;   // per allocation attempt: names Tor answered
+    QHash<QString, QHostAddress> m_resolved;   // per allocation attempt: names looked up
     QSet<QString> m_unresolved;                // and names it couldn't (not asked again)
 };
