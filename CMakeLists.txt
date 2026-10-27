@@ -212,6 +212,7 @@ qt_add_qml_module(huginn
         qml/HoverBar.qml
         qml/MessageRow.qml
         qml/QuickSwitcher.qml
+        qml/StickPointer.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/raven_message.wav
@@ -222,7 +223,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher)
+                   HoverBar MessageRow QuickSwitcher StickPointer)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

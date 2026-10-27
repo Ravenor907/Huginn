@@ -60,7 +60,7 @@ Rectangle {
     }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
-    // The lock's own LB / RB (pattern or password) win over moving along the rail.
+    // The lock's own LB (pattern or password) wins over moving along the rail.
     readonly property bool ownsShoulders: lock.visible && lock.mode !== "unlock"
 
     // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
@@ -103,12 +103,12 @@ Rectangle {
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
     readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
 
-    // What the hint bar shows (Main.qml adds LB RB).
-    readonly property var prompts: lock.visible ? [{ key: "b", label: "Back" }]
+    // What the hint bar shows (Main.qml adds LB). LT opens the options (the page gets it as X).
+    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
-                             { key: "x", label: "Options" }, { key: "b", label: "Back" }]
+                             { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
-            .concat(sel >= 0 || openKey !== "" ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
+            .concat(sel >= 0 || openKey !== "" ? [{ key: "lt", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
     readonly property string status: lock.visible ? "" : Chat.netStatus
 
     function routeText(r) {
@@ -740,7 +740,7 @@ Rectangle {
                 visible: list.count === 0
                 text: page.openKey === "" ? (Chat.nearbyOn ? (Chat.nearbyCount === 0 ? "Nobody else is here yet. Open Muninn on a phone close by or on this Wi-Fi." : "Say hello. Press A to write.")
                                                            : "Nearby chat is off. Turn it on in Settings › Chat.")
-                                          : "No messages yet. Press A to write, hold Y to talk, X for a picture."
+                                          : "No messages yet. Press A to write, hold Y to talk, LT for a picture and more."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             }
 
@@ -1397,6 +1397,8 @@ Rectangle {
         }
     }
 
+    // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
+    function scrollView() { return zone === "messages" ? list : listPane }
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)

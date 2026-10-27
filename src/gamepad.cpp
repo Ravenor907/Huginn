@@ -2,11 +2,13 @@
 
 #include <SDL.h>
 
+#include <QCoreApplication>
 #include <QDebug>
+#include <QMouseEvent>
+#include <QQuickWindow>
 
 namespace
 {
-constexpr int kDeadzone = 16000;
 constexpr int kTrigger = 12000;
 
 QString buttonName(Uint8 b)
@@ -30,16 +32,18 @@ QString buttonName(Uint8 b)
     return {};
 }
 
+// Only the D-pad repeats. The sticks aren't buttons any more: the left one scrolls and the
+// right one moves the pointer, so they never share the D-pad's names.
 bool isDirection(const QString &b)
 {
-    return b == QLatin1String("up") || b == QLatin1String("down") || b == QLatin1String("left") || b == QLatin1String("right")
-        || b == QLatin1String("lt") || b == QLatin1String("rt");
+    return b == QLatin1String("up") || b == QLatin1String("down") || b == QLatin1String("left") || b == QLatin1String("right");
 }
 }
 
 Gamepad::Gamepad(QObject *parent)
     : QObject(parent)
 {
+    m_clock.start();
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
         qWarning() << "Controller support is off:" << SDL_GetError();
@@ -135,6 +139,8 @@ void Gamepad::poll()
             if (m_pad && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(m_pad)) == e.cdevice.which) {
                 SDL_GameControllerClose(m_pad);
                 m_pad = nullptr;
+                m_stickX = m_stickY = m_rightX = m_rightY = 0;
+                Q_EMIT stickChanged();
                 Q_EMIT connectedChanged();
                 for (int i = 0; i < SDL_NumJoysticks(); ++i)
                     if (SDL_IsGameController(i)) { open(i); break; }
@@ -156,22 +162,26 @@ void Gamepad::poll()
             const int v = e.caxis.value;
             switch (e.caxis.axis) {
             case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
-                axisAsButton(QStringLiteral("lt"), v > kTrigger, true);
+                axisAsButton(QStringLiteral("lt"), v > kTrigger, false);
                 break;
             case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
-                axisAsButton(QStringLiteral("rt"), v > kTrigger, true);
+                axisAsButton(QStringLiteral("rt"), v > kTrigger, false);
                 break;
             case SDL_CONTROLLER_AXIS_LEFTX:
-                m_stickX = v / 32767.0;
+                m_stickX = qBound(-1.0, v / 32767.0, 1.0);
                 Q_EMIT stickChanged();
-                axisAsButton(QStringLiteral("left"), v < -kDeadzone, true);
-                axisAsButton(QStringLiteral("right"), v > kDeadzone, true);
                 break;
             case SDL_CONTROLLER_AXIS_LEFTY:
-                m_stickY = v / 32767.0;
+                m_stickY = qBound(-1.0, v / 32767.0, 1.0);
                 Q_EMIT stickChanged();
-                axisAsButton(QStringLiteral("up"), v < -kDeadzone, true);
-                axisAsButton(QStringLiteral("down"), v > kDeadzone, true);
+                break;
+            case SDL_CONTROLLER_AXIS_RIGHTX:
+                m_rightX = qBound(-1.0, v / 32767.0, 1.0);
+                Q_EMIT stickChanged();
+                break;
+            case SDL_CONTROLLER_AXIS_RIGHTY:
+                m_rightY = qBound(-1.0, v / 32767.0, 1.0);
+                Q_EMIT stickChanged();
                 break;
             }
             break;
@@ -189,7 +199,6 @@ QString Gamepad::glyph(const QString &button) const
     if (button == QLatin1String("y")) return ps ? QStringLiteral("△") : QStringLiteral("Y");
     if (button == QLatin1String("lb")) return ps ? QStringLiteral("L1") : QStringLiteral("LB");
     if (button == QLatin1String("rb")) return ps ? QStringLiteral("R1") : QStringLiteral("RB");
-    if (button == QLatin1String("lbrb")) return ps ? QStringLiteral("L1 R1") : QStringLiteral("LB RB");
     if (button == QLatin1String("lt")) return ps ? QStringLiteral("L2") : QStringLiteral("LT");
     if (button == QLatin1String("rt")) return ps ? QStringLiteral("R2") : QStringLiteral("RT");
     if (button == QLatin1String("start")) return ps ? QStringLiteral("Options") : QStringLiteral("Menu");
@@ -197,5 +206,35 @@ QString Gamepad::glyph(const QString &button) const
     if (button == QLatin1String("right")) return QStringLiteral("▶");
     if (button == QLatin1String("left")) return QStringLiteral("◀");
     if (button == QLatin1String("updown")) return QStringLiteral("▲▼");
+    if (button == QLatin1String("dpad")) return QStringLiteral("✚");
+    if (button == QLatin1String("ls")) return ps ? QStringLiteral("L3") : QStringLiteral("LS");
+    if (button == QLatin1String("rs")) return ps ? QStringLiteral("R3") : QStringLiteral("RS");
     return button.toUpper();
+}
+
+void Gamepad::pointerMove(QQuickWindow *window, double x, double y)
+{
+    if (!window)
+        return;
+    const QPointF at(x, y);
+    // A move with nothing held is a hover, which is how hover tools and highlights appear.
+    QMouseEvent ev(QEvent::MouseMove, at, at, window->mapToGlobal(at), Qt::NoButton, m_held, Qt::NoModifier);
+    ev.setTimestamp(quint64(m_clock.elapsed()));
+    QCoreApplication::sendEvent(window, &ev);
+}
+
+void Gamepad::pointerButton(QQuickWindow *window, double x, double y, int button, bool down)
+{
+    if (!window)
+        return;
+    const Qt::MouseButton b = button == 2 ? Qt::RightButton : Qt::LeftButton;
+    // A release only for a press we sent, a press only once.
+    if (down == m_held.testFlag(b))
+        return;
+    m_held.setFlag(b, down);
+    const QPointF at(x, y);
+    QMouseEvent ev(down ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease, at, at, window->mapToGlobal(at),
+                   b, m_held, Qt::NoModifier);
+    ev.setTimestamp(quint64(m_clock.elapsed()));
+    QCoreApplication::sendEvent(window, &ev);
 }

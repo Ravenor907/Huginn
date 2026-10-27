@@ -39,14 +39,14 @@ Item {
         do { i += dir } while (i >= 0 && i < entries.length && entries[i].header)
         if (i >= 0 && i < entries.length) current = i
     }
-    function jumpSection(dir) {
+    function jumpSection(dir, wrap) {
         // Headers mark sections; land on the first entry of the next or previous one.
         const headers = []
         entries.forEach((e, i) => { if (e.header) headers.push(i) })
         if (!headers.length) return
         let here = 0
         headers.forEach((h, k) => { if (h < current) here = k })
-        const target = Math.max(0, Math.min(headers.length - 1, here + dir))
+        const target = wrap ? (here + dir + headers.length) % headers.length : Math.max(0, Math.min(headers.length - 1, here + dir))
         current = headers[target] + 1
     }
 
@@ -150,8 +150,8 @@ Item {
             anchors.bottom: parent.bottom
             width: parent.width
             color: "transparent"
-            prompts: [{ key: "a", label: "Choose" }, { key: "lbrb", label: "Sections" }, { key: "b", label: "Cancel" }]
-            onPrompt: k => picker.handleButton(k === "lbrb" ? "rb" : k)
+            prompts: [{ key: "a", label: "Choose" }, { key: "lb", label: "Next section" }, { key: "b", label: "Cancel" }]
+            onPrompt: k => picker.handleButton(k)
         }
     }
 
@@ -159,10 +159,9 @@ Item {
         switch (b) {
         case "up": step(-1); break
         case "down": step(1); break
-        case "lt": for (let i = 0; i < 6; ++i) step(-1); break
-        case "rt": for (let i = 0; i < 6; ++i) step(1); break
-        case "lb": jumpSection(-1); break
-        case "rb": jumpSection(1); break
+        case "lb": jumpSection(1, true); break   // LB goes round the sections
+        case "next": jumpSection(1, false); break
+        case "prev": jumpSection(-1, false); break
         case "a": pick(); break
         case "b": close(); break
         }
