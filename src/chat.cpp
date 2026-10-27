@@ -2263,8 +2263,9 @@ QVariantList Chat::messagesWith(const QString &key) const
     QVariantList out = m_private.value(key);
     const QString shown = nameOf(key);
     const QVariantList all = out;
+    const M1Index idx = m1Index(all);
     for (QVariant &v : out) {
-        QVariantMap m = withM1(v.toMap(), all, shown);
+        QVariantMap m = withM1(v.toMap(), all, idx, shown);
         if (m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool()) {
             v = m;
             continue;
@@ -2663,31 +2664,40 @@ bool Chat::isPicture(const QString &path) const
 
 // What the screens need for replies, reactions and edits: the quoted message's name and text, the
 // reaction counts (mine marked) and whether it was edited.
-QVariantMap Chat::withM1(const QVariantMap &in, const QVariantList &all, const QString &theirName) const
+Chat::M1Index Chat::m1Index(const QVariantList &all)
+{
+    M1Index idx;
+    idx.at.reserve(all.size());
+    for (int i = 0; i < all.size(); ++i) {
+        const QVariantMap q = all.at(i).toMap();
+        const QString id = str(q, "id");
+        if (!id.isEmpty() && !idx.at.contains(id))
+            idx.at.insert(id, i);
+        const QString re = str(q, "re");
+        if (!re.isEmpty())
+            ++idx.replies[re];
+    }
+    return idx;
+}
+
+QVariantMap Chat::withM1(const QVariantMap &in, const QVariantList &all, const M1Index &idx, const QString &theirName) const
 {
     QVariantMap m = in;
     const QString re = str(m, "re");
     if (!re.isEmpty()) {
         QString who = QStringLiteral("Message"), what = QStringLiteral("Not here any more");
-        for (const QVariant &v : all) {
-            const QVariantMap q = v.toMap();
-            if (str(q, "id") != re)
-                continue;
+        const auto hit = idx.at.constFind(re);
+        if (hit != idx.at.cend()) {
+            const QVariantMap q = all.at(*hit).toMap();
             who = q.value(QStringLiteral("mine")).toBool() ? QStringLiteral("You") : theirName.isEmpty() ? str(q, "name") : theirName;
             what = !str(q, "unsent").isEmpty() ? QStringLiteral("Message deleted")
                  : q.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
                  : !str(q, "photo").isEmpty() ? QStringLiteral("Photo") : str(q, "text").left(120);
-            break;
         }
         m.insert(QStringLiteral("reName"), who);
         m.insert(QStringLiteral("reText"), what);
     }
-    int replies = 0;
-    const QString id = str(m, "id");
-    for (const QVariant &v : all)
-        if (str(v.toMap(), "re") == id)
-            ++replies;
-    m.insert(QStringLiteral("replies"), replies);
+    m.insert(QStringLiteral("replies"), idx.replies.value(str(m, "id"), 0));
     m.insert(QStringLiteral("rxList"), RichWire::counts(m.value(QStringLiteral("rx")).toMap(), myKey()));
     m.insert(QStringLiteral("myReaction"), RichWire::shown(m.value(QStringLiteral("rx")).toMap()).value(myKey()).toString());
     m.insert(QStringLiteral("isEdited"), m.value(QStringLiteral("edited")).toLongLong() > 0 && str(m, "unsent").isEmpty());

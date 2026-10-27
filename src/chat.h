@@ -312,7 +312,13 @@ private:
     void sendActive(bool on);
     void liveTick();
     void savePins();
-    QVariantMap withM1(const QVariantMap &m, const QVariantList &all, const QString &theirName) const;
+    // Built once per message list: where each id sits and how many messages reply to it.
+    struct M1Index {
+        QHash<QString, int> at;             // message id -> index in the list
+        QHash<QString, int> replies;        // message id -> how many messages have it as "re"
+    };
+    static M1Index m1Index(const QVariantList &all);
+    QVariantMap withM1(const QVariantMap &m, const QVariantList &all, const M1Index &idx, const QString &theirName) const;
     void takeGroupChange(const QString &g, const QString &from, const QJsonObject &p);
 
     // ---- groups (chatgroups.cpp)

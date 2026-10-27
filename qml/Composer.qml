@@ -22,7 +22,9 @@ Item {
     signal attach()
 
     function focusField() { field.forceActiveFocus() }
-    function setText(t) { field.text = t; field.cursorPosition = t.length; field.forceActiveFocus() }
+    // Text put in by the app (Up to edit, a draft) is not typing, so it sends no typing signal.
+    property bool settingText: false
+    function setText(t) { settingText = true; field.text = t; field.cursorPosition = t.length; settingText = false; field.forceActiveFocus() }
     function insert(t) { field.insert(field.cursorPosition, t); field.forceActiveFocus() }
 
     // The @word being typed at the cursor, for suggestions ("" when there's none).
@@ -151,7 +153,8 @@ Item {
                     topPadding: Theme.px(12); bottomPadding: Theme.px(12); leftPadding: Theme.px(8); rightPadding: Theme.px(8)
                     background: null
                     Accessible.name: box.placeholder
-                    onTextChanged: box.typing(text.trim().length > 0)
+                    // Editing a sent message is not typing a new one: no typing signals then.
+                    onTextChanged: if (!box.settingText && !box.editing) box.typing(text.trim().length > 0)
                     Keys.onPressed: event => {
                         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
                             if (box.suggestions.length > 0) box.pickMention(box.suggestions[0])

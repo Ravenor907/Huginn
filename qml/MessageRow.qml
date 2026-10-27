@@ -1,0 +1,185 @@
+import QtQuick
+import Huginn
+
+// Shared by groups and 1:1 chats (threads and pins).
+// One message: name, time (and "(edited)"), for mine a check mark with how many have read it in a
+// circle; the quoted message of a reply, the text or picture or voice, reactions, "N replies" (a
+// thread), and on the desktop the tools over its corner. An @mention of me is lit up.
+Rectangle {
+    id: msg
+    // The page it sits on (GroupPage or ChatPage): its clock, actions, pins and photo viewer.
+    property var host: null
+    property var m: ({})
+    property int at: 0
+    property bool picked: false
+    property int lineH: 0
+    property bool hoverTools: false
+    property bool inThread: false
+    signal options()
+    property string who: m.name || "Someone"
+    height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.height, col.implicitHeight) + Theme.px(14)
+    radius: Theme.px(8)
+    color: picked ? Theme.focusFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : "transparent"
+    border.width: picked ? Theme.focusWidth : 0
+    border.color: Theme.accent
+    Rectangle { visible: !!msg.m.mention && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH; color: Theme.accent }
+
+    Item {
+        visible: msg.lineH > 0
+        width: parent.width; height: msg.lineH
+        Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
+        Rectangle {
+            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.px(4); color: Theme.danger
+            Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+        }
+    }
+    // A note from Huginn itself (someone joined, the group was renamed).
+    Rectangle {
+        id: note
+        visible: !!msg.m.system
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.min(parent.width * 0.9, noteText.implicitWidth + Theme.px(28))
+        height: noteText.implicitHeight + Theme.px(14)
+        radius: Theme.px(8)
+        color: Theme.panel
+        border.width: 1
+        border.color: Theme.line
+        Text {
+            id: noteText
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, msg.width * 0.9 - Theme.px(28))
+            wrapMode: Text.Wrap
+            text: msg.m.system ? (msg.m.text || "") : ""
+            color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+        }
+    }
+    Rectangle {
+        id: face
+        visible: !msg.m.system
+        x: Theme.px(8); y: msg.lineH + Theme.px(7)
+        width: Theme.px(40); height: width; radius: width / 2
+        color: Theme.avatar(msg.who, msg.m.mine).bg
+        Text {
+            anchors.centerIn: parent
+            text: host.initial(msg.who)
+            color: Theme.avatar(msg.who, msg.m.mine).fg
+            font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
+        }
+    }
+    Column {
+        id: col
+        visible: !msg.m.system
+        anchors.left: face.right; anchors.leftMargin: Theme.px(12)
+        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+        y: msg.lineH + Theme.px(7)
+        spacing: Theme.px(3)
+        Row {
+            spacing: Theme.px(8)
+            Text {
+                id: whoText
+                text: msg.who
+                color: Theme.avatar(msg.who, msg.m.mine).fg
+                font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
+            }
+            Text {
+                anchors.baseline: whoText.baseline
+                text: host.clock(msg.m.time) + (msg.m.isEdited ? " · (edited)" : "") + host.stateLabel(msg.m)
+                color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? Theme.accent : Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(13)
+            }
+            // Mine and read: a check mark and how many have read it, in a circle.
+            Row {
+                visible: !!msg.m.mine && !msg.m.unsent && (msg.m.readCount || 0) > 0
+                anchors.verticalCenter: whoText.verticalCenter
+                spacing: Theme.px(3)
+                Accessible.role: Accessible.StaticText
+                Accessible.name: "Read by " + (msg.m.readCount || 0)
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "check"; size: Theme.px(15); color: Theme.accent }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(Theme.px(18), readN.implicitWidth + Theme.px(8)); height: Theme.px(18); radius: height / 2
+                    color: "transparent"; border.color: Theme.accent; border.width: 1
+                    Text { id: readN; anchors.centerIn: parent; text: msg.m.readCount || 0; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
+                }
+            }
+        }
+        QuoteLine {
+            visible: !!msg.m.reName && !msg.m.unsent
+            who: msg.m.reName || ""
+            what: msg.m.reText || ""
+            onJump: host.jumpTo(msg.m.re)
+        }
+        Image {
+            visible: !!msg.m.photo && !msg.m.voice && !msg.m.unsent
+            width: Theme.px(300); height: Theme.px(170)
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            source: visible && !host.isTour ? Chat.photoUrl(msg.m.photo) : ""
+        }
+        Row {
+            visible: !!msg.m.voice && !msg.m.unsent
+            spacing: Theme.px(10)
+            Icon { name: Voice.playing === msg.m.id ? "stop" : "play"; color: Theme.accent }
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                Rectangle {
+                    width: Theme.px(180); height: Theme.px(4); color: Theme.line
+                    Rectangle { width: parent.width * (Voice.playing === msg.m.id ? Voice.progress : 0); height: parent.height; color: Theme.accent }
+                }
+                Text { text: "Voice message · " + Voice.length(msg.m.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+            }
+        }
+        Text {
+            visible: !msg.m.photo || !!msg.m.unsent
+            width: parent.width; wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
+            font.italic: !!msg.m.unsent
+            color: msg.m.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
+        }
+        Reactions {
+            width: parent.width
+            list: msg.m.rxList || []
+            add: msg.hoverTools
+            onToggled: (e, mine) => host.reactTo(msg.m.id, mine ? "" : e)
+            onMore: host.openReact(msg.m.id, msg.m.myReaction || "")
+        }
+        // A thread: how many replies, opening them beside the channel.
+        Text {
+            visible: !msg.inThread && (msg.m.replies || 0) > 0 && !msg.m.unsent
+            text: (msg.m.replies === 1 ? "1 reply" : msg.m.replies + " replies") + " ›"
+            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+            Accessible.role: Accessible.Button
+            Accessible.name: "Open the thread"
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: host.openThread(msg.m.id) }
+        }
+    }
+    HoverBar {
+        visible: msg.hoverTools && msgHover.hovered && !msg.m.system && !msg.m.unsent
+        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+        y: msg.lineH - Theme.px(6)
+        z: 2
+        canEdit: !!msg.m.mine && !msg.m.photo && !msg.m.failed
+        canThread: !msg.inThread
+        canPin: !msg.inThread
+        pinnedNow: host.pins.indexOf(msg.m.id) >= 0
+        onReact: host.openReact(msg.m.id, msg.m.myReaction || "")
+        onReply: msg.inThread ? host.threadCompose.focusField() : host.startReply(msg.m.id)
+        onThread: host.openThread(msg.m.id)
+        onEdit: host.startEdit(msg.m)
+        onPin: host.togglePin(msg.m.id)
+        onMore: msg.options()
+    }
+    HoverHandler { id: msgHover }
+    // Click: a photo opens; right click (or a click on a handheld) opens the options.
+    TapHandler {
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onTapped: (point, button) => {
+            if (button === Qt.RightButton || !host.typeHere) msg.options()
+            else if (msg.m.photo && !msg.m.voice && !msg.m.unsent) host.viewing = msg.m.photo
+        }
+    }
+}

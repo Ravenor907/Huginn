@@ -31,6 +31,14 @@ Rectangle {
     property int newFrom: -1
     property string reactFor: ""
     readonly property var replyMsg: replyId === "" ? null : messages.find(m => m.id === replyId) || null
+    // The side panel (desktop, a 1:1 chat only): "thread" for one message and its replies, "pins" for
+    // this chat's pins (only on this computer), the same as in groups.
+    property string side: ""
+    property string threadRoot: ""
+    readonly property bool isTour: tour
+    readonly property var pins: tour || locked || openKey === "" ? [] : (Chat.chats, Chat.pinned(openKey))
+    readonly property var pinnedMsgs: pins.map(id => messages.find(m => m.id === id)).filter(m => !!m)
+    readonly property var threadMsgs: threadRoot === "" ? [] : messages.filter(m => m.id === threadRoot || m.re === threadRoot)
     readonly property bool theyType: openKey !== "" && !locked && Chat.typing[openKey] !== undefined
     readonly property bool theyActive: openKey !== "" && !locked && Chat.active[openKey] !== undefined
 
@@ -101,7 +109,7 @@ Rectangle {
 
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
-        replyId = ""; editId = ""; reactFor = ""
+        replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
         if (typeHere) compose.text = ""
         // Where the unread ones start (after my last message), for the "New messages" line.
         newFrom = -1
@@ -302,7 +310,7 @@ Rectangle {
     Item {
         id: main
         anchors.left: middle.right
-        anchors.right: members.visible ? members.left : parent.right
+        anchors.right: sidePanel.visible ? sidePanel.left : members.visible ? members.left : parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
@@ -336,6 +344,14 @@ Rectangle {
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
+            }
+            // Pinned messages of this chat (only on this computer).
+            HButton {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: page.typeHere && !page.locked && page.openKey !== ""
+                text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
+                fontSize: 15
+                onClicked: page.side = page.side === "pins" ? "" : "pins"
             }
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
@@ -515,6 +531,16 @@ Rectangle {
                             onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
                             onMore: page.openReact(modelData.id, modelData.myReaction || "")
                         }
+                        // A thread: how many replies, opening them beside the chat.
+                        Text {
+                            visible: page.typeHere && page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
+                            text: (modelData.replies === 1 ? "1 reply" : modelData.replies + " replies") + " ›"
+                            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "Open the thread"
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: page.openThread(modelData.id) }
+                        }
                     }
                     // Desktop: react, reply, edit and more over the corner while the pointer is on it.
                     HoverBar {
@@ -523,8 +549,13 @@ Rectangle {
                         y: msg.lineH - Theme.px(6)
                         z: 2
                         canEdit: !!modelData.mine && !modelData.photo && !modelData.failed
+                        canThread: true
+                        canPin: true
+                        pinnedNow: page.pins.indexOf(modelData.id) >= 0
                         onReact: page.openReact(modelData.id, modelData.myReaction || "")
                         onReply: page.startReply(modelData.id)
+                        onThread: page.openThread(modelData.id)
+                        onPin: page.togglePin(modelData.id)
                         onEdit: page.startEdit(modelData)
                         onMore: { page.zone = "messages"; page.sel = index; page.options() }
                     }
@@ -645,6 +676,66 @@ Rectangle {
             onEditLast: page.editLast()
             onEscaped: page.escapeKey()
             onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
+            onAttach: page.pickPicture()
+        }
+    }
+
+    // ============================================================= side panel (desktop): a thread or the pins
+    property alias threadCompose: threadBox
+    Rectangle {
+        id: sidePanel
+        visible: page.typeHere && !lock.visible && page.openKey !== "" && page.side !== ""
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: Theme.px(360)
+        color: Theme.column
+        PageHeader {
+            id: sideHead
+            width: parent.width
+            title: page.side === "thread" ? "Thread" : "Pinned"
+            subtitle: page.side === "thread" ? "With " + page.openName : page.pinnedMsgs.length ? page.pinnedMsgs.length + " pinned · only on this computer" : "Nothing pinned with " + page.openName
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: { page.side = ""; page.threadRoot = "" } }
+        }
+        ListView {
+            id: sideList
+            anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(10)
+            anchors.bottom: threadBox.visible ? threadBox.top : parent.bottom; anchors.bottomMargin: Theme.px(10)
+            x: Theme.px(8); width: parent.width - Theme.px(16)
+            spacing: Theme.px(6)
+            clip: true
+            model: page.side === "thread" ? page.threadMsgs : page.pinnedMsgs
+            onCountChanged: if (page.side === "thread") positionViewAtEnd()
+            delegate: MessageRow {
+                host: page
+                width: sideList.width
+                m: modelData
+                at: index
+                who: page.senderName(modelData)
+                inThread: true
+                hoverTools: page.typeHere
+                onOptions: { const i = page.messages.findIndex(x => x.id === modelData.id); if (i >= 0) { page.zone = "messages"; page.sel = i; page.options() } }
+            }
+        }
+        Text {
+            visible: page.side === "pins" && page.pinnedMsgs.length === 0
+            anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(16)
+            x: Theme.px(16); width: parent.width - Theme.px(32)
+            wrapMode: Text.WordWrap
+            text: "Pin a message with the pin over its corner. Pins stay on this computer."
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+        }
+        Composer {
+            id: threadBox
+            visible: page.side === "thread"
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.margins: Theme.px(12)
+            height: implicitHeight
+            placeholder: "Reply in the thread"
+            target: page.openKey
+            onSend: t => page.sendText(t, page.threadRoot)
+            onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
+            onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
             onAttach: page.pickPicture()
         }
     }
@@ -884,7 +975,9 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
             items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
+            if (typeHere) items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
         }
+        if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
         if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
@@ -899,6 +992,8 @@ Rectangle {
         Ui.pickFrom("Message", sections, a => {
             if (a === "react") pickReaction(m)
             else if (a === "reply") startReply(m.id)
+            else if (a === "thread") openThread(m.id)
+            else if (a === "pin") togglePin(m.id)
             else if (a === "edit") startEdit(m)
             else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
             else if (a === "view") viewing = m.photo
@@ -957,7 +1052,21 @@ Rectangle {
         replyId = ""; editId = ""; newFrom = -1
         if (openKey !== "") Chat.markRead(openKey)
     }
-    function sendText(t) {
+    // A thread: the message and its replies beside the chat, with its own reply box.
+    function openThread(id) {
+        if (openKey === "" || !typeHere) return
+        threadRoot = id
+        side = "thread"
+        Qt.callLater(() => threadBox.focusField())
+    }
+    function togglePin(id) {
+        if (tour || openKey === "") return
+        const on = pins.indexOf(id) < 0
+        Chat.setPinned(openKey, id, on)
+        Ui.say(on ? "Pinned. Pins are only on this computer." : "Unpinned.")
+    }
+    // re: the message answered; a reply in a thread passes the thread's first message.
+    function sendText(t, re) {
         if (editId !== "") {
             const r = Chat.editMessage(openKey, editId, t)
             if (r !== "") Ui.say(r, true)
@@ -967,8 +1076,8 @@ Rectangle {
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › Chat.", true); return }
             Chat.sendNearby(t)
-        } else Chat.sendPrivate(openKey, t, replyId)
-        replyId = ""
+        } else Chat.sendPrivate(openKey, t, re !== undefined ? re : replyId)
+        if (re === undefined) replyId = ""
         newFrom = -1
     }
     // Dropped files: pictures go in the chat; anything else goes to Files, ready to send over the Wi-Fi.

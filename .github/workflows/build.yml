@@ -536,6 +536,8 @@ jobs:
           start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
           exit $bad
       - name: Publish the Wine logs to the ci-wine branch
+        # Only a convenience for reading logs: a failed push must not fail the Wine job or block a release.
+        continue-on-error: true
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           [ -d wine-logs ] || exit 0
