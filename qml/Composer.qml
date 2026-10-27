@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick.Controls.Basic
 import Huginn
 
-// Desktop (mouse and keyboard): the message box docked at the bottom of a chat, typed into directly.
-// Enter sends, Shift+Enter starts a new line, Ctrl+V pastes a picture, Up in an empty box edits your last
-// message, Esc cancels a reply or an edit (or marks the chat read). Game Mode and controllers keep TextPrompt.
+// The message box docked at the bottom of a chat, typed into directly. Enter sends, Shift+Enter starts
+// a new line, Ctrl+V pastes a picture, Up in an empty box edits your last message, Esc cancels a reply
+// or an edit (or marks the chat read). With a controller, A on the conversation puts you in it and
+// Steam's keyboard comes up; the page then routes the buttons here (see boxButton in the pages).
 Item {
     id: box
     property string placeholder: ""
@@ -22,6 +23,23 @@ Item {
     signal attach()
 
     function focusField() { field.forceActiveFocus() }
+    readonly property bool hasFocus: field.activeFocus
+    readonly property bool emojiShown: picker.visible
+    // The controller or its pointer is in use: the focus shows as thick as everywhere else.
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
+    // Out of the box (the draft stays): the controller and the keyboard go back to the page.
+    function leave() {
+        picker.visible = false
+        System.hideSteamKeyboard()
+        if (Ui.main) Ui.main.restoreFocus()
+    }
+    function toggleEmoji() { picker.visible = !picker.visible }
+    function emojiButton(b) { return picker.handleButton(b) }
+    // What Enter does: take the first @ suggestion, or send.
+    function enter() {
+        if (box.suggestions.length > 0) box.pickMention(box.suggestions[0])
+        else box.submit()
+    }
     // Text put in by the app (Up to edit, a draft) is not typing, so it sends no typing signal.
     property bool settingText: false
     function setText(t) { settingText = true; field.text = t; field.cursorPosition = t.length; settingText = false; field.forceActiveFocus() }
@@ -119,8 +137,8 @@ Item {
             height: Math.min(Math.max(field.implicitHeight, Theme.px(46)), Theme.px(180))
             radius: Theme.px(11)
             color: Theme.raised
-            border.width: field.activeFocus ? 1 : 0
-            border.color: Theme.lineMuted
+            border.width: field.activeFocus ? (box.pad ? Theme.focusWidth : 1) : 0
+            border.color: box.pad ? Theme.accent : Theme.lineMuted
             Icon {
                 id: attachIcon
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
@@ -155,10 +173,11 @@ Item {
                     Accessible.name: box.placeholder
                     // Editing a sent message is not typing a new one: no typing signals then.
                     onTextChanged: if (!box.settingText && !box.editing) box.typing(text.trim().length > 0)
+                    // Game Mode has no keyboard of its own: Steam's comes up (it does nothing elsewhere).
+                    onActiveFocusChanged: if (activeFocus) System.showSteamKeyboard()
                     Keys.onPressed: event => {
                         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
-                            if (box.suggestions.length > 0) box.pickMention(box.suggestions[0])
-                            else box.submit()
+                            box.enter()
                             event.accepted = true
                         } else if (event.key === Qt.Key_Up && field.text.length === 0) {
                             box.editLast()

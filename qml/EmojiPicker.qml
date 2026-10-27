@@ -3,6 +3,7 @@ import Huginn
 
 // A panel of emoji to put in a message or react with. [quick]: the five quick reactions on top (for
 // reacting); tap one to pick it. Closes on Esc or a tap outside it (the owner decides: picked hides it).
+// A controller moves a highlight with the D-pad (the page hands it the buttons), A picks, B closes.
 Rectangle {
     id: picker
     property bool quick: false
@@ -22,6 +23,35 @@ Rectangle {
     readonly property var all: Chat.emojiList()
     readonly property var quickOnes: Chat.quickReactions()
 
+    // The controller's highlight: the quick row first, then the grid.
+    property int cur: 0
+    readonly property int quickCount: quick ? quickOnes.length : 0
+    readonly property int cols: Math.max(1, Math.floor(grid.width / grid.cellWidth))
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
+    onVisibleChanged: if (visible) { cur = 0; grid.positionViewAtBeginning() }
+    function moveTo(i) {
+        cur = i
+        if (i >= quickCount) grid.positionViewAtIndex(i - quickCount, GridView.Contain)
+    }
+    function handleButton(b) {
+        const q = quickCount, n = q + all.length
+        switch (b) {
+        case "left": if (cur > 0) moveTo(cur - 1); break
+        case "right": if (cur < n - 1) moveTo(cur + 1); break
+        case "up":
+            if (cur >= q + cols) moveTo(cur - cols)
+            else if (cur >= q && q > 0) moveTo(Math.min(q - 1, cur - q))
+            break
+        case "down":
+            if (cur < q) moveTo(Math.min(n - 1, q + cur))
+            else if (cur + cols < n) moveTo(cur + cols)
+            break
+        case "a": if (n > 0) picker.picked(cur < q ? quickOnes[cur] : all[cur - q]); break
+        case "b": visible = false; break
+        }
+        return true
+    }
+
     Row {
         id: quickRow
         visible: picker.quick
@@ -31,9 +61,10 @@ Rectangle {
         Repeater {
             model: picker.quick ? picker.quickOnes : []
             Rectangle {
+                readonly property bool on: picker.pad && picker.cur === index
                 width: Theme.px(40); height: width; radius: width / 2
-                color: modelData === picker.current ? Theme.accentFill : qHover.hovered ? Theme.raised : Theme.tile
-                border.width: modelData === picker.current ? 2 : 0
+                color: modelData === picker.current ? Theme.accentFill : on ? Theme.focusFill : qHover.hovered ? Theme.raised : Theme.tile
+                border.width: on ? Theme.focusWidth : modelData === picker.current ? 2 : 0
                 border.color: Theme.accent
                 Accessible.role: Accessible.Button
                 Accessible.name: modelData === picker.current ? "Take back " + modelData : "React " + modelData
@@ -58,8 +89,11 @@ Rectangle {
         model: picker.all
         boundsBehavior: Flickable.StopAtBounds
         delegate: Rectangle {
+            readonly property bool on: picker.pad && picker.cur === picker.quickCount + index
             width: grid.cellWidth - Theme.px(2); height: width; radius: Theme.px(6)
-            color: eHover.hovered ? Theme.raised : "transparent"
+            color: on ? Theme.focusFill : eHover.hovered ? Theme.raised : "transparent"
+            border.width: on ? Theme.focusWidth : 0
+            border.color: Theme.accent
             Accessible.role: Accessible.Button
             Accessible.name: modelData
             Text { anchors.centerIn: parent; text: modelData; font.pixelSize: Theme.fs(20) }

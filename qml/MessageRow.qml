@@ -4,7 +4,8 @@ import Huginn
 // Shared by groups and 1:1 chats (threads and pins).
 // One message: name, time (and "(edited)"), for mine a check mark with how many have read it in a
 // circle; the quoted message of a reply, the text or picture or voice, reactions, "N replies" (a
-// thread), and on the desktop the tools over its corner. An @mention of me is lit up.
+// thread), and the tools over its corner (pointed at, or picked with the controller). An @mention
+// of me is lit up.
 Rectangle {
     id: msg
     // The page it sits on (GroupPage or ChatPage): its clock, actions, pins and photo viewer.
@@ -16,6 +17,7 @@ Rectangle {
     property bool hoverTools: false
     property bool inThread: false
     signal options()
+    signal chosen()          // clicked: the page picks it (its tools show)
     property string who: m.name || "Someone"
     height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.height, col.implicitHeight) + Theme.px(14)
     radius: Theme.px(8)
@@ -158,7 +160,8 @@ Rectangle {
         }
     }
     HoverBar {
-        visible: msg.hoverTools && msgHover.hovered && !msg.m.system && !msg.m.unsent
+        id: tools
+        visible: msg.hoverTools && (msgHover.hovered || msg.picked) && !msg.m.system && !msg.m.unsent
         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
         y: msg.lineH - Theme.px(6)
         z: 2
@@ -167,19 +170,29 @@ Rectangle {
         canPin: !msg.inThread
         pinnedNow: host.pins.indexOf(msg.m.id) >= 0
         onReact: host.openReact(msg.m.id, msg.m.myReaction || "")
-        onReply: msg.inThread ? host.threadCompose.focusField() : host.startReply(msg.m.id)
+        // In a thread its own box answers; from the pins, the chat's box does.
+        onReply: msg.inThread && host.threadCompose.visible ? host.threadCompose.focusField() : host.startReply(msg.m.id)
         onThread: host.openThread(msg.m.id)
         onEdit: host.startEdit(msg.m)
         onPin: host.togglePin(msg.m.id)
         onMore: msg.options()
     }
     HoverHandler { id: msgHover }
-    // Click: a photo opens; right click (or a click on a handheld) opens the options.
+    // A click (a mouse or the right stick's pointer) picks it and opens a photo; a right click opens
+    // the options. A finger has no right click, so a tap opens them.
     TapHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onTapped: (point, button) => {
-            if (button === Qt.RightButton || !host.typeHere) msg.options()
+            // The tools over the corner answer their own clicks.
+            if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
+            msg.chosen()
+            if (button === Qt.RightButton) msg.options()
             else if (msg.m.photo && !msg.m.voice && !msg.m.unsent) host.viewing = msg.m.photo
         }
+    }
+    TapHandler {
+        acceptedDevices: PointerDevice.TouchScreen
+        onTapped: { msg.chosen(); msg.options() }
     }
 }

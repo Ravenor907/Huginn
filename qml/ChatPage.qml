@@ -3,15 +3,16 @@ import Huginn
 
 // Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, people in no
 // folder, then each folder as a section that folds away (like Discord categories), the Trash, and at
-// the very bottom the Nearby room and people around you. Main column: the open conversation. Locked
-// with a pattern or password like Muninn.
+// the very bottom the Nearby room and people around you. Main column: the open conversation and its
+// message box, with a thread or the pins beside it. The same on a desktop and a handheld, only bigger
+// there. Locked with a pattern or password like Muninn.
 Rectangle {
     id: page
     color: Theme.ground
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "list" or "messages"
+    property string zone: "list"      // "list", "messages" or "side" (a thread or the pins)
     // A person being dragged with the mouse (from which section), and where they'd land: the line
     // (in the list's content), the section, and whether that's onto a folder's header.
     property string dragKey: ""
@@ -24,15 +25,21 @@ Rectangle {
     property bool dropOnHeader: false
     property string openKey: ""       // "" = Nearby room, otherwise a private chat
     property int sel: -1              // selected message, for its options
+    property int sideSel: -1          // the message picked in the thread or pins panel
     property bool showCode: false
     property string viewing: ""       // a photo open full size
     property bool tour: false
     property bool changeLock: false
     // Groups arrive later; a direct message never shows the member column.
     readonly property bool isGroup: false
-    // Desktop with a mouse and keyboard: type straight into the box at the bottom (Game Mode and
-    // controllers keep the big TextPrompt).
-    readonly property bool typeHere: Theme.desktop && !System.gameMode
+    // The controller or its pointer is in use: what opens takes the controller's focus, not a text cursor.
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
+    // Narrow screens (a Steam Deck at handheld sizes, or a big Size): a thread or the pins slide over
+    // the conversation instead of sitting beside it, so it keeps room to read.
+    readonly property bool sideDocked: width - middle.width - Theme.px(360) >= Theme.px(420)
+    // The message box the controller is typing in, if any (picking a message takes it out).
+    readonly property var typingIn: compose.hasFocus && zone === "messages" && sel < 0 ? compose
+                                  : threadBox.hasFocus && zone === "side" && sideSel < 0 ? threadBox : null
     // Cap m1: the message being answered or edited, where the "New messages" line goes, the message
     // whose reaction picker is open.
     property string replyId: ""
@@ -40,8 +47,8 @@ Rectangle {
     property int newFrom: -1
     property string reactFor: ""
     readonly property var replyMsg: replyId === "" ? null : messages.find(m => m.id === replyId) || null
-    // The side panel (desktop, a 1:1 chat only): "thread" for one message and its replies, "pins" for
-    // this chat's pins (only on this computer), the same as in groups.
+    // The side panel (a 1:1 chat only): "thread" for one message and its replies, "pins" for this
+    // chat's pins (only on this computer), the same as in groups.
     property string side: ""
     property string threadRoot: ""
     readonly property bool isTour: tour
@@ -105,6 +112,10 @@ Rectangle {
 
     // What the hint bar shows (Main.qml adds LB). LT opens the options (the page gets it as X).
     readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }, { key: "b", label: "Back" }]
+        : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
+        : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
+                            .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
                              { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
@@ -131,7 +142,7 @@ Rectangle {
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
         replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
-        if (typeHere) compose.text = ""
+        compose.text = ""
         // Where the unread ones start (after my last message), for the "New messages" line.
         newFrom = -1
         if (openKey !== "" && !tour && !locked) {
@@ -149,6 +160,13 @@ Rectangle {
     }
     // Read only counts when someone is actually looking: not while a game is in front.
     onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
+    onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
+    onSideChanged: {
+        sideSel = -1
+        if (side === "" && zone === "side") zone = "messages"
+        // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
+        if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
+    }
     Component.onCompleted: Vault.back()   // away more than a minute: locked again
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
     Connections {
@@ -471,7 +489,7 @@ Rectangle {
     Item {
         id: main
         anchors.left: middle.right
-        anchors.right: sidePanel.visible ? sidePanel.left : members.visible ? members.left : parent.right
+        anchors.right: sidePanel.visible && page.sideDocked ? sidePanel.left : members.visible ? members.left : parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
@@ -509,7 +527,7 @@ Rectangle {
             // Pinned messages of this chat (only on this computer).
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: page.typeHere && !page.locked && page.openKey !== ""
+                visible: !page.locked && page.openKey !== ""
                 text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
                 fontSize: 15
                 onClicked: page.side = page.side === "pins" ? "" : "pins"
@@ -688,13 +706,13 @@ Rectangle {
                         Reactions {
                             width: parent.width
                             list: modelData.rxList || []
-                            add: page.typeHere && page.openKey !== ""
+                            add: page.openKey !== ""
                             onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
                             onMore: page.openReact(modelData.id, modelData.myReaction || "")
                         }
                         // A thread: how many replies, opening them beside the chat.
                         Text {
-                            visible: page.typeHere && page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
+                            visible: page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
                             text: (modelData.replies === 1 ? "1 reply" : modelData.replies + " replies") + " ›"
                             color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                             Accessible.role: Accessible.Button
@@ -703,9 +721,11 @@ Rectangle {
                             TapHandler { onTapped: page.openThread(modelData.id) }
                         }
                     }
-                    // Desktop: react, reply, edit and more over the corner while the pointer is on it.
+                    // React, reply, edit and more over the corner while the pointer is on it or the
+                    // controller has it picked.
                     HoverBar {
-                        visible: page.typeHere && page.openKey !== "" && msgHover.hovered && !modelData.system && !modelData.unsent
+                        id: tools
+                        visible: page.openKey !== "" && (msgHover.hovered || msg.picked) && !modelData.system && !modelData.unsent
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         y: msg.lineH - Theme.px(6)
                         z: 2
@@ -721,14 +741,22 @@ Rectangle {
                         onMore: { page.zone = "messages"; page.sel = index; page.options() }
                     }
                     HoverHandler { id: msgHover }
-                    // Click: a photo opens; right click (or a click on a handheld) opens the options.
+                    // A click (a mouse or the right stick's pointer) picks it and opens a photo; a
+                    // right click opens the options. A finger has no right click, so a tap opens them.
                     TapHandler {
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onTapped: (point, button) => {
+                            // The tools over the corner answer their own clicks.
+                            if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
-                            if (button === Qt.RightButton || !page.typeHere) page.options()
+                            if (button === Qt.RightButton) page.options()
                             else if (modelData.photo && !modelData.voice && !modelData.unsent) page.viewing = modelData.photo
                         }
+                    }
+                    TapHandler {
+                        acceptedDevices: PointerDevice.TouchScreen
+                        onTapped: { page.zone = "messages"; page.sel = index; page.options() }
                     }
                 }
             }
@@ -800,7 +828,7 @@ Rectangle {
             // Drop pictures (or other files) on the chat to send them.
             DropArea {
                 anchors.fill: parent
-                enabled: page.typeHere && page.openKey !== "" && !page.locked
+                enabled: page.openKey !== "" && !page.locked
                 onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
                 Rectangle {
                     anchors.fill: parent
@@ -820,10 +848,10 @@ Rectangle {
             }
         }
 
-        // Desktop: the message box, docked at the bottom and typed into directly. Handheld writes with A.
+        // The message box, docked at the bottom and typed into directly (A puts the controller in it).
         Composer {
             id: compose
-            visible: page.typeHere && !lock.visible
+            visible: !lock.visible
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20); anchors.bottomMargin: Theme.px(18)
             height: implicitHeight
@@ -833,6 +861,7 @@ Rectangle {
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.openName) : ""
             bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
             onSend: t => page.sendText(t)
+            onHasFocusChanged: if (hasFocus) { page.zone = "messages"; page.sel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEditLast: page.editLast()
             onEscaped: page.escapeKey()
@@ -841,16 +870,18 @@ Rectangle {
         }
     }
 
-    // ============================================================= side panel (desktop): a thread or the pins
+    // ============================================================= side panel: a thread or the pins
     property alias threadCompose: threadBox
     Rectangle {
         id: sidePanel
-        visible: page.typeHere && !lock.visible && page.openKey !== "" && page.side !== ""
+        visible: !lock.visible && page.openKey !== "" && page.side !== ""
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(360)
+        width: Math.min(Theme.px(360), page.width - middle.width - Theme.px(48))
         color: Theme.column
+        // Over the conversation on a narrow screen: an edge so it reads as on top.
+        Rectangle { visible: !page.sideDocked; width: 1; height: parent.height; color: Theme.lineStrong }
         PageHeader {
             id: sideHead
             width: parent.width
@@ -874,8 +905,10 @@ Rectangle {
                 at: index
                 who: page.senderName(modelData)
                 inThread: true
-                hoverTools: page.typeHere
-                onOptions: { const i = page.messages.findIndex(x => x.id === modelData.id); if (i >= 0) { page.zone = "messages"; page.sel = i; page.options() } }
+                picked: page.active && page.zone === "side" && page.sideSel === index
+                hoverTools: true
+                onChosen: { page.zone = "side"; page.sideSel = index }
+                onOptions: page.sideOptions(index)
             }
         }
         Text {
@@ -895,6 +928,7 @@ Rectangle {
             placeholder: "Reply in the thread"
             target: page.openKey
             onSend: t => page.sendText(t, page.threadRoot)
+            onHasFocusChanged: if (hasFocus) { page.zone = "side"; page.sideSel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
             onAttach: page.pickPicture()
@@ -946,7 +980,7 @@ Rectangle {
 
     // ============================================================= actions
     function write() {
-        if (typeHere && !lock.visible) { zone = "messages"; compose.focusField(); return }
+        if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › Chat.", true); return }
             Ui.ask("Message everyone nearby", "You're " + Chat.username, "", "Send", t => Chat.sendNearby(t), false, true)
@@ -1004,7 +1038,8 @@ Rectangle {
         items.push(
                        { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
-                       { name: "Folders", detail: folderNames(openKey), url: "folders" })
+                       { name: "Folders", detail: folderNames(openKey), url: "folders" },
+                       { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -1021,6 +1056,7 @@ Rectangle {
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
+            else if (a === "pins") openPins()
         })
     }
     // ------------------------------------------------------------- folders (only on this computer)
@@ -1253,7 +1289,7 @@ Rectangle {
         const k = openKey, id = m.id
         const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
         if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
-        if (typeHere) items.push({ name: "More emoji", url: "+" })
+        items.push({ name: "More emoji", url: "+" })
         Ui.pickFrom("React", [{ header: "", items: items }], e => {
             if (e === "+") { openReact(id, m.myReaction || ""); return }
             const r = Chat.react(k, id, e === m.myReaction ? "" : e)
@@ -1274,7 +1310,7 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
             items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
-            if (typeHere) items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
+            items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
         }
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
@@ -1305,6 +1341,10 @@ Rectangle {
             else if (a === "picture") pickPicture()
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
+            else if (a === "folders") pickFolders(k)
+            else if (a === "pins") openPins()
+            else if (a === "call") startCall()
+            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
         })
     }
 
@@ -1330,13 +1370,13 @@ Rectangle {
         if (openKey === "") return
         editId = ""
         replyId = id
-        if (typeHere) compose.focusField(); else write()
+        write()
     }
     function startEdit(m) {
         if (!m || !m.mine || m.photo || m.unsent || openKey === "") return
         if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs a newer Huginn or Muninn to see edits.", true); return }
         replyId = ""
-        if (typeHere) { editId = m.id; compose.setText(m.text) }
+        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
         else { const k = openKey, id = m.id; Ui.ask("Edit your message", "They see it marked (edited)", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
     }
     // Up in an empty box: edit my last text message.
@@ -1351,12 +1391,28 @@ Rectangle {
         replyId = ""; editId = ""; newFrom = -1
         if (openKey !== "") Chat.markRead(openKey)
     }
-    // A thread: the message and its replies beside the chat, with its own reply box.
+    // A thread: the message and its replies beside the chat, with its own reply box. The controller
+    // (or its pointer) goes into the panel; a mouse gets a cursor in its reply box.
     function openThread(id) {
-        if (openKey === "" || !typeHere) return
+        if (openKey === "") return
         threadRoot = id
         side = "thread"
-        Qt.callLater(() => threadBox.focusField())
+        if (pad) { zone = "side"; sideSel = threadMsgs.length - 1 }
+        else Qt.callLater(() => threadBox.focusField())
+    }
+    function openPins() {
+        if (openKey === "") return
+        side = "pins"
+        if (pad) { zone = "side"; sideSel = pinnedMsgs.length ? 0 : -1 }
+    }
+    function sideMsgs() { return side === "thread" ? threadMsgs : side === "pins" ? pinnedMsgs : [] }
+    // Options for a message in the panel: the same as in the chat.
+    function sideOptions(i) {
+        const m = sideMsgs()[i]
+        if (!m) return
+        zone = "side"; sideSel = i
+        const at = messages.findIndex(x => x.id === m.id)
+        if (at >= 0) { sel = at; options() }
     }
     function togglePin(id) {
         if (tour || openKey === "") return
@@ -1398,7 +1454,50 @@ Rectangle {
     }
 
     // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
-    function scrollView() { return zone === "messages" ? list : listPane }
+    function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : listPane }
+    // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
+    // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
+    function boxButton(box, b) {
+        switch (b) {
+        case "a": case "start": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "y": System.showSteamKeyboard(); return true
+        case "x": boxOptions(box); return true
+        case "down": return true
+        }
+        box.leave()
+        return b === "b"
+    }
+    function boxOptions(box) {
+        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" }]
+        if (openKey !== "") items.push({ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" })
+        if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
+        items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
+        Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
+            if (a === "send") box.enter()
+            else if (a === "emoji") box.toggleEmoji()
+            else if (a === "picture") pickPicture()
+            else if (a === "cancel") box.cancelBanner()
+            else if (a === "leave") box.leave()
+        })
+    }
+    // A thread or the pins: up and down pick, A answers in the thread or goes to a pin, B closes.
+    function sideButton(b) {
+        const n = sideMsgs().length
+        switch (b) {
+        case "up": if (n) sideSel = sideSel < 0 ? n - 1 : Math.max(0, sideSel - 1); return true
+        case "down": if (sideSel >= 0) sideSel = Math.min(n - 1, sideSel + 1); return true
+        case "left": zone = "messages"; return true
+        case "right": return true
+        case "a":
+            if (side === "thread") threadBox.focusField()
+            else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
+            return true
+        case "x": if (sideSel >= 0) sideOptions(sideSel); else conversationOptions(); return true
+        case "y": return true
+        case "b": side = ""; threadRoot = ""; return true
+        }
+        return false
+    }
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)
@@ -1410,6 +1509,11 @@ Rectangle {
         }
         if (viewing !== "") { if (b === "b" || b === "a") viewing = ""; return true }
         if (Voice.recording) { if (b === "b") { Voice.cancel(); Ui.say("Recording cancelled.") } return true }
+        if (reactPicker.visible) return reactPicker.handleButton(b)
+        if (compose.emojiShown) return compose.emojiButton(b)
+        if (threadBox.emojiShown) return threadBox.emojiButton(b)
+        if (typingIn && boxButton(typingIn, b)) return true
+        if (zone === "side") return sideButton(b)
         if (zone === "messages" && openKey !== "" && keep.visible) {
             if (b === "start") { Chat.keepInTouch(openKey); return true }
             if (b === "back") { Chat.notNow(openKey); return true }
@@ -1423,7 +1527,10 @@ Rectangle {
             if (zone === "list") row = Math.min(entries.length - 1, row + 1)
             else if (sel >= 0) { sel = Math.min(messages.length - 1, sel + 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
-        case "right": zone = "messages"; return true
+        case "right":
+            if (zone === "messages" && sidePanel.visible) { const n = sideMsgs().length; zone = "side"; sideSel = !n ? -1 : side === "thread" ? n - 1 : 0 }
+            else zone = "messages"
+            return true
         case "left":
             if (zone === "list") return false
             zone = "list"; sel = -1
