@@ -30,7 +30,7 @@ data class Pinned(val name: String, val urls: List<String>, val sha256: String, 
 val tvVoicePins = listOf(
     Pinned("webrtc-audio-processing 1.3",
         listOf("https://freedesktop.org/software/pulseaudio/webrtc-audio-processing/webrtc-audio-processing-1.3.tar.xz"),
-        "WEBRTC_SHA256_PENDING", "webrtc-audio-processing-1.3.tar.xz"),
+        "2365e93e778d7b61b5d6e02d21c47d97222e9c7deff9e1d0838ad6ec2e86f1b9", "webrtc-audio-processing-1.3.tar.xz"),
     Pinned("abseil-cpp 20230125.1",
         listOf("https://github.com/abseil/abseil-cpp/archive/20230125.1.tar.gz",
             "https://github.com/mesonbuild/wrapdb/releases/download/abseil-cpp_20230125.1-4/abseil-cpp-20230125.1.tar.gz"),
