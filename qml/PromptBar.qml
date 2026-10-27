@@ -2,6 +2,7 @@ import QtQuick
 import Huginn
 
 // The bottom bar: status on the left, controller prompts on the right.
+// Shows sending and receiving progress (LocalSend) wherever you are.
 Rectangle {
     id: bar
     property string status
@@ -9,35 +10,34 @@ Rectangle {
     property var prompts: []          // [{ key, label }]
     signal prompt(string key)
 
-    implicitHeight: Theme.px(60)
-    color: Theme.groundDeep
-    Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.line }
+    implicitHeight: Theme.px(50)
+    color: Theme.ground
+    Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.seam }
 
     Text {
         anchors.left: parent.left
-        anchors.leftMargin: Theme.px(28)
+        anchors.leftMargin: Theme.px(24)
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: keys.left
         anchors.rightMargin: Theme.px(20)
         elide: Text.ElideRight
-        text: FileOps.busy ? FileOps.status + (FileOps.progress > 0 ? "  " + Math.round(FileOps.progress * 100) + "%" : "")
-            : LocalSend.busy ? LocalSend.status + (LocalSend.progress > 0 ? "  " + Math.round(LocalSend.progress * 100) + "%" : "")
+        text: LocalSend.busy ? LocalSend.status + (LocalSend.progress > 0 ? "  " + Math.round(LocalSend.progress * 100) + "%" : "")
             : bar.status
-        color: FileOps.busy || LocalSend.busy ? Theme.accent : bar.statusColor
+        color: LocalSend.busy ? Theme.accent : bar.statusColor
         font.family: Theme.body
-        font.pixelSize: Theme.fs(16)
+        font.pixelSize: Theme.fs(15)
         font.weight: Font.DemiBold
     }
 
-    // Progress for copies and moves: a full-width bar along the top of the prompt bar.
+    // Progress for sending and receiving: a full-width bar along the top of the prompt bar.
     Rectangle {
-        visible: FileOps.busy || LocalSend.busy
+        visible: LocalSend.busy
         anchors.top: parent.top
         width: parent.width
-        height: Theme.px(6)
+        height: Theme.px(5)
         color: Theme.line
         Rectangle {
-            width: parent.width * (FileOps.busy ? FileOps.progress : LocalSend.progress)
+            width: parent.width * LocalSend.progress
             height: parent.height
             color: Theme.accent
         }
@@ -46,9 +46,9 @@ Rectangle {
     Row {
         id: keys
         anchors.right: parent.right
-        anchors.rightMargin: Theme.px(28)
+        anchors.rightMargin: Theme.px(24)
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.px(24)
+        spacing: Theme.px(22)
         Repeater {
             model: bar.prompts
             PromptKey {

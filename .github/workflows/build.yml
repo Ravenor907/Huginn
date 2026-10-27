@@ -11,28 +11,6 @@ permissions:
   contents: write
 
 jobs:
-  drive-helper:
-    name: Drive helper tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: Ravenor907/Handheld-Forge
-          ref: 010576ae680b458a74bbcaa2617269890d0e509a
-          path: forge
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Ventoy update keeps images and Secure Boot setting
-        run: HUGINN_FORGE_PATH=$PWD/forge python helper/test_drivetool.py -v
-      - name: Windows installer layout (FAT32 and exFAT) passes fsck and mounts
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq dosfstools exfatprogs
-          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
-          sudo modprobe vfat || true; sudo modprobe exfat || true
-          sudo HUGINN_FORGE_PATH=$PWD/forge "$(which python)" -c "import sys" && sudo env HUGINN_FORGE_PATH=$PWD/forge PATH="$(dirname "$(which python)"):$PATH" sh helper/test-windows-layout.sh
-
   flatpak:
     name: Flatpak
     runs-on: ubuntu-latest
@@ -98,29 +76,26 @@ jobs:
       - name: Chat encryption matches Muninn (shared test vectors)
         shell: bash
         run: |
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
-      - name: Windows setup file is valid and has every choice
-        shell: bash
-        run: |
-          dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --unattend-sample > unattend.xml
-          cat unattend.xml
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          ns = {"u": "urn:schemas-microsoft-com:unattend"}
-          root = ET.parse("unattend.xml").getroot()
-          text = open("unattend.xml").read()
-          passes = [s.get("pass") for s in root.findall("u:settings", ns)]
-          assert passes == ["windowsPE", "specialize", "oobeSystem"], passes
-          for needle in ["BypassTPMCheck", "BypassSecureBootCheck", "BypassRAMCheck", "BypassNRO", "<ProtectYourPC>3</ProtectYourPC>",
-                         "<Name>Player</Name>", "logonpasswordchg", "<PreventDeviceEncryption>true</PreventDeviceEncryption>",
-                         "<SystemLocale>", "processorArchitecture=\"amd64\""]:
-              assert needle in text, needle
-          print("unattend.xml OK")
-          PY
+          run() {
+            s=0; "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Self-test failed: $* (exit $s)::$e"
+              bad=1
+            fi
+          }
+          bad=0
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
+          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
+          tor() { timeout 330 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --tor-selftest; }
+          tor > /dev/null 2>&1 || run tor
+          exit $bad
       - name: Draw the project banner (both ravens)
         if: always()
         shell: bash
@@ -236,6 +211,184 @@ jobs:
           git commit -q -m "Muninn screens for ${GITHUB_SHA::7}" || exit 0
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-muninn
 
+  windows:
+    name: Windows (portable zip)
+    # Huginn-Windows.zip: unzip anywhere and run Huginn.exe, nothing to install.
+    # New in 0.6 and not proven yet, so it may fail without stopping the Linux and Android release.
+    # Remove continue-on-error once a few releases have built cleanly.
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Tor Expert Bundle (the official tor.exe for Windows). Pin the version here; after the first
+      # run, copy the sha256 the job prints into TOR_BUNDLE_SHA256. Until then the download is
+      # checked against the Tor Browser Developers signing key instead.
+      TOR_BUNDLE_VERSION: "15.0.24"
+      TOR_BUNDLE_SHA256: "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65"
+      TOR_SIGNING_KEY: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+      VCPKG_PACKAGES: openssl opus sdl2 libqrencode
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fonts
+        run: tools/get-fonts.sh
+      - name: Version
+        run: |
+          v=$(head -n1 VERSION | tr -d '\r')
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
+          echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          # Windows file names ignore case, so MSVC would take this file for the C++ <version> header.
+          rm VERSION
+      - name: Qt 6.10 (same modules as the Flatpak)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.*"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtwebsockets qtconnectivity qtmultimedia
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: vcpkg cache folder
+        run: |
+          d="$(cygpath -m "$GITHUB_WORKSPACE")/vcpkg-bincache"
+          mkdir -p "$d"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$d" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: vcpkg-bincache
+          key: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-${{ github.sha }}
+          restore-keys: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-
+      - name: OpenSSL, Opus, SDL2 and libqrencode (vcpkg)
+        run: |
+          vcpkg="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/vcpkg.exe"
+          "$vcpkg" install $VCPKG_PACKAGES --triplet x64-windows 2>&1 | tee vcpkg.log; status=${PIPESTATUS[0]}
+          if [ $status -ne 0 ]; then
+            errs=$(grep -iE "error" vcpkg.log | head -n 20 | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=vcpkg failed::$errs"
+            exit $status
+          fi
+      - name: Build Huginn.exe (CMake, MSVC)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT -replace '\\','/'
+          $qt = $env:QT_ROOT_DIR -replace '\\','/'
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DHUGINN_VERSION=$env:HUGINN_VERSION" -DHUGINN_WINDOWS_PORTABLE=ON `
+            "-DCMAKE_PREFIX_PATH=$qt" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { $e = (Get-Content configure.log -Tail 40) -join '%0A'; Write-Output "::error title=CMake configure failed::$e"; exit 1 }
+          cmake --build build --config Release 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            $e = (Select-String -Path build.log -Pattern 'error C|error LNK|fatal error|: error' | Select-Object -First 25 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }) -join '%0A'
+            Write-Output "::error title=Windows build failed::$e"
+            exit 1
+          }
+      - name: Gather Huginn and everything it needs (windeployqt)
+        shell: pwsh
+        run: |
+          $out = "dist/Huginn"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item build/Huginn.exe $out
+          windeployqt --release --qmldir qml --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw "$out/Huginn.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::windeployqt failed"; exit 1 }
+          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), SDL2 (controllers), libqrencode (QR codes)
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
+          # The Visual C++ runtime, so nothing has to be installed first
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
+          Copy-Item "$($crt.FullName)/*.dll" $out
+          Copy-Item LICENSE "$out/LICENSE.txt"
+      - name: Tor (official Expert Bundle, pinned and checked)
+        run: |
+          v="$TOR_BUNDLE_VERSION"
+          f="tor-expert-bundle-windows-x86_64-$v.tar.gz"
+          mkdir -p torbundle && cd torbundle
+          for base in "https://dist.torproject.org/torbrowser/$v" "https://archive.torproject.org/tor-package-archive/torbrowser/$v"; do
+            curl -fsSL --retry 3 -o "$f" "$base/$f" && curl -fsSL --retry 3 -o "$f.asc" "$base/$f.asc" && break
+            rm -f "$f" "$f.asc"
+          done
+          [ -f "$f" ] || { echo "::error title=Tor bundle::Couldn't download $f (is TOR_BUNDLE_VERSION right?)"; exit 1; }
+          sum=$(sha256sum "$f" | cut -d' ' -f1)
+          if [ -n "$TOR_BUNDLE_SHA256" ]; then
+            [ "$sum" = "$TOR_BUNDLE_SHA256" ] || { echo "::error title=Tor bundle checksum::expected $TOR_BUNDLE_SHA256, got $sum"; exit 1; }
+          else
+            export GNUPGHOME="$PWD/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
+            gpg --batch --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org \
+              || gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$TOR_SIGNING_KEY"
+            gpg --batch --status-fd 1 --verify "$f.asc" "$f" 2>/dev/null | grep -q "VALIDSIG.*$TOR_SIGNING_KEY" \
+              || { echo "::error title=Tor bundle signature::$f is not signed by the Tor Browser Developers key"; exit 1; }
+            echo "::warning title=Pin the Tor bundle::Signature checked. Set TOR_BUNDLE_SHA256: \"$sum\" in build.yml"
+          fi
+          mkdir -p x && tar -xzf "$f" -C x
+          exe=$(find x -name tor.exe | head -n1)
+          [ -n "$exe" ] || { echo "::error::tor.exe isn't in $f"; exit 1; }
+          dir=$(dirname "$exe")
+          cp "$exe" ../dist/Huginn/tor.exe
+          # Any DLLs tor.exe needs go beside it, but never over one of ours (same name, other build).
+          for d in "$dir"/*.dll; do
+            [ -f "$d" ] || continue
+            n=$(basename "$d")
+            if [ -f "../dist/Huginn/$n" ]; then echo "::error title=Tor DLL clash::$n is both Tor's and Huginn's"; exit 1; fi
+            cp "$d" ../dist/Huginn/
+          done
+          mkdir -p ../dist/Huginn/licenses/tor
+          find x -iname "*LICENSE*" -type f -exec cp {} ../dist/Huginn/licenses/tor/ \; || true
+          echo "Tor $v: $(../dist/Huginn/tor.exe --version | head -n1)"
+      - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
+        run: |
+          h=dist/Huginn/Huginn.exe
+          run() {
+            s=0; "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Windows self-test failed: $* (exit $s)::$e"
+              bad=1
+            fi
+          }
+          bad=0
+          run "$h" --chat-selftest tests/chat-vectors.json
+          run "$h" --ratchet-selftest tests/ratchet-vectors.json
+          run "$h" --nostr-selftest tests/nostr-vectors.json
+          run "$h" --privacy-selftest
+          run "$h" --backup-selftest
+          run "$h" --call-selftest tests/proto06-vectors.json
+          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
+          timeout 330 "$h" --tor-selftest > /dev/null 2>&1 || run timeout 330 "$h" --tor-selftest
+          exit $bad
+      - name: Screenshot tour (for a look, doesn't fail the job yet)
+        continue-on-error: true
+        env:
+          QT_QUICK_BACKEND: software
+        run: |
+          mkdir -p tour-windows
+          timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: huginn-windows-tour
+          path: tour-windows
+          if-no-files-found: ignore
+      - name: Zip it
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
+          $7z = "C:/Program Files/7-Zip/7z.exe"
+          Push-Location dist
+          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
+          Pop-Location
+          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
+          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Huginn-Windows.zip
+          path: Huginn-Windows.zip
+
 
 
   site:
@@ -259,7 +412,8 @@ jobs:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
-    needs: [drive-helper, flatpak, muninn, muninn-screens]
+    # windows has continue-on-error, so a failed Windows build never holds this back (the zip is just left out).
+    needs: [flatpak, muninn, muninn-screens, windows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -284,6 +438,11 @@ jobs:
         if: steps.v.outputs.new == '1'
         with:
           name: muninn-apk
+      - uses: actions/download-artifact@v4
+        if: steps.v.outputs.new == '1'
+        continue-on-error: true   # missing when the Windows job failed
+        with:
+          name: Huginn-Windows.zip
       - uses: softprops/action-gh-release@v2
         if: steps.v.outputs.new == '1'
         with:
@@ -292,10 +451,13 @@ jobs:
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
             Huginn.flatpak
+            Huginn-Windows.zip
             Muninn.apk
+          fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
           generate_release_notes: true
           body: |
             **Huginn** (SteamOS handheld): Huginn.flatpak. Installed copies update themselves at launch.
+            **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.

@@ -2,7 +2,7 @@
 #include "settings.h"
 #include "system.h"
 
-#include <Prison/Barcode>
+#include "platform/qrcode.h"
 
 #include <QDir>
 #include <QFile>
@@ -16,6 +16,8 @@
 #include <QTcpSocket>
 #include <QTimer>
 #include <QUrlQuery>
+#include <QStringList>
+#include <QVariantMap>
 
 namespace
 {
@@ -374,7 +376,7 @@ a.dl{display:flex;justify-content:space-between;color:#E4E1DA;text-decoration:no
 <h1>HUGINN</h1><p>Files you send go straight to your handheld.</p>
 <label class="pick">Tap to choose files<br><b>or drop them here</b><input id="f" type="file" multiple></label>
 <div id="up"></div>
-<h2>FROM HUGINN</h2><div id="shared"><p>Nothing yet. On the handheld, pick files and choose To phone.</p></div>
+<h2>FROM HUGINN</h2><div id="shared"><p>Nothing yet. In Huginn, open Files and choose Pick files to send.</p></div>
 </main><script>
 const up=document.getElementById('up');
 function send(files){let q=[...files];const next=()=>{const f=q.shift();if(!f)return;
@@ -400,15 +402,11 @@ QImage QrImageProvider::requestImage(const QString &id, QSize *size, const QSize
     const int side = requestedSize.width() > 0 ? requestedSize.width() : 512;
     QImage out(side, side, QImage::Format_RGB32);
     out.fill(QColor("#E4E1DA"));
-    auto code = Prison::Barcode::create(Prison::QRCode);
-    if (code) {
-        code->setData(text);
-        const QImage qr = code->toImage(QSizeF(side, side));
-        if (!qr.isNull()) {
-            QPainter p(&out);
-            p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-            p.drawImage(QRect(0, 0, side, side), qr);
-        }
+    const QImage qr = Platform::qrCode(text, side);
+    if (!qr.isNull()) {
+        QPainter p(&out);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.drawImage(QRect(0, 0, side, side), qr);
     }
     if (size)
         *size = out.size();

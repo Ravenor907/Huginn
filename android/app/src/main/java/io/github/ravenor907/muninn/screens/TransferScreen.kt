@@ -1,147 +1,219 @@
 package io.github.ravenor907.muninn.screens
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import io.github.ravenor907.muninn.Muninn
-import io.github.ravenor907.muninn.files.Files
+import io.github.ravenor907.muninn.net.Close
 import io.github.ravenor907.muninn.net.LocalSend
+import io.github.ravenor907.muninn.net.Received
 import io.github.ravenor907.muninn.ui.Bar
-import io.github.ravenor907.muninn.ui.Kind
-import io.github.ravenor907.muninn.ui.Line
 import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Panel
-import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
+import io.github.ravenor907.muninn.ui.hcBorder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Files shared into Muninn from another app ("Share" › Muninn), waiting to be sent. */
+/** Files waiting to be sent: picked in the Files tab, or shared into Muninn from another app ("Share" › Muninn). */
 object Share {
     val pending = androidx.compose.runtime.mutableStateListOf<File>()
+
+    /**
+     * Copies what the system picker or another app handed over into Muninn's cache, so it can be sent
+     * (Muninn sees no other files on the phone). [busy]: a transfer is running, so older copies stay.
+     */
+    fun copyIn(context: Context, uris: List<Uri>, busy: Boolean): List<File> {
+        val root = File(context.cacheDir, "outgoing")
+        if (!busy && pending.isEmpty()) root.deleteRecursively()
+        val dir = File(root, System.currentTimeMillis().toString()).also { it.mkdirs() }
+        return uris.mapNotNull { u ->
+            try {
+                var name = "shared"
+                context.contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0)?.let { name = it } }
+                val f = Received.free(dir, name.replace('/', '_').replace('\\', '_').ifBlank { "shared" })
+                context.contentResolver.openInputStream(u)?.use { ins -> f.outputStream().use { ins.copyTo(it) } } ?: return@mapNotNull null
+                f
+            } catch (e: Exception) { null }
+        }
+    }
 }
 
+private val labelStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 1.5.sp, color = Palette.textMuted)
+private val noteStyle get() = TextStyle(fontFamily = Type.body, fontSize = 13.sp, color = Palette.textMuted)
+
+@Composable
+private fun Label(text: String, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text.uppercase(), style = labelStyle, modifier = Modifier.weight(1f).semantics { heading() })
+        trailing()
+    }
+}
+
+/** Someone files can go to: a phone close by (Muninn over Bluetooth) or a LocalSend device on the Wi-Fi. */
+private class Target(val key: String, val name: String, val icon: String, val detail: String, val send: (List<File>) -> Unit)
+
+/**
+ * The Files tab: one big Send files button (the system's own file picker), everyone close by to send
+ * to, and recent transfers with their progress. Received files go to Downloads.
+ */
 @Composable
 fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val devices by app.net.devices.collectAsState()
     val transfer by app.net.transfer.collectAsState()
     val items by app.net.items.collectAsState()
     val scanning by app.net.scanning.collectAsState()
     val error by app.net.error.collectAsState()
     val direct by app.direct.state.collectAsState()
-    val browser = remember { BrowserState(Files.downloads) }
-    var picking by remember { mutableStateOf(false) }
-    var showDirect by remember { mutableStateOf(false) }
     val closePeers by app.close.list.collectAsState()
-    val close = closePeers.filter { it.connected }
-    androidx.compose.runtime.LaunchedEffect(Share.pending.size) {
-        if (Share.pending.isNotEmpty()) { browser.picked.addAll(Share.pending.filterNot { browser.picked.contains(it) }); Share.pending.clear(); picking = true }
+    var showDirect by remember { mutableStateOf(false) }
+    var copying by remember { mutableStateOf(false) }
+    /** Tapped a device before picking anything: send to it as soon as files are picked. */
+    var after by remember { mutableStateOf<Target?>(null) }
+
+    fun deliver(t: Target, files: List<File>) {
+        if (files.isEmpty()) return
+        if (app.net.transfer.value.active) { Ui.say("Wait for the transfer that's running to finish, then send.", true); return }
+        t.send(files)
+        Share.pending.clear()
     }
 
-    fun sendTo(d: LocalSend.Device) {
-        val files = browser.picked.flatMap { if (it.isDirectory) it.walkTopDown().filter { f -> f.isFile }.toList() else listOf(it) }
-        if (files.isEmpty()) { picking = true; Ui.say("Pick files to send, then choose ${d.alias}."); return }
-        app.net.send(d.id, files)
-        browser.picked.clear()
-        picking = false
-    }
-
-    fun sendClose(p: io.github.ravenor907.muninn.net.Close.Peer) {
-        val files = browser.picked.flatMap { if (it.isDirectory) it.walkTopDown().filter { f -> f.isFile }.toList() else listOf(it) }
-        if (files.isEmpty()) { picking = true; Ui.say("Pick files to send, then choose ${p.name}."); return }
-        app.closeFiles.send(p, files)
-        browser.picked.clear()
-        picking = false
-    }
-
-    if (picking) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            Section("Pick files to send") { MButton("Done", kind = Kind.Accent) { picking = false } }
-            FileBrowser(browser, Modifier.weight(1f))
-            if (browser.picked.isNotEmpty()) {
-                Text("Send to:", style = Type.small, modifier = Modifier.padding(top = 8.dp))
-                close.take(4).forEach { p -> Line(p.name, "Close by", icon = "phone") { sendClose(p) } }
-                devices.take(4).forEach { d -> Line(d.alias, d.model.ifEmpty { d.ip }, icon = if (d.type == "mobile") "phone" else "network") { sendTo(d) } }
-                if (devices.isEmpty() && close.isEmpty()) Text("No devices nearby yet. Go back and press Look again.", style = Type.small)
-            }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val then = after
+        after = null
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        copying = true
+        scope.launch {
+            val files = withContext(Dispatchers.IO) { Share.copyIn(context, uris, app.net.transfer.value.active) }
+            copying = false
+            if (files.size < uris.size) Ui.say("${uris.size - files.size} of the files couldn't be read.", true)
+            Share.pending.addAll(files)
+            if (then != null) deliver(then, Share.pending.toList())
         }
-        return
+    }
+    fun pick() { try { picker.launch(arrayOf("*/*")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } }
+
+    val targets = closePeers.filter { it.connected }.map { p: Close.Peer ->
+        Target("close-" + p.endpoint, p.name, "phone", "Close by") { files -> app.closeFiles.send(p, files) }
+    } + devices.map { d ->
+        val icon = when (d.type) { "mobile" -> "phone"; "server", "headless" -> "server"; else -> "network" }
+        Target(d.id, d.alias, icon, d.app?.replaceFirstChar { it.uppercase() } ?: "LocalSend") { files -> app.net.send(d.id, files) }
     }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
-            if (transfer.active) {
-                Panel(Modifier.padding(top = 12.dp)) {
-                    Text(transfer.status, style = Type.big)
-                    Spacer(Modifier.height(8.dp))
-                    Bar(transfer.fraction)
-                    Text("${LocalSend.size(transfer.done)} of ${LocalSend.size(transfer.total)}", style = Type.small, modifier = Modifier.padding(top = 6.dp))
-                    if (transfer.sending) MButton("Stop sending", Modifier.padding(top = 8.dp)) { app.net.cancelSend() }
-                }
+            // The one big action, in gold like the chat list's new chat button.
+            val shape = RoundedCornerShape(16.dp)
+            Row(Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(min = 56.dp).clip(shape).background(Palette.gold)
+                .clickable(role = Role.Button, enabled = !copying) { after = null; pick() }.padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                MIcon("upload", Palette.onGold, 22.dp, weight = 2f)
+                Spacer(Modifier.width(10.dp))
+                Text(when { copying -> "Getting files ready…"; Share.pending.isEmpty() -> "Send files"; else -> "Add more files" },
+                    style = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.onGold))
             }
-            MButton(if (browser.picked.isEmpty()) "Pick files to send" else "${browser.picked.size} picked · change", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "send") { picking = true }
-            Section("Send to") { MButton(if (scanning) "Looking…" else "Look again", enabled = !scanning) { app.net.refresh() } }
-            if (error != null) Text(error!!, style = Type.normal.copy(color = Palette.danger))
-            if (devices.isEmpty() && close.isEmpty() && error == null) Text(
+            if (Share.pending.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${if (Share.pending.size == 1) Share.pending[0].name else "${Share.pending.size} files"} · ${LocalSend.size(Share.pending.sumOf { it.length() })}. Tap who gets ${if (Share.pending.size == 1) "it" else "them"}.",
+                    style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+                MButton("Clear") { Share.pending.clear() }
+            }
+            if (transfer.active) Panel(Modifier.padding(top = 12.dp)) {
+                Text(transfer.status, style = Type.big)
+                Spacer(Modifier.height(8.dp))
+                Bar(transfer.fraction, color = Palette.gold)
+                Text("${LocalSend.size(transfer.done)} of ${LocalSend.size(transfer.total)}", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+                if (transfer.sending) MButton("Stop sending", Modifier.padding(top = 8.dp)) { app.net.cancelSend() }
+            }
+            Label("Close by") {
+                Text(if (scanning) "Looking…" else "Look again", style = noteStyle.copy(color = if (scanning) Palette.textFaint else Palette.gold),
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, enabled = !scanning) { app.net.refresh() }
+                        .padding(horizontal = 8.dp, vertical = 10.dp))
+            }
+            if (error != null) Text(error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(bottom = 8.dp))
+            if (targets.isEmpty() && error == null) Text(
                 "Nobody yet. Phones with Muninn close by show up on their own. Devices with Huginn or LocalSend show up when they're on the same Wi-Fi. " +
                     "This phone shows up as “${app.identity.deviceName}”.",
                 style = Type.normal,
             )
         }
-        items(close, key = { "close-" + it.endpoint }) { p ->
-            Panel(Modifier.padding(bottom = 8.dp), onClick = { sendClose(p) }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MIcon("phone", Palette.accent, 28.dp)
-                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text(p.name, style = Type.big)
-                        Text("Muninn · close by, no Wi-Fi needed", style = Type.small)
+        // Three to a row, like the mockup's grid.
+        items(targets.chunked(3), key = { row -> row.joinToString("|") { it.key } }) { row ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { t ->
+                    val shape = RoundedCornerShape(14.dp)
+                    Column(Modifier.weight(1f).clip(shape).background(Palette.field).hcBorder(shape)
+                        .clickable(role = Role.Button, onClickLabel = "Send to ${t.name}") {
+                            if (Share.pending.isEmpty()) { after = t; pick() } else deliver(t, Share.pending.toList())
+                        }.padding(vertical = 14.dp, horizontal = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        MIcon(t.icon, Palette.accent, 34.dp, weight = 1.5f)
+                        Text(t.name, style = Type.small.copy(fontSize = 13.sp, color = Palette.text), textAlign = TextAlign.Center,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+                        Text(t.detail, style = noteStyle.copy(fontSize = 12.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Text("Send", style = Type.small.copy(color = Palette.accent))
                 }
-            }
-        }
-        items(devices, key = { it.id }) { d ->
-            Panel(Modifier.padding(bottom = 8.dp), onClick = { sendTo(d) }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MIcon(if (d.type == "mobile") "phone" else "network", Palette.accent, 28.dp)
-                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text(d.alias, style = Type.big)
-                        Text(listOfNotNull(d.app?.replaceFirstChar { it.uppercase() } ?: "LocalSend", d.model.ifEmpty { null }, d.ip).joinToString(" · "), style = Type.small)
-                    }
-                    Text("Send", style = Type.small.copy(color = Palette.accent))
-                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
         item {
-            if (!showDirect && !direct.on) MButton("Huginn or LocalSend not showing up? No Wi-Fi?", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "wifi") { showDirect = true }
-            if (showDirect || direct.on) Section("Direct connect")
+            Text("Muninn, Huginn and any LocalSend app, close by or on the same Wi-Fi. Never through the internet. Received files go to ${Received.place(context)}.",
+                style = noteStyle)
+            if (!showDirect && !direct.on) MButton("Huginn or LocalSend not showing up? No Wi-Fi?", Modifier.fillMaxWidth().padding(top = 12.dp), icon = "wifi") { showDirect = true }
+            if (showDirect || direct.on) Label("Direct connect")
             if (showDirect || direct.on) Panel {
                 if (!direct.on) {
                     Text("No shared Wi-Fi? Muninn can make a private hotspot (no internet, no data used). The other phone scans the code with its camera to join, then sending and chat work as usual.", style = Type.normal)
@@ -150,19 +222,27 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                     Text("For the handheld: start Direct connect in Huginn's Phone Transfer and scan its code with this phone's camera.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
                 } else {
                     Text("Scan with the other phone's camera", style = Type.big)
-                    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Qr(direct.qr, 220) }
+                    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Qr(direct.qr, 220.dp) }
                     Text("Wi-Fi: ${direct.ssid}", style = Type.normal)
                     Text("Password: ${direct.password}", style = Type.normal)
                     MButton("Stop Direct connect", Modifier.fillMaxWidth().padding(top = 10.dp)) { app.direct.stop() }
                 }
             }
-            Section("Received") { Text("Saved in ${app.identity.receiveFolder.name}", style = Type.small) }
-            if (items.isEmpty()) Text("Nothing yet. Files show up here as they arrive, after you accept them.", style = Type.normal)
+            Label("Recent")
+            if (items.isEmpty()) Text("Nothing yet. Files you send and receive show up here.", style = Type.normal)
         }
         items(items) { it ->
-            Column(Modifier.padding(bottom = 8.dp)) {
-                Row { Text(it.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f), maxLines = 1); Text(it.status, style = Type.small.copy(color = if (it.failed) Palette.danger else Palette.textSoft)) }
-                Bar(it.fraction, Modifier.padding(top = 4.dp), if (it.fraction >= 1f) Palette.textFaint else Palette.accent)
+            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(Palette.coolTint), contentAlignment = Alignment.Center) {
+                    MIcon(if (it.sent) "upload" else "download", if (it.failed) Palette.danger else Palette.accent, 20.dp)
+                }
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(it.name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val moving = !it.failed && it.fraction > 0f && it.fraction < 1f
+                    if (moving) Bar(it.fraction, Modifier.padding(top = 8.dp), Palette.gold)
+                    Text(it.status, style = noteStyle.copy(color = if (it.failed) Palette.danger else Palette.textMuted),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = if (moving) 4.dp else 2.dp))
+                }
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
@@ -170,14 +250,14 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
 }
 
 @Composable
-fun Qr(text: String, sizeDp: Int) {
+fun Qr(text: String, size: Dp) {
     val bmp = remember(text) {
         val m = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 512, 512)
         Bitmap.createBitmap(m.width, m.height, Bitmap.Config.RGB_565).apply {
             for (x in 0 until m.width) for (y in 0 until m.height) setPixel(x, y, if (m[x, y]) 0xFF101112.toInt() else 0xFFE4E1DA.toInt())
         }
     }
-    Box(Modifier.size((sizeDp + 20).dp).background(Palette.text), contentAlignment = Alignment.Center) {
-        Image(bmp.asImageBitmap(), contentDescription = "Wi-Fi code", modifier = Modifier.size(sizeDp.dp))
+    Box(Modifier.size(size + 20.dp).background(Palette.text), contentAlignment = Alignment.Center) {
+        Image(bmp.asImageBitmap(), contentDescription = "QR code", modifier = Modifier.size(size))
     }
 }

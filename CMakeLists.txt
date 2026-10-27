@@ -8,14 +8,29 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus Concurrent WebSockets Bluetooth Multimedia)
-find_package(KF6CoreAddons REQUIRED)
-find_package(KF6KIO REQUIRED)
-find_package(KF6Archive REQUIRED)
-find_package(KF6Prison REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+# ------------------------------------------------------------- platforms
+# Linux (the Flatpak): D-Bus, KDE's Prison for QR codes, SDL2 through pkg-config.
+# Windows (the portable zip, see the Windows job in .github/workflows/build.yml): no D-Bus or Prison;
+# OpenSSL, SDL2, libqrencode and Opus come from vcpkg (CMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake).
+if(WIN32)
+    enable_language(RC)
+    find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network WebSockets Bluetooth Multimedia)
+    # Only needed while main.cpp still sends notifications over D-Bus (it should call Platform::notify).
+    find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS DBus)
+    find_package(OpenSSL REQUIRED)
+    find_package(SDL2 CONFIG REQUIRED)
+    find_path(QRENCODE_INCLUDE_DIR qrencode.h REQUIRED)
+    find_library(QRENCODE_LIBRARY NAMES qrencode qrencoded REQUIRED)
+    find_package(Opus CONFIG QUIET)
+    option(HUGINN_WINDOWS_PORTABLE "The CI build for Huginn-Windows.zip (updates itself from GitHub releases)" OFF)
+else()
+    find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
+    find_package(KF6Prison REQUIRED)
+    find_package(OpenSSL REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    pkg_check_modules(OPUS QUIET IMPORTED_TARGET opus)
+endif()
 
 qt_standard_project_setup(REQUIRES 6.6)
 
@@ -24,21 +39,15 @@ qt_add_executable(huginn
     src/settings.cpp src/settings.h
     src/system.cpp src/system.h
     src/gamepad.cpp src/gamepad.h
-    src/foldermodel.cpp src/foldermodel.h
-    src/fileops.cpp src/fileops.h
-    src/places.cpp src/places.h
-    src/steam.cpp src/steam.h
-    src/archivemodel.cpp src/archivemodel.h
     src/transfer.cpp src/transfer.h
-    src/network.cpp src/network.h
-    src/usb.cpp src/usb.h
     src/updater.cpp src/updater.h
-    src/storage.cpp src/storage.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
-    src/direct.cpp src/direct.h
+    src/direct.h
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
+    src/chatgroups.cpp
+    src/groupwire.cpp src/groupwire.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h
@@ -48,9 +57,68 @@ qt_add_executable(huginn
     src/ble.cpp src/ble.h
     src/bleframes.cpp src/bleframes.h
     src/tls.cpp src/tls.h
+    src/tor.cpp src/tor.h
+    # 1:1 voice calls (docs/protocol-0.6.md section 5, TURN relay only over the internet)
+    src/call/relayconfig.h
+    src/call/callsignal.h
+    src/call/callcrypto.cpp src/call/callcrypto.h
+    src/call/stun.cpp src/call/stun.h
+    src/call/turnclient.cpp src/call/turnclient.h
+    src/call/jitterbuffer.cpp src/call/jitterbuffer.h
+    src/call/audiodsp.cpp src/call/audiodsp.h
+    src/call/opuscodec.cpp src/call/opuscodec.h
+    src/call/audioio.cpp src/call/audioio.h
+    src/call/callmedia.cpp src/call/callmedia.h
+    src/call/callsession.cpp src/call/callsession.h
+    src/call/callmanager.cpp src/call/callmanager.h
+    src/call/callselftest.cpp src/call/callselftest.h
 )
 
 target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
+
+# Small per-platform pieces (src/platform/). Direct connect needs NetworkManager, so Windows
+# builds a version of it that explains the Windows way instead.
+target_sources(huginn PRIVATE
+    src/platform/notify.h
+    src/platform/qrcode.h
+    src/platform/keepawake.h
+    src/platform/singleinstance.cpp src/platform/singleinstance.h
+    src/platform/winupdate.cpp src/platform/winupdate.h
+)
+if(WIN32)
+    target_sources(huginn PRIVATE
+        src/platform/notify_windows.cpp
+        src/platform/qrcode_qrencode.cpp
+        src/platform/keepawake_windows.cpp
+        src/platform/direct_windows.cpp
+    )
+    # Huginn.exe: a windowed app (no console), with the raven icon and version details.
+    set_target_properties(huginn PROPERTIES WIN32_EXECUTABLE TRUE OUTPUT_NAME Huginn)
+    string(REPLACE "." ";" HUGINN_VERSION_PARTS "${HUGINN_VERSION}")
+    list(GET HUGINN_VERSION_PARTS 0 HUGINN_RC_MAJOR)
+    list(LENGTH HUGINN_VERSION_PARTS HUGINN_VERSION_COUNT)
+    if(HUGINN_VERSION_COUNT GREATER 1)
+        list(GET HUGINN_VERSION_PARTS 1 HUGINN_RC_MINOR)
+    else()
+        set(HUGINN_RC_MINOR 0)
+    endif()
+    set(HUGINN_RC_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/huginn.ico")
+    configure_file(packaging/windows/huginn.rc.in ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc @ONLY)
+    target_sources(huginn PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
+    # Sources are UTF-8 (they use … and · in strings); MSVC needs to be told.
+    target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Zc:__cplusplus /permissive->)
+    target_compile_definitions(huginn PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN SDL_MAIN_HANDLED)
+    target_include_directories(huginn PRIVATE ${QRENCODE_INCLUDE_DIR})
+    if(HUGINN_WINDOWS_PORTABLE)
+        target_compile_definitions(huginn PRIVATE HUGINN_WINDOWS_PORTABLE)
+    endif()
+else()
+    target_sources(huginn PRIVATE
+        src/platform/notify_linux.cpp
+        src/platform/qrcode_prison.cpp
+        src/direct.cpp
+    )
+endif()
 
 set_source_files_properties(qml/Theme.qml qml/Ui.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
@@ -65,32 +133,24 @@ qt_add_qml_module(huginn
         qml/Theme.qml
         qml/Ui.qml
         qml/Icon.qml
-        qml/Divider.qml
         qml/PageHeader.qml
         qml/PromptKey.qml
         qml/PromptBar.qml
         qml/HButton.qml
         qml/ToggleSwitch.qml
         qml/Segmented.qml
-        qml/FileRow.qml
-        qml/FilePane.qml
-        qml/ActionWheel.qml
         qml/TextPrompt.qml
         qml/ConfirmDialog.qml
         qml/Toast.qml
-        qml/BrowserPage.qml
-        qml/GamesPage.qml
-        qml/UsbPage.qml
-        qml/TransferPage.qml
-        qml/NetworkPage.qml
-        qml/SettingsPage.qml
-        qml/PreviewPage.qml
-        qml/ArchivePage.qml
-        qml/StoragePage.qml
-        qml/DestinationPicker.qml
-        qml/HomePage.qml
-        qml/RecentPage.qml
+        qml/ListPicker.qml
+        qml/Rail.qml
         qml/ChatPage.qml
+        qml/GroupPage.qml
+        qml/FilesPage.qml
+        qml/CallsPage.qml
+        qml/CallPage.qml
+        qml/IncomingCall.qml
+        qml/SettingsPage.qml
         qml/ContactsPage.qml
         qml/LockPanel.qml
         qml/PatternPad.qml
@@ -101,10 +161,9 @@ qt_add_qml_module(huginn
 )
 
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
-foreach(f IN ITEMS Main Theme Ui Icon Divider PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented FileRow FilePane
-                   ActionWheel TextPrompt ConfirmDialog Toast BrowserPage GamesPage UsbPage TransferPage NetworkPage
-                   SettingsPage PreviewPage ArchivePage StoragePage DestinationPicker HomePage RecentPage ChatPage
-                   ContactsPage LockPanel PatternPad)
+foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
+                   TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
+                   ContactsPage LockPanel PatternPad CallPage IncomingCall)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
@@ -115,16 +174,40 @@ foreach(font IN LISTS HUGINN_FONTS)
 endforeach()
 
 target_link_libraries(huginn PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::DBus Qt6::Concurrent
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network
     Qt6::WebSockets Qt6::Bluetooth Qt6::Multimedia
-    KF6::CoreAddons KF6::KIOCore KF6::KIOWidgets KF6::Archive KF6::Prison
-    PkgConfig::SDL2
     OpenSSL::Crypto
 )
+if(WIN32)
+    target_link_libraries(huginn PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+        ${QRENCODE_LIBRARY}
+    )
+    if(TARGET Qt6::DBus)
+        target_link_libraries(huginn PRIVATE Qt6::DBus)
+    endif()
+else()
+    target_link_libraries(huginn PRIVATE Qt6::DBus KF6::Prison PkgConfig::SDL2)
+endif()
+# Opus (voice calls, src/call/): linked and HUGINN_HAVE_OPUS defined when it's there.
+if(TARGET Opus::opus)
+    target_link_libraries(huginn PRIVATE Opus::opus)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_OPUS)
+elseif(TARGET PkgConfig::OPUS)
+    target_link_libraries(huginn PRIVATE PkgConfig::OPUS)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_OPUS)
+elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
+    message(FATAL_ERROR "Opus wasn't found: the Windows build installs it with vcpkg (opus:x64-windows).")
+elseif(NOT WIN32)
+    # The Flatpak's runtime ships libopus (freedesktop base); without it calls would build but never sound.
+    message(FATAL_ERROR "Opus wasn't found (pkg-config opus): needed for voice calls.")
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS huginn RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS helper/huginn-drivetool DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
+if(WIN32)
+    return()   # Windows is packaged by the CI job (windeployqt and a zip), not installed
+endif()
 install(FILES packaging/io.github.ravenor907.Huginn.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/io.github.ravenor907.Huginn.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 install(FILES packaging/io.github.ravenor907.Huginn-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME io.github.ravenor907.Huginn.png)

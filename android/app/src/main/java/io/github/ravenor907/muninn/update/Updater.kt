@@ -11,15 +11,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
+import io.github.ravenor907.muninn.net.Tor
+import okhttp3.Request
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.IOException
 import java.util.concurrent.Executors
 
 /**
  * Checks GitHub for a newer Muninn every time the app is opened (not just when its process starts:
  * the background service keeps the process alive for days). A newer release downloads by itself and
  * goes straight to Android's installer, which always asks the person to tap Install.
+ * Both the check and the download go through Tor, so GitHub never sees this phone's IP address.
  */
 class Updater(private val context: Context, private val identity: Identity) {
     data class State(val status: String = "", val latest: String = "", val busy: Boolean = false, val ready: Boolean = false, val progress: Float = 0f)
@@ -48,29 +50,18 @@ class Updater(private val context: Context, private val identity: Identity) {
         _state.value = _state.value.copy(busy = true, status = "Checking for updates…")
         pool.execute {
             try {
-                val c = URL(RELEASES).openConnection() as HttpURLConnection
-                c.setRequestProperty("Accept", "application/vnd.github+json")
-                c.setRequestProperty("User-Agent", "Muninn/$current")
-                c.connectTimeout = 8000; c.readTimeout = 15000
-                val a = JSONArray(c.inputStream.bufferedReader().readText())
-                var best: String? = null
-                var bestUrl: String? = null
-                for (i in 0 until a.length()) {
-                    val r = a.getJSONObject(i)
-                    if (r.optBoolean("draft") || r.optBoolean("prerelease")) continue
-                    val tag = r.optString("tag_name")
-                    val name = versionOf(tag) ?: continue
-                    val assets = r.optJSONArray("assets") ?: continue
-                    val apk = (0 until assets.length()).map { assets.getJSONObject(it) }.firstOrNull { it.optString("name").endsWith(".apk") } ?: continue
-                    if (best == null || rank(name) > rank(best)) { best = name; bestUrl = apk.optString("browser_download_url") }
-                }
+                if (!Tor.ready) _state.value = _state.value.copy(status = "Connecting privately…")
+                if (!Tor.awaitReady(TOR_WAIT_MS)) throw IOException("Tor isn't ready")
+                val api = fromApi()
+                // GitHub's API allows few checks per address, and Tor exits are shared: then ask the website instead.
+                val (best, bestUrl) = if (api.first == null) fromWebsite() else api
                 url = bestUrl
                 val newer = best != null && rank(best) > rank(current)
                 _state.value = State(if (newer) "Muninn $best is ready to install" else "Muninn is up to date", best ?: "", false, newer)
                 if (newer && installAfter) download()
             } catch (e: Exception) {
                 lastCheck = 0L   // try again next time Muninn opens
-                _state.value = State("Couldn't reach GitHub. Check the connection.")
+                _state.value = State("Couldn't reach GitHub privately. Check the connection.")
             }
         }
     }
@@ -82,19 +73,19 @@ class Updater(private val context: Context, private val identity: Identity) {
             try {
                 val dir = File(context.cacheDir, "updates").also { it.mkdirs() }
                 val out = File(dir, "Muninn.apk")
-                var c = URL(u).openConnection() as HttpURLConnection
-                c.instanceFollowRedirects = true
-                // GitHub's download links redirect to another host.
-                var hops = 0
-                while (c.responseCode in 300..399 && hops++ < 5) {
-                    c = URL(c.getHeaderField("Location")).openConnection() as HttpURLConnection
-                }
-                val total = c.contentLengthLong
-                c.inputStream.use { ins ->
-                    out.outputStream().use { os ->
-                        val buf = ByteArray(1 shl 16); var got = 0L
-                        while (true) { val n = ins.read(buf); if (n < 0) break; os.write(buf, 0, n); got += n
-                            if (total > 0) _state.value = _state.value.copy(progress = got.toFloat() / total) }
+                if (!Tor.awaitReady(TOR_WAIT_MS)) throw IOException("Tor isn't ready")
+                // GitHub's download links redirect to another host; OkHttp follows them, still through Tor.
+                val c = Tor.client().newBuilder().readTimeout(2, java.util.concurrent.TimeUnit.MINUTES).build()
+                c.newCall(Request.Builder().url(u).header("User-Agent", "Muninn").build()).execute().use { r ->
+                    if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+                    val body = r.body ?: throw IOException("No body")
+                    val total = body.contentLength()
+                    body.byteStream().use { ins ->
+                        out.outputStream().use { os ->
+                            val buf = ByteArray(1 shl 16); var got = 0L
+                            while (true) { val n = ins.read(buf); if (n < 0) break; os.write(buf, 0, n); got += n
+                                if (total > 0) _state.value = _state.value.copy(progress = got.toFloat() / total) }
+                        }
                     }
                 }
                 _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
@@ -103,6 +94,41 @@ class Updater(private val context: Context, private val identity: Identity) {
                 _state.value = _state.value.copy(busy = false, status = "The download stopped. Try again.")
             }
         }
+    }
+
+    /** The newest release with an APK, from GitHub's API: (version, download link), or nulls if the API said no. */
+    private fun fromApi(): Pair<String?, String?> {
+        val req = Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").header("User-Agent", "Muninn").build()
+        val text = Tor.client().newCall(req).execute().use { r ->
+            if (r.code == 403 || r.code == 429) return null to null   // rate limited
+            if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+            r.body?.string() ?: throw IOException("No body")
+        }
+        val a = JSONArray(text)
+        var best: String? = null
+        var bestUrl: String? = null
+        for (i in 0 until a.length()) {
+            val r = a.getJSONObject(i)
+            if (r.optBoolean("draft") || r.optBoolean("prerelease")) continue
+            val tag = r.optString("tag_name")
+            val name = versionOf(tag) ?: continue
+            val assets = r.optJSONArray("assets") ?: continue
+            val apk = (0 until assets.length()).map { assets.getJSONObject(it) }.firstOrNull { it.optString("name").endsWith(".apk") } ?: continue
+            if (best == null || rank(name) > rank(best)) { best = name; bestUrl = apk.optString("browser_download_url") }
+        }
+        return best to bestUrl
+    }
+
+    /** The website's "latest release" link redirects to its tag; the APK is always named Muninn.apk. */
+    private fun fromWebsite(): Pair<String?, String?> {
+        val req = Request.Builder().url(LATEST).header("User-Agent", "Muninn").head().build()
+        val finalUrl = Tor.client().newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
+            r.request.url.toString()
+        }
+        val tag = tagFromLatest(finalUrl) ?: throw IOException("No release tag in $finalUrl")
+        val name = versionOf(tag) ?: throw IOException("Unexpected tag $tag")
+        return name to "$DOWNLOAD/$tag/Muninn.apk"
     }
 
     private fun install(apk: File) {
@@ -118,7 +144,15 @@ class Updater(private val context: Context, private val identity: Identity) {
 
     companion object {
         private const val RELEASES = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100"
+        private const val LATEST = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest"
+        private const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download"
         private const val RECHECK_MS = 5 * 60_000L
+        /** Tor usually starts in seconds, but a first start on a slow network can take a minute or two. */
+        private const val TOR_WAIT_MS = 120_000L
+
+        /** ".../releases/tag/v0.6" -> "v0.6" (where the "latest" link lands), else null. */
+        fun tagFromLatest(url: String): String? =
+            Regex("""/releases/tag/([^/?#]+)$""").find(url.substringBefore('?').substringBefore('#'))?.groupValues?.get(1)
 
         /** "v0.31" -> "0.31". Old test tags (v0.3-test1) and anything else -> null. */
         fun versionOf(tag: String): String? =

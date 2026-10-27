@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Window
 import Huginn
 
+// The window: the rail on the left, the open section beside it (its own list and main columns),
+// and on a handheld the button hints along the bottom. Overlays sit on top.
 Window {
     id: app
     width: System.tourDir.length > 0 ? 1920 : 1280
@@ -11,82 +13,157 @@ Window {
     title: "Huginn"
     color: Theme.ground
 
-    // ------------------------------------------------------------- pages
-    property string pageName: "start"
-    property var pageArgs: ({})
+    // ------------------------------------------------------------- layout density
+    // Automatic: the desktop density for a wide window when no controller is in use (Desktop Mode
+    // with a mouse and keyboard); handheld sizes otherwise. Game Mode always gets handheld sizes.
+    readonly property bool touring: System.tourDir.length > 0
+    property bool tourDesktop: false
+    property bool padInUse: Gamepad.connected
+    readonly property bool wide: width >= 1100
+    readonly property bool desktopLayout: touring ? tourDesktop
+        : Settings.layout === "desktop" ? true
+        : Settings.layout === "handheld" ? false
+        : !System.gameMode && wide && !padInUse
+    Binding { target: System; property: "desktop"; value: app.desktopLayout }
 
-    // Pages opened from the start screen go back to it; everything else goes back to the browser.
-    property string returnTo: ""
+    // ------------------------------------------------------------- the rail
+    // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
+    readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
+                                       { id: "tour-kindred", name: "Kindred", unread: 0 }]
+    readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
+    readonly property var railItems: [
+        { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+    ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?", badge: g.unread || 0 })))
+     .concat([
+        { id: "newgroup", kind: "add", label: "New group", action: true },
+        { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
+        { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
+        { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
+        { id: "exit", kind: "icon", icon: "power", label: "Exit Huginn", bottom: true, action: true }
+    ])
+    // LB and RB step through the sections and groups (New group and Exit are reached with the D-pad).
+    readonly property var cycle: railItems.filter(e => !e.action).map(e => e.id)
+
+    // ------------------------------------------------------------- pages
+    property string pageName: "dms"
+    property var pageArgs: ({})
+    property string focusZone: "content"     // "rail" or "content"
+    property int railIndex: 0
+    // The rail item for the page on screen (Contacts belongs to Settings).
+    readonly property string section: pageName === "contacts" ? "settings" : pageName
 
     function openPage(name, args) {
+        if (name === "chat") name = "dms"
         pageArgs = args || {}
-        if (name === "browser") { showBrowser(); return }
+        focusZone = "content"
         if (name === pageName) {
             if (pageLoader.item && pageLoader.item.setArgs) pageLoader.item.setArgs(pageArgs)
             return
         }
-        returnTo = name === "start" ? "" : pageName === "start" ? "start" : returnTo
+        const groupToGroup = name.startsWith("g:") && pageName.startsWith("g:")
         pageName = name
+        // From one group to another the page stays loaded: hand it the new arguments.
+        if (groupToGroup && pageLoader.item && pageLoader.item.setArgs) pageLoader.item.setArgs(pageArgs)
+    }
+    function openRail(index) {
+        const e = railItems[index]
+        if (!e) return
+        railIndex = index
+        if (e.id === "exit") { requestExit(); return }
+        if (e.id === "newgroup") { newGroup(); return }
+        openPage(e.id, {})
+    }
+    function newGroup() {
+        if (Vault.screenLocked || !Vault.exists) { Ui.say("Open Direct messages and unlock Chat first.", true); openPage("dms", {}); return }
+        Ui.ask("New group", "A name everyone in it sees, like Family or Kindred. You can change it later.", "", "Make it", t => {
+            const g = Chat.createGroup(t)
+            if (g === "") { Ui.say("Give the group a name.", true); return }
+            openPage("g:" + g, {})
+        }, false, true)
+    }
+    function stepSection(dir) {
+        const i = cycle.indexOf(section)
+        openPage(cycle[(i + dir + cycle.length) % cycle.length], {})
+        railIndex = railItems.findIndex(e => e.id === section)
+    }
+    function focusRail() {
+        railIndex = Math.max(0, railItems.findIndex(e => e.id === section))
+        focusZone = "rail"
+        keys.forceActiveFocus()
+    }
+    // Back out of a page: Contacts goes back to Settings, everything else to the rail.
+    function closePage() {
+        if (pageName === "contacts") openPage("settings", { section: 1 })
+        else focusRail()
+        keys.forceActiveFocus()
     }
     function restoreFocus() { keys.forceActiveFocus() }
-    // Every Exit goes through here, so a running copy or USB write is never cut off by surprise.
+    // Every Exit goes through here, so a transfer is never cut off by surprise.
     function requestExit() {
-        if (Usb.busy)
-            Ui.sure("Exit while the USB drive is being written?", "Closing now leaves the drive unusable until you start over.", "Exit anyway", () => Qt.quit(), true, true)
-        else if (FileOps.busy || LocalSend.busy)
-            Ui.sure("Exit while this runs?", (FileOps.busy ? FileOps.status : LocalSend.status) + " Closing now stops it partway.", "Exit anyway", () => Qt.quit(), true, true)
+        if (LocalSend.busy)
+            Ui.sure("Exit while this runs?", LocalSend.status + " Closing now stops it partway.", "Exit anyway", () => Qt.quit(), true, true)
         else
-            Ui.sure("Exit Huginn?", "You'll land back in Steam.", "Exit", () => Qt.quit(), false, false)
-    }
-    function showBrowser() {
-        returnTo = ""
-        pageName = ""
-        keys.forceActiveFocus()
-    }
-    function openInBrowser(url) {
-        showBrowser()
-        browser.activeModel.setUrl(url)
-    }
-    function closePage() {
-        pageName = returnTo
-        returnTo = ""
-        keys.forceActiveFocus()
+            Ui.sure("Exit Huginn?", System.gameMode ? "You'll land back in Steam." : "Messages wait for you until you open Huginn again.", "Exit", () => Qt.quit(), false, false)
     }
 
-    BrowserPage {
-        id: browser
-        anchors.fill: parent
-        visible: app.pageName === ""
+    Rail {
+        id: rail
+        anchors.top: parent.top
+        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.left: parent.left
+        items: app.railItems
+        current: app.section
+        focusIndex: app.railIndex
+        focused: app.focusZone === "rail"
+        onActivated: index => app.openRail(index)
     }
 
     Loader {
         id: pageLoader
-        anchors.fill: parent
-        active: app.pageName !== ""
+        anchors.top: parent.top
+        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.left: rail.right
+        anchors.right: parent.right
         source: {
+            if (app.pageName.startsWith("g:")) return "GroupPage.qml"
             switch (app.pageName) {
-            case "start": return "HomePage.qml"
-            case "recent": return "RecentPage.qml"
-            case "chat": return "ChatPage.qml"
-            case "contacts": return "ContactsPage.qml"
-            case "games": return "GamesPage.qml"
-            case "storage": return "StoragePage.qml"
-            case "usb": return "UsbPage.qml"
-            case "transfer": return "TransferPage.qml"
-            case "network": return "NetworkPage.qml"
+            case "dms": return "ChatPage.qml"
+            case "calls": return "CallsPage.qml"
+            case "files": return "FilesPage.qml"
             case "settings": return "SettingsPage.qml"
-            case "preview": return "PreviewPage.qml"
-            case "archive": return "ArchivePage.qml"
+            case "contacts": return "ContactsPage.qml"
             }
-            return ""
+            return "ChatPage.qml"
         }
         onLoaded: if (item.setArgs) item.setArgs(app.pageArgs)
     }
 
+    // Handheld: the buttons and what they do, along the bottom like the mockups.
+    PromptBar {
+        id: hints
+        anchors.bottom: parent.bottom
+        z: callPage.visible || incomingCall.visible ? 38 : 0   // the call's buttons stay on show over it
+        width: parent.width
+        visible: !Theme.desktop || LocalSend.busy
+        status: incomingCall.visible ? incomingCall.status : callPage.visible ? callPage.status
+              : app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
+        prompts: {
+            if (incomingCall.visible) return incomingCall.prompts
+            if (callPage.visible) return callPage.prompts
+            const lbrb = [{ key: "lbrb", label: "Sections" }]
+            if (app.focusZone === "rail")
+                return lbrb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }])
+            const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts : []
+            return lbrb.concat(p)
+        }
+        onPrompt: k => k === "lbrb" ? app.stepSection(1) : app.press(k)
+    }
+
     // ------------------------------------------------------------- overlays
-    ActionWheel { id: wheel; z: 20 }
-    DestinationPicker { id: picker; z: 25 }
+    ListPicker { id: picker; z: 25 }
     TextPrompt { id: prompt; z: 30 }
+    CallPage { id: callPage; z: 36 }
+    IncomingCall { id: incomingCall; z: 37 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
 
@@ -128,12 +205,11 @@ Window {
 
     Component.onCompleted: {
         Ui.main = app
-        Ui.wheel = wheel
         Ui.prompt = prompt
         Ui.confirm = confirm
         Ui.toast = toast
         Ui.picker = picker
-        if (System.tourDir.length > 0) tour.start()
+        if (touring) tour.start()
     }
 
     // ------------------------------------------------------------- nearby sharing (LocalSend)
@@ -159,16 +235,20 @@ Window {
         target: Chat
         function onNotice(text) { Ui.say(text) }
         function onArrived(name, text, key) {
-            if (Chat.openChat === key && pageLoader.source.toString().indexOf("ChatPage") >= 0) return
-            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : "New message. Open Chat to read it.")
+            if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
+            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : "New message. Open Direct messages to read it.")
         }
+    }
+    // Calls: how a call ended, as a toast.
+    Connections {
+        target: Calls
+        function onFinished(t) { Ui.say(t) }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen.
     Connections {
         target: Vault
         function onPanicked() {
             if (prompt.visible) prompt.cancel()
-            if (wheel.visible) wheel.close()
             if (picker.visible) picker.close()
             Ui.say("Chat locked.")
         }
@@ -188,44 +268,73 @@ Window {
     }
 
     // ------------------------------------------------------------- input
-    function topHandler() {
-        if (updating.visible) return null
+    function overlay() {
+        if (updating.visible) return updating
         if (confirm.visible) return confirm
+        if (incomingCall.visible) return incomingCall
+        if (callPage.visible) return callPage
         if (prompt.visible) return prompt
         if (picker.visible) return picker
-        if (wheel.visible) return wheel
-        if (pageLoader.item && pageLoader.status === Loader.Ready) return pageLoader.item
-        return browser
+        return null
+    }
+    function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }
+
+    function railButton(b) {
+        switch (b) {
+        case "up": railIndex = Math.max(0, railIndex - 1); break
+        case "down": railIndex = Math.min(railItems.length - 1, railIndex + 1); break
+        case "a": case "right": openRail(railIndex); break
+        case "b": requestExit(); break
+        case "start": openPage("settings", {}); break
+        }
     }
     function press(b) {
-        const h = topHandler()
-        if (h && h.handleButton) h.handleButton(b)
+        const o = overlay()
+        if (o) { if (o.handleButton) o.handleButton(b); return }
+        const p = page()
+        // LB and RB move between rail items, unless the page needs them right now (the chat lock).
+        if ((b === "lb" || b === "rb") && !(p && p.ownsShoulders && focusZone === "content")) { stepSection(b === "lb" ? -1 : 1); return }
+        if (focusZone === "rail") { railButton(b); return }
+        if (p && p.handleButton && p.handleButton(b)) return
+        // What the page didn't use: Left and B go to the rail, Menu opens Settings.
+        if (b === "left" || b === "b") focusRail()
+        else if (b === "start") openPage("settings", {})
     }
     function release(b) {
-        const h = topHandler()
-        if (h && h.handleRelease) h.handleRelease(b)
+        const o = overlay()
+        if (o) { if (o.handleRelease) o.handleRelease(b); return }
+        const p = page()
+        if (focusZone === "content" && p && p.handleRelease) p.handleRelease(b)
     }
 
     Connections {
         target: Gamepad
-        function onPressed(button) { app.press(button) }
+        function onPressed(button) { app.padInUse = true; app.press(button) }
         function onReleased(button) { app.release(button) }
     }
-
     // Keyboard stands in for the controller in Desktop Mode.
     Item {
         id: keys
         anchors.fill: parent
         focus: true
+        // A mouse in use: Automatic switches to the desktop density.
+        // Moving it over the columns also puts the focus back on them (clicks there act on the page).
+        HoverHandler {
+            onPointChanged: {
+                if (app.touring) return
+                if (app.padInUse) app.padInUse = false
+                if (app.focusZone === "rail" && point.position.x > rail.width) app.focusZone = "content"
+            }
+        }
         Keys.onPressed: event => {
-            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space || wheel.visible)) return
+            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space)) return
             const map = {}
             map[Qt.Key_Up] = "up"; map[Qt.Key_Down] = "down"; map[Qt.Key_Left] = "left"; map[Qt.Key_Right] = "right"
             map[Qt.Key_Return] = "a"; map[Qt.Key_Enter] = "a"; map[Qt.Key_Escape] = "b"; map[Qt.Key_Backspace] = "b"
             map[Qt.Key_Space] = "x"; map[Qt.Key_Menu] = "y"; map[Qt.Key_F10] = "y"; map[Qt.Key_Tab] = "rb"
             map[Qt.Key_Backtab] = "lb"; map[Qt.Key_PageUp] = "lt"; map[Qt.Key_PageDown] = "rt"; map[Qt.Key_F1] = "start"
             const b = map[event.key]
-            if (b) { app.press(b); event.accepted = true }
+            if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
         }
         Keys.onReleased: event => {
             if (event.isAutoRepeat) return
@@ -242,40 +351,46 @@ Window {
         id: tour
         property int step: 0
         readonly property var steps: [
-            { page: "start", file: "00-start" },
-            { page: "", file: "01-browser" },
-            { page: "", wheel: true, file: "02-action-wheel" },
-            { page: "", prompt: true, file: "03-rename" },
-            { page: "games", file: "04-games" },
-            { page: "usb", file: "05-usb" },
-            { page: "transfer", file: "06-transfer" },
-            { page: "network", file: "07-network" },
-            { page: "settings", file: "08-settings" },
-            { page: "preview", file: "09-preview" },
-            { page: "archive", file: "10-archive" },
-            { page: "", hold: true, file: "11-confirm" },
-            { page: "storage", file: "12-storage" },
-            { page: "", picker: true, file: "13-move-to" },
-            { page: "preview", text: true, file: "14-text" },
-            { page: "settings", section: 2, file: "15-settings-browser" },
-            { page: "settings", section: 1, file: "15-settings-chat" },
-            { page: "chat", file: "16-chat" }
+            { page: "dms", file: "00-direct-messages" },
+            { page: "dms", zone: "messages", file: "01-conversation" },
+            { page: "dms", rail: true, file: "02-rail" },
+            { page: "files", file: "03-files" },
+            { page: "calls", file: "04-calls" },
+            { page: "settings", file: "05-settings" },
+            { page: "settings", section: 1, file: "06-settings-chat" },
+            { page: "contacts", file: "07-contacts" },
+            { page: "dms", picker: true, file: "08-options" },
+            { page: "dms", prompt: true, file: "09-write" },
+            { page: "dms", hold: true, file: "10-confirm" },
+            { page: "dms", zone: "messages", desktop: true, file: "11-desktop" },
+            { page: "settings", desktop: true, file: "12-desktop-settings" },
+            { page: "g:tour-crew", file: "13-group" },
+            { page: "g:tour-crew", zone: "messages", desktop: true, file: "14-desktop-group" },
+            { page: "g:tour-crew", zone: "channels", groupOptions: true, file: "15-group-options" },
+            { page: "g:tour-crew", zone: "channels", voice: true, file: "16-voice-room" },
+            { page: "dms", folders: true, file: "17-folders" },
+            { page: "dms", rail: true, desktop: true, file: "18-desktop-rail" }
         ]
         interval: 1500
         repeat: true
         onTriggered: {
             if (step > 0) System.grab(app, steps[step - 1].file)
-            wheel.visible = false; prompt.visible = false; confirm.visible = false; picker.visible = false
+            prompt.visible = false; confirm.visible = false; picker.visible = false
             if (step >= steps.length) { stop(); System.tourFinished(); return }
             const s = steps[step]
             const args = { tour: true }
-            if (s.text) { args.tour = false; args.url = System.sampleText(); args.folder = "" }
             if (s.section) args.section = s.section
-            if (s.page === "") app.showBrowser(); else app.openPage(s.page, args)
-            if (s.picker) picker.open("Move 2 items to…", [{ name: "Other pane", detail: "Home / Downloads", url: "file:///tmp" }], null)
-            if (s.wheel) { browser.openWheel(false); wheel.current = 1 }
-            if (s.prompt) prompt.open("Rename folder", "Home", "screenshots", "Rename", null, false)
-            if (s.hold) confirm.open("Erase this drive?", "Everything on the 64 GB USB drive will be replaced by Ventoy.", "Erase and install", null, true, true)
+            if (s.zone) args.zone = s.zone
+            if (s.groupOptions) args.groupOptions = true
+            if (s.voice) args.voice = true
+            if (s.folders) args.folders = true
+            app.tourDesktop = !!s.desktop
+            app.openPage(s.page, args)
+            if (s.rail) app.focusRail()
+            if (s.picker) picker.openList("Message", [{ header: "", items: [{ name: "Unsend", detail: "Removes it from both sides", url: "unsend" }, { name: "Delete for me", detail: "Only on this computer", url: "delete" }] },
+                                                     { header: "Conversation", items: [{ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" }] }], null)
+            if (s.prompt) prompt.open("Message everyone nearby", "You're " + Chat.username, "", "Send", null, false, true)
+            if (s.hold) confirm.open("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }
     }

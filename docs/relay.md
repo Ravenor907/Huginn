@@ -1,0 +1,97 @@
+# Relay credentials (app side)
+
+Over the internet, call audio goes only through Cloudflare TURN relays (docs/protocol-0.6.md 5.1 and 5.6):
+there is no STUN and no direct internet path. The apps never hold the Cloudflare TURN token. They ask the
+relay Worker (`relay-worker/worker.js`) for a short-lived TURN login instead, and get TURN URLs from it,
+never STUN URLs.
+
+## Constants
+
+The Worker URL and `APP_SECRET` live in one constants file per app, and nowhere else:
+
+- Huginn: `src/call/relayconfig.h` (`RelayConfig::kWorkerUrl`, `RelayConfig::kAppSecret`)
+- Muninn: `android/app/src/main/java/io/github/ravenor907/muninn/net/call/RelayConfig.kt`
+  (`RelayConfig.WORKER_URL`, `RelayConfig.APP_SECRET`)
+
+```
+WORKER_URL = "https://huginn-relay.ravenor907.workers.dev"
+APP_SECRET = "<64 hex chars, same value as the Worker secret>"
+```
+
+`APP_SECRET` is not a real secret (anyone can pull it out of an app). It only stops casual scripts. The real
+protection is the Worker's daily caps.
+
+## Request
+
+`POST {WORKER_URL}/turn`, `Content-Type: application/json`, sent over Tor like other network requests.
+
+```json
+{"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
+```
+
+- `id`: lowercase hex SHA-256 (64 chars) of the raw SubjectPublicKeyInfo DER of the caller's chat key: the
+  bytes whose standard base64 is the `fromKey` of its envelopes (not that base64 text, and not the bare EC
+  point). Huginn `RelayCredentials::body`, Muninn `TurnCreds.body`; both self-tests check the same example.
+- `t`: current Unix time in whole seconds (a JSON integer, not a string).
+- `sig`: lowercase hex HMAC-SHA256 with key `APP_SECRET` (the UTF-8 bytes of the string) over the UTF-8
+  string `id + "." + t`, for example `aaaa...aaaa.1800000000` (the 64-char id, a dot, then the digits of t).
+
+The Worker rejects `t` more than 300 s away from its clock. If the device clock is badly off, the request fails
+with 401 `stale`.
+
+## Response
+
+200:
+
+```json
+{
+  "urls": [
+    "turn:turn.cloudflare.com:3478?transport=udp",
+    "turn:turn.cloudflare.com:3478?transport=tcp",
+    "turns:turn.cloudflare.com:5349?transport=tcp",
+    "turns:turn.cloudflare.com:443?transport=tcp"
+  ],
+  "username": "...",
+  "credential": "...",
+  "ttl": 7200
+}
+```
+
+- `urls`: only `turn:` and `turns:` URLs, UDP and TCP, as Cloudflare returns them (ports 3478, 443, 80, 5349,
+  maybe 53). Use them in the order given; skip any the app can't use.
+- `username` and `credential`: the TURN long-term credential (RFC 8489 style) for every URL in the list.
+- `ttl`: seconds the login is valid, counted from when the response arrived.
+
+Errors are JSON `{"error": "<code>"}`:
+
+| Status | `error` | App behaviour |
+| --- | --- | --- |
+| 400 | `bad_request` | Bug in the app. Don't retry. |
+| 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. Don't retry this call. |
+| 429 | `id_limit`, `global_limit` | Daily cap reached. No relay until the next UTC day. |
+| 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
+| 503 | `limits_unavailable`, `not_configured` | Worker not set up or KV down. Retry later. |
+
+On any error, the call goes on without a relay: only the Wi-Fi and Bluetooth paths can work, and an internet
+call fails with "Can't connect".
+
+## Caching
+
+- Store `{urls, username, credential, expires}` with `expires = time the response arrived + ttl`.
+- Reuse the cached login until 5 minutes before `expires` (`now < expires - 300`). After that, fetch a new one.
+- Fetch lazily: only when a call needs a relay, not at app start.
+- Keep the cache in memory (or app private storage). Never log the credential.
+- After a 429, don't ask again until the next UTC day. After a 5xx, wait at least 60 s before asking again.
+- A call already using a login keeps it; refreshing only affects new allocations.
+
+## Reaching the TURN server
+
+The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up through Tor only (SOCKS5
+RESOLVE on Tor's port), a few tries a second apart, and never fall back to the system resolver: that would
+tell the local network and its DNS server when this device makes a call. If Tor can't answer, the call has
+no relay and says "Can't reach the call relay right now". The audio itself then goes from the device to the
+TURN server's address directly (UDP, or TLS on 443), not through Tor.
+
+## Health
+
+`GET {WORKER_URL}/health` returns `{"ok":true}`. The apps don't need it; it is for the owner to check the Worker.

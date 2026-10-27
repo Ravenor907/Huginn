@@ -1,0 +1,739 @@
+package io.github.ravenor907.muninn.net
+
+import io.github.ravenor907.muninn.net.Proto06.Channel
+import io.github.ravenor907.muninn.net.Proto06.MAIN
+import io.github.ravenor907.muninn.net.Proto06.Member
+import io.github.ravenor907.muninn.net.Proto06.State
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.KeyPair
+
+/**
+ * Group chats (docs/protocol-0.6.md, section 3). No group key: every group message is sealed to each
+ * member over that member's own pairwise session, by [Host.send]. The group itself is a signed
+ * snapshot ([State]); every change is a whole new state with a higher version, signed by an admin.
+ *
+ * No Android in here: Chat is the [Host] on the phone, and the unit tests run several of these
+ * against each other in memory.
+ */
+class Groups(
+    private val keys: KeyPair, private val me: String, private val host: Host,
+    private val read: (String) -> String?, private val write: (String, String) -> Unit,
+    private val now: () -> Long = { System.currentTimeMillis() },
+) {
+    interface Host {
+        val myName: String
+        val myMailbox: String
+        val readReceipts: Boolean
+        /** Seal [o] for [o].to and send it on every route. One envelope id, one sealing: retries send the same bytes. */
+        fun send(o: Out)
+        /** The sealed copy of envelope [env] isn't needed any more. */
+        fun drop(env: String)
+        /** A real contact (not a group peer). */
+        fun isContact(k: String): Boolean
+        /** A member who isn't a contact becomes a group peer, so they can be reached (3.7). */
+        fun peer(k: String, name: String, mailbox: String)
+        fun notice(text: String)
+        /** Something arrived in group [g] (for a notification). */
+        fun arrived(g: String, title: String, text: String)
+        fun deleteBlob(id: String)
+    }
+
+    /** One envelope to one member. [env] is the envelope id (2.3); [id] the logical id it's confirmed by. */
+    data class Out(
+        val env: String, val to: String, val room: String, val plain: String, val id: String, val g: String, val t: Long,
+        val retry: Boolean = true, val photo: String = "", val voice: Int = 0, val ch: String = "", val tries: Int = 0,
+    )
+
+    /** [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). */
+    data class Group(val state: State, val history: List<State> = emptyList(), val gone: String = "") {
+        val readOnly get() = gone.isNotEmpty()
+        val g get() = state.g
+    }
+
+    /** A group message. Mine: [to] is who it went to, [delivered] and [read] who confirmed. */
+    data class GMsg(
+        val id: String, val g: String, val ch: String, val from: String, val name: String, val text: String, val mine: Boolean,
+        val time: Long, val photo: String = "", val voice: Int = 0, val unsent: String = "", val state: String = "",
+        val to: Set<String> = emptySet(), val delivered: Set<String> = emptySet(), val read: Set<String> = emptySet(),
+        val seen: Boolean = false,
+    )
+
+    /** "Raven invited you to Family": nothing changes until it's accepted. */
+    data class Invite(val g: String, val name: String, val from: String, val fromName: String, val inv: String, val x: Long, val state: State)
+
+    /** A change an admin makes, kept so it can be made again on top of a state that won a conflict. */
+    data class Change(val op: String, val a: String = "", val b: String = "", val c: String = "", val v: Long = 0) {
+        fun applyTo(s: State): State? = when (op) {
+            "rename" -> if (a.isEmpty()) s.copy(name = b).takeIf { b != s.name }
+                else s.channel(a)?.takeIf { it.n != b }?.let { s.copy(channels = s.channels.map { ch -> if (ch.id == a) ch.copy(n = b) else ch }) }
+            "addch" -> if (s.channel(a) != null) null else s.copy(channels = s.channels + Channel(a, b, c))
+            "rmch" -> if (a == MAIN || s.channel(a) == null) null else s.copy(channels = s.channels.filter { it.id != a })
+            "admin" -> if (!s.has(a) || s.isAdmin(a)) null else s.copy(admins = (s.admins + a).sorted())
+            "unadmin" -> if (!s.isAdmin(a) || a == s.owner) null else s.copy(admins = s.admins - a)
+            "owner" -> if (!s.has(a) || a == s.owner) null else s.copy(owner = a, admins = (s.admins + a).toSortedSet().toList())
+            "remove", "leave" -> if (!s.has(a) || a == s.owner) null else s.copy(members = s.members.filter { it.k != a }, admins = s.admins - a)
+            "join" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
+            else -> null
+        }
+    }
+
+    private data class Token(val i: String, val g: String, val x: Long, val multi: Boolean)
+    private data class Held(val from: String, val name: String, val plain: JSONObject)
+
+    private val lock = Any()
+    private val groups = LinkedHashMap<String, Group>()
+    private val chats = HashMap<String, List<GMsg>>()
+    private val outs = ArrayList<Out>()
+    private val tokens = ArrayList<Token>()
+    private val invites = ArrayList<Invite>()
+    /** Groups I asked to join, and the admin I asked: the first state is taken only from them (3.3 step 2). */
+    private val joining = HashMap<String, String>()
+    private val last = HashMap<String, Change>()
+    private val deleted = HashMap<String, Long>()
+    private val unread = HashSet<String>()
+    private val held = HashMap<String, MutableList<Held>>()
+    private val tries = HashMap<String, Pair<Int, Long>>()
+    /** "g|key" to when: syncs asked of them (their states are welcome) and states sent back (not again at once). */
+    private val asked = HashMap<String, Long>()
+    private val answered = HashMap<String, Long>()
+    private val queue = ArrayList<Out>()
+
+    private val _groups = MutableStateFlow<Map<String, Group>>(emptyMap())
+    val all: StateFlow<Map<String, Group>> = _groups.asStateFlow()
+    private val _chats = MutableStateFlow<Map<String, List<GMsg>>>(emptyMap())
+    val messages: StateFlow<Map<String, List<GMsg>>> = _chats.asStateFlow()
+    private val _invites = MutableStateFlow<List<Invite>>(emptyList())
+    val pending: StateFlow<List<Invite>> = _invites.asStateFlow()
+    private val _unread = MutableStateFlow<Set<String>>(emptySet())
+    val unreadGroups: StateFlow<Set<String>> = _unread.asStateFlow()
+
+    init { load(); publish() }
+
+    // ------------------------------------------------------------------ reading
+
+    fun group(g: String): Group? = synchronized(lock) { groups[g] }
+    fun isMember(g: String, k: String) = synchronized(lock) { groups[g]?.let { !it.readOnly && it.state.has(k) } == true }
+    /** A key I share a live group with (or am joining through): group rooms from them are welcome. */
+    fun sharesGroup(k: String) = synchronized(lock) { groups.values.any { !it.readOnly && it.state.has(k) } || k in joining.values }
+    /** The group of a group message whose envelope id is [env], if I have it already (a copy, or a resend). */
+    fun knownEnvelope(env: String): String? {
+        val id = env.substringBefore('-')
+        if (!Proto06.isLogicalId(id)) return null
+        return synchronized(lock) { chats.entries.firstOrNull { (_, l) -> l.any { it.id == id } }?.key ?: if (deleted.containsKey(id)) "" else null }
+    }
+
+    // ------------------------------------------------------------------ making and changing groups
+
+    /** A new group: me as owner, only admin and only member, the main channel. Nothing is sent. */
+    fun create(name: String): String? = act {
+        val n = clean(name, Proto06.MAX_NAME)
+        if (n.isBlank()) return@act null
+        val g = Proto06.newGroupId()
+        val s = State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
+            listOf(Channel(MAIN, "general", "text")), now()).signedBy(keys.private, me)
+        Proto06.check(s)
+        groups[g] = Group(s)
+        g
+    }
+
+    fun rename(g: String, name: String) = change(g, Change("rename", "", clean(name, Proto06.MAX_NAME)))
+    fun addChannel(g: String, name: String, voice: Boolean) =
+        change(g, Change("addch", Proto06.newChannelId(), clean(name, Proto06.MAX_CHANNEL_NAME), if (voice) "voice" else "text"))
+    fun renameChannel(g: String, ch: String, name: String) = change(g, Change("rename", ch, clean(name, Proto06.MAX_CHANNEL_NAME)))
+    fun removeChannel(g: String, ch: String) = change(g, Change("rmch", ch))
+    fun setAdmin(g: String, k: String, on: Boolean) = change(g, Change(if (on) "admin" else "unadmin", k))
+    fun handOver(g: String, k: String) = change(g, Change("owner", k))
+    fun remove(g: String, k: String) = change(g, Change("remove", k))
+
+    /** Null when done (or nothing to do), else why not, in words for the person. */
+    private fun change(g: String, c: Change): String? = act { changeLocked(g, c) }
+
+    private fun changeLocked(g: String, c: Change): String? {
+        val grp = groups[g] ?: return "That group isn't here any more."
+        if (grp.readOnly) return "You're not in ${grp.state.name} any more."
+        val cur = grp.state
+        if (!cur.isAdmin(me)) return "Only admins can change ${cur.name}."
+        if (c.op == "owner" && cur.owner != me) return "Only the owner can hand the group over."
+        if ((c.op == "rename" && c.b.isBlank()) || (c.op == "addch" && c.b.isBlank())) return "Give it a name."
+        if (c.op == "addch" && cur.channels.size >= Proto06.MAX_CHANNELS) return "A group has at most ${Proto06.MAX_CHANNELS} channels."
+        if ((c.op == "join") && cur.members.size >= Proto06.MAX_MEMBERS) return "${cur.name} is full (${Proto06.MAX_MEMBERS} people)."
+        val changed = c.applyTo(cur) ?: return null
+        val next = try {
+            changed.copy(v = cur.v + 1, ts = now()).signedBy(keys.private, me).also { Proto06.check(it) }
+        } catch (e: IllegalArgumentException) { return "That change doesn't fit (${e.message})." }
+        last[g] = c.copy(v = next.v)
+        take(grp, next)
+        broadcast(cur, next, c.op)
+        return null
+    }
+
+    /** Sends [s] to everyone in [old] and [s] (the removed person too, so their app knows). */
+    private fun broadcast(old: State, s: State, op: String) {
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "state").put("g", s.g).put("id", id).put("op", op).put("state", s.json()).toString()
+        (old.members.map { it.k } + s.members.map { it.k }).toSet().filter { it != me }.forEach { k -> out(k, "group", plain, id, s.g) }
+    }
+
+    // ------------------------------------------------------------------ invites and codes (3.5)
+
+    /** Invites a contact (the caller checks they have g1). Null when sent, else why not. */
+    fun invite(g: String, k: String): String? = act {
+        val grp = groups[g] ?: return@act "That group isn't here any more."
+        val s = grp.state
+        if (grp.readOnly || !s.isAdmin(me)) return@act "Only admins can invite people."
+        if (s.has(k)) return@act null
+        if (s.members.size >= Proto06.MAX_MEMBERS) return@act "${s.name} is full (${Proto06.MAX_MEMBERS} people)."
+        val t = Token(Proto06.newToken(), g, now() / 1000 + Proto06.CODE_MS / 1000, false)
+        tokens.add(t)
+        val id = Proto06.newLogicalId()
+        out(k, "group", JSONObject().put("t", "invite").put("g", g).put("id", id).put("state", s.json()).put("inv", t.i).put("x", t.x).toString(), id, g)
+        null
+    }
+
+    /** A group code good for an hour, for anyone who has it (several people may use it). */
+    fun code(g: String): String? = act {
+        val grp = groups[g] ?: return@act null
+        if (grp.readOnly || !grp.state.isAdmin(me)) return@act null
+        val t = Token(Proto06.newToken(), g, now() / 1000 + Proto06.CODE_MS / 1000, true)
+        tokens.add(t)
+        Proto06.code(Proto06.Code(g, grp.state.name, me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox), t.i, t.x))
+    }
+
+    /** Stops every group code of [g] from working. */
+    fun revokeCodes(g: String) = act { tokens.removeAll { it.g == g && it.multi }; Unit }
+
+    fun acceptInvite(inv: Invite): String? = act {
+        invites.removeAll { it.g == inv.g && it.inv == inv.inv }
+        if (inv.x * 1000 < now()) return@act "That invite has expired. Ask ${inv.fromName} for a new one."
+        joining[inv.g] = inv.from
+        sendJoin(inv.g, inv.from, inv.inv)
+        null
+    }
+
+    fun declineInvite(inv: Invite) = act {
+        invites.removeAll { it.g == inv.g && it.inv == inv.inv }
+        val id = Proto06.newLogicalId()
+        out(inv.from, "group", JSONObject().put("t", "decline").put("g", inv.g).put("id", id).put("inv", inv.inv).toString(), id, inv.g)
+    }
+
+    /** Joins with a group code (the admin needn't be a contact). Null when asked, else why not. */
+    fun joinByCode(c: Proto06.Code): String? = act {
+        if (c.x * 1000 < now()) return@act "That group code has expired (they last an hour). Ask for a new one."
+        if (c.a == me) return@act "That's your own group code."
+        if (groups[c.g]?.let { !it.readOnly && it.state.has(me) } == true) return@act "You're already in ${c.gn}."
+        if (!host.isContact(c.a)) host.peer(c.a, c.an.ifBlank { "Admin" }, c.p)
+        joining[c.g] = c.a
+        sendJoin(c.g, c.a, c.i)
+        null
+    }
+
+    private fun sendJoin(g: String, admin: String, inv: String) {
+        val id = Proto06.newLogicalId()
+        out(admin, "group", JSONObject().put("t", "join").put("g", g).put("id", id).put("inv", inv)
+            .put("n", clean(host.myName, Proto06.MAX_NAME)).put("p", mailbox(host.myMailbox)).toString(), id, g)
+    }
+
+    fun isJoining(g: String) = synchronized(lock) { joining.containsKey(g) }
+
+    /** Leaves (the owner hands the group over first). The group stays here, read-only. */
+    fun leave(g: String): String? = act {
+        val grp = groups[g] ?: return@act null
+        val s = grp.state
+        if (grp.readOnly) return@act null
+        if (s.owner == me && s.members.size > 1) return@act "You own ${s.name}. Hand it over to someone first (Group settings › Members)."
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "leave").put("g", g).put("id", id).toString()
+        s.members.map { it.k }.filter { it != me }.forEach { out(it, "group", plain, id, g) }
+        groups[g] = grp.copy(gone = "left")
+        null
+    }
+
+    /** Removes the group and its messages from this phone (only once I'm out of it, or alone in it). */
+    fun delete(g: String): Boolean = act {
+        val grp = groups[g] ?: return@act false
+        if (!grp.readOnly && grp.state.members.size > 1) return@act false
+        groups.remove(g)
+        chats.remove(g)?.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo) }
+        outs.removeAll { (it.g == g).also { gone -> if (gone) host.drop(it.env) } }
+        unread.remove(g); last.remove(g); held.remove(g)
+        true
+    }
+
+    // ------------------------------------------------------------------ messages (3.8, 3.9)
+
+    fun sendText(g: String, ch: String, text: String): Boolean = act {
+        val t = text.trim()
+        if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act false
+        val (s, chId) = target(g, ch) ?: return@act false
+        val id = Proto06.newLogicalId()
+        val time = now()
+        val to = s.members.map { it.k }.filter { it != me }.toSet()
+        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to))
+        val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time).toString()
+        to.forEach { out(it, "gmsg", plain, id, g) }
+        true
+    }
+
+    /** A photo or voice message already stored as [blob] (Chat seals the pieces per member). */
+    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int): Boolean = act {
+        val (s, chId) = target(g, ch) ?: return@act false
+        val id = Proto06.newLogicalId()
+        val to = s.members.map { it.k }.filter { it != me }.toSet()
+        addMsg(GMsg(id, g, chId, me, host.myName, "", true, now(), photo = blob, voice = voiceMs, state = if (to.isEmpty()) "sent" else "sending", to = to))
+        to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId) }
+        true
+    }
+
+    private fun target(g: String, ch: String): Pair<State, String>? {
+        val grp = groups[g] ?: return null
+        if (grp.readOnly) return null
+        val s = grp.state
+        return s to (if (s.channel(ch)?.t == "text") ch else MAIN)
+    }
+
+    /** Takes my message back from everyone who got it. */
+    fun unsend(g: String, msgId: String) = act {
+        val m = chats[g]?.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() } ?: return@act
+        if (m.photo.isNotEmpty()) host.deleteBlob(m.photo)
+        edit(g, msgId) { it.copy(text = "", photo = "", voice = 0, unsent = "You") }
+        outs.removeAll { (it.id == msgId).also { gone -> if (gone) host.drop(it.env) } }
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "unsend").put("g", g).put("id", id).put("msg", msgId).toString()
+        val s = groups[g]?.state
+        m.to.filter { s?.has(it) == true }.forEach { out(it, "group", plain, id, g) }
+    }
+
+    /** Deletes one message on this phone only. */
+    fun deleteMessage(g: String, msgId: String) = act {
+        val list = chats[g] ?: return@act
+        list.firstOrNull { it.id == msgId }?.photo?.takeIf { it.isNotEmpty() }?.let { host.deleteBlob(it) }
+        chats[g] = list.filterNot { it.id == msgId }
+        deleted[msgId] = now()
+        outs.removeAll { (it.id == msgId).also { gone -> if (gone) host.drop(it.env) } }
+    }
+
+    /** The group is on screen: clear its dot and, with read receipts on, tell each author what was read. */
+    fun markRead(g: String) = act {
+        unread.remove(g)
+        val fresh = chats[g].orEmpty().filter { !it.mine && !it.seen && it.unsent.isEmpty() }
+        if (fresh.isEmpty()) return@act
+        chats[g] = chats[g].orEmpty().map { if (!it.mine && !it.seen) it.copy(seen = true) else it }
+        if (host.readReceipts) fresh.groupBy { it.from }.forEach { (k, l) -> l.map { it.id }.chunked(Proto06.MAX_RECEIPT_IDS).forEach { receipt(k, g, it, "read") } }
+    }
+
+    // ------------------------------------------------------------------ receiving
+
+    /**
+     * Rooms "group", "gmsg" and "greceipt", after the envelope opened. [isContact]: a real contact.
+     * Returns 200 (taken, or quietly dropped), 400 (malformed) or 403 (not from someone allowed to send it).
+     */
+    fun receive(room: String, from: String, fromName: String, envMailbox: String?, p: JSONObject): Int = act {
+        when (room) {
+            "group" -> control(from, fromName, envMailbox, p)
+            "gmsg" -> gmsg(from, fromName, p, fromHeld = false)
+            "greceipt" -> greceipt(from, p)
+            else -> 400
+        }
+    }
+
+    private fun control(from: String, fromName: String, envMailbox: String?, p: JSONObject): Int {
+        val t = p.optString("t"); val g = p.optString("g"); val id = p.optString("id")
+        if (!Proto06.isLogicalId(id) || g.isEmpty() || g.length > 40) return 400
+        val grp = groups[g]
+        val inGroup = grp != null && (grp.state.has(from) || grp.history.any { it.has(from) })
+        val allowed = when (t) {
+            "invite" -> host.isContact(from)
+            "join" -> liveToken(p.optString("inv"), g) != null
+            "decline" -> host.isContact(from) || inGroup
+            "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from")
+            "leave", "sync", "unsend" -> inGroup
+            else -> return 400
+        }
+        if (!allowed) return 403
+        when (t) {
+            "invite" -> {
+                val s = try { Proto06.parseState(p.getJSONObject("state")) } catch (e: Exception) { return 400 }
+                val x = p.optLong("x")
+                if (s.g != g || !s.isAdmin(from) || !Proto06.accept(null, s).first) return 400
+                if (x * 1000 > now() && grp?.let { !it.readOnly && it.state.has(me) } != true && invites.none { it.g == g && it.from == from }) {
+                    invites.add(Invite(g, s.name, from, fromName, p.optString("inv"), x, s))
+                    host.notice("$fromName invited you to ${s.name}")
+                    host.arrived(g, s.name, "$fromName invited you")
+                }
+            }
+            "join" -> {
+                val tok = liveToken(p.optString("inv"), g)!!
+                val cur = grp?.state
+                if (grp == null || cur == null || grp.readOnly || !cur.isAdmin(me)) return 200
+                if (!tok.multi) tokens.remove(tok)
+                val n = clean(p.optString("n"), Proto06.MAX_NAME).ifBlank { clean(fromName, Proto06.MAX_NAME) }.ifBlank { "Someone" }
+                val mb = p.optString("p").takeIf { Proto06.isMailbox(it) } ?: envMailbox?.takeIf { Proto06.isMailbox(it) } ?: ""
+                if (!host.isContact(from)) host.peer(from, n, mb)
+                if (cur.has(from)) {
+                    val rid = Proto06.newLogicalId()
+                    out(from, "group", JSONObject().put("t", "state").put("g", g).put("id", rid).put("op", "join").put("state", cur.json()).toString(), rid, g)
+                } else changeLocked(g, Change("join", from, n, mb))?.let { host.notice(it) }
+            }
+            "decline" -> tokens.removeAll { it.i == p.optString("inv") && it.g == g && !it.multi }
+            "state" -> {
+                val s = try { Proto06.parseState(p.getJSONObject("state")) } catch (e: Exception) { return 400 }
+                if (s.g != g) return 400
+                takeState(from, s)
+            }
+            "states" -> {
+                val a = p.optJSONArray("list") ?: return 400
+                val list = try { (0 until minOf(a.length(), Proto06.STATES_ANSWER)).map { Proto06.parseState(a.getJSONObject(it)) } } catch (e: Exception) { return 400 }
+                list.filter { it.g == g }.sortedBy { it.v }.forEach { takeState(from, it) }
+            }
+            "sync" -> {
+                val have = p.optLong("have")
+                val list = (grp!!.history + grp.state).filter { it.v > have }.sortedBy { it.v }.take(Proto06.STATES_ANSWER)
+                if (list.isNotEmpty()) {
+                    val rid = Proto06.newLogicalId()
+                    out(from, "group", JSONObject().put("t", "states").put("g", g).put("id", rid).put("list", JSONArray().apply { list.forEach { put(it.json()) } }).toString(), rid, g)
+                }
+            }
+            "leave" -> {
+                val cur = grp!!.state
+                if (!grp.readOnly && cur.isAdmin(me) && cur.has(from)) changeLocked(g, Change("leave", from))
+            }
+            "unsend" -> {
+                val msg = p.optString("msg")
+                if (!Proto06.isLogicalId(msg)) return 400
+                val m = chats[g]?.firstOrNull { it.id == msg && !it.mine }
+                when {
+                    m == null -> { deleted[msg] = now(); held[g]?.removeAll { it.plain.optString("id") == msg } }
+                    m.from == from && m.unsent.isEmpty() -> {
+                        if (m.photo.isNotEmpty()) host.deleteBlob(m.photo)
+                        edit(g, msg) { it.copy(text = "", photo = "", voice = 0, unsent = nameIn(grp!!.state, from, fromName)) }
+                    }
+                }
+                if (m == null || m.from == from) receipt(from, g, listOf(msg), "unsent")
+            }
+        }
+        // Every group message is confirmed to its sender, so they stop resending it.
+        receipt(from, g, listOf(id), "delivered")
+        return 200
+    }
+
+    private fun liveToken(inv: String, g: String): Token? =
+        tokens.firstOrNull { it.i == inv && it.g == g && it.x * 1000 > now() }
+
+    /** Applies 3.3 to an incoming state. */
+    private fun takeState(from: String, s: State) {
+        val grp = groups[s.g]
+        if (grp == null) {
+            if (joining[s.g] != s.by || !s.has(me) || !Proto06.accept(null, s).first) return
+            joining.remove(s.g)
+            invites.removeAll { it.g == s.g }
+            groups[s.g] = Group(s)
+            peers(s)
+            host.notice("You joined ${s.name}")
+            replayHeld(s.g)
+            return
+        }
+        val (ok, why) = Proto06.accept(grp.state, s)
+        if (!ok) {
+            // Behind: the signer became an admin in a version I missed. Ask for the ones in between.
+            if (why == "signer is not an admin in the current state" && s.v > grp.state.v) askSync(s.g, from, grp.state.v)
+            return
+        }
+        take(grp, s)
+    }
+
+    /** [s] replaces the current state of [grp] (already checked, or made here). */
+    private fun take(grp: Group, s: State) {
+        val cur = grp.state
+        val rejoin = joining[s.g] != null && s.has(me)
+        val gone = when {
+            !s.has(me) -> grp.gone.ifEmpty { "removed" }
+            grp.gone == "left" && !rejoin -> "left"
+            else -> ""
+        }
+        if (rejoin) joining.remove(s.g)
+        groups[s.g] = Group(s, (grp.history + cur).filter { it.hash != s.hash }.takeLast(Proto06.HISTORY), gone)
+        peers(s)
+        // Stop sending messages to anyone who isn't in it any more.
+        val gone2 = cur.members.map { it.k }.filter { !s.has(it) }.toSet()
+        outs.removeAll { (it.g == s.g && it.to in gone2 && it.room != "group").also { x -> if (x) host.drop(it.env) } }
+        if (gone == "removed" && grp.gone.isEmpty()) host.notice("You were removed from ${s.name}")
+        if (gone.isEmpty() && grp.gone.isNotEmpty()) host.notice("You're back in ${s.name}")
+        // Two admins changed the same version and mine lost: make my change again on top of the winner.
+        if (s.v == cur.v && cur.by == me && s.by != me) last[s.g]?.takeIf { it.v == cur.v }?.let { changeLocked(s.g, it) }
+        replayHeld(s.g)
+    }
+
+    private fun peers(s: State) = s.members.filter { it.k != me && !host.isContact(it.k) }.forEach { host.peer(it.k, it.n, it.p) }
+
+    private fun askSync(g: String, k: String, have: Long) {
+        val key = "$g|$k"
+        if (now() - (asked[key] ?: 0L) < 30_000) return
+        asked[key] = now()
+        val id = Proto06.newLogicalId()
+        out(k, "group", JSONObject().put("t", "sync").put("g", g).put("id", id).put("have", have).toString(), id, g)
+    }
+
+    /** They're behind: send them the current state (not more than every 30 s). */
+    private fun sendStateBack(g: String, k: String) {
+        val key = "$g|$k"
+        if (now() - (answered[key] ?: 0L) < 30_000) return
+        answered[key] = now()
+        val s = groups[g]?.state ?: return
+        val id = Proto06.newLogicalId()
+        out(k, "group", JSONObject().put("t", "state").put("g", g).put("id", id).put("op", "sync").put("state", s.json()).toString(), id, g)
+    }
+
+    private fun replayHeld(g: String) {
+        val list = held.remove(g) ?: return
+        list.forEach { gmsg(it.from, it.name, it.plain, fromHeld = true) }
+    }
+
+    private fun gmsg(from: String, fromName: String, p: JSONObject, fromHeld: Boolean): Int {
+        val g = p.optString("g"); val ch = p.optString("ch"); val id = p.optString("id")
+        val sv = (p.opt("sv") as? Number)?.toLong() ?: return 400
+        val text = p.opt("text") as? String ?: return 400
+        if (!Proto06.isLogicalId(id) || Proto06.chars(text) > Proto06.MAX_TEXT || text.isBlank()) return 400
+        val grp = groups[g] ?: return 403
+        if (grp.readOnly) return 403
+        if (deleted.containsKey(id) || chats[g]?.any { it.id == id } == true) { receipt(from, g, listOf(id), "delivered"); return 200 }
+        val s = grp.state
+        if (!s.has(from) || (s.channel(ch) == null && sv > s.v)) {
+            // Maybe they're in a version I haven't seen yet: hold it and catch up.
+            if (sv > s.v && !fromHeld) {
+                val h = held.getOrPut(g) { ArrayList() }
+                if (h.size < Proto06.HELD_PER_GROUP && h.none { it.from == from && it.plain.optString("id") == id }) h.add(Held(from, fromName, p))
+                askSync(g, from, s.v)
+            }
+            return 200
+        }
+        val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN   // a removed channel's messages show in main
+        if (sv < s.v) sendStateBack(g, from) else if (sv > s.v) askSync(g, from, s.v)
+        val name = nameIn(s, from, fromName)
+        addMsg(GMsg(id, g, chId, from, name, text, false, now()))
+        unread.add(g)
+        host.arrived(g, "$name in ${s.name}", text)
+        receipt(from, g, listOf(id), "delivered")
+        return 200
+    }
+
+    /** A photo or voice message whose pieces all came in (Chat put it back together and stored it as [blob]). */
+    fun receivedBlob(from: String, fromName: String, g: String, ch: String, gid: String, blob: String, voiceMs: Int): Boolean = act {
+        val grp = groups[g]
+        if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
+        if (deleted.containsKey(gid) || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
+        val s = grp.state
+        val name = nameIn(s, from, fromName)
+        addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs))
+        unread.add(g)
+        host.arrived(g, "$name in ${s.name}", if (voiceMs > 0) "Voice message" else "Photo")
+        receipt(from, g, listOf(gid), "delivered")
+        true
+    }
+
+    private fun greceipt(from: String, p: JSONObject): Int {
+        val g = p.optString("g")
+        val a = p.optJSONArray("ids") ?: return 400
+        val st = p.optString("s")
+        if (st != "delivered" && st != "read" && st != "unsent") return 400
+        if (a.length() > Proto06.MAX_RECEIPT_IDS) return 400
+        val ids = (0 until a.length()).map { a.optString(it) }.filter { Proto06.isLogicalId(it) }.toSet()
+        for (id in ids) {
+            val env = Proto06.envelopeId(id, from)
+            outs.removeAll { (it.env == env).also { x -> if (x) host.drop(env) } }
+            tries.remove(env)
+        }
+        val list = chats[g] ?: return 200
+        chats[g] = list.map { m ->
+            if (!m.mine || m.id !in ids || from !in m.to) m
+            else when (st) {
+                "delivered" -> m.copy(delivered = m.delivered + from, state = "sent")
+                "read" -> m.copy(delivered = m.delivered + from, read = m.read + from, state = "sent")
+                else -> m
+            }
+        }
+        return 200
+    }
+
+    private fun nameIn(s: State, k: String, fallback: String) = s.member(k)?.n?.ifBlank { null } ?: fallback.take(Proto06.MAX_NAME).ifBlank { "Someone" }
+
+    // ------------------------------------------------------------------ sending and retrying
+
+    /** Confirms again (a copy of something already handled came in: its sender missed my receipt). */
+    fun ack(to: String, g: String, ids: List<String>, s: String) = act { receipt(to, g, ids.filter { Proto06.isLogicalId(it) }, s) }
+
+    private fun receipt(to: String, g: String, ids: List<String>, s: String) {
+        if (ids.isEmpty()) return
+        queue.add(Out(Proto06.newLogicalId(), to, "greceipt", JSONObject().put("g", g).put("ids", JSONArray(ids)).put("s", s).toString(), "", g, now(), retry = false))
+    }
+
+    private fun out(to: String, room: String, plain: String, id: String, g: String, photo: String = "", voice: Int = 0, ch: String = "") {
+        val o = Out(Proto06.envelopeId(id, to), to, room, plain, id, g, now(), photo = photo, voice = voice, ch = ch, tries = 1)
+        outs.removeAll { it.env == o.env }
+        outs.add(o)
+        tries[o.env] = 1 to now() + RETRY[0]
+        queue.add(o)
+    }
+
+    /** Called every second or so: what to send again now (the same sealed bytes; tries counts up). */
+    fun due(): List<Out> = synchronized(lock) {
+        val t = now()
+        val before = outs.size
+        outs.removeAll { o ->
+            val stale = t - o.t > DAY || (o.room != "group" && groups[o.g]?.let { it.readOnly || !it.state.has(o.to) } != false)
+            if (stale) { host.drop(o.env); tries.remove(o.env) }
+            stale
+        }
+        val list = outs.mapNotNull { o ->
+            val (n, next) = tries[o.env] ?: (0 to 0L)
+            if (next > t) null else { tries[o.env] = (n + 1) to t + RETRY[minOf(n, RETRY.size - 1)]; o.copy(tries = n + 1) }
+        }
+        if (outs.size != before) save()
+        list
+    }
+
+    /** Envelopes for [to] still waiting for a receipt (tests, and the "sending" state). */
+    fun waiting(to: String? = null) = synchronized(lock) { outs.filter { to == null || it.to == to }.map { it.copy() } }
+
+    private inline fun <T> act(f: () -> T): T {
+        val r: T
+        val send: List<Out>
+        synchronized(lock) {
+            r = f()
+            send = queue.toList(); queue.clear()
+            prune()
+            save(); publish()
+        }
+        send.forEach { try { host.send(it) } catch (_: Exception) {} }
+        return r
+    }
+
+    private fun addMsg(m: GMsg) { chats[m.g] = (chats[m.g].orEmpty() + m).takeLast(1000) }
+    private fun edit(g: String, id: String, f: (GMsg) -> GMsg) { chats[g] = chats[g].orEmpty().map { if (it.id == id) f(it) else it } }
+
+    private fun prune() {
+        val t = now()
+        deleted.entries.removeIf { t - it.value > 2 * DAY }
+        tokens.removeAll { it.x * 1000 < t }
+        invites.removeAll { it.x * 1000 < t }
+        asked.entries.removeIf { t - it.value > 10 * 60_000 }
+        answered.entries.removeIf { t - it.value > 10 * 60_000 }
+    }
+
+    /** Messages older than [cutoff] go (the "Delete messages after" setting). */
+    fun pruneOlder(cutoff: Long) = act {
+        for (g in chats.keys.toList()) {
+            val (old, keep) = chats[g]!!.partition { it.time < cutoff }
+            if (old.isEmpty()) continue
+            old.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo) }
+            chats[g] = keep
+        }
+    }
+
+    /** Erase all. */
+    fun clear() = act {
+        groups.clear(); chats.clear(); outs.clear(); tokens.clear(); invites.clear(); joining.clear(); last.clear()
+        deleted.clear(); unread.clear(); held.clear(); tries.clear()
+    }
+
+    private fun publish() {
+        _groups.value = LinkedHashMap(groups)
+        _chats.value = HashMap(chats)
+        _invites.value = invites.toList()
+        _unread.value = unread.toSet()
+    }
+
+    // ------------------------------------------------------------------ storage
+
+    private fun save() {
+        try {
+            val o = JSONObject()
+            o.put("groups", JSONArray().apply { groups.values.forEach { gr ->
+                put(JSONObject().put("s", gr.state.json()).put("h", JSONArray().apply { gr.history.forEach { put(it.json()) } }).put("gone", gr.gone))
+            } })
+            o.put("tokens", JSONArray().apply { tokens.forEach { put(JSONObject().put("i", it.i).put("g", it.g).put("x", it.x).put("m", it.multi)) } })
+            o.put("invites", JSONArray().apply { invites.forEach { put(JSONObject().put("g", it.g).put("n", it.name).put("f", it.from).put("fn", it.fromName)
+                .put("i", it.inv).put("x", it.x).put("s", it.state.json())) } })
+            o.put("joining", JSONObject().apply { joining.forEach { (g, k) -> put(g, k) } })
+            o.put("last", JSONObject().apply { last.forEach { (g, c) -> put(g, JSONObject().put("op", c.op).put("a", c.a).put("b", c.b).put("c", c.c).put("v", c.v)) } })
+            o.put("deleted", JSONObject().apply { deleted.forEach { (k, t) -> put(k, t) } })
+            o.put("unread", JSONArray(unread.toList()))
+            write(FILE, o.toString())
+            val c = JSONObject()
+            chats.forEach { (g, l) -> c.put(g, JSONArray().apply { l.forEach { put(msgJson(it)) } }) }
+            write(CHATS, c.toString())
+            write(OUTS, JSONArray().apply { outs.forEach { put(JSONObject().put("e", it.env).put("to", it.to).put("r", it.room).put("p", it.plain).put("id", it.id)
+                .put("g", it.g).put("t", it.t).put("ph", it.photo).put("vo", it.voice).put("ch", it.ch)) } }.toString())
+        } catch (_: Exception) {}
+    }
+
+    private fun msgJson(m: GMsg) = JSONObject().put("id", m.id).put("g", m.g).put("ch", m.ch).put("f", m.from).put("n", m.name).put("x", m.text)
+        .put("m", m.mine).put("t", m.time).put("ph", m.photo).put("vo", m.voice).put("u", m.unsent).put("st", m.state)
+        .put("to", JSONArray(m.to.toList())).put("dl", JSONArray(m.delivered.toList())).put("rd", JSONArray(m.read.toList())).put("sn", m.seen)
+
+    private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
+
+    private fun load() {
+        try {
+            read(FILE)?.let { text ->
+                val o = JSONObject(text)
+                o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) {
+                    val x = a.getJSONObject(i)
+                    val s = Proto06.parseState(x.getJSONObject("s"))
+                    val h = x.optJSONArray("h")?.let { hs -> (0 until hs.length()).map { Proto06.parseState(hs.getJSONObject(it)) } }.orEmpty()
+                    groups[s.g] = Group(s, h, x.optString("gone"))
+                } }
+                o.optJSONArray("tokens")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { tokens.add(Token(it.getString("i"), it.getString("g"), it.getLong("x"), it.optBoolean("m"))) } }
+                o.optJSONArray("invites")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let {
+                    invites.add(Invite(it.getString("g"), it.optString("n"), it.getString("f"), it.optString("fn"), it.optString("i"), it.optLong("x"), Proto06.parseState(it.getJSONObject("s"))))
+                } }
+                o.optJSONObject("joining")?.let { j -> j.keys().forEach { joining[it] = j.getString(it) } }
+                o.optJSONObject("last")?.let { j -> j.keys().forEach { g -> j.getJSONObject(g).let { c ->
+                    last[g] = Change(c.getString("op"), c.optString("a"), c.optString("b"), c.optString("c"), c.optLong("v")) } } }
+                o.optJSONObject("deleted")?.let { j -> j.keys().forEach { deleted[it] = j.optLong(it) } }
+                unread.addAll(strings(o.optJSONArray("unread")))
+            }
+            read(CHATS)?.let { text ->
+                val o = JSONObject(text)
+                o.keys().forEach { g -> val a = o.getJSONArray(g); chats[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {
+                    GMsg(it.getString("id"), it.getString("g"), it.optString("ch", MAIN), it.getString("f"), it.optString("n"), it.optString("x"), it.optBoolean("m"),
+                        it.optLong("t"), it.optString("ph"), it.optInt("vo"), it.optString("u"), it.optString("st"),
+                        strings(it.optJSONArray("to")), strings(it.optJSONArray("dl")), strings(it.optJSONArray("rd")), it.optBoolean("sn"))
+                } }
+            }
+            read(OUTS)?.let { text ->
+                val a = JSONArray(text)
+                for (i in 0 until a.length()) a.getJSONObject(i).let {
+                    outs.add(Out(it.getString("e"), it.getString("to"), it.getString("r"), it.optString("p"), it.optString("id"), it.getString("g"), it.optLong("t"),
+                        photo = it.optString("ph"), voice = it.optInt("vo"), ch = it.optString("ch")))
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    companion object {
+        const val FILE = "groups.json"
+        const val CHATS = "gchats.json"
+        const val OUTS = "gouts.json"
+        const val DAY = 86_400_000L
+        /** 5 s, 10 s, 20 s, 1 min, then every 5 min, like private messages. */
+        val RETRY = longArrayOf(5_000, 10_000, 20_000, 60_000, 300_000)
+        /** Names and text from others: no control characters, at most [limit] characters. */
+        fun clean(s: String, limit: Int): String {
+            val t = s.filter { it.code >= 0x20 && it.code != 0x7F }.trim()
+            return if (Proto06.chars(t) <= limit) t else t.substring(0, t.offsetByCodePoints(0, limit))
+        }
+        private fun mailbox(p: String) = if (Proto06.isMailbox(p)) p else ""
+        /** Mine: "Sending", "Delivered to 4 of 6", "Read by 2". */
+        fun status(m: GMsg): String = when {
+            !m.mine || m.unsent.isNotEmpty() -> ""
+            m.to.isEmpty() -> "Sent"
+            m.read.isNotEmpty() -> if (m.read.size >= m.to.size) "Read by everyone" else "Read by ${m.read.size}"
+            m.delivered.isNotEmpty() -> if (m.delivered.size >= m.to.size) "Delivered" else "Delivered to ${m.delivered.size} of ${m.to.size}"
+            else -> "Sending"
+        }
+    }
+}

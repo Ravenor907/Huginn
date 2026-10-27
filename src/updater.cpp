@@ -1,6 +1,7 @@
 #include "updater.h"
 #include "settings.h"
 #include "system.h"
+#include "tor.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -10,13 +11,19 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QProcess>
+#include <QTimer>
+#include "platform/winupdate.h"
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QStringList>
+#include <QVariantMap>
 
 namespace
 {
 const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100";
+const char *kLatestPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest";
+const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/";
 const char *kAppId = "io.github.ravenor907.Huginn";
 
 // Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0.
@@ -31,9 +38,10 @@ qint64 rank(const QString &v)
 }
 }
 
-Updater::Updater(Settings *settings, QObject *parent)
+Updater::Updater(Settings *settings, Tor *tor, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
+    , m_tor(tor)
     , m_current(QCoreApplication::applicationVersion())
     , m_status(QStringLiteral("Up to date as far as Huginn knows"))
 {
@@ -41,7 +49,7 @@ Updater::Updater(Settings *settings, QObject *parent)
 
 void Updater::startAutoUpdate()
 {
-    if (!System::inFlatpak())
+    if (!System::inFlatpak() && !WinUpdate::supported())
         return;   // a development build updates by rebuilding
     fetch(false, true);
 }
@@ -63,23 +71,55 @@ void Updater::check()
     fetch(false);
 }
 
+// Every request to GitHub goes through Tor, on circuits of its own.
+QNetworkRequest Updater::request(const QUrl &url) const
+{
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
+    return req;
+}
+
+// True when Tor is ready now. Otherwise the check runs by itself once it is.
+bool Updater::waitForTor(bool installAfter, bool autoMode)
+{
+    if (m_tor && m_tor->ready()) {
+        m_net.setProxy(m_tor->proxy(QStringLiteral("updater")));
+        return true;
+    }
+    if (!m_tor) {
+        m_status = QStringLiteral("Updates need the Tor connection.");
+        Q_EMIT changed();
+        return false;
+    }
+    m_status = QStringLiteral("Waiting for the Tor connection…");
+    Q_EMIT changed();
+    QObject::disconnect(m_waiting);
+    m_waiting = connect(m_tor, &Tor::readyChanged, this, [this, installAfter, autoMode] {
+        if (!m_tor->ready())
+            return;
+        QObject::disconnect(m_waiting);
+        fetch(installAfter, autoMode);
+    });
+    return false;
+}
+
 void Updater::fetch(bool installAfter, bool autoMode)
 {
     if (m_busy)
         return;
+    if (!waitForTor(installAfter, autoMode))
+        return;
     m_busy = true;
     m_status = QStringLiteral("Checking for updates…");
     Q_EMIT changed();
-    QNetworkRequest req(QUrl(QString::fromLatin1(kReleases)));
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kReleases)));
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *r = m_net.get(req);
     connect(r, &QNetworkReply::finished, this, [this, r, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
         if (r->error() != QNetworkReply::NoError) {
-            m_status = QStringLiteral("Couldn't reach GitHub. Check the connection.");
-            Q_EMIT changed();
+            fetchLatestPage(installAfter, autoMode);
             return;
         }
         QString bestVer, bestTag, bestAsset;
@@ -97,7 +137,7 @@ void Updater::fetch(bool installAfter, bool autoMode)
                 continue;
             QString asset;
             for (const QJsonValue &a : rel.value(QStringLiteral("assets")).toArray())
-                if (a.toObject().value(QStringLiteral("name")).toString().endsWith(QLatin1String(".flatpak")))
+                if (a.toObject().value(QStringLiteral("name")).toString().endsWith(WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral(".flatpak")))
                     asset = a.toObject().value(QStringLiteral("browser_download_url")).toString();
             if (asset.isEmpty())
                 continue;
@@ -107,26 +147,57 @@ void Updater::fetch(bool installAfter, bool autoMode)
                 bestAsset = asset;
             }
         }
-        m_latest = bestVer;
-        m_latestTag = bestTag;
-        m_assetUrl = bestAsset;
-        if (installAfter) {
-            if (bestTag.isEmpty()) {
-                m_status = QStringLiteral("No release found on GitHub.");
-                Q_EMIT changed();
-                return;
-            }
-            download(bestAsset, bestTag);
-            return;
-        }
-        if (autoMode && available()) {
-            m_auto = true;
-            download(bestAsset, bestTag);
-            return;
-        }
-        m_status = available() ? QStringLiteral("Huginn %1 is ready to install").arg(bestVer) : QStringLiteral("Huginn is up to date");
-        Q_EMIT changed();
+        chosen(bestVer, bestTag, bestAsset, installAfter, autoMode);
     });
+}
+
+void Updater::fetchLatestPage(bool installAfter, bool autoMode)
+{
+    if (!waitForTor(installAfter, autoMode))
+        return;
+    m_busy = true;
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kLatestPage)));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    QNetworkReply *r = m_net.get(req);
+    connect(r, &QNetworkReply::finished, this, [this, r, installAfter, autoMode] {
+        r->deleteLater();
+        m_busy = false;
+        // .../releases/latest answers with a redirect to .../releases/tag/v0.6
+        const QUrl to = r->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+        const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("/releases/tag/([^/?#]+)$")).match(to.path());
+        const QString tag = m.hasMatch() ? m.captured(1) : QString();
+        const QString ver = versionFromTag(tag);
+        if (ver.isEmpty()) {
+            m_status = QStringLiteral("Couldn't reach GitHub. Check the connection.");
+            Q_EMIT changed();
+            return;
+        }
+        // Every release carries Huginn.flatpak (see .github/workflows/build.yml).
+        chosen(ver, tag, QString::fromLatin1(kDownload) + tag + (WinUpdate::supported() ? QStringLiteral("/") + WinUpdate::assetName() : QStringLiteral("/Huginn.flatpak")), installAfter, autoMode);
+    });
+}
+
+void Updater::chosen(const QString &bestVer, const QString &bestTag, const QString &bestAsset, bool installAfter, bool autoMode)
+{
+    m_latest = bestVer;
+    m_latestTag = bestTag;
+    m_assetUrl = bestAsset;
+    if (installAfter) {
+        if (bestTag.isEmpty()) {
+            m_status = QStringLiteral("No release found on GitHub.");
+            Q_EMIT changed();
+            return;
+        }
+        download(bestAsset, bestTag);
+        return;
+    }
+    if (autoMode && available()) {
+        m_auto = true;
+        download(bestAsset, bestTag);
+        return;
+    }
+    m_status = available() ? QStringLiteral("Huginn %1 is ready to install").arg(bestVer) : QStringLiteral("Huginn is up to date");
+    Q_EMIT changed();
 }
 
 void Updater::install()
@@ -138,11 +209,18 @@ void Updater::install()
 
 void Updater::download(const QString &url, const QString &tag)
 {
+    if (!m_tor || !m_tor->ready()) {
+        m_busy = false;
+        m_auto = false;
+        m_status = QStringLiteral("Tor isn't connected yet. Try again in a moment.");
+        Q_EMIT changed();
+        return;
+    }
+    m_net.setProxy(m_tor->proxy(QStringLiteral("updater")));
     m_busy = true;
     m_status = QStringLiteral("Downloading Huginn %1…").arg(versionFromTag(tag));
     Q_EMIT changed();
-    QNetworkRequest req{QUrl(url)};
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
+    QNetworkRequest req = request(QUrl(url));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     QNetworkReply *r = m_net.get(req);
     connect(r, &QNetworkReply::finished, this, [this, r, tag] {
@@ -156,7 +234,7 @@ void Updater::download(const QString &url, const QString &tag)
         }
         const QString dir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
         QDir().mkpath(dir);
-        const QString path = dir + QStringLiteral("/Huginn-") + tag + QStringLiteral(".flatpak");
+        const QString path = dir + QStringLiteral("/Huginn-") + tag + (WinUpdate::supported() ? QStringLiteral(".zip") : QStringLiteral(".flatpak"));
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly)) {
             m_busy = false;
@@ -169,6 +247,19 @@ void Updater::download(const QString &url, const QString &tag)
         f.close();
         m_status = QStringLiteral("Installing…");
         Q_EMIT changed();
+        if (WinUpdate::supported()) {
+            // Windows: unpack next to Huginn.exe and start the new copy.
+            WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
+                m_busy = false;
+                if (!ok)
+                    m_auto = false;
+                m_status = msg;
+                Q_EMIT changed();
+                if (ok)
+                    QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+            });
+            return;
+        }
         auto *p = new QProcess(this);
         QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
                          QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};

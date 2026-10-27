@@ -1,9 +1,12 @@
 #include "chat.h"
 #include "ble.h"
 #include "chatcrypto.h"
+#include "call/callcrypto.h"
+#include "groupwire.h"
 #include "localsend.h"
 #include "nostr.h"
 #include "photos.h"
+#include "tor.h"
 #include "vault.h"
 
 #include <QBuffer>
@@ -19,9 +22,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaProperty>
 #include <QNetworkReply>
 #include <QRandomGenerator>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QUuid>
 #include <algorithm>
 #include <memory>
@@ -78,8 +83,17 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
         if (!m_vault->exists()) {
             m_peers.clear();
             m_capable.clear();
+            m_caps.clear();
             m_outbox.clear();
             m_unsentKeeps.clear();
+            m_groups.clear();
+            m_gidx.clear();
+            m_gpeers.clear();
+            m_ginvites.clear();
+            m_joining.clear();
+            m_gtokens.clear();
+            m_gout.clear();
+            m_folders.clear();
         }
     });
     if (!m_vault->locked())
@@ -124,12 +138,16 @@ void Chat::start()
                       {QStringLiteral("mailbox"), m_nostr->publicKey()}};
         if (nearbyOn())
             o.insert(QStringLiteral("chatName"), username());
+        if (!onion().isEmpty())
+            o.insert(QStringLiteral("onion"), onion());
         return o;
     };
     m_net->chatReceive = [this](const QByteArray &body, const QString &) { return receive(body, QStringLiteral("wifi")); };
     connect(m_net, &LocalSend::devicesChanged, this, &Chat::changed);
+    connect(m_net, &LocalSend::devicesChanged, this, &Chat::learnOnions);
     connect(m_ble, &Ble::message, this, [this](const QString &, const QByteArray &json) { receive(json, QStringLiteral("bluetooth")); });
     connect(m_ble, &Ble::changed, this, &Chat::changed);
+    connect(m_ble, &Ble::changed, this, &Chat::learnOnions);
     connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changed);
     m_nostr->onEnvelope = [this](const QString &content) {
         const QByteArray body = unwrap(content);
@@ -196,13 +214,16 @@ void Chat::setKeepNearby(bool v)
 
 int Chat::internet() const { return m_nostr->connected(); }
 
-QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires)
+QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires, const QString &onion)
 {
     QJsonObject o{{QStringLiteral("n"), name}, {QStringLiteral("k"), chatKey}, {QStringLiteral("p"), mailbox}};
     if (!invite.isEmpty()) {
         o.insert(QStringLiteral("i"), invite);
         o.insert(QStringLiteral("x"), double(expires / 1000));
     }
+    // 0.6: where this device is reached over Tor. 0.5 apps ignore it.
+    if (!onion.isEmpty())
+        o.insert(QStringLiteral("o"), onion);
     return kPrefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
 
@@ -218,7 +239,7 @@ QString Chat::newLink()
     for (auto it = m_invites.begin(); it != m_invites.end();)
         it = it.value() < now() ? m_invites.erase(it) : std::next(it);
     saveInvites();
-    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires);
+    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires, onion());
     Q_EMIT changed();
     return m_link;
 }
@@ -277,9 +298,10 @@ QVariantMap Chat::parseCode(const QString &text) const
         name = QStringLiteral("Someone");
     const QString mailbox = o.value(QStringLiteral("p")).toString();
     const qint64 expires = qint64(o.value(QStringLiteral("x")).toDouble()) * 1000;
+    const QString onion = o.value(QStringLiteral("o")).toString();
     return {{QStringLiteral("key"), key}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox.size() == 64 ? mailbox : QString()},
             {QStringLiteral("mine"), key == myKey()}, {QStringLiteral("invite"), o.value(QStringLiteral("i")).toString()},
-            {QStringLiteral("expired"), expires > 0 && expires < now()}};
+            {QStringLiteral("expired"), expires > 0 && expires < now()}, {QStringLiteral("onion"), isOnion(onion) ? onion : QString()}};
 }
 
 void Chat::addContact(const QString &text, const QString &sameAs)
@@ -296,6 +318,7 @@ void Chat::addContact(const QString &text, const QString &sameAs)
     if (!old.isEmpty()) {
         replaceKey(old, key, str(c, "name"), str(c, "mailbox"));
         m_contacts[key].insert(QStringLiteral("invite"), c.value(QStringLiteral("invite")));
+        m_contacts[key].insert(QStringLiteral("onion"), c.value(QStringLiteral("onion")));
         saveContacts();
         return;
     }
@@ -303,7 +326,7 @@ void Chat::addContact(const QString &text, const QString &sameAs)
     const QString nick = nicknameOf(key);
     QVariantMap entry{{QStringLiteral("key"), key}, {QStringLiteral("name"), c.value(QStringLiteral("name"))},
                       {QStringLiteral("mailbox"), c.value(QStringLiteral("mailbox"))}, {QStringLiteral("verified"), true},
-                      {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}};
+                      {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}, {QStringLiteral("onion"), c.value(QStringLiteral("onion"))}};
     if (!nick.isEmpty())
         entry.insert(QStringLiteral("nick"), nick);
     m_contacts.insert(key, entry);
@@ -471,8 +494,314 @@ QString Chat::realNameOf(const QString &key) const
 
 QString Chat::mailboxOf(const QString &key) const
 {
-    const QString c = str(m_contacts.value(key), "mailbox");
-    return c.isEmpty() ? str(m_met.value(key), "mailbox") : c;
+    QString c = str(m_contacts.value(key), "mailbox");
+    if (c.isEmpty())
+        c = str(m_met.value(key), "mailbox");
+    if (c.isEmpty())
+        c = str(m_gpeers.value(key), "mailbox");
+    if (c.isEmpty())
+        for (const QVariantMap &j : m_joining)
+            if (str(j, "admin") == key)
+                c = str(j, "mailbox");
+    return c;
+}
+
+QString Chat::onionOf(const QString &key) const
+{
+    QString o = str(m_contacts.value(key), "onion");
+    if (o.isEmpty())
+        o = str(m_gpeers.value(key), "onion");
+    if (o.isEmpty())
+        for (const QVariantMap &j : m_joining)
+            if (str(j, "admin") == key)
+                o = str(j, "onion");
+    return isOnion(o) ? o : QString();
+}
+
+bool Chat::isOnion(const QString &o)
+{
+    // A v3 onion address: 56 base32 letters, with or without ".onion".
+    const QString h = o.endsWith(QLatin1String(".onion")) ? o.left(o.size() - 6) : o;
+    if (h.size() != 56)
+        return false;
+    for (const QChar c : h)
+        if (!((c >= QLatin1Char('a') && c <= QLatin1Char('z')) || (c >= QLatin1Char('2') && c <= QLatin1Char('7'))))
+            return false;
+    return true;
+}
+
+// Hellos (Bluetooth, Wi-Fi) say where a contact is reached over Tor now. Only for people already
+// known; a wrong one can only delay a message (the relays still get it from the second try on).
+void Chat::learnOnions()
+{
+    if (!m_ready)
+        return;
+    bool any = false;
+    auto learn = [this, &any](const QString &key, const QString &onion) {
+        if (key.isEmpty() || !isOnion(onion))
+            return;
+        if (m_contacts.contains(key) && str(m_contacts.value(key), "onion") != onion) {
+            m_contacts[key].insert(QStringLiteral("onion"), onion);
+            any = true;
+        } else if (m_gpeers.contains(key) && str(m_gpeers.value(key), "onion") != onion) {
+            m_gpeers[key].insert(QStringLiteral("onion"), onion);
+            saveGroups();
+        }
+    };
+    for (const QVariant &p : m_ble->peers())
+        learn(str(p.toMap(), "chatKey"), str(p.toMap(), "onion"));
+    for (const LocalSend::Peer &p : m_net->chatPeers())
+        learn(p.chatKey, p.onion);
+    if (any)
+        saveContacts();
+}
+
+// ------------------------------------------------------------------ Tor
+
+void Chat::setTor(Tor *tor)
+{
+    m_tor = tor;
+    if (!tor)
+        return;
+    // Messages for our onion address: the same as the Wi-Fi endpoint, but from far away.
+    tor->onMessage([this](const QByteArray &body) { return receive(body, QStringLiteral("internet")); });
+    // Its progress and address show on screen and go in our hellos.
+    const QMetaObject *mo = tor->metaObject();
+    const int slot = metaObject()->indexOfMethod("torChanged()");
+    for (int i = mo->propertyOffset(); i < mo->propertyCount(); ++i) {
+        const QMetaProperty p = mo->property(i);
+        if (p.hasNotifySignal() && slot >= 0)
+            QObject::connect(tor, p.notifySignal(), this, metaObject()->method(slot));
+    }
+    Q_EMIT changed();
+}
+
+void Chat::torChanged()
+{
+    const QString o = onion();
+    if (o != m_lastOnion) {
+        m_lastOnion = o;
+        if (m_ready) {
+            m_net->announce();
+            m_ble->sayHello();
+        }
+    }
+    Q_EMIT changed();
+}
+
+QString Chat::onion() const { return m_tor ? m_tor->onion() : QString(); }
+bool Chat::torReady() const { return m_tor && m_tor->property("ready").toBool(); }
+int Chat::torProgress() const { return m_tor ? qBound(0, m_tor->property("progress").toInt(), 100) : 0; }
+
+QString Chat::netStatus() const
+{
+    if (m_tor) {
+        if (torReady())
+            return QStringLiteral("Online privately");
+        return QStringLiteral("Connecting privately %1%").arg(torProgress());
+    }
+    return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
+}
+
+bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, bool alsoMailbox, std::function<void()> sent)
+{
+    if (bodies.isEmpty())
+        return false;
+    const QString onion = onionOf(key);
+    auto relays = [this, key, bodies, mailbox] {
+        for (const QByteArray &b : bodies)
+            m_nostr->publish(mailbox, wrap(key, b));
+    };
+    if (!onion.isEmpty() && torReady()) {
+        auto left = std::make_shared<int>(int(bodies.size()));
+        auto good = std::make_shared<bool>(true);
+        const bool relaysNow = alsoMailbox && !mailbox.isEmpty();
+        for (const QByteArray &b : bodies)
+            m_tor->post(onion, kPath, b, [left, good, relays, relaysNow, mailbox, sent](int code) {
+                *good = *good && code == 200;
+                if (--*left > 0)
+                    return;
+                if (*good) {
+                    if (sent)
+                        sent();
+                } else if (!relaysNow && !mailbox.isEmpty()) {
+                    relays();   // not there over Tor: their mailbox keeps it for them
+                    if (sent)
+                        sent();
+                }
+            });
+        if (relaysNow)
+            relays();
+        return true;
+    }
+    if (mailbox.isEmpty())
+        return false;
+    relays();
+    if (sent)
+        sent();
+    return true;
+}
+
+// ------------------------------------------------------------------ caps
+
+bool Chat::canGroup(const QString &key) const { return isGroupPeer(key) || m_caps.value(key).contains(QStringLiteral("g1")); }
+
+void Chat::noteCaps(const QString &key, bool present, const QStringList &caps)
+{
+    // From authentic envelopes only, and only for people kept here. An envelope without "caps"
+    // (a 0.5 app) teaches nothing; tokens are never taken away (a key change starts over:
+    // forgetRatchet).
+    if (!present || (!isContact(key) && !m_met.contains(key) && !isGroupPeer(key)))
+        return;
+    const bool known = m_caps.contains(key);
+    QStringList have = m_caps.value(key);
+    bool grew = false;
+    for (const QString &c : caps)
+        if (!have.contains(c)) {
+            have << c;
+            grew = true;
+        }
+    if (known && !grew)
+        return;
+    m_caps.insert(key, have);
+    saveRatchet(key);
+    Q_EMIT changed();
+}
+
+void Chat::probeCaps(const QString &key)
+{
+    if (!m_ready || key.isEmpty() || capsKnown(key) || now() - m_probed.value(key, 0) < 3600000)
+        return;
+    m_probed.insert(key, now());
+    const QJsonObject r{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}, {QStringLiteral("q"), QStringLiteral("caps")}};
+    deliver(key, envelope(QStringLiteral("receipt"), key, compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(key));
+}
+
+// ------------------------------------------------------------------ calls
+
+void Chat::sendCall(const QString &key, const QJsonObject &msg)
+{
+    if (!m_ready || key.isEmpty() || isBlocked(key))
+        return;
+    // Sealed once (a ratchet message moves the session on) and the same copy sent on every
+    // route at once: the other side keeps the first and drops the rest. Never kept for resending.
+    const QByteArray json = compact(envelope(QStringLiteral("call"), key, compact(msg), QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    m_ble->send(key, json);
+    const QString base = m_net->baseFor(key);
+    if (!base.isEmpty())
+        post(base, json);
+    sendInternet(key, {json}, mailboxOf(key), false);
+}
+
+QByteArray Chat::signWithChatKey(const QByteArray &bytes) const { return CallCrypto::signDer(m_priv, bytes); }
+
+bool Chat::canCall(const QString &key) const
+{
+    if (key.isEmpty() || isBlocked(key))
+        return false;
+    if (m_caps.value(key).contains(QStringLiteral("c1")))
+        return isContact(key) || isGroupPeer(key);
+    // A group peer whose caps aren't known yet counts as "r1 g1 c1" (docs/protocol-0.6.md 3.7, as Muninn does).
+    return isGroupPeer(key) && !isContact(key) && !capsKnown(key);
+}
+
+QString Chat::lanHost(const QString &key) const
+{
+    const QString base = m_net->baseFor(key);
+    return base.isEmpty() ? QString() : QUrl(base).host();
+}
+
+// ------------------------------------------------------------------ contact folders
+
+void Chat::loadFolders()
+{
+    m_folders.clear();
+    const QByteArray raw = m_vault->read(QStringLiteral("folders.json"));
+    if (raw.isEmpty()) {
+        // First time: three to start with. Rename, delete or add your own.
+        for (const char *n : {"Family", "Work", "Kindred"})
+            m_folders << QVariantMap{{QStringLiteral("id"), QUuid::createUuid().toString(QUuid::Id128).left(12)}, {QStringLiteral("name"), QString::fromLatin1(n)},
+                                     {QStringLiteral("keys"), QStringList()}};
+        saveFolders();
+        return;
+    }
+    const QJsonArray a = QJsonDocument::fromJson(raw).object().value(QStringLiteral("folders")).toArray();
+    for (const QJsonValue &v : a)
+        m_folders << v.toObject().toVariantMap();
+}
+
+void Chat::saveFolders()
+{
+    QJsonArray a;
+    for (const QVariantMap &f : std::as_const(m_folders))
+        a << QJsonObject::fromVariantMap(f);
+    m_vault->write(QStringLiteral("folders.json"), compact(QJsonObject{{QStringLiteral("folders"), a}}));
+}
+
+QVariantList Chat::folders() const
+{
+    QVariantList out;
+    for (const QVariantMap &f : m_folders)
+        out << QVariantMap{{QStringLiteral("id"), f.value(QStringLiteral("id"))}, {QStringLiteral("name"), f.value(QStringLiteral("name"))},
+                           {QStringLiteral("count"), f.value(QStringLiteral("keys")).toStringList().size()}};
+    return out;
+}
+
+QString Chat::addFolder(const QString &name)
+{
+    const QString n = name.simplified().left(24);
+    if (n.isEmpty() || !m_ready || m_folders.size() >= 30)
+        return QString();
+    const QString id = QUuid::createUuid().toString(QUuid::Id128).left(12);
+    m_folders << QVariantMap{{QStringLiteral("id"), id}, {QStringLiteral("name"), n}, {QStringLiteral("keys"), QStringList()}};
+    saveFolders();
+    Q_EMIT changed();
+    return id;
+}
+
+void Chat::renameFolder(const QString &id, const QString &name)
+{
+    const QString n = name.simplified().left(24);
+    if (n.isEmpty())
+        return;
+    for (QVariantMap &f : m_folders)
+        if (str(f, "id") == id)
+            f.insert(QStringLiteral("name"), n);
+    saveFolders();
+    Q_EMIT changed();
+}
+
+void Chat::deleteFolder(const QString &id)
+{
+    for (int i = int(m_folders.size()) - 1; i >= 0; --i)
+        if (str(m_folders.at(i), "id") == id)
+            m_folders.removeAt(i);
+    saveFolders();
+    Q_EMIT changed();
+}
+
+void Chat::setInFolder(const QString &id, const QString &key, bool on)
+{
+    for (QVariantMap &f : m_folders) {
+        if (str(f, "id") != id)
+            continue;
+        QStringList keys = f.value(QStringLiteral("keys")).toStringList();
+        keys.removeAll(key);
+        if (on)
+            keys << key;
+        f.insert(QStringLiteral("keys"), keys);
+    }
+    saveFolders();
+    Q_EMIT changed();
+}
+
+QStringList Chat::foldersOf(const QString &key) const
+{
+    QStringList out;
+    for (const QVariantMap &f : m_folders)
+        if (f.value(QStringLiteral("keys")).toStringList().contains(key))
+            out << str(f, "id");
+    return out;
 }
 
 QString Chat::route(const QString &key) const
@@ -482,7 +811,7 @@ QString Chat::route(const QString &key) const
             return QStringLiteral("bluetooth");
     if (!m_net->baseFor(key).isEmpty())
         return QStringLiteral("wifi");
-    if (!str(m_contacts.value(key), "mailbox").isEmpty())
+    if (!str(m_contacts.value(key), "mailbox").isEmpty() || !str(m_gpeers.value(key), "mailbox").isEmpty() || !onionOf(key).isEmpty())
         return QStringLiteral("internet");
     return QString();
 }
@@ -637,8 +966,15 @@ void Chat::removeContact(const QString &key)
     m_met.remove(key);
     m_unsentKeeps.remove(key);
     forgetRatchet(key);
+    for (QVariantMap &f : m_folders) {
+        QStringList keys = f.value(QStringLiteral("keys")).toStringList();
+        if (keys.removeAll(key))
+            f.insert(QStringLiteral("keys"), keys);
+    }
+    saveFolders();
     saveContacts();
     saveMet();
+    refreshGroupPeers();   // someone you share a group with stays reachable there
     Q_EMIT changed();
 }
 
@@ -653,8 +989,22 @@ int Chat::receive(const QByteArray &body, const QString &via)
     const int code = receiveEnvelope(QJsonDocument::fromJson(body).object(), via);
     // A ratchet message that wasn't accepted leaves no trace, so the same envelope can open later.
     m_pendingPeer.reset();
-    if (code == 200 && !m_openedFrom.isEmpty())
+    if (code == 200 && !m_openedFrom.isEmpty()) {
         noteCapable(m_openedFrom, m_openedCap);
+        noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps);
+        // Muninn and Huginn 0.6 put their onion address in every envelope ("o"): keep it current.
+        const QString key = m_openedFrom, onionNow = m_openedOnion;
+        if (isOnion(onionNow)) {
+            if (m_contacts.contains(key) && str(m_contacts.value(key), "onion") != onionNow) {
+                m_contacts[key].insert(QStringLiteral("onion"), onionNow);
+                saveContacts();
+            } else if (m_gpeers.contains(key) && str(m_gpeers.value(key), "onion") != onionNow) {
+                m_gpeers[key].insert(QStringLiteral("onion"), onionNow);
+                saveGroups();
+            }
+        }
+    }
+    m_openedOnion.clear();
     m_openedFrom.clear();
     return code;
 }
@@ -682,6 +1032,8 @@ QByteArray Chat::open(const QJsonObject &o, const QString &fromKey, bool *ok)
     if (*ok) {
         m_openedFrom = fromKey;
         m_openedCap = ChatWire::saysCapable(o);
+        m_openedCaps = ChatWire::capsOf(o, &m_openedHasCaps);
+        m_openedOnion = o.value(QStringLiteral("o")).toString();
     }
     return *ok ? plain : QByteArray();
 }
@@ -698,7 +1050,7 @@ void Chat::commitPeer()
 void Chat::noteCapable(const QString &key, bool capable)
 {
     // Only from a message that proved it's really them; only kept for people we know.
-    if (!capable || m_capable.value(key) || (!isContact(key) && !m_met.contains(key)))
+    if (!capable || m_capable.value(key) || (!isContact(key) && !m_met.contains(key) && !isGroupPeer(key)))
         return;
     m_capable.insert(key, true);
     saveRatchet(key);
@@ -720,6 +1072,10 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     QString mailbox = o.value(QStringLiteral("mailbox")).toString();
     if (mailbox.size() != 64)
         mailbox.clear();
+    if (room == QLatin1String("group") || room == QLatin1String("gmsg") || room == QLatin1String("greceipt"))
+        return receiveGroup(o, fromKey, name, mailbox, via);
+    if (room == QLatin1String("gphoto"))
+        return receiveGroupPiece(o, fromKey, name, mailbox, via);
     const QString sentId = o.value(QStringLiteral("id")).toString();
     // A copy that's already here (another route, or a resend): confirm again, don't count it.
     // Always before opening: a ratchet message only opens once.
@@ -735,7 +1091,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             if (str(v.toMap(), "id") == sentId)
                 return 200;
     }
-    const bool once = room == QLatin1String("receipt") || room == QLatin1String("unsend") || room == QLatin1String("keep");
+    const bool once = room == QLatin1String("receipt") || room == QLatin1String("unsend") || room == QLatin1String("keep") || room == QLatin1String("call");
     if (once && m_seen.has(fromKey, sentId)) {
         // An unsend's resend: say "unsent" again in case the first answer was lost.
         const QString gone = m_seen.note(fromKey, sentId);
@@ -747,6 +1103,33 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     const QByteArray plain = open(o, fromKey, &ok);
     if (!ok)
         return keyWith(fromKey).isEmpty() ? 400 : 403;
+    // Calls (0.6): only from contacts and group peers, at most 30 signals in 10 seconds each.
+    if (room == QLatin1String("call")) {
+        if (!isContact(fromKey) && !isGroupPeer(fromKey)) {
+            m_pendingPeer.reset();
+            return 403;
+        }
+        if (m_recentCall.size() > 500)
+            m_recentCall.clear();
+        QList<qint64> &q = m_recentCall[fromKey];
+        while (!q.isEmpty() && now() - q.first() > 10000)
+            q.removeFirst();
+        if (q.size() >= 30) {
+            m_pendingPeer.reset();
+            return 429;
+        }
+        q << now();
+        const QJsonObject msg = QJsonDocument::fromJson(plain).object();
+        if (msg.isEmpty()) {
+            m_pendingPeer.reset();
+            return 400;
+        }
+        commitPeer();
+        if (!sentId.isEmpty())
+            m_seen.add(fromKey, sentId, now());   // the same signal on another route is dropped
+        Q_EMIT callMessage(fromKey, msg);
+        return 200;
+    }
     // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room. Counted only
     // once a message proved it's really from them, so nobody can use it to block a real contact.
     if (room != QLatin1String("receipt")) {
@@ -824,7 +1207,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         return 200;
     }
     if (room == QLatin1String("receipt")) {
-        if (!isContact(fromKey) && !m_met.contains(fromKey))
+        if (!isContact(fromKey) && !m_met.contains(fromKey) && !isGroupPeer(fromKey))
             return 403;
         const QJsonObject r = QJsonDocument::fromJson(text.toUtf8()).object();
         const QString st = r.value(QStringLiteral("s")).toString();
@@ -832,6 +1215,12 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             return 400;
         commitPeer();
         m_seen.add(fromKey, sentId, now());
+        // A caps probe (0.6): answer with an empty receipt, whose envelope carries our caps.
+        if (r.value(QStringLiteral("q")).toString() == QLatin1String("caps")) {
+            const QJsonObject a{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}};
+            deliver(fromKey, envelope(QStringLiteral("receipt"), fromKey, compact(a), QUuid::createUuid().toString(QUuid::WithoutBraces)),
+                    mailbox.isEmpty() ? mailboxOf(fromKey) : mailbox);
+        }
         QSet<QString> ids;
         const QJsonArray a = r.value(QStringLiteral("ids")).toArray();
         for (int i = 0; i < qMin(int(a.size()), 200); ++i)
@@ -955,6 +1344,10 @@ QString Chat::sendBlob(const QString &key, const QByteArray &bytes, int voiceMs)
 
 bool Chat::sendPhoto(const QString &key, const QString &path, bool hd)
 {
+    if (key.startsWith(QLatin1String("g:"))) {
+        const QStringList parts = key.split(QLatin1Char(':'));
+        return parts.size() == 3 && sendGroupPhoto(parts.at(1), parts.at(2), path, hd);
+    }
     const QByteArray jpeg = Photos::prepare(path, hd);
     if (jpeg.isEmpty()) {
         Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
@@ -968,6 +1361,13 @@ void Chat::sendVoice(const QString &key, const QByteArray &aac, int ms)
 {
     if (!Photos::isAdts(aac))
         return;
+    // A group channel: "g:<group>:<channel>" (the group page records for it).
+    if (key.startsWith(QLatin1String("g:"))) {
+        const QStringList parts = key.split(QLatin1Char(':'));
+        if (parts.size() == 3)
+            sendGroupBlob(parts.at(1), parts.at(2), aac, qBound(1, ms, Photos::kMaxVoiceMs));
+        return;
+    }
     sendBlob(key, aac, qBound(1, ms, Photos::kMaxVoiceMs));
 }
 
@@ -997,6 +1397,13 @@ QVariantList Chat::recentPictures() const
     const QString home = QDir::homePath();
     QStringList roots{home + QStringLiteral("/.local/share/Steam/userdata"), home + QStringLiteral("/.steam/steam/userdata"),
                       QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)};
+#ifdef Q_OS_WIN
+    // Steam on Windows says where it lives (usually C:/Program Files (x86)/Steam).
+    const QString steam = QSettings(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"), QSettings::NativeFormat)
+                              .value(QStringLiteral("SteamPath")).toString();
+    if (!steam.isEmpty())
+        roots.prepend(QDir::fromNativeSeparators(steam) + QStringLiteral("/userdata"));
+#endif
     QList<QFileInfo> found;
     QSet<QString> seen;
     for (const QString &root : roots) {
@@ -1026,6 +1433,12 @@ void Chat::copyLink() const
 {
     if (auto *c = QGuiApplication::clipboard())
         c->setText(myLink());
+}
+
+void Chat::copyText(const QString &text) const
+{
+    if (auto *c = QGuiApplication::clipboard())
+        c->setText(text);
 }
 
 QList<QJsonObject> Chat::pieces(const QVariantMap &m)
@@ -1146,6 +1559,9 @@ QJsonObject Chat::envelope(const QString &room, const QString &theirKey, const Q
     const QString invite = str(m_contacts.value(theirKey), "invite");
     if (!invite.isEmpty())
         o.insert(QStringLiteral("invite"), invite);
+    // 0.6: where I'm reached over Tor, for contacts and group peers only (never the Nearby room).
+    if (room != QLatin1String("nearby") && (m_contacts.contains(theirKey) || m_gpeers.contains(theirKey)) && !onion().isEmpty())
+        o.insert(QStringLiteral("o"), onion());
     return seal(o, theirKey, plain);
 }
 
@@ -1155,7 +1571,8 @@ QJsonObject Chat::seal(const QJsonObject &fields, const QString &theirKey, const
     // A message from them that just opened moves the same peer: keep that first.
     if (m_pendingPeer && m_pendingKey == theirKey)
         commitPeer();
-    const bool r1 = ChatWire::useRatchet(fields.value(QStringLiteral("room")).toString(), isContact(theirKey), m_capable.value(theirKey));
+    const bool r1 = ChatWire::useRatchet(fields.value(QStringLiteral("room")).toString(), isContact(theirKey) || isGroupPeer(theirKey),
+                                         m_capable.value(theirKey) || isGroupPeer(theirKey));
     Ratchet::Peer *peer = r1 ? &m_peers[theirKey] : nullptr;
     const QJsonObject o = ChatWire::seal(fields, keyWith(theirKey), theirKey, plain, peer, kNewKey);
     if (peer && ChatWire::isRatchet(o))
@@ -1188,10 +1605,8 @@ QString Chat::deliver(const QString &key, const QJsonObject &body, const QString
         post(base, json);
         return QStringLiteral("wifi");
     }
-    if (!mailbox.isEmpty()) {
-        m_nostr->publish(mailbox, wrap(key, json));
+    if (sendInternet(key, {json}, mailbox, false))
         return QStringLiteral("internet");
-    }
     return QString();
 }
 
@@ -1317,11 +1732,11 @@ void Chat::attempt(const QString &key, const QString &id)
     }
     const QString mailbox = backupMailbox(m);
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
-    if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
-        for (const QByteArray &b : bodies)
-            m_nostr->publish(mailbox, wrap(key, b));
-        any = true;
-        markSent(QStringLiteral("internet"));
+    // Their onion first (Tor); the relays when that fails, and on every try from the second on.
+    const bool reachable = !mailbox.isEmpty() || (isContact(key) && !onionOf(key).isEmpty());
+    if (reachable && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
+        if (sendInternet(key, bodies, mailbox, t.count >= 2, [markSent] { markSent(QStringLiteral("internet")); }))
+            any = true;
     }
     if (!any && t.count == 1)
         update(key, id, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });
@@ -1370,6 +1785,7 @@ void Chat::retryLoop()
         }
     for (const auto &d : due)
         attempt(d.first, d.second);
+    groupRetry();
     for (const auto &u : unsends) {
         if (u.second.startsWith(QLatin1Char('!'))) {
             const QString id = u.second.mid(1);
@@ -1470,9 +1886,7 @@ void Chat::attemptUnsend(const QString &key, const QString &id)
     const QString base = m_net->baseFor(key);
     if (!base.isEmpty())
         post(base, body);
-    const QString box = mailboxOf(key);
-    if (!box.isEmpty())
-        m_nostr->publish(box, wrap(key, body));
+    sendInternet(key, {body}, mailboxOf(key), t.count >= 2);
 }
 
 // ------------------------------------------------------------------ sealed envelopes and ratchet state
@@ -1518,8 +1932,8 @@ void Chat::sweepSealed()
     const qint64 t = now();
     for (const QString &id : m_outbox.ids()) {
         const ChatWire::Outbox::Entry *e = m_outbox.find(id);
-        bool keep = false;
-        if (e && t - e->time <= kDay) {
+        bool keep = m_gout.contains(id);   // a group message waiting for that member (groupRetry ends it)
+        if (!keep && e && t - e->time <= kDay) {
             const bool unsend = id.startsWith(QLatin1String("u-"));
             const QString msgId = unsend ? id.mid(2) : id;
             for (const QVariant &v : m_private.value(e->key)) {
@@ -1551,6 +1965,8 @@ void Chat::loadRatchet()
             continue;
         if (o.value(QStringLiteral("cap")).toBool())
             m_capable.insert(key, true);
+        if (o.value(QStringLiteral("caps")).isString())
+            m_caps.insert(key, o.value(QStringLiteral("caps")).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts));
         if (o.contains(QStringLiteral("peer"))) {
             bool ok = false;
             const Ratchet::Peer p = Ratchet::Peer::fromJson(o.value(QStringLiteral("peer")).toObject(), &ok);
@@ -1572,11 +1988,13 @@ void Chat::saveRatchet(const QString &key)
 {
     const bool cap = m_capable.value(key);
     const auto p = m_peers.constFind(key);
-    if (!cap && (p == m_peers.cend() || p->sessions.empty())) {
+    if (!cap && !m_caps.contains(key) && (p == m_peers.cend() || p->sessions.empty())) {
         m_vault->remove(ratchetFile(key));
         return;
     }
     QJsonObject o{{QStringLiteral("key"), key}, {QStringLiteral("cap"), cap}};
+    if (m_caps.contains(key))
+        o.insert(QStringLiteral("caps"), m_caps.value(key).join(QLatin1Char(' ')));
     if (p != m_peers.cend())
         o.insert(QStringLiteral("peer"), p->toJson());
     m_vault->write(ratchetFile(key), compact(o));
@@ -1586,6 +2004,7 @@ void Chat::forgetRatchet(const QString &key)
 {
     m_peers.remove(key);
     m_capable.remove(key);
+    m_caps.remove(key);
     if (m_pendingPeer && m_pendingKey == key)
         m_pendingPeer.reset();
     m_vault->remove(ratchetFile(key));
@@ -1694,6 +2113,10 @@ void Chat::deleteAll()
         return;   // locked: nothing could be saved, so don't pretend
     m_private.clear();
     m_nearby.clear();
+    for (Group &gr : m_groups)
+        gr.messages.clear();
+    m_gidx.clear();
+    saveGroupChats();
     QDir(m_vault->path(QStringLiteral("photos"))).removeRecursively();
     m_vault->remove(QStringLiteral("nearby.json"));
     save();
@@ -1722,6 +2145,7 @@ void Chat::prune()
         }
         it.value() = kept;
     }
+    pruneGroups(cutoff);
     QVariantList n;
     for (const QVariant &v : std::as_const(m_nearby))
         if (v.toMap().value(QStringLiteral("time")).toLongLong() >= cutoff)
@@ -1754,6 +2178,13 @@ void Chat::saveMet()
 
 void Chat::saveContacts()
 {
+    // Adding a group peer as a contact just makes them a contact (docs/protocol-0.6.md 3.7).
+    bool peers = false;
+    for (auto it = m_contacts.begin(); it != m_contacts.end(); ++it)
+        if (m_gpeers.remove(it.key()))
+            peers = true;
+    if (peers)
+        saveGroups();
     QJsonArray a;
     for (const QVariantMap &c : std::as_const(m_contacts))
         a << QJsonObject::fromVariantMap(c);
@@ -1805,6 +2236,8 @@ void Chat::load()
         m_deleted.insert(it.key(), qint64(it.value().toDouble()));
     if (keepNearby())
         m_nearby = QJsonDocument::fromJson(m_vault->read(QStringLiteral("nearby.json"))).array().toVariantList();
+    loadFolders();
+    loadGroups();
     loadRatchet();
     prune();
     sweepSealed();
@@ -1841,7 +2274,8 @@ QVariantList Chat::chats() const
         }
         out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), nameOf(k)}, {QStringLiteral("last"), preview},
                            {QStringLiteral("time"), last.value(QStringLiteral("time"), 0)}, {QStringLiteral("route"), route(k)},
-                           {QStringLiteral("unread"), m_unread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)}};
+                           {QStringLiteral("unread"), m_unread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)},
+                           {QStringLiteral("folders"), foldersOf(k)}};
     }
     std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
         return a.toMap().value(QStringLiteral("time")).toLongLong() > b.toMap().value(QStringLiteral("time")).toLongLong();

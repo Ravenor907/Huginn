@@ -25,6 +25,10 @@ QtObject {
     readonly property color textMuted: hc ? "#E0E0E0" : "#9C978D"
     readonly property color textFaint: hc ? "#C8C8C8" : "#6E6A62"
     readonly property color ornament: hc ? "#A0A0A0" : "#5E5A53"
+    // The three columns: the rail on the far left, the list beside it, and the open conversation.
+    readonly property color rail: groundDeep
+    readonly property color column: panelLow
+    readonly property color seam: hc ? "#9A9A9A" : "#1F2125"
     // Color-blind friendly: amber instead of rose, so warnings never depend on telling red from green.
     readonly property color danger: Settings.colorBlind ? "#F2B33D" : hc ? "#FFB4A8" : "#D9A79E"
     readonly property color dangerLine: Settings.colorBlind ? "#7A5A1E" : "#5A3A34"
@@ -35,9 +39,12 @@ QtObject {
     readonly property color accentFill: Qt.rgba(accent.r * 0.25 + 0.06, accent.g * 0.25 + 0.06, accent.b * 0.25 + 0.06, 1)
     readonly property color focusFill: Qt.rgba(accent.r * 0.12 + 0.11, accent.g * 0.12 + 0.11, accent.b * 0.12 + 0.1, 1)
 
-    // Everything scales with the screen and the Size setting (see System::uiScale).
-    readonly property bool tv: System.tvLayout
-    readonly property real s: System.uiScale
+    // Everything scales with the screen, the layout density and the Size setting (see System::uiScale).
+    // Desktop gets a boost on top: System's desktop density was far too small to read on a 1080p or
+    // 1440p monitor at arm's length (body text near 14 px). With it, 1080p reads like the mockups
+    // (16 to 18 px) and 1440p grows with the screen.
+    readonly property bool desktop: System.desktop
+    readonly property real s: System.uiScale * (desktop ? 1.3 : 1)
     function px(v) { return Math.round(v * s) }
     // Text sizes: the overall Size, times the separate Text size.
     function fs(v) { return Math.round(v * s * textScale) }
@@ -50,4 +57,16 @@ QtObject {
     // Controller focus: thick enough to spot at arm's length on a 7 inch screen.
     readonly property int focusWidth: Math.max(hc ? 4 : 3, px(hc ? 3.5 : 2.5))
     readonly property int rowHeight: px(56)
+
+    // Avatars: a soft color per person, picked from their name so it never changes. Your own is gold.
+    readonly property var avatarTones: hc ? [{ bg: "#1F1F1F", fg: "#FFFFFF" }]
+        : [{ bg: "#2C3A2C", fg: "#B6D6B6" }, { bg: "#2D3340", fg: "#B9C6E0" }, { bg: "#3A2724", fg: "#E6A596" }, { bg: "#33293A", fg: "#D2BCE0" }, { bg: "#24363A", fg: "#AED4D8" }]
+    readonly property var avatarMine: hc ? ({ bg: "#1F1F1F", fg: "#FFFFFF" }) : ({ bg: "#3A3220", fg: "#E0C27F" })
+    function avatar(name, mine) {
+        if (mine) return avatarMine
+        let h = 0
+        const n = String(name || "")
+        for (let i = 0; i < n.length; ++i) h = (h * 31 + n.charCodeAt(i)) % 9973
+        return avatarTones[h % avatarTones.length]
+    }
 }

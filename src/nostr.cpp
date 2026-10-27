@@ -1,5 +1,6 @@
 #include "nostr.h"
 #include "schnorr.h"
+#include "tor.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -213,6 +214,26 @@ void Nostr::setKeepAlive(bool on)
 
 // ------------------------------------------------------------------ relays
 
+void Nostr::setTor(Tor *tor)
+{
+    if (m_tor == tor)
+        return;
+    if (m_tor)
+        QObject::disconnect(m_tor, nullptr, this, nullptr);
+    m_tor = tor;
+    if (!tor)
+        return;
+    connect(tor, &Tor::readyChanged, this, [this] {
+        if (!m_tor || !m_tor->ready())
+            return;   // sockets through a Tor that went away fail by themselves and retry
+        if (m_keepAlive || m_wanted) {
+            m_wanted = false;
+            m_retries.clear();
+            connectRelays();
+        }
+    });
+}
+
 void Nostr::connectRelays()
 {
     for (const QString &url : relays())
@@ -224,7 +245,13 @@ void Nostr::open(const QString &url)
     // One socket per relay, never two: only opens if there isn't one already.
     if (m_links.contains(url))
         return;
+    // Only through Tor. Until it is ready nothing opens; readyChanged connects everything then.
+    if (!m_tor || !m_tor->ready()) {
+        m_wanted = true;
+        return;
+    }
     auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    ws->setProxy(m_tor->proxy(QStringLiteral("nostr ") + url));
     m_links.insert(url, Link{ws, true});
     connect(ws, &QWebSocket::connected, this, [this, url, ws] { opened(url, ws); });
     connect(ws, &QWebSocket::disconnected, this, [this, url, ws] { gone(url, ws); });
@@ -235,8 +262,8 @@ void Nostr::open(const QString &url)
         if (it != m_links.end() && it->ws == ws)
             it->ponged = true;
     });
-    // A relay that never answers counts as down after 10 s, so the retry can start.
-    QTimer::singleShot(10000, ws, [this, url, ws] {
+    // A relay that never answers counts as down after 30 s (circuits through Tor take a while), so the retry can start.
+    QTimer::singleShot(30000, ws, [this, url, ws] {
         if (ws->state() != QAbstractSocket::ConnectedState)
             gone(url, ws);
     });
@@ -331,6 +358,7 @@ void Nostr::reconnectNow()
 void Nostr::disconnect()
 {
     setKeepAlive(false);
+    m_wanted = false;
     const QHash<QString, Link> links = m_links;
     m_links.clear();
     for (const Link &l : links) {
@@ -429,7 +457,8 @@ void Nostr::handle(const QJsonObject &ev)
 
 int Nostr::publish(const QString &mailboxHex, const QString &content)
 {
-    const QJsonArray tags{QJsonArray{QStringLiteral("p"), mailboxHex}};
+    // QJsonValue(...) keeps the inner array nested: MSVC treats QJsonArray{QJsonArray{...}} as a copy.
+    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
     // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
     const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), now() - QRandomGenerator::global()->bounded(600));
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
@@ -466,7 +495,7 @@ bool Nostr::selfTest(const QString &vectorsPath)
     const bool officialSig = Schnorr::hex(osig) == s(o, "sig") && Schnorr::verify(b(o, "msg"), b(o, "pubkey"), osig);
 
     // An event made by the reference code, the same one Muninn's tests check.
-    const QJsonArray tags{QJsonArray{QStringLiteral("p"), s(v, "recipient")}};
+    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), s(v, "recipient")})};
     const qint64 createdAt = v.value(QStringLiteral("created_at")).toInteger();
     const int kind = v.value(QStringLiteral("kind")).toInt();
     const bool serialized = serialize(s(v, "pubkey"), createdAt, kind, tags, s(v, "content")) == s(v, "serialized").toUtf8();
@@ -480,7 +509,7 @@ bool Nostr::selfTest(const QString &vectorsPath)
     // NIP-01 escaping: seven escapes, "/" and non-ASCII left as they are.
     const QString tricky = QString::fromUtf8("q\"b\\n\nr\rt\tb\bf\f a/b caf\xc3\xa9");
     const QByteArray expected = "[0,\"ab\",1,1,[[\"t\",\"a/b\"]],\"q\\\"b\\\\n\\nr\\rt\\tb\\bf\\f a/b caf\xc3\xa9\"]";
-    const bool escaping = serialize(QStringLiteral("ab"), 1, 1, QJsonArray{QJsonArray{QStringLiteral("t"), QStringLiteral("a/b")}}, tricky) == expected;
+    const bool escaping = serialize(QStringLiteral("ab"), 1, 1, QJsonArray{QJsonValue(QJsonArray{QStringLiteral("t"), QStringLiteral("a/b")})}, tricky) == expected;
 
     // A changed signature must fail.
     const QByteArray sk = Schnorr::newSecret();

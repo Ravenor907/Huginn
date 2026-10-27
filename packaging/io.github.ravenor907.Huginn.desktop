@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Huginn
-GenericName=File Explorer
-Comment=A controller-first file explorer for SteamOS Game Mode
+GenericName=Chat and File Sharing
+Comment=Private chat and file sharing, built for a controller
 Exec=huginn
 Icon=io.github.ravenor907.Huginn
 Terminal=false
-Categories=System;FileManager;Utility;
-Keywords=files;folders;explorer;steam deck;handheld;ventoy;usb;
+Categories=Network;InstantMessaging;FileTransfer;
+Keywords=chat;messages;localsend;file sharing;steam deck;handheld;
 StartupNotify=true

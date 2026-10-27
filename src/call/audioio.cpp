@@ -1,0 +1,266 @@
+#include "audioio.h"
+
+#include <QAudioSink>
+#include <QAudioSource>
+#include <QIODevice>
+#include <QMediaDevices>
+#include <cstring>
+
+namespace
+{
+const int kSinkAheadMs = 60;    // keep this much queued in the speaker
+}
+
+AudioIO::AudioIO(QObject *parent) : QObject(parent)
+{
+    m_devices = new QMediaDevices(this);
+    connect(m_devices, &QMediaDevices::audioOutputsChanged, this, [this] {
+        // The chosen output went away (headphones unplugged): back to the default.
+        bool still = m_outputId.isEmpty();
+        for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+            if (QString::fromLatin1(d.id()) == m_outputId)
+                still = true;
+        if (!still)
+            setOutput(QString());
+        Q_EMIT outputsChanged();
+    });
+    m_pump.setTimerType(Qt::PreciseTimer);
+    m_pump.setInterval(10);
+    connect(&m_pump, &QTimer::timeout, this, &AudioIO::pump);
+}
+
+AudioIO::~AudioIO()
+{
+    stop();
+}
+
+QAudioFormat AudioIO::wanted()
+{
+    QAudioFormat f;
+    f.setSampleRate(AudioDsp::kRate);
+    f.setChannelCount(1);
+    f.setSampleFormat(QAudioFormat::Int16);
+    return f;
+}
+
+QAudioFormat AudioIO::pick(const QAudioDevice &dev)
+{
+    const QAudioFormat w = wanted();
+    if (dev.isFormatSupported(w))
+        return w;
+    QAudioFormat f = dev.preferredFormat();
+    if (f.sampleFormat() == QAudioFormat::Unknown)
+        f.setSampleFormat(QAudioFormat::Int16);
+    return f;
+}
+
+bool AudioIO::start()
+{
+    if (m_running)
+        return true;
+    m_running = true;
+    const bool in = startInput(), out = startOutput();
+    if (!in)
+        Q_EMIT error(QStringLiteral("The microphone isn't available right now."));
+    if (!out)
+        Q_EMIT error(QStringLiteral("No speaker or headphones to play the call on."));
+    m_pump.start();
+    return in || out;
+}
+
+void AudioIO::stop()
+{
+    m_running = false;
+    m_pump.stop();
+    if (m_source) {
+        m_source->stop();
+        delete m_source;
+        m_source = nullptr;
+    }
+    stopOutput();
+    m_mono.clear();
+    m_frame.clear();
+}
+
+bool AudioIO::startInput()
+{
+    const QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    if (dev.isNull())
+        return false;
+    m_inFormat = pick(dev);
+    m_down.setRates(m_inFormat.sampleRate(), AudioDsp::kRate);
+    m_source = new QAudioSource(dev, m_inFormat, this);
+    m_source->setBufferSize(m_inFormat.bytesForDuration(40000));
+    m_in = m_source->start();
+    if (!m_in) {
+        delete m_source;
+        m_source = nullptr;
+        return false;
+    }
+    connect(m_in, &QIODevice::readyRead, this, &AudioIO::onInput);
+    return true;
+}
+
+bool AudioIO::startOutput()
+{
+    QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        if (!m_outputId.isEmpty() && QString::fromLatin1(d.id()) == m_outputId)
+            dev = d;
+    if (dev.isNull())
+        return false;
+    m_outFormat = pick(dev);
+    m_up.setRates(AudioDsp::kRate, m_outFormat.sampleRate());
+    m_sink = new QAudioSink(dev, m_outFormat, this);
+    m_sink->setBufferSize(m_outFormat.bytesForDuration(120000));
+    m_out = m_sink->start();
+    if (!m_out) {
+        delete m_sink;
+        m_sink = nullptr;
+        return false;
+    }
+    m_pending.clear();
+    return true;
+}
+
+void AudioIO::stopOutput()
+{
+    if (m_sink) {
+        m_sink->stop();
+        delete m_sink;
+        m_sink = nullptr;
+    }
+    m_pending.clear();
+}
+
+void AudioIO::toMono(const QAudioFormat &f, const char *data, int frames, std::vector<float> *out)
+{
+    const int ch = qMax(1, f.channelCount());
+    const int bps = f.bytesPerSample();
+    for (int i = 0; i < frames; ++i) {
+        float sum = 0;
+        for (int c = 0; c < ch; ++c) {
+            const char *p = data + (i * ch + c) * bps;
+            switch (f.sampleFormat()) {
+            case QAudioFormat::UInt8: sum += (float(quint8(*p)) - 128.f) / 128.f; break;
+            case QAudioFormat::Int16: { qint16 v; std::memcpy(&v, p, 2); sum += float(v) / 32768.f; break; }
+            case QAudioFormat::Int32: { qint32 v; std::memcpy(&v, p, 4); sum += float(double(v) / 2147483648.0); break; }
+            case QAudioFormat::Float: { float v; std::memcpy(&v, p, 4); sum += v; break; }
+            default: break;
+            }
+        }
+        out->push_back(sum / float(ch));
+    }
+}
+
+QByteArray AudioIO::fromMono(const QAudioFormat &f, const float *data, int n)
+{
+    const int ch = qMax(1, f.channelCount());
+    const int bps = f.bytesPerSample();
+    QByteArray out(n * ch * bps, 0);
+    char *p = out.data();
+    for (int i = 0; i < n; ++i) {
+        const float s = qBound(-1.f, data[i], 1.f);
+        for (int c = 0; c < ch; ++c, p += bps) {
+            switch (f.sampleFormat()) {
+            case QAudioFormat::UInt8: *p = char(quint8(qRound(s * 127.f + 128.f))); break;
+            case QAudioFormat::Int16: { const qint16 v = qint16(qRound(s * 32767.f)); std::memcpy(p, &v, 2); break; }
+            case QAudioFormat::Int32: { const qint32 v = qint32(double(s) * 2147483647.0); std::memcpy(p, &v, 4); break; }
+            case QAudioFormat::Float: std::memcpy(p, &s, 4); break;
+            default: break;
+            }
+        }
+    }
+    return out;
+}
+
+void AudioIO::onInput()
+{
+    if (!m_in)
+        return;
+    const QByteArray raw = m_in->readAll();
+    const int frameBytes = m_inFormat.bytesPerFrame();
+    if (frameBytes <= 0 || raw.isEmpty())
+        return;
+    const int frames = int(raw.size()) / frameBytes;
+    m_mono.clear();
+    toMono(m_inFormat, raw.constData(), frames, &m_mono);
+    m_resampled.clear();
+    m_down.process(m_mono.data(), int(m_mono.size()), &m_resampled);
+    for (float s : m_resampled) {
+        m_frame.push_back(qint16(qRound(qBound(-1.f, s, 1.f) * 32767.f)));
+        if (int(m_frame.size()) == AudioDsp::kFrame) {
+            Q_EMIT captured(QByteArray(reinterpret_cast<const char *>(m_frame.data()), AudioDsp::kFrame * 2));
+            m_frame.clear();
+        }
+    }
+}
+
+void AudioIO::pump()
+{
+    if (!m_sink || !m_out || !pull)
+        return;
+    // Write what's left over first, then fresh frames while less than kSinkAheadMs is queued.
+    for (int guard = 0; guard < 8; ++guard) {
+        if (!m_pending.isEmpty()) {
+            const qint64 n = m_out->write(m_pending);
+            if (n > 0)
+                m_pending.remove(0, int(n));
+            if (!m_pending.isEmpty())
+                return;
+        }
+        const qint64 queued = m_sink->bufferSize() - m_sink->bytesFree();
+        if (queued >= m_outFormat.bytesForDuration(kSinkAheadMs * 1000))
+            return;
+        qint16 pcm[AudioDsp::kFrame];
+        pull(pcm);
+        float f[AudioDsp::kFrame];
+        for (int i = 0; i < AudioDsp::kFrame; ++i)
+            f[i] = float(pcm[i]) / 32768.f;
+        m_resampled.clear();
+        m_up.process(f, AudioDsp::kFrame, &m_resampled);
+        m_pending = fromMono(m_outFormat, m_resampled.data(), int(m_resampled.size()));
+    }
+}
+
+QVariantList AudioIO::outputs() const
+{
+    QVariantList out;
+    out << QVariantMap{{QStringLiteral("id"), QString()}, {QStringLiteral("name"), QStringLiteral("Default")}};
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        out << QVariantMap{{QStringLiteral("id"), QString::fromLatin1(d.id())}, {QStringLiteral("name"), d.description()}};
+    return out;
+}
+
+QString AudioIO::outputName() const
+{
+    if (m_outputId.isEmpty())
+        return QStringLiteral("Default");
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        if (QString::fromLatin1(d.id()) == m_outputId)
+            return d.description();
+    return QStringLiteral("Default");
+}
+
+void AudioIO::setOutput(const QString &id)
+{
+    if (id == m_outputId)
+        return;
+    m_outputId = id;
+    if (m_running) {
+        stopOutput();
+        if (!startOutput())
+            Q_EMIT error(QStringLiteral("That output isn't available."));
+    }
+    Q_EMIT outputsChanged();
+}
+
+void AudioIO::nextOutput()
+{
+    const QVariantList all = outputs();
+    int at = 0;
+    for (int i = 0; i < all.size(); ++i)
+        if (all.at(i).toMap().value(QStringLiteral("id")).toString() == m_outputId)
+            at = i;
+    setOutput(all.at((at + 1) % all.size()).toMap().value(QStringLiteral("id")).toString());
+}

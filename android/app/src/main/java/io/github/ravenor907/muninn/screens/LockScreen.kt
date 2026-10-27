@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -84,7 +85,8 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             while (taps.isNotEmpty() && t - taps.first() > 5_000) taps.removeFirst()
             if (taps.size >= 10) { taps.clear(); showErase = true }
         })
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Scrolls, so with larger size and text settings the pad and buttons can always be reached.
+        Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
                 Text(if (pattern) "Draw your pattern. Your messages, contacts and keys stay encrypted until you do."
@@ -108,7 +110,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                 Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
                 MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {
                     Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
-                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                        "Hold to erase", danger = true, hold = true) { io.github.ravenor907.muninn.net.Tor.forget(app); app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
                 }
             }
         }

@@ -1,14 +1,11 @@
-# Handheld Forge uses no reflection or serialization frameworks; defaults are enough.
-
-# commons-compress: only bzip2 is used; optional codecs it can link to aren't bundled.
--dontwarn com.github.luben.zstd.**
--dontwarn org.brotli.dec.**
--dontwarn org.objectweb.asm.**
--dontwarn org.osgi.**
--dontwarn java.lang.invoke.**
-
 # Muninn: zxing is used directly; nothing reflective.
 -dontwarn com.google.zxing.**
+
+# Tor: the native library reads TorService's fields and calls its methods by name.
+-keep class org.torproject.jni.** { *; }
+-keep class net.freehaven.tor.control.** { *; }
+-dontwarn org.torproject.jni.**
+-dontwarn net.freehaven.tor.control.**
 
 # WorkManager creates the inbox worker by name.
 -keep class io.github.ravenor907.muninn.net.InboxWorker { *; }

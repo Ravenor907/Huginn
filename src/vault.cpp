@@ -1,4 +1,5 @@
 #include "vault.h"
+#include "platform/singleinstance.h"
 #include "gamepad.h"
 
 #include <QCoreApplication>
@@ -308,6 +309,7 @@ void applySettingsBlob(const QByteArray &blob)
 // Starts Huginn again (to load restored chats) and closes this one.
 void restartHuginn()
 {
+    SingleInstance::releaseForRestart();   // the new copy must not find this one still holding the lock
     if (QFile::exists(QStringLiteral("/.flatpak-info")))
         QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QStringLiteral("io.github.ravenor907.Huginn")});
     else

@@ -2,7 +2,6 @@ package io.github.ravenor907.muninn.net
 
 import android.content.Context
 import android.net.Uri
-import io.github.ravenor907.muninn.files.Files
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,7 +38,7 @@ class CloseFiles(private val context: Context, private val close: Close, private
             }
         }
         close.onFile = { _, pid, file, uri -> save(pid, file, uri) }
-        close.onSent = { if (--sending <= 0 && sentTo.isNotEmpty()) finish(true, "Sent to $sentTo.") }
+        close.onSent = { if (--sending <= 0 && sentTo.isNotEmpty()) { net.logSent(sentNames, sentTo); finish(true, "Sent to $sentTo.") } }
         close.onProgress = { pid, done, all ->
             progress[pid] = done
             if (total > 0) net.closeProgress(progress.values.sum(), total)
@@ -60,6 +59,7 @@ class CloseFiles(private val context: Context, private val close: Close, private
     }
 
     private fun send(o: Outgoing, @Suppress("UNUSED_PARAMETER") ignored: JSONArray?) {
+        sentNames = o.files.map { it.name }
         net.closeStatus(true, true, "Sending to ${o.name}…", total)
         for (f in o.files) {
             val pid = close.sendFile(o.endpoint, f)
@@ -70,6 +70,7 @@ class CloseFiles(private val context: Context, private val close: Close, private
     }
     @Volatile private var sentTo = ""
     @Volatile private var sending = 0
+    @Volatile private var sentNames = emptyList<String>()
 
     private fun onOffer(endpoint: String, o: JSONObject) {
         val from = close.list.value.firstOrNull { it.endpoint == endpoint }?.name ?: "A phone close by"
@@ -101,24 +102,27 @@ class CloseFiles(private val context: Context, private val close: Close, private
     private fun save(pid: Long, file: File?, uri: Uri?) {
         val o = offer ?: return
         val (name, _) = expected.remove(pid) ?: ("file-$pid" to 0L)
-        val dir = net.identity.receiveFolder.also { it.mkdirs() }
-        val target = Files.free(dir, name.substringAfterLast('/'))
+        // Into Downloads (MediaStore on Android 10 and newer), out of Nearby's own temporary copy.
+        var target: Received.Target? = null
         try {
-            when {
-                uri != null -> {
-                    context.contentResolver.openInputStream(uri)?.use { ins -> target.outputStream().use { ins.copyTo(it) } }
-                    try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
-                }
-                file != null -> if (!file.renameTo(target)) { file.copyTo(target); file.delete() }
-            }
-            Recent.add(context, target)
-            net.closeItem(target.name, true)
+            val t = Received.create(context, name.substringAfterLast('/')).also { target = it }
+            val input = when {
+                uri != null -> context.contentResolver.openInputStream(uri)
+                file != null -> file.inputStream()
+                else -> null
+            } ?: throw java.io.IOException("Nothing arrived for $name.")
+            input.use { ins -> t.out.use { ins.copyTo(it) } }
+            t.finish()
+            if (uri != null) try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            file?.delete()
+            net.closeItem(t.name, true, o.from)
         } catch (e: Exception) {
-            net.closeItem(name, false)
+            target?.discard()
+            net.closeItem(name, false, o.from)
         }
         if (++received >= o.files.size) {
             offer = null
-            finish(true, "Received ${if (received == 1) "1 file" else "$received files"} from ${o.from}. They're in ${dir.name}.")
+            finish(true, "Received ${if (received == 1) "1 file" else "$received files"} from ${o.from}. They're in ${Received.place(context)}.")
         }
     }
 

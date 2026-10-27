@@ -1,7 +1,11 @@
 package io.github.ravenor907.muninn.net
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
@@ -22,10 +26,15 @@ import kotlin.random.Random
  * run). Each phone has a Nostr key; its public half is its mailbox. A message is an event of
  * kind 1059 addressed to the mailbox, signed by a throwaway key so relays can't tell who sent it.
  * The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text.
+ * Every relay connection goes through Tor (see [Tor]), so relays never see this phone's IP address;
+ * while Tor isn't ready nothing connects, and it all connects once Tor is.
  */
 class Nostr(context: Context, private val secretHex: () -> String?) {
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
-    private val client = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).connectTimeout(10, TimeUnit.SECONDS).build()
+    /** Through Tor only; rebuilt when Tor's port changes. Connecting through Tor takes longer than directly. */
+    private fun client(): OkHttpClient = Tor.client().newBuilder().pingInterval(30, TimeUnit.SECONDS).connectTimeout(30, TimeUnit.SECONDS).build()
+    /** Someone asked to connect (cleared by [disconnect]): connect as soon as Tor is ready. */
+    @Volatile private var wanted = false
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val live = ConcurrentHashMap<String, Boolean>()
     private val seen = LinkedHashSet<String>()
@@ -55,17 +64,22 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     init {
         prefs.getString("nostrSeen", "")!!.split(',').filter { it.isNotEmpty() }.forEach { seen.add(it) }
+        // Tor just became ready (at start, or back after losing the network): connect what's wanted.
+        CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+            Tor.state.collect { if (it == Tor.State.Ready && wanted) { retries.clear(); for (url in relays) open(url) } }
+        }
     }
 
     // ------------------------------------------------------------------ relays
 
-    fun connect() { for (url in relays) open(url) }
+    fun connect() { wanted = true; for (url in relays) open(url) }
 
-    /** One socket per relay, never two: only opens if there isn't one already. */
+    /** One socket per relay, never two: only opens if there isn't one already, and only through Tor. */
     private fun open(url: String) {
+        if (!Tor.ready) return   // the Tor watcher in init connects once it's ready
         synchronized(sockets) {
             if (sockets.containsKey(url)) return
-            sockets[url] = client.newWebSocket(Request.Builder().url(url).build(), Listener(url))
+            sockets[url] = client().newWebSocket(Request.Builder().url(url).build(), Listener(url))
         }
     }
 
@@ -84,6 +98,7 @@ class Nostr(context: Context, private val secretHex: () -> String?) {
 
     fun disconnect() {
         keepAlive = false
+        wanted = false
         synchronized(sockets) { sockets.values.forEach { it.close(1000, null) }; sockets.clear() }
         live.clear()
         _connected.value = 0

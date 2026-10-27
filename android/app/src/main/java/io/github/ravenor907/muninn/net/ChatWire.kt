@@ -11,10 +11,15 @@ import java.util.concurrent.ConcurrentHashMap
  * [nickname] is only ever kept on this phone: it never goes into a message or a contact code.
  * [ratchet]: their app said it speaks the message ratchet ("cap":"r1").
  * [keyChanged]: their security key changed and nobody has checked the code since.
+ * [groupOnly]: a group peer (protocol 0.6, 3.7): someone in a group with me who isn't a contact. Kept here so
+ *   they can be reached, never shown in the contact list, and private messages from them need the usual asking.
+ * [caps]: what their app said it speaks ("caps" in their envelopes: r1 g1 c1 k1), empty until known.
+ * [onion]: their Tor onion address (from their code or envelopes), for the private internet route.
  */
 data class Contact(
     val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null,
     val ratchet: Boolean = false, val nickname: String? = null, val keyChanged: Boolean = false,
+    val groupOnly: Boolean = false, val caps: Set<String> = emptySet(), val onion: String? = null,
 ) {
     /** What this phone shows for them. */
     val shown: String get() = nickname ?: name
@@ -26,22 +31,24 @@ data class Contact(
  * the outbox of sealed envelopes and the ratchet state per contact.
  *
  * Envelope (the same on every route; Huginn builds the same):
- *   { room, fromKey, fromName, fromId, mailbox, id, cap:"r1", [invite], [i, n, kind, ms],
+ *   { room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps:"r1 g1 c1 k1", [o], [invite], [i, n, kind, ms],
  *     v1:      nonce, data            (AES-GCM with the static shared key)
  *     ratchet: rh:{b,d,pn,n}, data    (Ratchet ciphertext, standard base64) }
  */
 object ChatWire {
     const val CAP = "r1"
     /** Rooms whose payload goes through the ratchet for a contact that has it. Nearby never does. */
-    val RATCHET_ROOMS = setOf("private", "receipt", "unsend", "keep", "photo")
+    val RATCHET_ROOMS = setOf("private", "receipt", "unsend", "keep", "photo", "group", "gmsg", "gphoto", "greceipt", "call", "tvconfig")
     /** Rooms with no id of their own to check against the chat: duplicates are caught with [Seen]. */
-    val SEEN_ROOMS = setOf("receipt", "unsend", "keep")
+    val SEEN_ROOMS = setOf("receipt", "unsend", "keep", "group", "greceipt")
+    /** 0.6 group rooms: only ever sent to someone whose app said "g1" (a 0.5 app would answer 400). */
+    val GROUP_ROOMS = setOf("group", "gmsg", "gphoto", "greceipt")
     const val DAY = 86_400_000L
 
     /** The clear part of every envelope. */
     fun base(room: String, fromKey: String, fromName: String, fromId: String, mailbox: String, msgId: String): JSONObject =
         JSONObject().put("room", room).put("fromKey", fromKey).put("fromName", fromName).put("fromId", fromId)
-            .put("mailbox", mailbox).put("id", msgId).put("cap", CAP)
+            .put("mailbox", mailbox).put("id", msgId).put("cap", CAP).put("caps", Proto06.CAPS)
 
     /** Ratchet when [peer] is given (the caller saves it afterwards), else v1. Always the same plaintext bytes. */
     fun seal(o: JSONObject, plain: ByteArray, sk: ByteArray, theirKey: String, peer: Ratchet.Peer?, newKey: () -> KeyPair): JSONObject {
@@ -76,6 +83,23 @@ object ChatWire {
 
     fun capable(o: JSONObject) = o.optString("cap") == CAP
 
+    /** The 0.6 tokens an envelope says its app speaks ("caps"), plus r1 from the old field. */
+    fun capsOf(o: JSONObject): Set<String> = Proto06.caps(o.optString("caps")) + (if (capable(o)) setOf(CAP) else emptySet())
+
+    /** A v3 onion address as it travels ("o" in codes and envelopes): 56 base32 letters, no ".onion". Null if it isn't one. */
+    fun onion(s: String?): String? = s?.trim()?.lowercase()?.removeSuffix(".onion")?.takeIf { it.length == 56 && it.all { c -> c in 'a'..'z' || c in '2'..'7' } }
+
+    /** Never show a network address: anything that looks like an IPv4 or IPv6 address becomes [instead]. */
+    fun noIp(text: String, instead: String = "a device"): String =
+        text.replace(IPV6_BRACKET, instead).replace(IPV4, instead).replace(IPV6_FULL, instead).replace(IPV6_SHORT, instead)
+            .replace("/$instead", instead)
+
+    private val IPV4 = Regex("""(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\w.])""")
+    private val IPV6_BRACKET = Regex("""\[[0-9A-Fa-f:.%\w]*:[0-9A-Fa-f:.%\w]*](?::\d{1,5})?""")
+    private val IPV6_FULL = Regex("""(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?:%\w+)?(?![\w:])""")
+    /** With "::" somewhere and at least one hex group (fe80::1, 2001:db8::5, ::1). */
+    private val IPV6_SHORT = Regex("""(?<![\w:])(?=[0-9A-Fa-f:]*[0-9A-Fa-f])(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?(?:%\w+)?(?![\w:])""")
+
     /** Whether a payload for [room] to [c] goes through the ratchet: only for a contact whose app said "r1". */
     fun useRatchet(room: String, c: Contact?) = room in RATCHET_ROOMS && c?.ratchet == true
 
@@ -83,15 +107,19 @@ object ChatWire {
 
     fun contactToJson(c: Contact): JSONObject = JSONObject().put("k", c.chatKey).put("n", c.name).put("p", c.mailbox ?: "")
         .put("v", c.verified).put("i", c.invite ?: "").put("r", c.ratchet).put("nick", c.nickname ?: "").put("kc", c.keyChanged)
+        .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" ")).put("o", c.onion ?: "")
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
-        o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"))
+        o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
+        o.optBoolean("go"), Proto06.caps(o.optString("cp")), onion(o.optString("o")))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
         val kc = old.keyChanged || c.keyChanged
         return c.copy(verified = !kc && (c.verified || old.verified), mailbox = c.mailbox ?: old.mailbox, name = c.name.ifBlank { old.name },
-            invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc)
+            invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc,
+            // Adding a group peer as a contact just clears groupOnly; a contact never turns into a group peer.
+            groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps, onion = c.onion ?: old.onion)
     }
 
     /**
@@ -102,12 +130,13 @@ object ChatWire {
     fun keyChangeFor(all: List<Contact>, c: Contact): Contact? {
         if (all.any { it.chatKey == c.chatKey }) return null
         val m = c.mailbox ?: return null
-        return all.firstOrNull { it.mailbox == m }
+        // A group peer isn't someone you added, so another key with its mailbox isn't a key change of a contact.
+        return all.firstOrNull { it.mailbox == m && !it.groupOnly }
     }
 
     /** The contact after their key changed: same person on this phone (nickname kept), not trusted, no ratchet yet. */
     fun afterKeyChange(old: Contact, c: Contact) = Contact(c.chatKey, c.name.ifBlank { old.name }, c.mailbox, verified = false,
-        invite = c.invite, ratchet = false, nickname = old.nickname, keyChanged = true)
+        invite = c.invite, ratchet = false, nickname = old.nickname, keyChanged = true, onion = c.onion)
 
     fun keyChangedText(name: String) = "$name's security key changed. Check the code with them before trusting new messages."
 
@@ -124,9 +153,10 @@ object ChatWire {
 
     const val PREFIX = "MUNINN1:"
 
-    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
+    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0, onion: String? = null): String {
         val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
-            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
+            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }
+            .apply { onion(onion)?.let { put("o", it) } }.toString()
         return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
     }
 

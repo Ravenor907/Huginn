@@ -60,11 +60,12 @@ class MessageService : Service() {
         }
         if (!app.identity.stayConnected) { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY }
         running = true
+        Tor.hold(this, "service")   // the relays and the onion address are reached only through Tor
         app.listen()
         return START_STICKY   // if Android stops it for memory, it comes back
     }
 
-    override fun onDestroy() { running = false; super.onDestroy() }
+    override fun onDestroy() { running = false; Tor.release("service"); super.onDestroy() }
 
     companion object {
         const val CHANNEL = "listening_quiet"

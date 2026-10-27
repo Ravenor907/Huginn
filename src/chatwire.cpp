@@ -8,6 +8,7 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
+const char ChatWire::kCaps[] = "r1 g1 c1";
 
 namespace
 {
@@ -21,17 +22,31 @@ bool ChatWire::useRatchet(const QString &room, bool contact, bool capable)
     if (!contact || !capable)
         return false;
     return room == QLatin1String("private") || room == QLatin1String("receipt") || room == QLatin1String("unsend")
-        || room == QLatin1String("keep") || room == QLatin1String("photo");
+        || room == QLatin1String("keep") || room == QLatin1String("photo") || room == QLatin1String("group") || room == QLatin1String("gmsg")
+        || room == QLatin1String("gphoto") || room == QLatin1String("greceipt") || room == QLatin1String("call") || room == QLatin1String("tvconfig");
 }
 
 bool ChatWire::isRatchet(const QJsonObject &o) { return o.value(QStringLiteral("rh")).type() != QJsonValue::Undefined; }
 
 bool ChatWire::saysCapable(const QJsonObject &o) { return o.value(QStringLiteral("cap")).toString() == QLatin1String(kCap); }
 
+QStringList ChatWire::capsOf(const QJsonObject &o, bool *present)
+{
+    const QJsonValue v = o.value(QStringLiteral("caps"));
+    if (present)
+        *present = v.isString();
+    QStringList out;
+    for (const QString &t : v.toString().split(QLatin1Char(' '), Qt::SkipEmptyParts))
+        if (t.size() <= 8 && !out.contains(t) && out.size() < 16)
+            out << t;
+    return out;
+}
+
 QJsonObject ChatWire::seal(QJsonObject o, const QByteArray &sk, const QString &theirKey, const QByteArray &plain, Ratchet::Peer *peer,
                            const Ratchet::NewKey &newKey)
 {
     o.insert(QStringLiteral("cap"), QLatin1String(kCap));
+    o.insert(QStringLiteral("caps"), QLatin1String(kCaps));
     if (peer) {
         const std::pair<Ratchet::Header, QByteArray> out = peer->encrypt(sk, theirKey, plain, newKey);
         if (!out.second.isEmpty()) {
@@ -181,8 +196,10 @@ struct Side {
         f.insert(QStringLiteral("id"), msgId);
         const bool r1 = newApp && ChatWire::useRatchet(room, true, capable[to.key()]);
         QJsonObject o = ChatWire::seal(f, sk(to.key()), to.key(), plain, r1 ? &peers[to.key()] : nullptr, [] { return ChatCrypto::newKeyPair(); });
-        if (!newApp)
+        if (!newApp) {
             o.remove(QStringLiteral("cap"));
+            o.remove(QStringLiteral("caps"));
+        }
         const QByteArray bytes = QJsonDocument(o).toJson(QJsonDocument::Compact);
         ChatWire::Outbox::Entry e;
         e.time = 1000;
@@ -260,11 +277,26 @@ bool ChatWire::selfTest()
     b.nick[a.key()] = QStringLiteral("Uncle Leif");
 
     // 1. First message: nobody knows the other can do r1 yet, so v1 with "cap".
-    const std::set<std::string> v1Fields{"room", "fromKey", "fromName", "mailbox", "id", "cap", "nonce", "data"};
-    const std::set<std::string> r1Fields{"room", "fromKey", "fromName", "mailbox", "id", "cap", "rh", "data"};
+    const std::set<std::string> v1Fields{"room", "fromKey", "fromName", "mailbox", "id", "cap", "caps", "nonce", "data"};
+    const std::set<std::string> r1Fields{"room", "fromKey", "fromName", "mailbox", "id", "cap", "caps", "rh", "data"};
     QByteArray m = a.send(b, QStringLiteral("private"), "hello", QStringLiteral("m1"));
-    check(hasOnly(m, v1Fields), "v1 envelope has exactly room, fromKey, fromName, mailbox, id, cap, nonce, data");
-    check(QJsonDocument::fromJson(m).object().value(QStringLiteral("cap")).toString() == QLatin1String("r1"), "cap is \"r1\"");
+    check(hasOnly(m, v1Fields), "v1 envelope has exactly room, fromKey, fromName, mailbox, id, cap, caps, nonce, data");
+    check(QJsonDocument::fromJson(m).object().value(QStringLiteral("cap")).toString() == QLatin1String("r1"), "cap is \"r1\" (0.5 apps test exactly that)");
+    {
+        bool present = false;
+        const QStringList caps = ChatWire::capsOf(QJsonDocument::fromJson(m).object(), &present);
+        check(present && caps.contains(QStringLiteral("r1")) && caps.contains(QStringLiteral("g1")) && caps.contains(QStringLiteral("c1")) && ChatWire::saysCapable(QJsonDocument::fromJson(m).object()),
+              "caps says r1 g1 c1 next to cap");
+        QJsonObject odd;
+        odd.insert(QStringLiteral("caps"), QStringLiteral("  g1 zz9  r1 g1 "));
+        const QStringList t = ChatWire::capsOf(odd, &present);
+        check(present && t.size() == 3 && t.contains(QStringLiteral("zz9")), "caps: any order, extra spaces, unknown tokens kept apart, duplicates once");
+        check(ChatWire::capsOf(QJsonObject(), &present).isEmpty() && !present, "no caps field: a 0.5 app");
+        check(ChatWire::useRatchet(QStringLiteral("gmsg"), true, true) && ChatWire::useRatchet(QStringLiteral("group"), true, true)
+                  && ChatWire::useRatchet(QStringLiteral("greceipt"), true, true) && ChatWire::useRatchet(QStringLiteral("gphoto"), true, true)
+                  && !ChatWire::useRatchet(QStringLiteral("gmsg"), true, false),
+              "group rooms use the ratchet with capable peers");
+    }
     check(b.receive(m) == "hello", "v1 opens");
     check(b.capable[a.key()], "cap r1 from an authenticated message marks the sender capable");
 
@@ -297,7 +329,9 @@ bool ChatWire::selfTest()
 
     // 4. An app from before the ratchet: never says cap, so it only ever gets v1.
     m = old.send(a, QStringLiteral("private"), "old app", QStringLiteral("o1"));
-    check(fieldNames(m).size() == 7 && QJsonDocument::fromJson(m).object().value(QStringLiteral("cap")).type() == QJsonValue::Undefined, "old app envelope has no cap");
+    check(fieldNames(m).size() == 7 && QJsonDocument::fromJson(m).object().value(QStringLiteral("cap")).type() == QJsonValue::Undefined
+              && QJsonDocument::fromJson(m).object().value(QStringLiteral("caps")).type() == QJsonValue::Undefined,
+          "old app envelope has no cap and no caps");
     check(a.receive(m) == "old app", "old app's v1 opens");
     check(!a.capable[old.key()], "no cap: not marked capable");
     m = a.send(old, QStringLiteral("private"), "still v1", QStringLiteral("o2"));

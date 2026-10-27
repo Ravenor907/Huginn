@@ -2,7 +2,6 @@ package io.github.ravenor907.muninn.net
 
 import android.content.Context
 import android.os.Build
-import android.os.Environment
 import java.io.File
 import java.security.KeyPair
 import java.util.UUID
@@ -35,11 +34,6 @@ class Identity(context: Context, private val vault: Vault) {
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
-
-    /** Where received files go. */
-    var receiveFolder: File
-        get() = File(prefs.getString("receiveFolder", null) ?: Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath)
-        set(v) = prefs.edit().putString("receiveFolder", v.absolutePath).apply()
 
     /** Secret keys, kept only in the encrypted vault (moved there from older versions' settings). */
     private fun secret(name: String, make: () -> String): String {

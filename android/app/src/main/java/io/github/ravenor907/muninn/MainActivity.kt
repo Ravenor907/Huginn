@@ -6,15 +6,15 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,9 +37,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.height
 import androidx.core.content.ContextCompat
-import io.github.ravenor907.muninn.files.Files
-import io.github.ravenor907.muninn.forge.Jobs
 import io.github.ravenor907.muninn.net.LocalSend
+import io.github.ravenor907.muninn.net.Received
+import io.github.ravenor907.muninn.screens.CallsScreen
+import io.github.ravenor907.muninn.screens.ChatColumn
+import io.github.ravenor907.muninn.screens.ChannelColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import io.github.ravenor907.muninn.screens.ChatMain
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import android.view.WindowManager
 import io.github.ravenor907.muninn.screens.ChatNav
 import io.github.ravenor907.muninn.screens.ChatScreen
@@ -47,11 +68,9 @@ import io.github.ravenor907.muninn.screens.ContactsScreen
 import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FirstLock
 import androidx.compose.runtime.remember
-import io.github.ravenor907.muninn.screens.FilesScreen
 import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.Share
 import io.github.ravenor907.muninn.screens.TransferScreen
-import io.github.ravenor907.muninn.screens.UsbScreen
 import io.github.ravenor907.muninn.ui.AskDialog
 import io.github.ravenor907.muninn.ui.Brand
 import io.github.ravenor907.muninn.ui.IconAction
@@ -60,18 +79,18 @@ import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.MuninnTheme
 import io.github.ravenor907.muninn.ui.Palette
-import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val app get() = application as Muninn
+    /** The bottom tab (phones) or rail button (tablets): chat, calls, files, contacts, or settings (the gear). */
     private var tab by mutableStateOf("chat")
-    private var storageOk by mutableStateOf(true)
+    /** Where the gear goes back to. */
+    private var beforeSettings = "chat"
     /** Password set and Muninn was away long enough: ask for it before showing anything. */
     private var uiLocked by mutableStateOf(false)
     /** Test builds only: the emulator screenshots open screens without setting a lock. */
@@ -115,7 +134,24 @@ class MainActivity : ComponentActivity() {
         else Ui.say("Direct connect needs the ${if (Build.VERSION.SDK_INT >= 33) "Nearby devices" else "Location"} permission to make a hotspot.", true)
     }
     private val notifyPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    private val legacyStorage = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { storageOk = hasStorage() }
+    /** Android 8 and 9: saving into Downloads needs the storage permission, asked when a transfer is accepted. */
+    private var afterStorage: (() -> Unit)? = null
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // Refused: files still arrive, in Muninn's own Downloads folder (Received says where).
+        afterStorage?.invoke(); afterStorage = null
+    }
+
+    private fun acceptFiles(accept: () -> Unit) {
+        if (Received.needsPermission(this)) { afterStorage = accept; storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
+        else accept()
+    }
+
+    /** Opens a tab by name (also what CI and older links ask for); anything unknown is the chat list. */
+    private fun show(name: String) {
+        val t = when (name) { "send", "files" -> "files"; "calls", "contacts", "settings" -> name; else -> "chat" }
+        if (t == "settings" && tab != "settings") beforeSettings = tab
+        tab = t
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -128,9 +164,10 @@ class MainActivity : ComponentActivity() {
         // Muninn's window is closed. So a fresh open would land back in whatever chat was last on screen:
         // start on the chat list unless a notification (extra "chat") or a scanned code asks otherwise.
         if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.menu = false }
-        intent?.getStringExtra("screen")?.let { tab = it }   // CI screenshots open each tab
+        intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
         if (ciSkip && intent?.getBooleanExtra("menu", false) == true) ChatNav.menu = true   // CI: the + menu
+        if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
         if (savedInstanceState == null) { openChat(intent); openAdd(intent) }
         handleShare(intent)
         setContent { MuninnTheme { Root() } }
@@ -143,13 +180,13 @@ class MainActivity : ComponentActivity() {
         if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.getStringExtra("chat") == null) toList()
         openChat(intent)
         openAdd(intent)
-        intent.getStringExtra("screen")?.let { tab = it }
+        intent.getStringExtra("screen")?.let { show(it) }
     }
 
     /** Set when an intent picked the chat to show; cleared once Muninn is back on screen (onResume). */
     private var intentChose = false
 
-    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.menu = false }
+    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.space = ""; ChatNav.menu = false }
 
     /** A scanned contact QR opened Muninn: go to Add someone with the code filled in. */
     private fun openAdd(i: Intent?) {
@@ -165,6 +202,17 @@ class MainActivity : ComponentActivity() {
         val key = i?.getStringExtra("chat") ?: return
         tab = "chat"
         ChatNav.open = if (key == "inbox") "" else key
+        intentChose = true
+    }
+
+    /** Test builds only: a small group for the CI screenshots (made once, then reused). */
+    private fun ciGroup() {
+        val gs = app.chat.groups
+        val g = gs.all.value.values.firstOrNull { it.state.name == "The Family" }?.g ?: gs.create("The Family")?.also { g ->
+            gs.addChannel(g, "photos", false); gs.addChannel(g, "Living room", true); gs.sendText(g, "main", "Dinner at six")
+        } ?: return
+        tab = "chat"
+        ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(g) + if (intent?.getBooleanExtra("gsettings", false) == true) "/settings" else ""
         intentChose = true
     }
 
@@ -204,8 +252,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         intentChose = false
-        storageOk = hasStorage()
-        Jobs.setVisible(true)
         app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()
         // Back from Muninn's app settings with the permission now allowed: start close-by chat.
@@ -216,51 +262,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
-        Jobs.setVisible(false)
-        super.onPause()
-    }
-
-    private fun hasStorage() = if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
-        else ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-
-    private fun askStorage() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            try { startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))) }
-            catch (e: Exception) { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
-        } else {
-            legacyStorage.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE))
-        }
-    }
-
     private fun startDirect() {
         val perms = if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) app.direct.start() else directPermission.launch(perms)
     }
 
-    /** "Share" › Muninn from another app: copy what was shared so it can be sent. */
+
+    /** "Share" › Muninn from another app: copy what was shared so it can be sent, then open Files. */
     private fun handleShare(i: Intent?) {
         if (i == null || (i.action != Intent.ACTION_SEND && i.action != Intent.ACTION_SEND_MULTIPLE)) return
         val uris = if (i.action == Intent.ACTION_SEND) listOfNotNull(if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))
             else (if (Build.VERSION.SDK_INT >= 33) i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty()
-        val dir = File(cacheDir, "share").also { it.deleteRecursively(); it.mkdirs() }
+        if (uris.isEmpty()) return
+        val busy = app.ready.value && app.net.transfer.value.active
         Thread {
-            val files = uris.mapNotNull { u ->
-                try {
-                    var name = "shared"
-                    contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0)?.let { name = it } }
-                    val f = Files.free(dir, name.replace('/', '_'))
-                    contentResolver.openInputStream(u)?.use { ins -> f.outputStream().use { ins.copyTo(it) } }
-                    f
-                } catch (e: Exception) { null }
-            }
-            runOnUiThread { Share.pending.addAll(files); tab = "send" }
+            val files = Share.copyIn(this, uris, busy)
+            runOnUiThread { Share.pending.addAll(files); show("files") }
         }.start()
+    }
+
+    private fun title(t: String) = when (t) { "calls" -> "Calls"; "files" -> "Files"; "contacts" -> "Contacts"; "settings" -> "Settings"; else -> "Muninn" }
+
+    private fun toggleSettings() {
+        if (tab == "settings") tab = beforeSettings else show("settings")
     }
 
     @Composable
     private fun Root() {
+        // Kids' TV: its own screens, with no lock and no sign in.
+        if (io.github.ravenor907.muninn.tv.KidMode.on(app)) { io.github.ravenor907.muninn.tv.TvRoot(app); return }
         val ready by app.ready.collectAsState()
         val panic by io.github.ravenor907.muninn.ui.Panic.locked.collectAsState()
         LaunchedEffect(panic) { if (panic) toList() }
@@ -272,7 +303,6 @@ class MainActivity : ComponentActivity() {
         val offer by app.closeFiles.pendingOffer.collectAsState()
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()
-        val up by app.updater.state.collectAsState()
         LaunchedEffect(Unit) {
             launch { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
             launch { app.chat.notices.collect { Ui.say(it) } }
@@ -281,64 +311,14 @@ class MainActivity : ComponentActivity() {
             launch { app.net.pinNeeded.collect { Ui.say("That device asks for a PIN. Turn off its PIN setting in LocalSend to send from Muninn.", true) } }
         }
         LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
+        // Back from another tab (or Settings) goes to where you came from, then the chat list.
+        BackHandler(enabled = tab != "chat") { if (tab == "settings") tab = beforeSettings else tab = "chat" }
 
-        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
-        // An open conversation (or the Nearby room) gets the whole screen on phones: no header, no tabs.
-        // Tablets keep the list beside it (ChatScreen's wide layout), so they keep both.
-        val full = tab == "chat" && maxWidth < ChatNav.WIDE && ChatNav.open.isNotEmpty() && ChatNav.open != "add" && ChatNav.open != "code"
-        Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
-            val header: @Composable () -> Unit = { Brand {
-                if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
-                IconAction("gear", if (tab == "settings") "Close settings" else "Settings", if (tab == "settings") Palette.accent else Palette.text) {
-                    tab = if (tab == "settings") "chat" else "settings"
-                }
-            } }
-            if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
-            if (up.ready && tab != "settings" && !full) Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable { tab = "settings" }.padding(10.dp)) {
-                Text("Muninn ${up.latest} is ready. Tap to install.", style = Type.small.copy(color = Palette.accent))
-            }
-            if (!storageOk && (tab == "files" || tab == "send" || tab == "usb")) {
-                Panel(Modifier.padding(16.dp)) {
-                    Text("Muninn needs access to your files", style = Type.big)
-                    Text("To browse, send and receive files the way a file manager does, Android asks you to allow access to all files once.", style = Type.normal)
-                    MButton("Allow access", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { askStorage() }
-                }
-            }
-            Box(Modifier.weight(1f)) {
-                when (tab) {
-                    "send" -> TransferScreen(app) { startDirect() }
-                    "files" -> FilesScreen(app) { files -> Share.pending.addAll(files); tab = "send" }
-                    "usb" -> UsbScreen()
-                    "contacts" -> ContactsScreen(app) { tab = "settings" }
-                    "settings" -> SettingsScreen(app) { secure() }
-                    else -> ChatScreen(app) { askClose() }
-                }
-                toast?.let { (text, bad) ->
-                    Box(Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().background(if (bad) Palette.dangerFill else Palette.raised).clickable { Ui.toast.value = null }.padding(14.dp)) {
-                        // A problem is marked with an icon too, never by color alone.
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (bad) { MIcon("info", Palette.danger, 20.dp); androidx.compose.foundation.layout.Spacer(Modifier.padding(start = 8.dp)) }
-                            Text(text, style = Type.normal.copy(color = if (bad) Palette.danger else Palette.text))
-                        }
-                    }
-                }
-            }
-            if (!full) Column(Modifier.fillMaxWidth().background(Palette.groundDeep)) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp)) {
-                    listOf("chat" to ("chat" to "Chat"), "send" to ("send" to "Send"), "files" to ("folder" to "Files"), "usb" to ("usb" to "USB")).forEach { (id, v) ->
-                        val on = tab == id
-                        val tint = if (on) Palette.goldBright else Palette.textMuted
-                        Column(Modifier.weight(1f).clickable(role = Role.Tab) { tab = id }.padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            MIcon(v.first, tint, 22.dp)
-                            Text(v.second, style = Type.small.copy(color = tint, fontSize = 12.sp,
-                                fontWeight = if (on) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal),
-                                modifier = Modifier.padding(top = 4.dp))
-                        }
-                    }
-                }
-            }
-        }
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Palette.ground)) {
+            // Tablets and wide screens (600dp and up): Discord style, a rail, the chat list and the open chat.
+            val wide = maxWidth >= ChatNav.WIDE
+            SideEffect { ChatNav.wide = wide }
+            if (wide) TabletLayout(toast) else PhoneLayout(toast)
         }
 
         request?.let { r ->
@@ -346,8 +326,8 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { app.net.decline() },
                 containerColor = Palette.panel,
                 title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
-                text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${app.identity.receiveFolder.name}.", style = Type.normal) },
-                confirmButton = { MButton("Accept", kind = Kind.Accent) { app.net.accept() } },
+                text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal) },
+                confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.net.accept() } } },
                 dismissButton = { MButton("Decline") { app.net.decline() } },
             )
         }
@@ -356,11 +336,190 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { app.closeFiles.decline() },
                 containerColor = Palette.panel,
                 title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
-                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${app.identity.receiveFolder.name}.", style = Type.normal) },
-                confirmButton = { MButton("Accept", kind = Kind.Accent) { app.closeFiles.accept() } },
+                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal) },
+                confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.closeFiles.accept() } } },
                 dismissButton = { MButton("Decline") { app.closeFiles.decline() } },
             )
         }
         ask?.let { AskDialog(it) }
+    }
+
+    /** What a tab shows (the chat tab on phones; tablets lay chat out themselves). */
+    @Composable
+    private fun TabContent(t: String) {
+        when (t) {
+            "files" -> TransferScreen(app) { startDirect() }
+            "calls" -> CallsScreen()
+            "contacts" -> ContactsScreen(app)
+            "settings" -> SettingsScreen(app) { secure() }
+            else -> ChatScreen(app) { askClose() }
+        }
+    }
+
+    @Composable
+    private fun UpdateBanner() {
+        val up by app.updater.state.collectAsState()
+        if (up.ready && tab != "settings") Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable(role = Role.Button) { show("settings") }.padding(10.dp)) {
+            Text("Muninn ${up.latest} is ready. Tap to install.", style = Type.small.copy(color = Palette.accent))
+        }
+    }
+
+    @Composable
+    private fun Toast(toast: Pair<String, Boolean>?, modifier: Modifier) {
+        toast?.let { (text, bad) ->
+            Box(modifier.padding(12.dp).fillMaxWidth().background(if (bad) Palette.dangerFill else Palette.raised).clickable { Ui.toast.value = null }.padding(14.dp)) {
+                // A problem is marked with an icon too, never by color alone.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (bad) { MIcon("info", Palette.danger, 20.dp); Spacer(Modifier.padding(start = 8.dp)) }
+                    Text(text, style = Type.normal.copy(color = if (bad) Palette.danger else Palette.text))
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ phones
+
+    @Composable
+    private fun PhoneLayout(toast: Pair<String, Boolean>?) {
+        // An open conversation (or My code, Add someone, the Nearby room) gets the whole screen: no header, no tabs.
+        val full = tab == "chat" && ChatNav.open.isNotEmpty()
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            val header: @Composable () -> Unit = { Brand(title = title(tab).uppercase()) {
+                if (tab == "chat" && app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                IconAction("gear", if (tab == "settings") "Close settings" else "Settings", if (tab == "settings") Palette.accent else Palette.text) { toggleSettings() }
+            } }
+            if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
+            if (!full) UpdateBanner()
+            Box(Modifier.weight(1f)) {
+                TabContent(tab)
+                Toast(toast, Modifier.align(Alignment.BottomCenter))
+            }
+            if (!full) BottomTabs()
+        }
+    }
+
+    @Composable
+    private fun BottomTabs() {
+        Column(Modifier.fillMaxWidth().background(Palette.groundDeep)) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp)) {
+                listOf("chat" to ("chat" to "Chats"), "calls" to ("call" to "Calls"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
+                    val on = tab == id
+                    val tint = if (on) Palette.goldBright else Palette.textMuted
+                    Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
+                        .semantics { selected = on }.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        MIcon(v.first, tint, 22.dp)
+                        Text(v.second, style = Type.small.copy(color = tint, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal),
+                            modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ tablets
+
+    /** One button on the tablet rail. A gold bar at its left marks the one that's open. */
+    @Composable
+    private fun RailButton(label: String, on: Boolean, round: Boolean, fill: androidx.compose.ui.graphics.Color, onClick: () -> Unit, content: @Composable () -> Unit) {
+        Box(Modifier.width(80.dp), contentAlignment = Alignment.Center) {
+            if (on) Box(Modifier.align(Alignment.CenterStart).size(width = 4.dp, height = 32.dp)
+                .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp)).background(Palette.goldBright))
+            val shape = if (round) CircleShape else RoundedCornerShape(16.dp)
+            Box(Modifier.size(52.dp).clip(shape).background(fill).clickable(role = Role.Tab, onClick = onClick)
+                .semantics { contentDescription = label; selected = on }, contentAlignment = Alignment.Center) { content() }
+        }
+    }
+
+    /** The rail's top part: direct messages, then each group (protocol 0.6), then New group. */
+    @Composable
+    private fun RailSpaces() {
+        val groups by app.chat.groups.all.collectAsState()
+        val unread by app.chat.groups.unreadGroups.collectAsState()
+        val dms = tab == "chat" && ChatNav.space.isEmpty()
+        RailButton("Direct messages", dms, round = false, fill = Palette.field, onClick = { ChatNav.space = ""; if (dms) toList() else { show("chat"); ChatNav.open = "" } }) {
+            Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(32.dp))
+        }
+        Box(Modifier.size(width = 32.dp, height = 2.dp).background(Palette.hairline))
+        groups.values.forEach { grp ->
+            val on = tab == "chat" && ChatNav.space == grp.g
+            val name = grp.state.name
+            // The open one is a rounded square in gold, the rest circles (the mockup); a gold dot for unread.
+            Box(contentAlignment = Alignment.TopEnd) {
+                RailButton(if (grp.g in unread) "$name, unread" else name, on, round = !on, fill = if (on) Palette.gold else Palette.coolTint,
+                    onClick = { show("chat"); ChatNav.space = grp.g; ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(grp.g) }) {
+                    Text(name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "#",
+                        style = Type.big.copy(fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = if (on) Palette.onGold else Palette.accent))
+                }
+                if (grp.g in unread && !on) Box(Modifier.padding(top = 2.dp, end = 12.dp).size(12.dp).clip(CircleShape).background(Palette.gold))
+            }
+        }
+        RailButton("New group", false, round = true, fill = androidx.compose.ui.graphics.Color.Transparent,
+            onClick = { show("chat"); ChatNav.space = ""; ChatNav.open = "newgroup" }) {
+            MIcon("plus", Palette.textMuted, 22.dp)
+        }
+    }
+
+    @Composable
+    private fun TabletLayout(toast: Pair<String, Boolean>?) {
+        Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).padding(vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Groups can be many: the top part scrolls, the tabs below stay put.
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
+                listOf("files" to ("folder" to "Files"), "calls" to ("call" to "Calls"), "contacts" to ("people" to "Contacts"), "settings" to ("gear" to "Settings")).forEach { (id, v) ->
+                    val on = tab == id
+                    RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
+                        onClick = { if (id == "settings") toggleSettings() else show(id) }) {
+                        MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
+                    }
+                }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                UpdateBanner()
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (tab == "chat") Row(Modifier.fillMaxSize()) {
+                        // A group opened from anywhere (a notification, the list) picks it on the rail too.
+                        val opened = ChatNav.groupOf(ChatNav.open)
+                        LaunchedEffect(opened) { if (opened != null) ChatNav.space = opened }
+                        val groups by app.chat.groups.all.collectAsState()
+                        val space = groups[ChatNav.space]
+                        Column(Modifier.width(270.dp).fillMaxHeight().background(Palette.panelLow)) {
+                            if (space != null) {
+                                // A group: its channels (TEXT, then VOICE rooms), the conversation in the main column.
+                                ColumnHeader(space.state.name) {
+                                    IconAction("gear", "Group settings") { ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(space.g) + "/settings" }
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
+                            } else {
+                                ColumnHeader("Direct messages") {
+                                    if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
+                            }
+                        }
+                        Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.hairline))
+                        Box(Modifier.weight(1f).fillMaxHeight()) { ChatMain(app) }
+                    } else Column(Modifier.fillMaxSize()) {
+                        ColumnHeader(title(tab))
+                        Box(Modifier.weight(1f).fillMaxWidth()) { TabContent(tab) }
+                    }
+                    Toast(toast, Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp))
+                }
+            }
+        }
+    }
+
+    /** A tablet column's 60dp title bar with a hairline under it. */
+    @Composable
+    private fun ColumnHeader(text: String, trailing: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(text, style = Type.title.copy(fontSize = 18.sp, letterSpacing = 1.sp), maxLines = 1, modifier = Modifier.weight(1f))
+                trailing()
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
+        }
     }
 }
