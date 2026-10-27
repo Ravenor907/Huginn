@@ -1,18 +1,30 @@
 #include "chime.h"
 
 #include <QAudioDevice>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QMediaDevices>
 #include <QSoundEffect>
 #include <QUrl>
+
+QString Platform::resource(const QString &name)
+{
+    const QString usual = QStringLiteral(":/qt/qml/Huginn/assets/") + name;
+    if (QFileInfo::exists(usual))
+        return usual;
+    QDirIterator it(QStringLiteral(":/"), {name}, QDir::Files, QDirIterator::Subdirectories);
+    return it.hasNext() ? it.next() : QString();
+}
 
 Chime::Chime(const QString &resource, QObject *parent)
     : QObject(parent)
     , m_effect(new QSoundEffect(this))
 {
-    // ":/x" is "qrc:/x" to QSoundEffect.
-    m_effect->setSource(QUrl(QStringLiteral("qrc") + resource));
-    QFile f(resource);
+    // Wherever the build put the file. ":/x" is "qrc:/x" to QSoundEffect.
+    const QString path = Platform::resource(QFileInfo(resource).fileName());
+    m_effect->setSource(QUrl(QStringLiteral("qrc") + path));
+    QFile f(path);
     if (f.open(QIODevice::ReadOnly))
         m_wav = f.read(12);   // only to tell the self-test the file is there and is a WAV
 }
