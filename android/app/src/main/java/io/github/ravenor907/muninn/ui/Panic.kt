@@ -10,6 +10,10 @@ import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
 import io.github.ravenor907.muninn.Muninn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,9 +22,11 @@ import kotlin.math.sqrt
 
 /**
  * Panic lock: lock Muninn at once from the quick settings tile, the "Lock now" launcher shortcut,
- * or (if turned on) by shaking the phone hard 3 times while Muninn is open. Locking hides the
- * screen behind the lock, takes down message notifications, and keeps message text out of new
- * ones until Muninn is unlocked again.
+ * or (if turned on) by shaking the phone hard 3 times while Muninn is open. Locking takes down
+ * message notifications and, with a password or pattern set, ends any call, wipes the vault's key and
+ * ends Muninn's process, so nothing decrypted stays in memory. A fresh, locked Muninn starts listening
+ * again at once: it only says "New message" until someone unlocks it. Without a password there is
+ * nothing to lock the data with, so the screen is hidden behind the lock as before.
  */
 object Panic {
     private const val PREFS = "muninn"
@@ -38,8 +44,29 @@ object Panic {
         if (!enabled(context)) return false
         _locked.value = true
         clearMessages(context)
+        val app = context.applicationContext as? Muninn
+        if (app != null && app.vault.hasPassword) forget(app)
         return true
     }
+
+    /** Ends calls, wipes the key and ends the process; a one-shot inbox check starts a locked Muninn listening again. */
+    private fun forget(app: Muninn) {
+        if (forgetting) return
+        forgetting = true
+        try { io.github.ravenor907.muninn.net.call.CallManager.hangup() } catch (_: Exception) {}
+        try { io.github.ravenor907.muninn.net.call.RoomManager.leave() } catch (_: Exception) {}
+        try {
+            WorkManager.getInstance(app).enqueueUniqueWork("inbox-now", ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<io.github.ravenor907.muninn.net.InboxWorker>().setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
+        } catch (_: Exception) {}
+        Thread {
+            // A moment for the hangup to reach the other side and the "Locked" toast to show.
+            try { Thread.sleep(700) } catch (_: Exception) {}
+            try { app.vault.lock() } catch (_: Exception) {}
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }.start()
+    }
+    @Volatile private var forgetting = false
 
     /** The person unlocked: message text may show in notifications again (if they allow previews). */
     fun unlocked() { _locked.value = false }

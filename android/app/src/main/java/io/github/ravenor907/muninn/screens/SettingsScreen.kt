@@ -137,7 +137,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
                 var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
                 ToggleRow("Panic lock", "Lock Muninn in one move from anywhere: the “Lock Muninn” quick settings tile, or “Lock now” when you long-press Muninn's icon. " +
-                    "Message notifications are cleared and new ones hide their text until you unlock", panic) {
+                    "Any call ends, message notifications are cleared, and Muninn forgets its key: nothing can be read until you unlock. New messages still arrive", panic) {
                     panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
                 }
                 if (panic) {
