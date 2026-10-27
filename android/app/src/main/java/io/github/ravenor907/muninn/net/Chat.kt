@@ -941,7 +941,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** Typing in the chat with [peerKey]: "on" at most every 3 s while the text changes, "off" once it's cleared. */
-    fun typing(peerKey: String, on: Boolean) {
+    fun typingTo(peerKey: String, on: Boolean) {
         if (!hasM1(peerKey) || peerKey in id.muted()) return
         val now = System.currentTimeMillis()
         val last = typingSent[peerKey] ?: 0L

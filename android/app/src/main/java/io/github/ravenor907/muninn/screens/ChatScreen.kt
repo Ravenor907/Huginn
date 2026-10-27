@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.contentDescription
@@ -680,7 +681,7 @@ private fun Conversation(app: Muninn, key: String) {
     DisposableEffect(key) {
         app.openChat = key
         androidx.core.app.NotificationManagerCompat.from(context).cancel(key.hashCode())
-        onDispose { if (app.openChat == key) app.openChat = ""; app.chat.typing(key, false) }
+        onDispose { if (app.openChat == key) app.openChat = ""; app.chat.typingTo(key, false) }
     }
     val scope = rememberCoroutineScope()
     var picked by remember { mutableStateOf<Uri?>(null) }
@@ -834,7 +835,7 @@ private fun Conversation(app: Muninn, key: String) {
         }
         val banner: (@Composable () -> Unit)? = editing?.let { e -> { ComposeBanner("Editing your message", e.text, "edit") { editing = null; text = "" } } }
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${if (r.mine) "yourself" else name}", preview(r), "reply") { replyTo = null } } }
-        Composer(text, { text = it; app.chat.typing(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
+        Composer(text, { text = it; app.chat.typingTo(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
             pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         }, voice = VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -1082,7 +1083,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     // Swipe right to reply: the bubble follows the finger a little, and past the line it's a reply.
     var dragX by remember { mutableStateOf(0f) }
     val swipe = if (onReply != null && m.unsent.isEmpty()) Modifier.pointerInput(m.id) {
-        androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+        detectHorizontalDragGestures(
             onDragEnd = { if (dragX > 140f) replyNow?.invoke(); dragX = 0f },
             onDragCancel = { dragX = 0f },
         ) { change, amount -> dragX = (dragX + amount).coerceIn(0f, 220f); if (dragX > 0f) change.consume() }
@@ -1533,6 +1534,15 @@ private fun GroupConversation(app: Muninn, g: String) {
         if (i < 0) Ui.say("That message is in another channel or isn't here any more.") else scope.launch { list.animateScrollToItem(i) }
     }
     if (replyTo != null || editing != null) BackHandler { replyTo = null; if (editing != null) { editing = null; text = "" } }
+    // Search in this channel, and the group's photos and voice messages.
+    var searching by remember(ch) { mutableStateOf(false) }
+    var query by remember(ch) { mutableStateOf("") }
+    var matchAt by remember(ch) { mutableStateOf(0) }
+    var gallery by remember { mutableStateOf(false) }
+    if (searching) BackHandler { searching = false; query = "" }
+    val matches = if (!searching || query.isBlank()) emptyList()
+        else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
+    LaunchedEffect(matchAt, matches.size, query) { matches.getOrNull(matchAt)?.let { list.animateScrollToItem(it) } }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
     val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         Ui.say(if (ok) "Ready. Hold the mic to record." else "Voice messages need the microphone. Muninn only listens while you hold the button.", !ok)
@@ -1552,6 +1562,11 @@ private fun GroupConversation(app: Muninn, g: String) {
         PhotoViewer(app, v) { viewing = null }
         return
     }
+    if (gallery) {
+        BackHandler { gallery = false }
+        MediaGallery("Photos and voice · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it }) { gallery = false }
+        return
+    }
     val others = s.members.filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
     val inRoom by RoomManager.room.collectAsState()
     var callSome by remember { mutableStateOf(false) }
@@ -1565,6 +1580,10 @@ private fun GroupConversation(app: Muninn, g: String) {
                 }
             }) { close ->
             MenuNote("Each message is sealed separately to every member, end to end. Up to ${Proto06.MAX_MEMBERS} people.")
+            DropdownMenuItem(text = { Text("Search in #$chName", style = bodyStyle) }, leadingIcon = { MIcon("search", Palette.accent, 20.dp) },
+                onClick = { close(); searching = true; matchAt = 0 })
+            DropdownMenuItem(text = { Text("Photos and voice", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
+                onClick = { close(); gallery = true })
             if (!grp.readOnly && s.members.size > 2) DropdownMenuItem(text = { Text("Call some people", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
                 onClick = { close(); callSome = true })
             DropdownMenuItem(text = { Text("Group settings", style = bodyStyle) }, leadingIcon = { MIcon("gear", Palette.accent, 20.dp) },
@@ -1572,6 +1591,9 @@ private fun GroupConversation(app: Muninn, g: String) {
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
         }
+        if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
+            onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
+            onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
         if (folderPick) FolderPicker(app, key, s.name) { folderPick = false }
         if (callSome) CallSomeDialog(app, s) { callSome = false }
         // Tablets list the channels in their own column.
@@ -1605,7 +1627,7 @@ private fun GroupConversation(app: Muninn, g: String) {
                     Bubble(m, showName = true, photo = if (gm.photo.isNotEmpty()) ({ app.chat.photo(gm.photo) }) else null,
                         statusText = if (gm.mine) (if (gm.read.isNotEmpty()) "" else Groups.status(gm)) else null,
                         quote = quoteOf(gm.re), onQuote = { jumpTo(gm.re) }, me = me, groupRead = if (gm.mine) gm.read.size else -1,
-                        highlight = !gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username),
+                        highlight = matches.getOrNull(matchAt) == i || (!gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username)),
                         onReply = if (grp.readOnly) null else ({ editing = null; replyTo = gm }), onReactions = { sheetFor = gm },
                         onTap = { viewing = m }) { sheetFor = gm }
                 }

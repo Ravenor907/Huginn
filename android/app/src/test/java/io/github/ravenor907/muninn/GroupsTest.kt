@@ -127,6 +127,7 @@ class GroupsTest {
         assertTrue(b.groups.react(g, id, "❤️")); pump()
         assertEquals(mapOf(b.key to "❤️"), Rich.shown(a.groups.messages.value[g]!!.single().reactions))
         assertEquals(mapOf(b.key to "❤️"), Rich.shown(c.groups.messages.value[g]!!.single().reactions))
+        clock += 1000   // a later reaction replaces it; one at the same moment would change nothing
         assertTrue(b.groups.react(g, id, "")); pump()
         assertTrue(Rich.shown(a.groups.messages.value[g]!!.single().reactions).isEmpty())
         // A reply carries the id it answers; older apps just see the text.
@@ -140,6 +141,7 @@ class GroupsTest {
         assertEquals("Dinner at seven", c.groups.messages.value[g]!!.first { it.id == id }.text)
         // Someone without m1 gets no reactions (their app would refuse them).
         noM1.add(c.key)
+        clock += 1000
         assertTrue(b.groups.react(g, id, "👍"))
         assertTrue(wire.none { it.second.to == c.key && it.second.room == "group" })
         pump()
