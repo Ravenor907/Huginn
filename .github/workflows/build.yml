@@ -213,7 +213,7 @@ jobs:
       # run, copy the sha256 the job prints into TOR_BUNDLE_SHA256. Until then the download is
       # checked against the Tor Browser Developers signing key instead.
       TOR_BUNDLE_VERSION: "15.0.24"
-      TOR_BUNDLE_SHA256: ""
+      TOR_BUNDLE_SHA256: "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65"
       TOR_SIGNING_KEY: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
       VCPKG_PACKAGES: openssl opus sdl2 libqrencode
       VCPKG_DEFAULT_TRIPLET: x64-windows
@@ -328,13 +328,22 @@ jobs:
       - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
         run: |
           h=dist/Huginn/Huginn.exe
-          "$h" --chat-selftest tests/chat-vectors.json
-          "$h" --ratchet-selftest tests/ratchet-vectors.json
-          "$h" --nostr-selftest tests/nostr-vectors.json
-          "$h" --privacy-selftest
-          "$h" --backup-selftest
-          "$h" --call-selftest tests/proto06-vectors.json
-          timeout 330 "$h" --tor-selftest
+          run() {
+            "$@" > t.log 2>&1; s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$(tail -n 30 t.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Windows self-test failed: ${2} (exit $s)::$e"
+              exit 1
+            fi
+          }
+          run "$h" --chat-selftest tests/chat-vectors.json
+          run "$h" --ratchet-selftest tests/ratchet-vectors.json
+          run "$h" --nostr-selftest tests/nostr-vectors.json
+          run "$h" --privacy-selftest
+          run "$h" --backup-selftest
+          run "$h" --call-selftest tests/proto06-vectors.json
+          run timeout 330 "$h" --tor-selftest
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true
         env:
