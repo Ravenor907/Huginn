@@ -129,8 +129,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private val stopSend = AtomicBoolean(false)
     @Volatile private var sendConn: HttpURLConnection? = null
 
+    /** Hidden from people nearby: no name goes out. The chat key still does, so contacts on the Wi-Fi find this phone. */
     fun info(): JSONObject = JSONObject()
-        .put("alias", identity.deviceName)
+        .put("alias", if (identity.visibleNearby) identity.deviceName else Identity.HIDDEN_NAME)
         .put("version", "2.1")
         .put("deviceModel", "Muninn")
         .put("deviceType", "mobile")
@@ -142,7 +143,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         .apply {
             put("chatKey", identity.publicKey)
             mailbox?.let { put("mailbox", it) }
-            if (identity.nearbyChat) put("chatName", identity.username)
+            if (identity.nearbyRoom) put("chatName", identity.username)
         }
 
     // ------------------------------------------------------------------ start and stop

@@ -31,6 +31,18 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("nearbyChat", true)
         set(v) = prefs.edit().putBoolean("nearbyChat", v).apply()
 
+    /**
+     * Off: hidden from strangers close by. No Nearby room, nobody new can message over Bluetooth or Wi-Fi, and
+     * the name isn't sent out (Nearby, Bluetooth, LocalSend). Contacts still reach this phone, so its chat key
+     * keeps being announced. File sharing has its own switch.
+     */
+    var visibleNearby: Boolean
+        get() = prefs.getBoolean("visibleNearby", true)
+        set(v) = prefs.edit().putBoolean("visibleNearby", v).apply()
+
+    /** The Nearby room is on: its own switch, and only while visible to people nearby. */
+    val nearbyRoom: Boolean get() = nearbyChat && visibleNearby
+
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
@@ -135,5 +147,10 @@ class Identity(context: Context, private val vault: Vault) {
     fun setMuted(key: String, on: Boolean) {
         val s = muted().toMutableSet(); if (on) s.add(key) else s.remove(key)
         prefs.edit().putStringSet("muted", s).apply()
+    }
+
+    companion object {
+        /** What goes out in place of a name while hidden from people nearby. */
+        const val HIDDEN_NAME = "Muninn"
     }
 }

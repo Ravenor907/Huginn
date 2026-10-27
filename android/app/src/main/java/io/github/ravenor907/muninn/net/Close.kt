@@ -55,7 +55,17 @@ class Close(private val context: Context, private val identity: Identity) {
 
     /** Breaks the tie when two phones find each other at once: the one with the lower id asks. */
     private val myId = identity.fingerprint.take(8)
-    private fun advertisedName() = "$myId|${identity.username.take(24)}"
+    /** Hidden from people nearby: no name in what's advertised (contacts learn who it is from the chat key in the hello). */
+    private fun advertisedName() = "$myId|${if (identity.visibleNearby) identity.username.take(24) else Identity.HIDDEN_NAME}"
+
+    /** The name to advertise changed (or stopped being shown): start looking again with the new one. */
+    fun readvertise() {
+        main.post {
+            if (!running || !looking) return@post
+            quiet()
+            look()
+        }
+    }
 
     fun start(hello: () -> JSONObject) {
         if (running) return
