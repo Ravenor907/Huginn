@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 c2 k1 k2 t1 v1"
+"caps": "r1 g1 c1 c2 k1 k2 k3 t1 v1 m1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -60,7 +60,9 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
+| `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
+| `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -82,7 +84,8 @@ opens a contact's chat and the caps are unknown.
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`). 0.5 would answer 400 and drop it.
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `m1` for rooms `rich`, `mx` and
+  `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work exactly as in 0.5 with everyone.
@@ -922,7 +925,7 @@ sends a config with them once the TV's `applied` shows `k2`.
 | field | type | absent | meaning |
 |---|---|---|---|
 | `calls` | true or false | true | the kids can call people in `contacts` (and parents), and those people can call the TV |
-| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls |
+| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls. A TV that runs its own voice processing (echo canceller, noise suppression and automatic gain) applies `0.3 * (mic - 50)` dB after it instead, so 50 is the processed level |
 
 Anything else that's extra is still malformed. Vectors: `tv.configs.cfg4` (calls off, mic 80), and step 7 of
 `tv.accept`.
@@ -950,6 +953,37 @@ still unknown a minute after a probe, 1.2) gets the TV's link as a private messa
 once on every route (the relays hold it for an offline phone); the parent can always share the TV's code too.
 To put the person in a family group, the parent's app uses the normal group invite (3.5).
 
+### 7.7 Microphone level on the TV, storage and Clear history (`k3`)
+
+Anyone at the TV can set its microphone level on the TV itself (no parent unlock). The TV uses that
+level until a parent picks another one: it applies a new config's `mic` only when it differs from the
+`mic` of the config it had (a parent changed it; the last change wins), and keeps its own otherwise.
+
+The TV tells its parents (those whose app says `k3`) in room `tvconfig`:
+
+```
+{"t":"status","mic":<level in use, 0..100>,"used":<bytes Muninn takes on the TV>,"ts":<ms>}
+```
+
+`ts` is when the level last changed: the TV's clock when it was set on the TV, else the config's `ts`.
+All three are integers `0 <= n < 2^53`; anything else is malformed. The TV sends it a second after its
+slider stops moving, after every config it applies, after Clear history, and in answer to `usage`.
+
+A parent's app that gets a `status` whose `mic` differs from its own and whose `ts` is newer than its own
+last change takes the TV's level and sends a new config with it (7.2), so the other parent and later
+configs carry it too. It shows `used` as the TV's storage.
+
+A parent (only a current parent; anyone else gets 403) may send:
+
+| plaintext | the TV |
+|---|---|
+| `{"t":"usage"}` | answers with `status` |
+| `{"t":"clear"}` | erases every message, photo and voice message and its caches (pairing, parent keys, config and contacts stay), then sends `status` |
+
+Neither is retried; the parent's app asks again when its Kids' TV screen opens. On its own, the TV also
+keeps its storage small (recent messages only, smaller photos, voice messages for two weeks, caches
+emptied); that is local and not on the wire.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -967,6 +1001,11 @@ To put the person in a family group, the parent's app uses the normal group invi
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
 | `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
+| `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
+| `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
+| `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
+| `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
+| `group` | `react` `edit` | 11.5 | yes | a day, until greceipt | Seen | m1 |
 
 ## 9. Size limits
 
@@ -991,6 +1030,9 @@ To put the person in a family group, the parent's app uses the normal group invi
 | TV config, canonical | 16 KB |
 | TV microphone level (`mic`) | 0 to 100 |
 | group code / invite token | 1 hour |
+| a reaction | 1 to 16 characters (or empty, to take it back) |
+| a 1:1 message id in `re`, `msg` | 1 to 64 of `A-Z a-z 0-9 - _` |
+| typing and active status clock difference | 60 s |
 
 Characters means Unicode code points. Anything over a limit is malformed and refused, not cut.
 
@@ -1014,3 +1056,107 @@ Each app's unit tests should:
 - `room`: every `messages` entry's `signed` matches and its signature verifies with its sender; `accept` gives
   each `result` (with the named state, receiver and clock); running `presence` in order through one table
   gives each `in` list (and `changed`); `glare` gives each winner.
+
+`python3 tools/m1_ref.py` writes `tests/m1-vectors.json` (section 11): every `good` payload is well-formed for its
+room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
+gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn checks it in `RichTest`, Huginn in
+`--chat-selftest` (the file next to `chat-vectors.json`).
+
+## 11. Messenger features (cap `m1`)
+
+Replies, reactions, edits, typing and active status, in 1:1 chats and groups. Nothing here is new cryptography:
+every payload is UTF-8 JSON sealed exactly like a private message, so the reference (`tools/m1_ref.py`) only
+pins down which payloads are well-formed and how reactions and edits that arrive in any order settle.
+Everything in this section goes only to someone whose caps include `m1`; to anyone else the app sends what
+0.7 understands (a reply as plain text) or nothing (a reaction, an edit, typing) and says so where it matters
+("Raven needs a newer Muninn or Huginn to see edits").
+
+### 11.1 Shared rules
+
+- A 1:1 message id (`re`, `msg` in 11.2 and 11.3) is 1 to 64 characters of `A-Z a-z 0-9 - _` (the apps use UUIDs).
+  A group message id is a logical id (2.3).
+- `ts` is the sender's clock in ms, an integer 0 <= ts < 2^53.
+- `text` is 1 to 2000 characters (code points), not only spaces, like a private message.
+- `e` (a reaction) is `""` (take mine back) or 1 to 16 characters, not only spaces, without U+0000..U+001F or U+007F.
+  Any emoji will do; the apps offer heart, laugh, thumbs up, wow and sad first (`❤️ 😂 👍 😮 😢`).
+- Fields not listed are ignored (later versions may add some). An unknown `t` is refused (400).
+
+### 11.2 Room `rich`: a reply
+
+```json
+{"text": "Count me in", "re": "<the id of the message it answers>"}
+```
+
+Exactly a `private` message in every other way: the envelope `id` is the message id, it is deduped against the
+chat, answered with `receipt` `delivered` (and `read`), retried for a day, unsent with `unsend`. `re` may be left
+out. The receiver looks the quoted message up in that chat; one that isn't there (deleted, or never arrived)
+shows as "Not here any more". A reply to a contact without `m1` goes as `private` with just the text.
+
+### 11.3 Room `mx`: reactions and edits of 1:1 messages
+
+```json
+{"t": "react", "msg": "<id>", "e": "❤️", "ts": 1761500130000}
+{"t": "edit",  "msg": "<id>", "text": "Fixed the typo", "ts": 1761500130000}
+```
+
+- Sent to the other person only, sealed like a private message. The receiver answers `receipt`
+  `{"ids": ["<envelope id>"], "s": "delivered"}`; the sender keeps the sealed envelope and sends the same bytes
+  again (5 s, 10 s, 20 s, 60 s, then every 5 min) until a receipt names its envelope id, or a day passes.
+- `react`: on a message of either person in that chat. Each person has one reaction per message; the receiver
+  keeps, per message and person, the reaction with the highest `ts` (an `e` of `""` stays as a marker, so an
+  older copy can't bring the reaction back). Equal or lower `ts` changes nothing. Vectors: `reactions`.
+- `edit`: only on a message the sender wrote (theirs, from the receiver's side), not unsent, not a photo or voice
+  message. The highest `ts` wins; the message shows "(edited)". Vectors: `edits`.
+- A `react` or `edit` for a message that isn't there is confirmed and dropped.
+- Limit: 20 per sender per 10 s.
+
+### 11.4 Room `live`: typing and active status
+
+```json
+{"t": "typing", "on": true, "ts": 1761500130000}
+{"t": "active", "on": true, "ts": 1761500130000}
+```
+
+- Always sealed with v1 (the static pair key), never through the ratchet, so these never move it. Sent once on
+  every route, never retried, never answered. Limit: 30 per sender per 10 s.
+- Taken only if `ts` is within 60 s of the receiver's clock (vectors: `fresh`); a late copy from the relays does
+  nothing.
+- `typing`: `on` while the box has text, at most every 3 s; `off` when it's cleared (a sent message also ends it
+  at the receiver). The receiver shows "typing" for 6 s after the last `on`.
+- `active`: `on` when the app comes to the front and every 2 minutes while it stays there, `off` when it goes to the
+  back, to the 20 contacts with `m1` chatted with most lately. The receiver shows a green dot for 5 minutes after
+  the last `on`. Active status is a setting (on by default); off sends `off` once, then nothing, and shows nobody's.
+
+### 11.5 Groups
+
+- `gmsg` (3.8) may carry `"re": "<logical id>"`, the message it answers (in the same group). A `gmsg` whose `re`
+  isn't a logical id is refused. Apps without `m1` ignore the field and show the text.
+- Room `group` (3.4) gets two more `t`, sent to every member whose caps include `m1`, retried like every group
+  control message until a `greceipt` `delivered` for its `id`:
+
+  | t | fields | effect |
+  |---|---|---|
+  | `react` | `msg` (a gmsg or gphoto id), `e`, `ts` | as 11.3, per member: everyone in the group sees reactions |
+  | `edit` | `msg` (the sender's gmsg), `text`, `ts` | as 11.3, only from the message's author |
+
+  Taken only from a member of the receiver's current state.
+- Read receipts are the 3.10 ones: the author's app shows a check mark and, in a circle, how many members have
+  read the message. Nobody else learns who read what.
+- `@name` in a message's text (any case, not inside a longer word) mentions that member: the app lights the
+  message up and says "Raven mentioned you in Family". Nothing extra goes on the wire.
+
+### 11.6 Put straight in a group by a contact
+
+Messenger style: a contact can make a group with you in it without an invite to accept. The admin signs a state
+that adds you and sends it (`state`, `op:"add"`) as in 3.4. An app with `m1` that has no state of that group and
+isn't joining it accepts it at first sight (3.3 step 2) when all of these hold: the envelope is from a real
+contact (not a group peer), `new.by` is that contact, you are in `new.members`, and `new` is well-formed and its
+signature verifies. It says "Raven added you to Family". Anything else first-sight still needs the invite or
+group code of 3.5. An admin only does this for people whose caps include `m1`; everyone else gets the 3.4 invite.
+(Huginn 0.7 already sends `op:"add"` when it lets someone in with a code; that person is joining, so nothing changes
+for them.)
+
+### 11.7 Only on the device
+
+Pinned messages, the "New messages" line, the emoji picker, search inside a chat and a chat's photos and voice
+page are local: nothing about them goes on the wire, and the two apps don't need to agree on them.

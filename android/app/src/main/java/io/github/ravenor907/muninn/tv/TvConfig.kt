@@ -244,4 +244,25 @@ object TvRules {
     /** t1 (7.6): a parent hands someone they invited the TV's contact code, so their app adds the TV. */
     fun cardMessage(code: String): String = JSONObject().put("t", "card").put("code", code).toString()
     fun disconnectMessage(d: JSONObject): String = JSONObject().put("t", "disconnect").put("d", d).toString()
+
+    // ---- k3 (7.7): the TV's microphone level set on the TV, its storage, and Clear history
+    /** TV to parents: the level in use and the bytes Muninn takes on the TV; [ts] when the level last changed (TV clock). */
+    fun statusMessage(mic: Int, used: Long, ts: Long): String =
+        JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT)).toString()
+    /** Parent to TV: "send me your status". */
+    fun usageMessage(): String = JSONObject().put("t", "usage").toString()
+    /** Parent to TV: erase the messages, photos, voice messages and caches (pairing and contacts stay). */
+    fun clearMessage(): String = JSONObject().put("t", "clear").toString()
+
+    /** A TV's status as (mic, used, ts), or null if it isn't well-formed (7.7). */
+    fun status(o: JSONObject): Triple<Int, Long, Long>? {
+        if (o.optString("t") != "status") return null
+        val mic = o.opt("mic"); val used = o.opt("used"); val ts = o.opt("ts")
+        if (!Canon.isInt(mic) || !Canon.isInt(used) || !Canon.isInt(ts)) return null
+        val m = (mic as Number).toLong(); val u = (used as Number).toLong(); val t = (ts as Number).toLong()
+        if (m !in 0..MAX_MIC.toLong() || u !in 0..MAX_INT || t !in 0..MAX_INT) return null
+        return Triple(m.toInt(), u, t)
+    }
+
+    private const val MAX_INT = (1L shl 53) - 1
 }

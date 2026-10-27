@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,10 +52,11 @@ import kotlinx.coroutines.launch
  * during the call), Back declines a ring. Shown by CallActivity in kids' mode.
  */
 @Composable
-fun TvCallScreen(onAnswer: () -> Unit, onClose: () -> Unit) {
+fun TvCallScreen(app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit) {
     val c by CallManager.call.collectAsState()
     val context = LocalContext.current
     val mic = remember { TvAudio.hasMic(context) }
+    var micLevel by remember { mutableStateOf(false) }
     val call = c
     BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
@@ -76,14 +78,19 @@ fun TvCallScreen(onAnswer: () -> Unit, onClose: () -> Unit) {
             Row(Modifier.padding(top = 36.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 when (call.phase) {
                     Phase.INCOMING -> {
-                        Box(Modifier.width(300.dp)) { BigButton("Answer", icon = "call", requester = first, onClick = onAnswer) }
-                        Box(Modifier.width(300.dp)) { BigButton("Not now", icon = "close") { CallManager.decline() } }
+                        Box(Modifier.width(260.dp)) { BigButton("Answer", icon = "call", requester = first, onClick = onAnswer) }
+                        Box(Modifier.width(260.dp)) { BigButton("Not now", icon = "close") { CallManager.decline() } }
                     }
-                    Phase.ENDED -> Box(Modifier.width(300.dp)) { BigButton("OK", requester = first) { CallManager.dismiss(); onClose() } }
+                    Phase.ENDED -> Box(Modifier.width(260.dp)) { BigButton("OK", requester = first) { CallManager.dismiss(); onClose() } }
                     else -> {
-                        Box(Modifier.width(300.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
-                        if (call.phase == Phase.LIVE) Box(Modifier.width(300.dp)) {
+                        Box(Modifier.width(260.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
+                        if (call.phase == Phase.LIVE) Box(Modifier.width(260.dp)) {
                             BigButton(if (call.muted) "Unmute" else "Mute", icon = "mute", sub = if (call.muted) "They can't hear you" else null) { CallManager.setMuted(!call.muted) }
+                        }
+                        // They can't hear well: anyone can turn the TV's microphone up right here.
+                        if (call.phase == Phase.LIVE && mic) Box(Modifier.width(260.dp)) {
+                            val level by KidTv.micLevel.collectAsState()
+                            BigButton("Microphone", icon = "mic", sub = "Level $level") { micLevel = true }
                         }
                     }
                 }
@@ -91,6 +98,7 @@ fun TvCallScreen(onAnswer: () -> Unit, onClose: () -> Unit) {
             LaunchedEffect(call.phase == Phase.INCOMING, call.phase == Phase.ENDED) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
         }
     }
+    if (micLevel && call != null && call.phase != Phase.ENDED) TvMicDialog(app) { micLevel = false }
 }
 
 @Composable
@@ -123,7 +131,8 @@ private fun status(c: CallManager.Ui): String {
  */
 object TvRing {
     private var player: MediaPlayer? = null
-    private var focus: AudioFocusRequest? = null
+    /** The raven ring is playing (it counts as music to Android). */
+    val ringing: Boolean get() = player != null
     private val gap = android.os.Handler(android.os.Looper.getMainLooper())
     @Volatile private var watching = false
     private var lastCall = ""
@@ -138,11 +147,9 @@ object TvRing {
 
     private fun start(c: Context) {
         if (player != null) return
-        val am = c.getSystemService(AudioManager::class.java)
         val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
-        try {
-            focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attrs).build().also { am.requestAudioFocus(it) }
-        } catch (_: Exception) {}
+        // The show pauses for the ring and stays paused for the whole call (TvCallFocus gives it back at the end).
+        TvCallFocus.hold(c)
         try {
             player = MediaPlayer().apply {
                 setAudioAttributes(attrs)
@@ -156,8 +163,6 @@ object TvRing {
     private fun stop(c: Context) {
         player?.let { try { it.stop() } catch (_: Exception) {}; it.release() }
         player = null
-        focus?.let { try { c.getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) } catch (_: Exception) {} }
-        focus = null
     }
 
     /** Once, on a Kids' TV: every new incoming call brings the call screen up. */
@@ -167,6 +172,11 @@ object TvRing {
         val app = c.applicationContext
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             CallManager.call.collect { ui ->
+                if (TvMic.active) {
+                    // The show playing pauses for any call (ringing, calling out, talking) and comes back after.
+                    if (ui != null && ui.phase != Phase.ENDED) TvCallFocus.hold(app) else TvCallFocus.release(app)
+                    if (ui?.phase == Phase.LIVE) TvCallFocus.live(app)
+                }
                 if (ui != null && ui.phase == Phase.INCOMING && ui.callId != lastCall && TvMic.active) {
                     lastCall = ui.callId
                     try {
@@ -176,5 +186,81 @@ object TvRing {
                 }
             }
         }
+    }
+}
+
+/**
+ * A call on the Kids' TV and whatever was on before it. When a call rings or starts, Muninn takes audio
+ * focus for the whole call (a show or game pauses, as for a phone call; one that ignores focus but
+ * plays through a media session gets Pause), so its sound never goes into the microphone. When the call
+ * ends the focus goes back (the show resumes; one that was paused with Pause gets Play), and if the TV
+ * was showing something else when the call came, the call screen closes back to it instead of to Muninn.
+ */
+object TvCallFocus {
+    private var request: AudioFocusRequest? = null
+    private var pausedByKey = false
+    private var wasPlaying = false
+    /** Muninn wasn't on screen when the call began: back to what was. */
+    @Volatile private var returnToShow = false
+    /** Until when MainActivity coming up after a call should step back behind the show. */
+    @Volatile private var sendBackUntil = 0L
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    @Synchronized
+    fun hold(c: Context) {
+        if (request != null) return
+        val app = c.applicationContext
+        val am = app.getSystemService(AudioManager::class.java) ?: return
+        val playing = try { am.isMusicActive && !TvRing.ringing } catch (e: Exception) { false }
+        wasPlaying = playing
+        returnToShow = !((app as? io.github.ravenor907.muninn.Muninn)?.visible ?: true)
+        pausedByKey = false
+        val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+        request = try {
+            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener { }.build().also { am.requestAudioFocus(it) }
+        } catch (e: Exception) { null }
+        // Something still playing a moment later ignores focus: ask its media session to pause.
+        if (playing) main.postDelayed({
+            if (request != null && !pausedByKey && try { am.isMusicActive } catch (e: Exception) { false } && !TvRing.ringing) {
+                key(am, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE); pausedByKey = true
+            }
+        }, 700)
+    }
+
+    @Synchronized
+    fun release(c: Context) {
+        val r = request ?: return
+        request = null
+        val am = c.applicationContext.getSystemService(AudioManager::class.java) ?: return
+        try { am.abandonAudioFocusRequest(r) } catch (_: Exception) {}
+        // What was playing comes back: by itself with the focus, or with Play if it's still paused a moment later.
+        if (wasPlaying) main.postDelayed({ if (!(try { am.isMusicActive } catch (e: Exception) { true })) key(am, android.view.KeyEvent.KEYCODE_MEDIA_PLAY) }, 900)
+        pausedByKey = false; wasPlaying = false
+        if (returnToShow) sendBackUntil = System.currentTimeMillis() + 4000
+    }
+
+    /** The call is up (the ring has stopped): a show that ignored focus and still plays gets Pause now. */
+    @Synchronized
+    fun live(c: Context) {
+        if (request == null || !wasPlaying || pausedByKey) return
+        val am = c.applicationContext.getSystemService(AudioManager::class.java) ?: return
+        if (try { am.isMusicActive } catch (e: Exception) { false }) { key(am, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE); pausedByKey = true }
+    }
+
+    /** The call screen closes: behind whatever was on screen when the call came, else just closes. */
+    fun leave(a: android.app.Activity) {
+        if (returnToShow) try { a.moveTaskToBack(true) } catch (_: Exception) {}
+        a.finish()
+    }
+
+    /** MainActivity asks when it comes up: true right after a call that came in over a show (it steps back behind it). */
+    fun sendBack(): Boolean = (System.currentTimeMillis() < sendBackUntil).also { if (it) sendBackUntil = 0 }
+
+    private fun key(am: AudioManager, code: Int) {
+        try {
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code))
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, code))
+        } catch (_: Exception) {}
     }
 }

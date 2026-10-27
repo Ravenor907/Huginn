@@ -140,6 +140,10 @@
             android:name=".net.MessageService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging|dataSync" />
+        <!-- Reply straight from a message notification. -->
+        <receiver
+            android:name=".net.ReplyReceiver"
+            android:exported="false" />
         <receiver
             android:name=".net.StartAtBoot"
             android:exported="true">

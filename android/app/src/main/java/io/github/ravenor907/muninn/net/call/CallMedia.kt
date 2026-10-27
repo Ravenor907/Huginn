@@ -512,7 +512,11 @@ class CallMedia(
     private var oldMode = AudioManager.MODE_NORMAL
     private var mic: Thread? = null
     private var player: Thread? = null
-    private var tvGain: io.github.ravenor907.muninn.tv.TvMic.Gain? = null
+    /** Kids' TV only: the TV's microphone and speaker sound (TvMic, TvVoice). Null on a phone. */
+    private var tvGain: io.github.ravenor907.muninn.tv.TvMic.CallAudio? = null
+    /** The rates the microphone and the speaker run at: the call's own on a phone, the TV's own on a Kids' TV. */
+    private var micRate = Opus.RATE
+    private var playRate = Opus.RATE
 
     // ------------------------------------------------------------------ voice rooms (section 6)
 
@@ -531,19 +535,26 @@ class CallMedia(
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
         routeDefault()
-        val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // A phone has one source; a Kids' TV falls back to MIC when VOICE_COMMUNICATION won't open or start.
+        // Kids' TV: the microphone and speaker at the TV's own rate (TvVoice converts); a phone: the call's 16 kHz.
+        val tv = io.github.ravenor907.muninn.tv.TvMic.active
+        io.github.ravenor907.muninn.tv.TvMic.callRates(context, Opus.RATE).let { (m, p) -> micRate = m; playRate = p }
+        val minIn = AudioRecord.getMinBufferSize(micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        // A phone has one source; a Kids' TV tries the next one when a source won't open or start.
         val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull() ?: return false
         record = rec
-        val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val minOut = AudioTrack.getMinBufferSize(playRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        // A TV's audio is slower to wake and its CPU weaker: a 100 ms cushion there, so it never runs dry.
+        val outBytes = if (tv) maxOf(minOut * 2, playRate / 10 * 2) else maxOf(minOut, Opus.FRAME * 2 * 3)
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(Opus.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .setAudioFormat(AudioFormat.Builder().setSampleRate(playRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(maxOf(minOut, Opus.FRAME * 2 * 3))
+            .setBufferSizeInBytes(outBytes)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+        // The echo canceller's first guess at the speaker-to-microphone delay (it finds the real one itself).
+        tvGain?.delay(20 + outBytes / 2 * 1000 / playRate)
         mic = Thread({ captureLoop(rec) }, "muninn-call-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
         player = Thread({ playLoop(track!!) }, "muninn-call-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
         proximityOn(true)
@@ -556,13 +567,18 @@ class CallMedia(
      */
     @SuppressLint("MissingPermission")
     private fun openMic(src: Int, minIn: Int): AudioRecord? {
+        // A TV gets a roomy 200 ms buffer: a weak CPU that falls behind for a moment loses nothing.
+        val inBytes = if (io.github.ravenor907.muninn.tv.TvMic.active) maxOf(minIn * 2, micRate / 5 * 2) else maxOf(minIn, Opus.FRAME * 2 * 4)
         val rec = try {
-            AudioRecord(src, Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
+            AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
         } catch (e: Exception) { null }
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
-        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId)   // Kids' TV: louder microphone
-        if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
-        if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
+        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId, micRate, playRate, Opus.RATE)
+        if (io.github.ravenor907.muninn.tv.TvMic.platformEffects()) {
+            if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+            if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        }
         val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
         if (ok) return rec
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
@@ -573,17 +589,21 @@ class CallMedia(
     }
 
     private fun captureLoop(rec: AudioRecord) {
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         val enc = try { Opus.Encoder() } catch (e: Throwable) { return }
         val pcm = ShortArray(Opus.FRAME)
         var lastSent = 0L
         var frames = 0
+        // The microphone's 20 ms at its own rate (a Kids' TV may run it at 48 kHz).
+        val tv = tvGain
+        val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
         try {
             // Already recording: openMic started it to know the source works.
             while (!stopped) {
                 var got = 0
-                while (got < Opus.FRAME && !stopped) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }
-                if (got < Opus.FRAME) continue
-                tvGain?.process(pcm, got)
+                while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) break; got += n }
+                if (got < raw.size) continue
+                if (tv != null && !tv.capture(raw, pcm)) continue
                 if (muted) continue   // pings go on; no audio while muted (5.5)
                 if (frames++ % 25 == 0) opusTuning().let { (b, l) -> enc.tune(b, l) }   // twice a second
                 val p = enc.encode(pcm, keepSilence = true) ?: continue
@@ -598,8 +618,12 @@ class CallMedia(
     }
 
     private fun playLoop(t: AudioTrack) {
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         val dec = try { Opus.Decoder() } catch (e: Throwable) { return }
         val pcm = ShortArray(Opus.FRAME)
+        // Kids' TV: what goes to the speaker, at its own rate; the echo canceller hears it on the way.
+        val tv = tvGain
+        val out = if (tv != null) ShortArray(maxOf(tv.playFrame, Opus.FRAME)) else pcm
         var wasSpeaking = false
         try {
             t.play()
@@ -613,7 +637,8 @@ class CallMedia(
                 if (n <= 0) pcm.fill(0)
                 val s = speaking.feed(pcm, Opus.FRAME, System.currentTimeMillis())
                 if (s != wasSpeaking) { wasSpeaking = s; events.onSpeaking(s) }
-                t.write(pcm, 0, Opus.FRAME)   // blocking: the audio clock paces this loop
+                val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
+                t.write(out, 0, len)   // blocking: the audio clock paces this loop
             }
         } catch (_: Exception) {
         } finally { try { t.stop() } catch (_: Exception) {}; dec.close() }

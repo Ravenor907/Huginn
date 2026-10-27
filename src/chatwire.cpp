@@ -8,7 +8,7 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
-const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1";
+const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1";
 
 namespace
 {
@@ -23,7 +23,9 @@ bool ChatWire::useRatchet(const QString &room, bool contact, bool capable)
         return false;
     return room == QLatin1String("private") || room == QLatin1String("receipt") || room == QLatin1String("unsend")
         || room == QLatin1String("keep") || room == QLatin1String("photo") || room == QLatin1String("group") || room == QLatin1String("gmsg")
-        || room == QLatin1String("gphoto") || room == QLatin1String("greceipt") || room == QLatin1String("call") || room == QLatin1String("tvconfig");
+        || room == QLatin1String("gphoto") || room == QLatin1String("greceipt") || room == QLatin1String("call") || room == QLatin1String("tvconfig")
+        // Cap m1: replies, reactions and edits. Typing and active status ("live") stay on v1, so they never move the ratchet.
+        || room == QLatin1String("rich") || room == QLatin1String("mx");
 }
 
 bool ChatWire::isRatchet(const QJsonObject &o) { return o.value(QStringLiteral("rh")).type() != QJsonValue::Undefined; }

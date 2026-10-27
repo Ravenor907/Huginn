@@ -38,6 +38,16 @@ shot new-chat-menu --es screen chat --ez menu true
 shot group --ez group true
 shot group-settings --ez group true --ez gsettings true
 shot lock --es screen lock
+# The Kids' TV voice processing library (echo canceller, RNNoise) loads and runs on Android.
+adb shell am force-stop $PKG
+adb shell am start -W -n $PKG/.MainActivity --ez ci true --ez tvvoice true >/dev/null
+sleep 6
+tvv=$(adb logcat -d -s Muninn:I | grep "TvVoice self-check" | tail -1)
+case "$tvv" in
+  *"self-check: ok"*) echo "$tvv" ;;
+  *) echo "::error title=Kids' TV voice library::${tvv:-no self-check line in logcat}"; exit 1 ;;
+esac
+crashed tvvoice
 # Tablet size (1280x800 at density 160, so 1280dp wide): the rail, chat list and conversation.
 adb shell wm size 1280x800
 adb shell wm density 160

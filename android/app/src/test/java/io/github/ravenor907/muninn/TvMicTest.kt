@@ -66,5 +66,20 @@ class TvMicTest {
         val mic = android.media.MediaRecorder.AudioSource.MIC
         assertEquals(listOf(vc), TvMic.callSources(false).toList())
         assertEquals(listOf(vc, mic), TvMic.callSources(true).toList())
+        // With its own voice processing the TV uses the clean voice-search path first.
+        val vr = android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION
+        assertEquals(listOf(vr, mic, vc), TvMic.callSources(true, true).toList())
+        assertEquals(listOf(vc), TvMic.callSources(false, true).toList())
+    }
+
+    @Test
+    fun afterProcessingTheLevelIsCenteredOn50() {
+        // 50 leaves the processed sound as it is; 100 is +15 dB; 0 is -15 dB.
+        val a = shortArrayOf(1000); TvMic.Gain(50, TvMic.PROCESSED_OFFSET_DB).process(a)
+        assertEquals(1000, a[0].toInt())
+        val b = shortArrayOf(1000); TvMic.Gain(100, TvMic.PROCESSED_OFFSET_DB).process(b)
+        assertTrue(abs(b[0] - 5623) < 3)
+        val c = shortArrayOf(5623); TvMic.Gain(0, TvMic.PROCESSED_OFFSET_DB).process(c)
+        assertTrue(abs(c[0] - 1000) < 3)
     }
 }

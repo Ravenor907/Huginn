@@ -44,6 +44,7 @@ private const val DAY = 86_400_000L
 fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val id = app.identity
     var receipts by remember { mutableStateOf(id.readReceipts) }
+    var activeOn by remember { mutableStateOf(id.activeStatus) }
     var name by remember { mutableStateOf(id.username) }
     var device by remember { mutableStateOf(id.deviceName) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
@@ -116,6 +117,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             Text("Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             ToggleRow("Show message text in notifications", "Off: notifications only say “New message”", preview) { preview = it; id.showPreview = it }
             ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
+            ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
         Section("Lock")

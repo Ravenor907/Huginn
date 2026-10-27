@@ -40,6 +40,8 @@ class Groups(
         /** Something arrived in group [g] (for a notification). */
         fun arrived(g: String, title: String, text: String)
         fun deleteBlob(id: String)
+        /** Their app said "m1": reactions and edits go to them (docs/protocol-0.6.md, section 11). */
+        fun hasM1(k: String): Boolean = false
     }
 
     /** One envelope to one member. [env] is the envelope id (2.3); [id] the logical id it's confirmed by. */
@@ -60,6 +62,8 @@ class Groups(
         val time: Long, val photo: String = "", val voice: Int = 0, val unsent: String = "", val state: String = "",
         val to: Set<String> = emptySet(), val delivered: Set<String> = emptySet(), val read: Set<String> = emptySet(),
         val seen: Boolean = false,
+        /** Cap m1: the message this one answers, its reactions (who to their latest) and when it was last edited (0: never). */
+        val re: String = "", val reactions: Map<String, Rich.Reaction> = emptyMap(), val edited: Long = 0,
     )
 
     /** "Raven invited you to Family": nothing changes until it's accepted. */
@@ -76,7 +80,7 @@ class Groups(
             "unadmin" -> if (!s.isAdmin(a) || a == s.owner) null else s.copy(admins = s.admins - a)
             "owner" -> if (!s.has(a) || a == s.owner) null else s.copy(owner = a, admins = (s.admins + a).toSortedSet().toList())
             "remove", "leave" -> if (!s.has(a) || a == s.owner) null else s.copy(members = s.members.filter { it.k != a }, admins = s.admins - a)
-            "join" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
+            "join", "add" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
             else -> null
         }
     }
@@ -160,7 +164,7 @@ class Groups(
         if (c.op == "owner" && cur.owner != me) return "Only the owner can hand the group over."
         if ((c.op == "rename" && c.b.isBlank()) || (c.op == "addch" && c.b.isBlank())) return "Give it a name."
         if (c.op == "addch" && cur.channels.size >= Proto06.MAX_CHANNELS) return "A group has at most ${Proto06.MAX_CHANNELS} channels."
-        if ((c.op == "join") && cur.members.size >= Proto06.MAX_MEMBERS) return "${cur.name} is full (${Proto06.MAX_MEMBERS} people)."
+        if ((c.op == "join" || c.op == "add") && cur.members.size >= Proto06.MAX_MEMBERS) return "${cur.name} is full (${Proto06.MAX_MEMBERS} people)."
         val changed = c.applyTo(cur) ?: return null
         val next = try {
             changed.copy(v = cur.v + 1, ts = now()).signedBy(keys.private, me).also { Proto06.check(it) }
@@ -192,6 +196,16 @@ class Groups(
         val id = Proto06.newLogicalId()
         out(k, "group", JSONObject().put("t", "invite").put("g", g).put("id", id).put("state", s.json()).put("inv", t.i).put("x", t.x).toString(), id, g)
         null
+    }
+
+    /**
+     * Cap m1: puts a contact straight in (Messenger style), no invite to accept. Only for someone whose app
+     * has m1 (the caller checks): their app takes a first state with op "add" signed by a contact. Null when done.
+     */
+    fun addDirect(g: String, k: String, name: String, mailbox: String): String? = act {
+        val grp = groups[g] ?: return@act "That group isn't here any more."
+        if (grp.state.has(k)) return@act null
+        changeLocked(g, Change("add", k, clean(name, Proto06.MAX_NAME).ifBlank { "Someone" }, mailbox(mailbox)))
     }
 
     /** A group code good for an hour, for anyone who has it (several people may use it). */
@@ -265,15 +279,18 @@ class Groups(
 
     // ------------------------------------------------------------------ messages (3.8, 3.9)
 
-    fun sendText(g: String, ch: String, text: String): Boolean = act {
+    /** [re]: the message this answers (cap m1: "re" in the gmsg; older apps just show the text). */
+    fun sendText(g: String, ch: String, text: String, re: String = ""): Boolean = act {
         val t = text.trim()
         if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act false
         val (s, chId) = target(g, ch) ?: return@act false
         val id = Proto06.newLogicalId()
         val time = now()
         val to = s.members.map { it.k }.filter { it != me }.toSet()
-        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to))
-        val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time).toString()
+        val quote = re.takeIf { r -> Proto06.isLogicalId(r) && chats[g].orEmpty().any { it.id == r } } ?: ""
+        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote))
+        val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time)
+            .apply { if (quote.isNotEmpty()) put("re", quote) }.toString()
         to.forEach { out(it, "gmsg", plain, id, g) }
         true
     }
@@ -305,6 +322,37 @@ class Groups(
         val plain = JSONObject().put("t", "unsend").put("g", g).put("id", id).put("msg", msgId).toString()
         val s = groups[g]?.state
         m.to.filter { s?.has(it) == true }.forEach { out(it, "group", plain, id, g) }
+    }
+
+    /** Cap m1: my reaction to a group message ("" takes it away), sent to every member whose app has m1. */
+    fun react(g: String, msgId: String, e: String): Boolean = act {
+        val grp = groups[g] ?: return@act false
+        if (grp.readOnly || !Rich.emojiOk(e)) return@act false
+        val m = chats[g]?.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@act false
+        val ts = now()
+        val all = Rich.react(m.reactions, me, e, ts) ?: return@act false
+        edit(g, msgId) { it.copy(reactions = all) }
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "react").put("g", g).put("id", id).put("msg", msgId).put("e", e).put("ts", ts).toString()
+        grp.state.members.map { it.k }.filter { it != me && host.hasM1(it) }.forEach { out(it, "group", plain, id, g) }
+        true
+    }
+
+    /** Cap m1: changes the text of my message for everyone who got it and has m1. Null when done, else why not. */
+    fun editText(g: String, msgId: String, text: String): String? = act {
+        val grp = groups[g] ?: return@act "That group isn't here any more."
+        if (grp.readOnly) return@act "You're not in ${grp.state.name} any more."
+        val t = text.trim()
+        if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act "A message can be 1 to ${Proto06.MAX_TEXT} characters."
+        val m = chats[g]?.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() && it.photo.isEmpty() } ?: return@act "Only your own text messages can be edited."
+        if (m.text == t) return@act null
+        val ts = maxOf(now(), m.edited + 1)
+        edit(g, msgId) { it.copy(text = t, edited = ts) }
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "edit").put("g", g).put("id", id).put("msg", msgId).put("text", t).put("ts", ts).toString()
+        val s = grp.state
+        m.to.filter { s.has(it) && host.hasM1(it) }.forEach { out(it, "group", plain, id, g) }
+        null
     }
 
     /** Deletes one message on this phone only. */
@@ -349,8 +397,12 @@ class Groups(
             "invite" -> host.isContact(from)
             "join" -> liveToken(p.optString("inv"), g) != null
             "decline" -> host.isContact(from) || inGroup
-            "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from")
+            "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from") ||
+                // Cap m1: a contact put me straight in (op "add"), no invite to accept.
+                (t == "state" && grp == null && p.optString("op") == "add" && host.isContact(from))
             "leave", "sync", "unsend" -> inGroup
+            // Cap m1: reactions and edits from someone in the current state.
+            "react", "edit" -> grp != null && !grp.readOnly && grp.state.has(from)
             else -> return 400
         }
         if (!allowed) return 403
@@ -382,7 +434,7 @@ class Groups(
             "state" -> {
                 val s = try { Proto06.parseState(p.getJSONObject("state")) } catch (e: Exception) { return 400 }
                 if (s.g != g) return 400
-                takeState(from, s)
+                takeState(from, s, p.optString("op"))
             }
             "states" -> {
                 val a = p.optJSONArray("list") ?: return 400
@@ -414,6 +466,10 @@ class Groups(
                 }
                 if (m == null || m.from == from) receipt(from, g, listOf(msg), "unsent")
             }
+            "react", "edit" -> {
+                if (!Rich.ok("group", p)) return 400
+                takeChange(grp!!, from, fromName, p)
+            }
         }
         // Every group message is confirmed to its sender, so they stop resending it.
         receipt(from, g, listOf(id), "delivered")
@@ -423,16 +479,21 @@ class Groups(
     private fun liveToken(inv: String, g: String): Token? =
         tokens.firstOrNull { it.i == inv && it.g == g && it.x * 1000 > now() }
 
-    /** Applies 3.3 to an incoming state. */
-    private fun takeState(from: String, s: State) {
+    /** Applies 3.3 to an incoming state. [op]: its hint; "add" from a contact puts me straight in (cap m1). */
+    private fun takeState(from: String, s: State, op: String = "") {
         val grp = groups[s.g]
         if (grp == null) {
-            if (joining[s.g] != s.by || !s.has(me) || !Proto06.accept(null, s).first) return
+            val added = op == "add" && s.by == from && host.isContact(from) && joining[s.g] == null
+            if ((joining[s.g] != s.by && !added) || !s.has(me) || !Proto06.accept(null, s).first) return
             joining.remove(s.g)
             invites.removeAll { it.g == s.g }
             groups[s.g] = Group(s)
             peers(s)
-            host.notice("You joined ${s.name}")
+            if (added) {
+                val who = nameIn(s, from, "Someone")
+                host.notice("$who added you to ${s.name}")
+                host.arrived(s.g, s.name, "$who added you")
+            } else host.notice("You joined ${s.name}")
             replayHeld(s.g)
             return
         }
@@ -497,6 +558,7 @@ class Groups(
         val sv = (p.opt("sv") as? Number)?.toLong() ?: return 400
         val text = p.opt("text") as? String ?: return 400
         if (!Proto06.isLogicalId(id) || Proto06.chars(text) > Proto06.MAX_TEXT || text.isBlank()) return 400
+        if (!Rich.ok("gmsg", p)) return 400
         val grp = groups[g] ?: return 403
         if (grp.readOnly) return 403
         if (deleted.containsKey(id) || chats[g]?.any { it.id == id } == true) { receipt(from, g, listOf(id), "delivered"); return 200 }
@@ -513,9 +575,9 @@ class Groups(
         val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN   // a removed channel's messages show in main
         if (sv < s.v) sendStateBack(g, from) else if (sv > s.v) askSync(g, from, s.v)
         val name = nameIn(s, from, fromName)
-        addMsg(GMsg(id, g, chId, from, name, text, false, now()))
+        addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re")))
         unread.add(g)
-        host.arrived(g, "$name in ${s.name}", text)
+        host.arrived(g, if (Rich.mentions(text, host.myName)) "$name mentioned you in ${s.name}" else "$name in ${s.name}", text)
         receipt(from, g, listOf(id), "delivered")
         return 200
     }
@@ -532,6 +594,24 @@ class Groups(
         host.arrived(g, "$name in ${s.name}", if (voiceMs > 0) "Voice message" else "Photo")
         receipt(from, g, listOf(gid), "delivered")
         true
+    }
+
+    /** A reaction or edit (cap m1, already checked) from [from], a member of the current state. */
+    private fun takeChange(grp: Group, from: String, fromName: String, p: JSONObject) {
+        val g = grp.g
+        val msg = p.getString("msg")
+        val ts = Rich.ts(p)
+        val m = chats[g]?.firstOrNull { it.id == msg && it.unsent.isEmpty() } ?: return
+        if (p.getString("t") == "react") {
+            val e = p.getString("e")
+            val all = Rich.react(m.reactions, from, e, ts) ?: return
+            edit(g, msg) { it.copy(reactions = all) }
+            if (m.mine && e.isNotEmpty()) host.arrived(g, "${nameIn(grp.state, from, fromName)} in ${grp.state.name}", "Reacted $e to your message")
+        } else {
+            if (m.mine || m.photo.isNotEmpty() || !Rich.editWins(m.from, from, ts, m.edited)) return
+            val t = p.getString("text")
+            edit(g, msg) { it.copy(text = t, edited = ts) }
+        }
     }
 
     private fun greceipt(from: String, p: JSONObject): Int {
@@ -673,6 +753,7 @@ class Groups(
     private fun msgJson(m: GMsg) = JSONObject().put("id", m.id).put("g", m.g).put("ch", m.ch).put("f", m.from).put("n", m.name).put("x", m.text)
         .put("m", m.mine).put("t", m.time).put("ph", m.photo).put("vo", m.voice).put("u", m.unsent).put("st", m.state)
         .put("to", JSONArray(m.to.toList())).put("dl", JSONArray(m.delivered.toList())).put("rd", JSONArray(m.read.toList())).put("sn", m.seen)
+        .apply { if (m.re.isNotEmpty()) put("re", m.re); if (m.reactions.isNotEmpty()) put("rx", Rich.reactionsToJson(m.reactions)); if (m.edited > 0) put("ed", m.edited) }
 
     private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
 
@@ -701,7 +782,8 @@ class Groups(
                 o.keys().forEach { g -> val a = o.getJSONArray(g); chats[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {
                     GMsg(it.getString("id"), it.getString("g"), it.optString("ch", MAIN), it.getString("f"), it.optString("n"), it.optString("x"), it.optBoolean("m"),
                         it.optLong("t"), it.optString("ph"), it.optInt("vo"), it.optString("u"), it.optString("st"),
-                        strings(it.optJSONArray("to")), strings(it.optJSONArray("dl")), strings(it.optJSONArray("rd")), it.optBoolean("sn"))
+                        strings(it.optJSONArray("to")), strings(it.optJSONArray("dl")), strings(it.optJSONArray("rd")), it.optBoolean("sn"),
+                        it.optString("re"), Rich.reactionsFromJson(it.optJSONObject("rx")), it.optLong("ed"))
                 } }
             }
             read(OUTS)?.let { text ->

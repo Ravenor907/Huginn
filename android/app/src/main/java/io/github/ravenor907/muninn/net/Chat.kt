@@ -62,7 +62,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** Unsent: who took it back ("You" on the sender's phone, their name on the other). */
                    val unsent: String = "",
                    /** A voice message: its length in ms (the sound itself is stored like a photo, under [photo]). */
-                   val voice: Int = 0)
+                   val voice: Int = 0,
+                   /** A reply: the id of the message it quotes (cap m1). */
+                   val re: String = "",
+                   /** Reactions (cap m1): who to their latest one; an empty one is a removed reaction. */
+                   val reactions: Map<String, Rich.Reaction> = emptyMap(),
+                   /** Edited (cap m1): when the text shown was written (the editor's clock), 0 if never edited. */
+                   val edited: Long = 0)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false)
@@ -83,6 +89,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
     /** Someone unsent a message in this chat (key): clear its notification. */
     val recalls = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Cap m1: who is typing to me, until when (ms). */
+    private val _typing = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val typing: StateFlow<Map<String, Long>> = _typing.asStateFlow()
+    /** Cap m1: whose app said it's open, until when (ms). Empty while my own Active status is off. */
+    private val _active = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val active: StateFlow<Map<String, Long>> = _active.asStateFlow()
+    /** Cap m1: reactions and edits on their way (envelope id to who and when), until a receipt names them. */
+    private val mxOut = ConcurrentHashMap<String, Pair<String, Long>>()
+    private val mxStore = File(context.filesDir, "mxout.json")
+    private val liveTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    private val typingSent = ConcurrentHashMap<String, Long>()
+    @Volatile private var foreground = false
+    @Volatile private var activeSent = 0L
 
     /** "Yes" to Keep in touch that didn't get there yet, by person: the same sealed envelope goes again. */
     private val unsentKeeps = ConcurrentHashMap<String, String>()
@@ -376,7 +395,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Already handled: a copy from another route, or a resend. Confirms again where that helps. */
     private fun duplicate(room: String, fromKey: String, sentId: String, mailbox: String?): Pair<Int, String>? {
         if (sentId.isEmpty()) return null
-        if (room == "private" && known(fromKey, sentId)) {
+        if ((room == "private" || room == "rich") && known(fromKey, sentId)) {
             if (held[fromKey]?.containsKey(sentId) != true) receipt(fromKey, listOf(sentId), "delivered", mailbox)
             return 200 to "{}"
         }
@@ -387,6 +406,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         if (room in ChatWire.SEEN_ROOMS) seen.get("$fromKey|$sentId")?.let { note ->
             if (room == "unsend" && note.isNotEmpty()) receipt(fromKey, listOf(note), "unsent", mailbox)
+            // A reaction or edit sent again: my receipt didn't get there.
+            if (room == "mx") receipt(fromKey, listOf(sentId), "delivered", mailbox)
             // A group message they sent again: they didn't get my receipt, so confirm once more.
             if (room == "group" && note.isNotEmpty()) groups.ack(fromKey, note, listOf(sentId.substringBefore('-')), "delivered")
             return 200 to "{}"
@@ -430,23 +451,52 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (now != c) contacts.set(now)
     }
 
-    private fun handle(o: JSONObject, room: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
-                       opened: String): Pair<Int, String> {
+    private fun handle(o: JSONObject, envRoom: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
+                       plain: String): Pair<Int, String> {
         val now = System.currentTimeMillis()
+        // Cap m1: a reply ("rich") is a private message with the id it quotes; everything else is the same.
+        var opened = plain
+        var re = ""
+        if (envRoom == "rich") {
+            val p = try { JSONObject(plain) } catch (e: Exception) { return 400 to "{}" }
+            if (!Rich.ok("rich", p)) return 400 to "{}"
+            opened = p.getString("text"); re = p.optString("re")
+        }
+        val room = if (envRoom == "rich") "private" else envRoom
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room. Counted only once
         // a message proved it's really from them, so nobody can use it to block a real contact.
         if (recent.size > 500) recent.clear()
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
-        if (room == "tvconfig" || room == "call") { if (!groupRate(room, fromKey)) return 429 to "{}" }
+        if (room == "tvconfig" || room == "call" || room == "mx" || room == "live") { if (!groupRate(room, fromKey)) return 429 to "{}" }
         else if (room != "receipt") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
             if (q.size >= 5) return 429 to "{}"
             q.addLast(now)
         }
-        val text = if (room == "receipt") opened else opened.take(MAX)
+        val text = if (room == "receipt" || room == "mx" || room == "live") opened else opened.take(MAX)
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
-        val msg = Msg(msgId, fromKey, name, text, false, now, via = via)
+        val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re)
+        // A message from them ends their "typing".
+        if (room == "private" && fromKey in _typing.value) _typing.update { it - fromKey }
         when (room) {
+            "mx" -> {
+                if (contacts.contact(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
+                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                if (!Rich.ok("mx", p)) return 400 to "{}"
+                takeMx(fromKey, name, p)
+                // Confirmed by its envelope id, so the sender stops resending it.
+                receipt(fromKey, listOf(sentId), "delivered", mailbox)
+            }
+            "live" -> {
+                if (contacts.contact(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
+                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                if (!Rich.ok("live", p)) return 400 to "{}"
+                if (Rich.fresh(Rich.ts(p), now)) {
+                    val on = p.getBoolean("on")
+                    if (p.getString("t") == "typing") _typing.update { if (on) it + (fromKey to now + Rich.TYPING_MS) else it - fromKey }
+                    else if (id.activeStatus) _active.update { if (on) it + (fromKey to now + Rich.ACTIVE_MS) else it - fromKey }
+                }
+            }
             "call" -> { if (contacts.get(fromKey) == null) return 403 to "{}"; onSignal(fromKey, opened); return 200 to "{}" }
             "tvconfig" -> if (tvHandler?.onTvRoom(fromKey, mailbox, opened, inviteOk(o.optString("invite"))) != true) return 403 to "{}"
             "nearby" -> {
@@ -499,6 +549,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val ids = r.optJSONArray("ids")?.let { a -> (0 until minOf(a.length(), 200)).map { a.optString(it) }.toSet() } ?: return 400 to "{}"
                 val st = r.optString("s")
                 if (st != "delivered" && st != "read" && st != "unsent") return 400 to "{}"
+                // A reaction or edit (cap m1) got there: stop resending it.
+                if (st == "delivered" && ids.any { mxOut[it]?.first == fromKey }) {
+                    ids.forEach { if (mxOut[it]?.first == fromKey) { mxOut.remove(it); outbox.drop(it); tries.remove(it) } }
+                    saveMx()
+                }
                 // Got there: my sealed envelopes to them needn't be kept for resending any more.
                 _private.value[fromKey].orEmpty().forEach { m ->
                     if (m.mine && m.id in ids) { if (st == "unsent") outbox.drop(UNSEND + m.id) else outbox.drop(m.id) }
@@ -765,13 +820,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    fun sendPrivate(peerKey: String, text: String) {
+    /** [re]: the id of the message this answers (a reply, cap m1; to an older app it goes as plain text). */
+    fun sendPrivate(peerKey: String, text: String, re: String = "") {
         val t = text.trim().take(MAX)
         if (t.isEmpty()) return
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
-        val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending")
+        typingSent.remove(peerKey)
+        val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending",
+            re = re.takeIf { Rich.isMsgId(it) } ?: "")
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
@@ -781,6 +839,162 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             return
         }
         bg { attempt(mine) }
+    }
+
+    // ------------------------------------------------------------------ cap m1: reactions, edits, typing, active status
+    // (docs/protocol-0.6.md, section 11). Only ever sent to someone whose app said "m1".
+
+    /** Their app speaks m1: replies, reactions, edits, typing and active status. */
+    fun hasM1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(Rich.CAP) == true
+
+    /** My reaction to message [msgId] in the chat with [peerKey] ("" takes it away). Null when done, else what to say. */
+    fun react(peerKey: String, msgId: String, e: String): String? {
+        if (!Rich.emojiOk(e)) return "That reaction can't be sent."
+        val ts = System.currentTimeMillis()
+        var done = false
+        edit { map ->
+            val list = map[peerKey] ?: return@edit false
+            val m = list.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@edit false
+            val all = Rich.react(m.reactions, id.publicKey, e, ts) ?: return@edit false
+            map[peerKey] = list.map { if (it.id == msgId) it.copy(reactions = all) else it }
+            done = true
+            true
+        }
+        if (!done) return null
+        if (!hasM1(peerKey)) { probeCaps(peerKey); return "${nameOf(peerKey)} needs a newer Muninn or Huginn to see reactions." }
+        queueMx(peerKey, Rich.reactMsg(msgId, e, ts))
+        return null
+    }
+
+    /** Changes the text of one of my messages, on both sides ("(edited)"). Null when done, else what to say. */
+    fun editMessage(peerKey: String, msgId: String, text: String): String? {
+        val t = text.trim().take(MAX)
+        if (t.isEmpty()) return "A message can't be empty. Unsend it instead."
+        if (!hasM1(peerKey)) { probeCaps(peerKey); return "${nameOf(peerKey)} needs a newer Muninn or Huginn to see edits." }
+        val ts = System.currentTimeMillis()
+        var done = false
+        edit { map ->
+            val list = map[peerKey] ?: return@edit false
+            val m = list.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() && it.photo.isEmpty() } ?: return@edit false
+            if (m.text == t) return@edit false
+            map[peerKey] = list.map { if (it.id == msgId) it.copy(text = t, edited = maxOf(ts, m.edited + 1)) else it }
+            done = true
+            true
+        }
+        if (done) queueMx(peerKey, Rich.editMsg(msgId, t, _private.value[peerKey]?.firstOrNull { it.id == msgId }?.edited ?: ts))
+        return null
+    }
+
+    /** A reaction or edit from them, already checked (Rich.check). */
+    private fun takeMx(fromKey: String, name: String, p: JSONObject) {
+        val msgId = p.getString("msg")
+        val ts = Rich.ts(p)
+        if (p.getString("t") == "react") {
+            val e = p.getString("e")
+            var mine: Msg? = null
+            edit { map ->
+                val list = map[fromKey] ?: return@edit false
+                val m = list.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@edit false
+                val all = Rich.react(m.reactions, fromKey, e, ts) ?: return@edit false
+                map[fromKey] = list.map { if (it.id == msgId) it.copy(reactions = all) else it }
+                if (m.mine && e.isNotEmpty()) mine = m
+                true
+            }
+            mine?.let { m -> arrivals.tryEmit(Triple(contacts.get(fromKey)?.shown ?: name, "Reacted $e to “${preview(m)}”", fromKey)) }
+        } else {
+            val t = p.getString("text").take(MAX)
+            edit { map ->
+                val list = map[fromKey] ?: return@edit false
+                val m = list.firstOrNull { it.id == msgId && !it.mine && it.unsent.isEmpty() && it.photo.isEmpty() } ?: return@edit false
+                if (!Rich.editWins(fromKey, fromKey, ts, m.edited)) return@edit false
+                map[fromKey] = list.map { if (it.id == msgId) it.copy(text = t, edited = ts) else it }
+                true
+            }
+        }
+    }
+
+    private fun preview(m: Msg) = when { m.voice > 0 -> "Voice message"; m.photo.isNotEmpty() -> "Photo"; else -> m.text.take(60) }
+
+    /** Seals one reaction or edit once and keeps it until their receipt names its envelope id (a day at most). */
+    private fun queueMx(peerKey: String, plain: String) {
+        val env = UUID.randomUUID().toString()
+        mxOut[env] = peerKey to System.currentTimeMillis()
+        tries[env] = Tries(0, 0)
+        saveMx()
+        bg {
+            outbox.getOrMake(env) { listOf(envelope("mx", peerKey, plain, env).toString()) }
+            attemptMx(env)
+        }
+    }
+
+    private fun attemptMx(env: String) {
+        val (k, _) = mxOut[env] ?: return
+        val t = tries.getOrPut(env) { Tries(0, 0) }
+        t.count++
+        t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        val body = outbox.get(env) ?: run { mxOut.remove(env); saveMx(); return }
+        spread(k, body, false, t.count, contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox)
+    }
+
+    private fun saveMx() {
+        try { vault.write(mxStore, JSONObject().apply { mxOut.forEach { (e, v) -> put(e, JSONObject().put("k", v.first).put("t", v.second)) } }.toString()) } catch (_: Exception) {}
+    }
+
+    /** Typing in the chat with [peerKey]: "on" at most every 3 s while the text changes, "off" once it's cleared. */
+    fun typingTo(peerKey: String, on: Boolean) {
+        if (!hasM1(peerKey) || peerKey in id.muted()) return
+        val now = System.currentTimeMillis()
+        val last = typingSent[peerKey] ?: 0L
+        if (on && now - last < Rich.TYPING_EVERY_MS) return
+        if (!on && (last == 0L || now - last > Rich.TYPING_MS)) { typingSent.remove(peerKey); return }
+        if (on) typingSent[peerKey] = now else typingSent.remove(peerKey)
+        sendLive(peerKey, Rich.liveMsg("typing", on, now))
+    }
+
+    /** Muninn came on screen or went away: say so to recent contacts (only with Active status on). */
+    fun foreground(on: Boolean) {
+        if (foreground == on) return
+        foreground = on
+        if (!id.activeStatus) return
+        bg { sendActive(on) }
+    }
+
+    /** Active status switched in Settings: off tells everyone once and stops; nobody's dot shows either. */
+    fun setActiveStatus(on: Boolean) {
+        if (id.activeStatus == on) return
+        id.activeStatus = on
+        if (!on) { _active.value = emptyMap(); bg { sendActive(false) } }
+        else if (foreground) bg { sendActive(true) }
+    }
+
+    private fun sendActive(on: Boolean) {
+        val now = System.currentTimeMillis()
+        if (on) activeSent = now
+        val plain = Rich.liveMsg("active", on, now)
+        val muted = id.muted()
+        // Contacts with m1, the ones chatted with most lately first, at most 20 (each is a relay event).
+        val recentFirst = contacts.all.value.filter { !it.groupOnly && Rich.CAP in it.caps && it.chatKey !in muted }
+            .sortedByDescending { _private.value[it.chatKey]?.lastOrNull()?.time ?: 0L }.take(20)
+        recentFirst.forEach { c -> sendLive(c.chatKey, plain) }
+    }
+
+    /** Typing and active status: sealed with v1 (never the ratchet), sent once on every route, never retried. */
+    private fun sendLive(peerKey: String, plain: String) = bg {
+        val body = envelope("live", peerKey, plain, UUID.randomUUID().toString()).toString()
+        spread(peerKey, listOf(body), false, 1, contacts.get(peerKey)?.mailbox)
+    }
+
+    /** Replying from a notification: a chat ([key] a contact) or a group ("g:<id>", into the channel of its last message). */
+    fun replyFromNotification(key: String, text: String) {
+        val g = if (key.startsWith("g:")) key.removePrefix("g:") else null
+        if (g != null) {
+            val last = groups.messages.value[g]?.lastOrNull { !it.mine }
+            groups.markRead(g)
+            sendGroupText(g, last?.ch ?: Proto06.MAIN, text)
+        } else {
+            markRead(key)
+            sendPrivate(key, text)
+        }
     }
 
     // ------------------------------------------------------------------ getting it there
@@ -801,7 +1015,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
         if (m.photo.isNotEmpty()) { attemptPhoto(m, t); return }
         // Sealed once; every try and every route sends these same bytes.
-        val body = outbox.getOrMake(m.id) { listOf(envelope("private", m.peerKey, m.text, m.id).toString()) }?.firstOrNull() ?: return
+        val body = outbox.getOrMake(m.id) {
+            // A reply goes as "rich" to an app that has m1; the same text without the quote to any other.
+            val rich = m.re.isNotEmpty() && hasM1(m.peerKey)
+            listOf(envelope(if (rich) "rich" else "private", m.peerKey, if (rich) Rich.richText(m.text, m.re) else m.text, m.id).toString())
+        }?.firstOrNull() ?: return
         var any = false
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")); any = true; markSent(m, "close") }
         if (ble.send(m.peerKey, body)) { any = true; markSent(m, "close") }
@@ -844,6 +1062,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val now = System.currentTimeMillis()
         groups.due().forEach { o -> bg { sendGroupOut(o) } }
         incoming.entries.removeIf { now - it.value.started > 15 * 60_000 }   // half a photo that never finished
+        // Cap m1: reactions and edits still on their way, typing and active status that ran out.
+        for ((env, v) in mxOut) {
+            if (now - v.second > DAY) { mxOut.remove(env); outbox.drop(env); tries.remove(env); saveMx(); continue }
+            val t = tries[env]
+            if (t == null) { tries[env] = Tries(1, now + RETRY[0]); continue }
+            if (now >= t.next) { t.next = now + RETRY[0]; bg { attemptMx(env) } }
+        }
+        if (_typing.value.values.any { it < now }) _typing.update { m -> m.filterValues { it >= now } }
+        if (_active.value.values.any { it < now }) _active.update { m -> m.filterValues { it >= now } }
+        if (foreground && id.activeStatus && now - activeSent > Rich.ACTIVE_EVERY_MS) { activeSent = now; bg { sendActive(true) } }
         for ((_, list) in _private.value) for (m in list) {
             if (m.mine && m.state == "unsending") {
                 val t = tries.getOrPut(m.id) { Tries(1, now + RETRY[0]) }
@@ -951,6 +1179,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Same flow as private messages, keyed "g:<group id>": the notification opens the group.
         override fun arrived(g: String, title: String, text: String) { arrivals.tryEmit(Triple(title, text, Folders.groupKey(g))) }
         override fun deleteBlob(id: String) { File(photosDir, id).delete() }
+        override fun hasM1(k: String) = this@Chat.hasM1(k)
     }
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
@@ -959,7 +1188,34 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return groups.invite(g, peerKey)
     }
 
-    fun sendGroupText(g: String, ch: String, text: String) = groups.sendText(g, ch, text.trim().take(MAX))
+    fun sendGroupText(g: String, ch: String, text: String, re: String = "") = groups.sendText(g, ch, text.trim().take(MAX), re)
+
+    /**
+     * Messenger style: a new group with [keys] (contacts) in it, named after them. Contacts whose app has m1 go
+     * straight in; others with groups (g1) get an invite; anyone older is left out. Returns the group (null if
+     * none could be made) and what to tell the person.
+     */
+    fun startGroup(keys: List<String>): Pair<String?, String> {
+        val people = keys.distinct().mapNotNull { contacts.contact(it) }
+        if (people.isEmpty()) return null to "Pick at least one contact."
+        // Cut to the 40 characters a group name may have (by code points, in Groups.create).
+        val name = (listOf(id.username) + people.map { it.shown }).joinToString(", ")
+        val g = groups.create(name) ?: return null to "That group couldn't be made."
+        var invited = 0
+        val left = mutableListOf<String>()
+        for (c in people) {
+            when {
+                Rich.CAP in c.caps -> if (groups.addDirect(g, c.chatKey, c.name, c.mailbox ?: "") != null) left += c.shown
+                "g1" in c.caps -> if (groups.invite(g, c.chatKey) == null) invited++ else left += c.shown
+                else -> { probeCaps(c.chatKey); left += c.shown }
+            }
+        }
+        val parts = buildList {
+            if (invited > 0) add("$invited invited (they join once they accept)")
+            if (left.isNotEmpty()) add("${left.joinToString(", ")} need${if (left.size == 1) "s" else ""} a newer Muninn or Huginn")
+        }
+        return g to (if (parts.isEmpty()) "Group made. Rename it any time in its settings." else parts.joinToString(". ") + ".")
+    }
 
     fun sendGroupPhoto(g: String, ch: String, jpeg: ByteArray) = sendGroupBlob(g, ch, jpeg, 0)
     fun sendGroupVoice(g: String, ch: String, aac: ByteArray, ms: Int) = sendGroupBlob(g, ch, aac, ms.coerceAtLeast(1))
@@ -1019,7 +1275,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** gmsg: 5 in 10 s per sender, like private messages. group: 20 in 10 s. greceipt: not limited (2.4). */
     private fun groupRate(room: String, k: String): Boolean {
-        val (map, max) = when (room) { "gmsg" -> recent to 5; "group", "tvconfig" -> groupTimes to 20; "call" -> callTimes to 30; else -> return true }
+        val (map, max) = when (room) { "gmsg" -> recent to 5; "group", "tvconfig", "mx" -> groupTimes to 20; "call" -> callTimes to 30; "live" -> liveTimes to 30; else -> return true }
         val now = System.currentTimeMillis()
         if (map.size > 500) map.clear()
         val q = map.getOrPut(k) { ArrayDeque() }
@@ -1119,8 +1375,54 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             groups.clear()
             photosDir.deleteRecursively()
             outbox.clear()
+            mxOut.clear(); mxStore.delete()
             save(); nearbyStore.delete()
         }
+    }
+
+    /**
+     * Kids' TV storage cap: keeps the newest [keep] messages per person, drops voice messages older
+     * than [voiceBefore] (ms since the epoch), then the oldest photos and voice messages until the stored
+     * ones take at most [maxBlobBytes]. Photos bigger than [shrinkOver] bytes go through [shrink] (null
+     * keeps them as they are). Returns the messages removed.
+     */
+    fun trimHistory(keep: Int, voiceBefore: Long, maxBlobBytes: Long, shrinkOver: Int, shrink: (ByteArray) -> ByteArray?): Int {
+        var removed = 0
+        val gone = ArrayList<String>()
+        edit { map ->
+            var changed = false
+            for (k in map.keys.toList()) {
+                val list = map[k]!!
+                val (old, rest) = list.partition { it.voice > 0 && it.time < voiceBefore }
+                val kept = rest.takeLast(keep)
+                val drop = old + rest.dropLast(keep)
+                if (drop.isEmpty()) continue
+                drop.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete(); gone += it.id }
+                map[k] = kept; changed = true; removed += drop.size
+            }
+            // Oldest blobs first until they fit.
+            val blobs = map.values.flatten().filter { it.photo.isNotEmpty() }.sortedBy { it.time }
+            var total = blobs.sumOf { File(photosDir, it.photo).length() }
+            for (m in blobs) {
+                if (total <= maxBlobBytes) break
+                total -= File(photosDir, m.photo).length()
+                File(photosDir, m.photo).delete(); gone += m.id
+                map[m.peerKey] = map[m.peerKey].orEmpty().filterNot { it.id == m.id }
+                changed = true; removed++
+            }
+            changed
+        }
+        if (gone.isNotEmpty()) { forget(gone); gone.forEach { outbox.drop(it); outbox.drop(UNSEND + it); tries.remove(it) } }
+        // Big photos made smaller, outside the lock (decoding takes a moment).
+        for (m in _private.value.values.flatten()) {
+            if (m.photo.isEmpty() || m.voice > 0) continue
+            val f = File(photosDir, m.photo)
+            if (f.length() <= shrinkOver) continue
+            val bytes = try { photo(m.photo) } catch (e: Exception) { null } ?: continue
+            val small = try { shrink(bytes) } catch (e: Throwable) { null } ?: continue
+            if (small.size < bytes.size) try { vault.writeBytes(f, small) } catch (_: Exception) {}
+        }
+        return removed
     }
 
     private fun addNearby(m: Msg) = synchronized(lock) {
@@ -1141,11 +1443,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
-            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent).put("voice", it.voice)) }
+            .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent).put("voice", it.voice)
+            .apply { if (it.re.isNotEmpty()) put("re", it.re); if (it.reactions.isNotEmpty()) put("rx", Rich.reactionsToJson(it.reactions)); if (it.edited > 0) put("ed", it.edited) }) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
         Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
-            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"))
+            it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"),
+            re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"))
     }
 
     private fun save() = synchronized(lock) {
@@ -1181,6 +1485,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v")) } }
             }
             vault.read(deletedStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
+            vault.read(mxStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
             if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
             prune()
         } catch (_: Exception) {}
