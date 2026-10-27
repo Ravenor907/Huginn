@@ -225,6 +225,8 @@ object RoomManager {
     }
 
     fun setSpeaker(on: Boolean) = exec.execute { speakerOn = on; RoomAudio.route(on); publish() }
+    /** The room's sound goes to [id], one of [AudioRoute.outputs]. */
+    fun setOutput(id: String) = exec.execute { AudioRoute.choose(id); speakerOn = AudioRoute.onSpeaker; publish() }
 
     /** Rings [keys] (every member who can join, when empty) into a new group call of [group], and joins it. */
     fun callGroup(group: String, keys: List<String>): String? {
@@ -507,7 +509,7 @@ object RoomManager {
             audio = am
             oldMode = am.mode
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            route(speaker)
+            AudioRoute.start(am, speaker)
             running = true
             val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val t = try {
@@ -535,18 +537,10 @@ object RoomManager {
             return true
         }
 
+        /** Speaker on, or the usual order (Bluetooth, wired, earpiece). Any device: [AudioRoute.choose]. */
         fun route(speaker: Boolean) {
-            val am = audio ?: return
-            try {
-                if (Build.VERSION.SDK_INT >= 31) {
-                    val devs = am.availableCommunicationDevices
-                    val bt = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-                    val wired = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
-                    val pick = if (speaker) devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                        else bt ?: wired ?: devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-                    pick?.let { am.setCommunicationDevice(it) } ?: am.clearCommunicationDevice()
-                } else @Suppress("DEPRECATION") { am.isSpeakerphoneOn = speaker }
-            } catch (_: Exception) {}
+            if (audio == null) return
+            AudioRoute.choose(if (speaker) "speaker" else AudioRoute.AUTOMATIC)
         }
 
         private fun captureLoop(rec: AudioRecord) {
@@ -618,8 +612,7 @@ object RoomManager {
             record = null; track = null; aec = null; ns = null
             audio?.let { am ->
                 try {
-                    if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
-                    else @Suppress("DEPRECATION") { am.isSpeakerphoneOn = false }
+                    AudioRoute.stop()
                     am.mode = oldMode
                 } catch (_: Exception) {}
             }

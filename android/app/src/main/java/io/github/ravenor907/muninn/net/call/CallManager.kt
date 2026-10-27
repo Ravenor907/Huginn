@@ -164,6 +164,8 @@ object CallManager {
     fun hangup() { exec.execute { session?.hangup() } }
     fun setMuted(on: Boolean) { exec.execute { session?.setMuted(on) } }
     fun setSpeaker(on: Boolean) { exec.execute { session?.setSpeaker(on) } }
+    /** The call's sound goes to [id], one of [AudioRoute.outputs]: the earpiece, the speaker, headphones or a Bluetooth device. */
+    fun setOutput(id: String) { exec.execute { session?.setOutput(id) } }
     /** Clears an ended call from the screen. */
     fun dismiss() { if (_call.value?.phase == CallSession.Phase.ENDED) _call.value = null }
 

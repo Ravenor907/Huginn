@@ -81,7 +81,8 @@ class CallMedia(
     @Volatile private var stopped = false
     @Volatile private var gotFirst = false
     @Volatile var muted = false
-    @Volatile var speaker = false; private set
+    /** The sound comes out of the phone's own speaker (see [AudioRoute]). */
+    val speaker: Boolean get() = AudioRoute.onSpeaker
     private val pings = HashMap<String, Long>()
     @Volatile var rttMs = 0; private set
 
@@ -558,7 +559,7 @@ class CallMedia(
         if (Opus.loadError != null) return false
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
-        routeDefault()
+        AudioRoute.start(audio)
         // Kids' TV: the microphone and speaker at the TV's own rate (TvVoice converts); a phone: the call's 16 kHz.
         val tv = io.github.ravenor907.muninn.tv.TvMic.active
         io.github.ravenor907.muninn.tv.TvMic.callRates(context, Opus.RATE).let { (m, p) -> micRate = m; playRate = p }
@@ -670,29 +671,13 @@ class CallMedia(
 
     // ------------------------------------------------------------------ routing
 
-    /** Speaker on or off. Off goes back to a Bluetooth headset when one is connected, else the earpiece. */
-    fun setSpeaker(on: Boolean) {
-        speaker = on
-        if (on) {
-            if (Build.VERSION.SDK_INT >= 31) audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                ?.let { audio.setCommunicationDevice(it) }
-            else { @Suppress("DEPRECATION") run { audio.stopBluetoothSco(); audio.isBluetoothScoOn = false; audio.isSpeakerphoneOn = true } }
-        } else routeDefault()
-        proximityOn(!on)
-    }
+    /** Speaker on or off. Off goes back to the usual order: a Bluetooth headset, wired headphones, else the earpiece. */
+    fun setSpeaker(on: Boolean) = setOutput(if (on) "speaker" else AudioRoute.AUTOMATIC)
 
-    private fun routeDefault() {
-        if (Build.VERSION.SDK_INT >= 31) {
-            val devs = audio.availableCommunicationDevices
-            val bt = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-            val wired = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
-            val ear = devs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-            (bt ?: wired ?: ear)?.let { audio.setCommunicationDevice(it) } ?: audio.clearCommunicationDevice()
-        } else @Suppress("DEPRECATION") {
-            audio.isSpeakerphoneOn = false
-            val btHeadset = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-            if (btHeadset) try { audio.startBluetoothSco(); audio.isBluetoothScoOn = true } catch (_: Exception) {}
-        }
+    /** The sound goes to [id], one of [AudioRoute.outputs] (the call screen's Audio button). */
+    fun setOutput(id: String) {
+        AudioRoute.choose(id)
+        proximityOn(!AudioRoute.onSpeaker)
     }
 
     /** Proximity: the screen goes dark against the ear (not on speaker). */
@@ -729,8 +714,7 @@ class CallMedia(
         if (tvGain != null) io.github.ravenor907.muninn.tv.TvMic.release()
         proximityOn(false)
         if (!externalAudio) try {
-            if (Build.VERSION.SDK_INT >= 31) audio.clearCommunicationDevice()
-            else @Suppress("DEPRECATION") { audio.stopBluetoothSco(); audio.isBluetoothScoOn = false; audio.isSpeakerphoneOn = false }
+            AudioRoute.stop()
             audio.mode = oldMode
         } catch (_: Exception) {}
         keys?.wipe()

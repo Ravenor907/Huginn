@@ -25,12 +25,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +62,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import io.github.ravenor907.muninn.net.call.AudioRoute
 import io.github.ravenor907.muninn.net.call.CallManager
 import io.github.ravenor907.muninn.net.call.CallVideo
 import io.github.ravenor907.muninn.net.call.Vp8
@@ -90,11 +93,13 @@ private object CallIcons {
     const val answer = "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"
     const val camera = "M3 7h12v10H3z M15 10l6-3v10l-6-3"
     const val cameraOff = "M3 7h12v10H3z M15 10l6-3v10l-6-3 M3 3l18 18"
+    const val bluetooth = "M7 7l10 10-5 5V2l5 5L7 17"
+    const val headphones = "M4 15v-3a8 8 0 0 1 16 0v3 M4 15h3v5H4z M17 15h3v5h-3z"
     const val flip = "M4 12a8 8 0 0 1 14-5l2-2v6h-6l2.5-2.5A5.5 5.5 0 0 0 6.5 12 M20 12a8 8 0 0 1-14 5l-2 2v-6h6l-2.5 2.5A5.5 5.5 0 0 0 17.5 12"
 }
 
 @Composable
-private fun Glyph(path: String, color: Color, size: Dp, weight: Float = 1.8f) {
+internal fun Glyph(path: String, color: Color, size: Dp, weight: Float = 1.8f) {
     val p = remember(path) { PathParser().parsePathString(path).toPath() }
     Canvas(Modifier.size(size)) {
         val k = this.size.width / 24f
@@ -186,7 +191,7 @@ private fun Paths(c: CallManager.Ui) {
     }
 }
 
-/** Decline and Answer while it rings; Mute, Speaker, Camera, Flip or Message and End once it's on ([gap] above End). */
+/** Decline and Answer while it rings; Mute, Audio, Camera, Flip or Message and End once it's on ([gap] above End). */
 @Composable
 private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit,
                     onCamera: (Boolean) -> Unit, gap: Dp) {
@@ -202,8 +207,7 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute" else "Mute", if (c.muted) Palette.accent else Palette.coolTint,
                     if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
-                Round(CallIcons.speaker, "Speaker", if (c.speaker) Palette.accent else Palette.coolTint, if (c.speaker) Palette.ground else Palette.text, 68.dp,
-                    on = c.speaker) { CallManager.setSpeaker(!c.speaker) }
+                AudioButton { CallManager.setOutput(it) }
                 if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",
                     if (video.cameraOn) Palette.accent else Palette.coolTint, if (video.cameraOn) Palette.ground else Palette.text, 68.dp, on = video.cameraOn) {
                     onCamera(!video.cameraOn)
@@ -366,4 +370,58 @@ private fun Round(icon: String, text: String, bg: Color, fg: Color, size: Dp, on
         Box(Modifier.size(size).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { Glyph(icon, fg, if (size > 70.dp) 32.dp else 26.dp, 2f) }
         if (label) Text(text, style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 8.dp))
     }
+}
+
+/** The icon for where the sound goes. */
+private fun glyphOf(kind: AudioRoute.Kind?): String = when (kind) {
+    AudioRoute.Kind.SPEAKER -> CallIcons.speaker
+    AudioRoute.Kind.BLUETOOTH -> CallIcons.bluetooth
+    AudioRoute.Kind.WIRED -> CallIcons.headphones
+    else -> CallIcons.answer
+}
+
+/**
+ * "Audio" on a call: says where the sound goes now (Phone, Speaker, Headphones or the Bluetooth device's name) and
+ * opens the list of everything connected, so the person can switch at any time. Lit while it isn't the earpiece.
+ */
+@Composable
+private fun AudioButton(onPick: (String) -> Unit) {
+    val now by AudioRoute.current.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    val lit = now != null && now?.kind != AudioRoute.Kind.EARPIECE
+    Round(glyphOf(now?.kind), now?.name ?: "Audio", if (lit) Palette.accent else Palette.coolTint, if (lit) Palette.ground else Palette.text, 68.dp) { open = true }
+    if (open) AudioPicker(onDismiss = { open = false }) { onPick(it); open = false }
+}
+
+/** Every place the sound can go right now, the current one ticked. Shared by calls and voice rooms. */
+@Composable
+internal fun AudioPicker(onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val all by AudioRoute.outputs.collectAsState()
+    val now by AudioRoute.current.collectAsState()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.panel,
+        title = { Text("Audio", style = Type.big) },
+        text = {
+            Column {
+                if (all.isEmpty()) Text("Nothing to choose from right now.", style = Type.small)
+                all.forEach { o ->
+                    val on = o.id == now?.id
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(10.dp))
+                        .clickable(role = Role.RadioButton) { onPick(o.id) }
+                        .semantics { stateDescription = if (on) "selected" else "not selected" }.padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Glyph(glyphOf(o.kind), if (on) Palette.accent else Palette.text, 24.dp)
+                        Text(o.name, style = Type.normal.copy(color = if (on) Palette.accent else Palette.text), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 14.dp))
+                        if (on) Text("In use", style = Type.small.copy(color = Palette.accent))
+                    }
+                }
+                Text("Bluetooth devices show here once they're connected to the phone.", style = Type.small.copy(fontSize = 13.sp),
+                    modifier = Modifier.padding(top = 10.dp))
+            }
+        },
+        confirmButton = {},
+        dismissButton = { io.github.ravenor907.muninn.ui.MButton("Close", onClick = onDismiss) },
+    )
 }

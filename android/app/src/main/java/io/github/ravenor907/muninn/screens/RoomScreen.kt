@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ravenor907.muninn.net.call.AudioRoute
 import io.github.ravenor907.muninn.net.call.RoomLogic
 import io.github.ravenor907.muninn.net.call.RoomManager
 import io.github.ravenor907.muninn.ui.IconAction
@@ -141,7 +143,11 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             MButton(if (r.muted) "Unmute" else "Mute", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
-            MButton(if (r.speaker) "Speaker on" else "Speaker off", kind = if (r.speaker) Kind.Accent else Kind.Normal) { RoomManager.setSpeaker(!r.speaker) }
+            // Where the sound goes: the phone, its speaker, headphones or a Bluetooth device.
+            val out by AudioRoute.current.collectAsState()
+            var picking by remember { mutableStateOf(false) }
+            MButton(out?.name ?: "Audio", kind = if (out != null && out?.kind != AudioRoute.Kind.EARPIECE) Kind.Accent else Kind.Normal, icon = "audio") { picking = true }
+            if (picking) AudioPicker(onDismiss = { picking = false }) { RoomManager.setOutput(it); picking = false }
             MButton("Leave", kind = Kind.Danger) { RoomManager.leave() }
         }
     }

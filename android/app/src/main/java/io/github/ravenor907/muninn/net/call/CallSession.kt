@@ -372,6 +372,7 @@ class CallSession(
     }
 
     fun setSpeaker(on: Boolean) { media?.setSpeaker(on); host.changed(this) }
+    fun setOutput(id: String) { media?.setOutput(id); host.changed(this) }
     val speaker: Boolean get() = media?.speaker == true
 
     fun hangup() = end(if (phase == Phase.INCOMING) "declined" else "hangup", send = true, t = if (phase == Phase.INCOMING) "decline" else "hangup")
