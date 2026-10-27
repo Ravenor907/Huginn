@@ -1,24 +1,30 @@
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 #include <functional>
 
 class QObject;
 
 // Updates for the Windows portable build (Huginn-Windows.zip from the GitHub release).
-// Updater downloads the zip exactly as it downloads the Flatpak, then calls install():
-// the zip is unpacked into a staging folder beside Huginn.exe, and a small hidden PowerShell script
-// waits for Huginn to exit, copies the new files over the old ones, deletes the
-// staging folder and starts the new Huginn.exe. When done(true, ...) arrives, quit Huginn.
+// Updater downloads the zip, checks its SHA-256 against the one published with the release, then
+// calls install(), which does everything inside Huginn itself: it unpacks the zip into a staging
+// folder beside Huginn.exe, moves each file in use aside (Windows lets a running program's files be
+// renamed), puts the new files in their place and starts the new Huginn.exe as a normal window.
+// The moved-aside files are deleted the next time Huginn starts (cleanUp()).
 // On other platforms (and in a Windows development build) supported() is false.
 namespace WinUpdate
 {
 bool supported();
-QString assetName();   // "Huginn-Windows.zip", the release asset to look for
+QString assetName();      // "Huginn-Windows.zip", the release asset to look for
+QString digestName();     // "Huginn-Windows.zip.sha256", published beside it by the release job
+// The SHA-256 (64 hex digits, lower case) in a .sha256 file or a GitHub asset digest ("sha256:..."); empty if none.
+QByteArray parseDigest(const QByteArray &text);
 // Empty when Huginn's folder can be written to, else a sentence for the person.
 QString folderProblem();
-// The zip keeps everything but Huginn.exe in lib\. After an update from an older zip (everything at
-// the top), removes the old top-level copies of what lib\ now holds. Does nothing elsewhere.
-void tidyOldLayout();
+// At every start, before Qt loads anything: deletes what an update moved aside, and what older
+// zips left behind (0.6 had everything at the top; 0.7 had a launcher and the app in lib\).
+void cleanUp();
+void tidyOldLayout();   // the older-zip part of cleanUp(), kept for callers that run it later
 void install(const QString &zipPath, QObject *context, std::function<void(bool ok, const QString &message)> done);
 }
