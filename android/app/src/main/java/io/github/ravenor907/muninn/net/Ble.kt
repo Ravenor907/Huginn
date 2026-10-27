@@ -105,6 +105,27 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
     private var retryDelay = RETRY_FIRST
     private val retry = Runnable { bringUp() }
     private val readvertise = Runnable { if (server != null) advertise() }
+    /** Saving battery (see PowerLogic): FULL as before, LOW quieter and in turns, OFF not advertising (Huginns already connected stay). */
+    private var level = PowerLogic.Radio.FULL
+    /** LOW only: in the advertising half of the duty cycle. */
+    private var dutyOn = true
+    private val duty = Runnable { dutyOn = !dutyOn; restartAdvertising(); scheduleDuty() }
+
+    fun power(r: PowerLogic.Radio) {
+        handler.post {
+            if (r == level) return@post
+            level = r
+            handler.removeCallbacks(duty)
+            dutyOn = true
+            restartAdvertising()
+            scheduleDuty()
+        }
+    }
+
+    private fun scheduleDuty() {
+        handler.removeCallbacks(duty)
+        if (level == PowerLogic.Radio.LOW && wanted) handler.postDelayed(duty, PowerLogic.dutyNext(dutyOn))
+    }
 
     /** Starts advertising and serving. Safe to call again, for example once permission is given. */
     fun start() {
@@ -113,6 +134,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
             listenForSwitch()
             retryDelay = RETRY_FIRST
             bringUp()
+            scheduleDuty()
         }
     }
 
@@ -238,9 +260,11 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
     private fun advertise() {
         val adv = advertiser ?: return
         handler.removeCallbacks(readvertise)
+        if (level == PowerLogic.Radio.OFF || (level == PowerLogic.Radio.LOW && !dutyOn)) return
+        val low = level == PowerLogic.Radio.LOW
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+            .setAdvertiseMode(if (low) AdvertiseSettings.ADVERTISE_MODE_LOW_POWER else AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setTxPowerLevel(if (low) AdvertiseSettings.ADVERTISE_TX_POWER_LOW else AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .setTimeout(0)
             .build()

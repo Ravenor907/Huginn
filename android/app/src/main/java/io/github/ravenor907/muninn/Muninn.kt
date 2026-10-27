@@ -45,6 +45,8 @@ class Muninn : Application() {
     lateinit var chat: Chat
     lateinit var direct: Direct
     lateinit var updater: Updater
+    /** Saving battery while the screen is off (see net/PowerLogic). */
+    lateinit var power: io.github.ravenor907.muninn.net.Power
     /** True once everything is running (the vault is open). */
     val ready = MutableStateFlow(false)
     @Volatile var visible = false
@@ -80,15 +82,13 @@ class Muninn : Application() {
         }
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
+        // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
+        // (It also reconnects to the relays at once when the network comes back.)
+        power = io.github.ravenor907.muninn.net.Power(this)
+        power.install()
         if (vault.openDefault()) start()
         dropOldTools()
         dropTorFiles()
-        // Back online (Wi-Fi to data, out of a dead zone): reconnect to the relays at once.
-        try {
-            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: android.net.Network) { nostr.reconnectNow() }
-            })
-        } catch (_: Exception) {}
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Every 15 minutes (Android's shortest), check the internet inbox even when Muninn is closed.
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.KEEP,
@@ -114,6 +114,7 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        power.ready()
         // Messages that came while locked were only announced: ask the relays for them again now.
         nostr.resubscribe()
     }

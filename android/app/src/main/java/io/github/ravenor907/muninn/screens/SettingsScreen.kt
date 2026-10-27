@@ -86,6 +86,15 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
                 Text("Turn it off on the next screen. Muninn keeps listening and messages still notify you.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             }
+            var saver by remember { mutableStateOf(app.power.saver) }
+            val away by app.power.away.collectAsState()
+            ToggleRow("Battery saver",
+                if (saver) "Saves battery while the screen is off. Messages and calls still arrive, sometimes a few seconds later."
+                else "Maximum speed: always fully connected. Uses more battery.", saver) {
+                saver = it; app.power.saver = it
+            }
+            androidx.compose.runtime.LaunchedEffect(Unit) { app.power.refresh() }
+            Text(away.label, style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
                     ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
