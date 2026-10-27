@@ -76,7 +76,8 @@ public:
     // When we are the offerer: the offer's sealed body is resent as built (same JSON every time).
     QJsonObject offerMessage() const { return m_offer; }
 
-    bool useDevices = true;   // false: no microphone or speaker (self-test)
+    bool useDevices = true;   // false: no microphone or speaker (self-test, voice rooms)
+    QJsonObject offerExtra;   // added to the offer: a voice room's "g" and "ch" (section 6)
     std::function<QString(const QString &)> lanHostOverride;   // self-test: where the peer's "Wi-Fi" is
 
 Q_SIGNALS:

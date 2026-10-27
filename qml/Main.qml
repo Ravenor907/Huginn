@@ -121,7 +121,7 @@ Window {
     Loader {
         id: pageLoader
         anchors.top: parent.top
-        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.bottom: roomBar.visible ? roomBar.top : hints.visible ? hints.top : parent.bottom
         anchors.left: rail.right
         anchors.right: parent.right
         source: {
@@ -136,6 +136,14 @@ Window {
             return "ChatPage.qml"
         }
         onLoaded: if (item.setArgs) item.setArgs(app.pageArgs)
+    }
+
+    // In a voice room or group call: who's in it and the controls, under every page.
+    RoomBar {
+        id: roomBar
+        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.left: rail.right
+        anchors.right: parent.right
     }
 
     // Handheld: the buttons and what they do, along the bottom like the mockups.
@@ -242,6 +250,10 @@ Window {
     // Calls: how a call ended, as a toast.
     Connections {
         target: Calls
+        function onFinished(t) { Ui.say(t) }
+    }
+    Connections {
+        target: Rooms
         function onFinished(t) { Ui.say(t) }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen.

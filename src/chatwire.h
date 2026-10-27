@@ -23,7 +23,7 @@ namespace ChatWire
 extern const char kCap[];   // "r1"
 // What this app can do, sent as "caps" (docs/protocol-0.6.md 1.1). Only what Huginn really does:
 // no k1 (kids' TV is Muninn only), or 0.6 peers would try it and fail.
-extern const char kCaps[];  // "r1 g1 c1"
+extern const char kCaps[];  // "r1 g1 c1 v1"
 
 // The ratchet is for private-room and group payloads to a contact (or group peer) that said it
 // can read it.

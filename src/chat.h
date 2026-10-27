@@ -205,6 +205,14 @@ public:
     Q_INVOKABLE QString leaveGroup(const QString &g);
     Q_INVOKABLE void forgetGroup(const QString &g);
 
+    // Voice rooms and group calls (call/roommanager.cpp, docs/protocol-0.6.md section 6): the current
+    // state of a group this device is still in (empty otherwise), a member's name in it, whether a
+    // member's app can join rooms (caps v1, or not known yet) and whether it is known that it can't.
+    QJsonObject groupState(const QString &g) const;
+    QString groupMemberName(const QString &g, const QString &key) const { return memberName(g, key); }
+    bool canRoom(const QString &key) const;
+    bool lacksRooms(const QString &key) const;
+
     static const int kMax = 2000;
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0,
                         const QString &onion = QString());

@@ -258,6 +258,8 @@ void CallSession::sendOffer()
     addCands(o);
     o.insert(QStringLiteral("ble"), m_signal && m_signal->bleReady(m_peer));
     o.insert(QStringLiteral("codec"), QString::fromLatin1(kCodec));
+    for (auto it = offerExtra.constBegin(); it != offerExtra.constEnd(); ++it)
+        o.insert(it.key(), it.value());
     m_offer = o;
     send(o);
     // Every 3 s until they ring, answer, decline or are busy; no answer after 45 s.
