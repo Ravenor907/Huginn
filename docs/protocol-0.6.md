@@ -46,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1 k2 t1 v1 m1"
+"caps": "r1 g1 c1 k1 k2 k3 t1 v1 m1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -59,6 +59,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
+| `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 
@@ -82,8 +83,8 @@ opens a contact's chat and the caps are unknown.
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `m1` for rooms `rich`, `mx` and `live` and for `group` messages `react` and
-  `edit`). 0.5 would answer 400 and drop it.
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `m1` for rooms `rich`, `mx` and
+  `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work exactly as in 0.5 with everyone.
@@ -741,7 +742,7 @@ sends a config with them once the TV's `applied` shows `k2`.
 | field | type | absent | meaning |
 |---|---|---|---|
 | `calls` | true or false | true | the kids can call people in `contacts` (and parents), and those people can call the TV |
-| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls |
+| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls. A TV that runs its own voice processing (echo canceller, noise suppression and automatic gain) applies `0.3 * (mic - 50)` dB after it instead, so 50 is the processed level |
 
 Anything else that's extra is still malformed. Vectors: `tv.configs.cfg4` (calls off, mic 80), and step 7 of
 `tv.accept`.
@@ -769,6 +770,37 @@ still unknown a minute after a probe, 1.2) gets the TV's link as a private messa
 once on every route (the relays hold it for an offline phone); the parent can always share the TV's code too.
 To put the person in a family group, the parent's app uses the normal group invite (3.5).
 
+### 7.7 Microphone level on the TV, storage and Clear history (`k3`)
+
+Anyone at the TV can set its microphone level on the TV itself (no parent unlock). The TV uses that
+level until a parent picks another one: it applies a new config's `mic` only when it differs from the
+`mic` of the config it had (a parent changed it; the last change wins), and keeps its own otherwise.
+
+The TV tells its parents (those whose app says `k3`) in room `tvconfig`:
+
+```
+{"t":"status","mic":<level in use, 0..100>,"used":<bytes Muninn takes on the TV>,"ts":<ms>}
+```
+
+`ts` is when the level last changed: the TV's clock when it was set on the TV, else the config's `ts`.
+All three are integers `0 <= n < 2^53`; anything else is malformed. The TV sends it a second after its
+slider stops moving, after every config it applies, after Clear history, and in answer to `usage`.
+
+A parent's app that gets a `status` whose `mic` differs from its own and whose `ts` is newer than its own
+last change takes the TV's level and sends a new config with it (7.2), so the other parent and later
+configs carry it too. It shows `used` as the TV's storage.
+
+A parent (only a current parent; anyone else gets 403) may send:
+
+| plaintext | the TV |
+|---|---|
+| `{"t":"usage"}` | answers with `status` |
+| `{"t":"clear"}` | erases every message, photo and voice message and its caches (pairing, parent keys, config and contacts stay), then sends `status` |
+
+Neither is retried; the parent's app asks again when its Kids' TV screen opens. On its own, the TV also
+keeps its storage small (recent messages only, smaller photos, voice messages for two weeks, caches
+emptied); that is local and not on the wire.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -786,6 +818,7 @@ To put the person in a family group, the parent's app uses the normal group invi
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
 | `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
+| `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |

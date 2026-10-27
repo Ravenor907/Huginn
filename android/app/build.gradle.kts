@@ -23,6 +23,27 @@ val opusSha256 = "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7c
 val opusDir = layout.buildDirectory.dir("opus").get().asFile
 val opusSrc = File(opusDir, "opus-$opusVersion")
 
+// Kids' TV voice processing (src/main/cpp/tvvoice): WebRTC Audio Processing (BSD-3-Clause), the Abseil headers
+// its code includes (Apache-2.0) and RNNoise (BSD-3-Clause). Pinned versions and SHA-256, fetched once into
+// build/tvvoice by fetchTvVoice.
+data class Pinned(val name: String, val urls: List<String>, val sha256: String, val file: String)
+val tvVoicePins = listOf(
+    Pinned("webrtc-audio-processing 1.3",
+        listOf("https://freedesktop.org/software/pulseaudio/webrtc-audio-processing/webrtc-audio-processing-1.3.tar.xz"),
+        "2365e93e778d7b61b5d6e02d21c47d97222e9c7deff9e1d0838ad6ec2e86f1b9", "webrtc-audio-processing-1.3.tar.xz"),
+    Pinned("abseil-cpp 20230125.1",
+        listOf("https://github.com/abseil/abseil-cpp/archive/20230125.1.tar.gz",
+            "https://github.com/mesonbuild/wrapdb/releases/download/abseil-cpp_20230125.1-4/abseil-cpp-20230125.1.tar.gz"),
+        "81311c17599b3712069ded20cca09a62ab0bf2a89dfa16993786c8782b7ed145", "abseil-cpp-20230125.1.tar.gz"),
+    Pinned("rnnoise 0.2",
+        listOf("https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz"),
+        "90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37", "rnnoise-0.2.tar.gz"),
+)
+val tvVoiceDir = layout.buildDirectory.dir("tvvoice").get().asFile
+val webrtcSrc = File(tvVoiceDir, "webrtc-audio-processing-1.3/webrtc")
+val abseilSrc = File(tvVoiceDir, "abseil-cpp-20230125.1")
+val rnnoiseSrc = File(tvVoiceDir, "rnnoise-0.2")
+
 android {
     namespace = "io.github.ravenor907.muninn"
     compileSdk = 36
@@ -35,7 +56,8 @@ android {
         versionName = versionText
         // libopus (calls) is built for these. 32-bit x86 (old emulators only) is left out to keep the APK small.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
-        externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=none") } }
+        externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=c++_static",
+            "-DWEBRTC_APM_SRC=${webrtcSrc.absolutePath}", "-DABSEIL_SRC=${abseilSrc.absolutePath}", "-DRNNOISE_SRC=${rnnoiseSrc.absolutePath}") } }
     }
 
     externalNativeBuild {
@@ -98,7 +120,30 @@ val fetchOpus by tasks.registering {
         project.copy { from(project.tarTree(project.resources.gzip(tgz))); into(opusDir) }
     }
 }
-tasks.configureEach { if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(fetchOpus) }
+
+val fetchTvVoice by tasks.registering {
+    description = "Downloads the pinned Kids' TV voice processing sources and checks their SHA-256."
+    outputs.dirs(webrtcSrc, abseilSrc, rnnoiseSrc)
+    doLast {
+        if (File(webrtcSrc, "modules/audio_processing").exists() && File(abseilSrc, "absl").exists() && File(rnnoiseSrc, "src/denoise.c").exists()) return@doLast
+        fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+        tvVoiceDir.mkdirs()
+        for (p in tvVoicePins) {
+            val f = File(tvVoiceDir, p.file)
+            for (u in p.urls) {
+                if (f.exists() && sha(f) == p.sha256) break
+                try { URI(u).toURL().openStream().use { input -> f.outputStream().use { input.copyTo(it) } } } catch (e: Exception) { f.delete() }
+            }
+            val got = if (f.exists()) sha(f) else "nothing (download failed)"
+            if (got != p.sha256) { f.delete(); throw GradleException("${p.name} download has SHA-256 $got, expected ${p.sha256}") }
+            // tar knows .xz, which Gradle's tarTree doesn't.
+            val tar = ProcessBuilder("tar", "-xf", f.absolutePath, "-C", tvVoiceDir.absolutePath).redirectErrorStream(true).start()
+            val out = tar.inputStream.bufferedReader().readText()
+            if (tar.waitFor() != 0) throw GradleException("Unpacking ${p.file} failed: $out")
+        }
+    }
+}
+tasks.configureEach { if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(fetchOpus, fetchTvVoice) }
 
 kotlin {
     compilerOptions {

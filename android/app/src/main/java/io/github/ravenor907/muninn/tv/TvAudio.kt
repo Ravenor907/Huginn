@@ -106,7 +106,7 @@ class TvSpeech(private val context: Context) {
         rec = null
     }
 
-    /** 16 kHz mono 16-bit PCM from [TvMic], louder, into a pipe the recognizer reads. */
+    /** 16 kHz mono 16-bit PCM from [TvMic], cleaned up by [TvVoice] and louder, into a pipe the recognizer reads. */
     private class Feed(private val record: android.media.AudioRecord, val readSide: android.os.ParcelFileDescriptor,
                        private val writeSide: android.os.ParcelFileDescriptor) {
         @Volatile private var stopped = false
@@ -114,16 +114,20 @@ class TvSpeech(private val context: Context) {
 
         fun start() {
             thread = Thread({
+                TvMic.audioThread()
                 val agc = TvMic.clipAgc(record.audioSessionId)
-                val gain = TvMic.Gain { TvMic.level }
+                val proc = TvMic.clipProcessor(RATE)
+                val gain = TvMic.gainFor(proc)
+                val raw = ShortArray(FRAME)
                 val pcm = ShortArray(FRAME)
                 val bytes = ByteArray(FRAME * 2)
                 try {
                     android.os.ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { os ->
                         record.startRecording()
                         while (!stopped) {
-                            val n = record.read(pcm, 0, FRAME)
+                            val n = TvMic.readFully(record, raw, FRAME)
                             if (n <= 0) break
+                            if (proc != null && n == FRAME) proc.capture(raw, n, pcm) else System.arraycopy(raw, 0, pcm, 0, n)
                             gain.process(pcm, n)
                             for (i in 0 until n) { bytes[2 * i] = pcm[i].toInt().toByte(); bytes[2 * i + 1] = (pcm[i].toInt() shr 8).toByte() }
                             os.write(bytes, 0, n * 2)
@@ -134,6 +138,7 @@ class TvSpeech(private val context: Context) {
                     try { record.stop() } catch (_: Exception) {}
                     record.release()
                     try { agc?.release() } catch (_: Exception) {}
+                    proc?.close()
                 }
             }, "muninn-tv-speech").apply { isDaemon = true; start() }
         }

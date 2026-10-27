@@ -166,11 +166,13 @@ class MainActivity : ComponentActivity() {
         // ChatNav lives as long as the process, and the message service keeps the process alive after
         // Muninn's window is closed. So a fresh open would land back in whatever chat was last on screen:
         // start on the chat list unless a notification (extra "chat") or a scanned code asks otherwise.
-        if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.menu = false }
+        if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.menu = false; io.github.ravenor907.muninn.tv.TvNav.home() }
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
         if (ciSkip && intent?.getBooleanExtra("menu", false) == true) ChatNav.menu = true   // CI: the + menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
+        if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
+            Thread { android.util.Log.i("Muninn", "TvVoice self-check: " + io.github.ravenor907.muninn.tv.TvVoice.selfCheck()) }.start()
         if (savedInstanceState == null) { openChat(intent); openAdd(intent) }
         handleShare(intent)
         setContent { MuninnTheme { Root() } }
@@ -180,7 +182,9 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleShare(intent)
         // The launcher icon while Muninn is still open: the chat list, like a fresh open.
-        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.getStringExtra("chat") == null) toList()
+        // On a TV the launcher says LEANBACK_LAUNCHER; a Kids' TV goes back to "Who do you want to talk to?".
+        if (intent.action == Intent.ACTION_MAIN && (intent.hasCategory(Intent.CATEGORY_LAUNCHER) || intent.hasCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)) &&
+            intent.getStringExtra("chat") == null) { toList(); io.github.ravenor907.muninn.tv.TvNav.home() }
         openChat(intent)
         openAdd(intent)
         intent.getStringExtra("screen")?.let { show(it) }
@@ -211,6 +215,8 @@ class MainActivity : ComponentActivity() {
     /** A message notification was tapped: open that conversation. */
     private fun openChat(i: Intent?) {
         val key = i?.getStringExtra("chat") ?: return
+        // A Kids' TV: the notification's or banner's person (the TV's own screen ignores anyone not on its list).
+        if (key != "inbox") io.github.ravenor907.muninn.tv.TvNav.show(key)
         tab = "chat"
         ChatNav.open = if (key == "inbox") "" else key
         intentChose = true
@@ -295,6 +301,8 @@ class MainActivity : ComponentActivity() {
         secure()
         recents()
         intentChose = false
+        // Kids' TV: a call that came in over a show just ended; the show goes on, not Muninn.
+        if (io.github.ravenor907.muninn.tv.TvCallFocus.sendBack()) moveTaskToBack(true)
         app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()
         // Back from Muninn's app settings with the permission now allowed: start close-by chat.

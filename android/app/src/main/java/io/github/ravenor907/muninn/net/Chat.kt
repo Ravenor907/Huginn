@@ -1380,6 +1380,51 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
+    /**
+     * Kids' TV storage cap: keeps the newest [keep] messages per person, drops voice messages older
+     * than [voiceBefore] (ms since the epoch), then the oldest photos and voice messages until the stored
+     * ones take at most [maxBlobBytes]. Photos bigger than [shrinkOver] bytes go through [shrink] (null
+     * keeps them as they are). Returns the messages removed.
+     */
+    fun trimHistory(keep: Int, voiceBefore: Long, maxBlobBytes: Long, shrinkOver: Int, shrink: (ByteArray) -> ByteArray?): Int {
+        var removed = 0
+        val gone = ArrayList<String>()
+        edit { map ->
+            var changed = false
+            for (k in map.keys.toList()) {
+                val list = map[k]!!
+                val (old, rest) = list.partition { it.voice > 0 && it.time < voiceBefore }
+                val kept = rest.takeLast(keep)
+                val drop = old + rest.dropLast(keep)
+                if (drop.isEmpty()) continue
+                drop.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete(); gone += it.id }
+                map[k] = kept; changed = true; removed += drop.size
+            }
+            // Oldest blobs first until they fit.
+            val blobs = map.values.flatten().filter { it.photo.isNotEmpty() }.sortedBy { it.time }
+            var total = blobs.sumOf { File(photosDir, it.photo).length() }
+            for (m in blobs) {
+                if (total <= maxBlobBytes) break
+                total -= File(photosDir, m.photo).length()
+                File(photosDir, m.photo).delete(); gone += m.id
+                map[m.peerKey] = map[m.peerKey].orEmpty().filterNot { it.id == m.id }
+                changed = true; removed++
+            }
+            changed
+        }
+        if (gone.isNotEmpty()) { forget(gone); gone.forEach { outbox.drop(it); outbox.drop(UNSEND + it); tries.remove(it) } }
+        // Big photos made smaller, outside the lock (decoding takes a moment).
+        for (m in _private.value.values.flatten()) {
+            if (m.photo.isEmpty() || m.voice > 0) continue
+            val f = File(photosDir, m.photo)
+            if (f.length() <= shrinkOver) continue
+            val bytes = try { photo(m.photo) } catch (e: Exception) { null } ?: continue
+            val small = try { shrink(bytes) } catch (e: Throwable) { null } ?: continue
+            if (small.size < bytes.size) try { vault.writeBytes(f, small) } catch (_: Exception) {}
+        }
+        return removed
+    }
+
     private fun addNearby(m: Msg) = synchronized(lock) {
         if (_nearby.value.any { it.id == m.id }) return@synchronized
         _nearby.value = (_nearby.value + m).takeLast(300)

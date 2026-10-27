@@ -155,4 +155,19 @@ class TvConfigTest {
         // 80 characters counted as code points: 80 runes are fine.
         val ok = JSONObject(good.toString()); ok.getJSONArray("quick").getJSONObject(0).put("text", "ᚺ".repeat(80)); TvRules.check(ok)
     }
+
+    @Test
+    fun k3StatusIsCheckedAndUsageAndClearAreSimple() {
+        val m = JSONObject(TvRules.statusMessage(70, 123_456_789L, 1_761_500_100_000L))
+        assertEquals(Triple(70, 123_456_789L, 1_761_500_100_000L), TvRules.status(m))
+        // Out of range levels are held to 0..100 when made; anything else is refused when read.
+        assertEquals(100, TvRules.status(JSONObject(TvRules.statusMessage(250, 1, 1)))!!.first)
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("mic", 101)))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("used", -1)))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("ts", "soon")))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).put("t", "applied")))
+        assertEquals(null, TvRules.status(JSONObject(m.toString()).apply { remove("used") }))
+        assertEquals("usage", JSONObject(TvRules.usageMessage()).getString("t"))
+        assertEquals("clear", JSONObject(TvRules.clearMessage()).getString("t"))
+    }
 }

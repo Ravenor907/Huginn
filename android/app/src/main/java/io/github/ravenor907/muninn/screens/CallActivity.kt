@@ -46,18 +46,21 @@ class CallActivity : ComponentActivity() {
         setContent {
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
-                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(onAnswer = { withMic { CallManager.answer() } }, onClose = { finish() })
+                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { withMic { CallManager.answer() } }, onClose = { close() })
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
                 }, onAnswer = { withMic { CallManager.answer() } }, hideName = Panic.locked.value || privateName())
             }
         }
         // Gone once the call is over (after the short "Call ended" moment).
-        lifecycleScope.launch { var seen = false; CallManager.call.collect { if (it != null) seen = true else if (seen) finish() } }
+        lifecycleScope.launch { var seen = false; CallManager.call.collect { if (it != null) seen = true else if (seen) close() } }
         handle(intent)
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
+
+    /** Kids' TV: back to the show that was on when the call came (not to Muninn); else just closes. */
+    private fun close() { if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallFocus.leave(this) else finish() }
 
     private fun isLocked() = getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
 
