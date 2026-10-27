@@ -98,6 +98,9 @@ public:
     struct Peer { QString base, chatKey, chatName, alias, type; };
     QList<Peer> chatPeers() const;
     QString baseFor(const QString &chatKey) const;
+    // A sent file name as folders under the save folder: never "..", a drive or an absolute path.
+    static QStringList safeParts(const QString &name);
+    static bool selfTest();
     void announce();
     // For chat's own requests to a peer's base URL: peerRequest() adds our certificate, and
     // pinReply() aborts the reply if the peer's certificate isn't the one it announced.

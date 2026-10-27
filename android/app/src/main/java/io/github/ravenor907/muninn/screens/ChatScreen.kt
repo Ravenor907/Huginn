@@ -25,6 +25,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.abs
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
@@ -125,8 +136,14 @@ import java.util.Date
 /** [name] is what's shown (a nickname if set); [alt] is the name they chose, so search finds either. [group]: a group's id. */
 private data class ChatRow(val key: String, val name: String, val alt: String = name, val group: String? = null)
 
+/** A chat being dragged on the chat list: its list item, the section it came from and its key. */
+private data class Dragged(val item: String, val section: String, val key: String)
+
+/** From the chat list: the section a held chat is in ("" no folder), and moving it up or down there (null at the end). */
+internal class ListMoves(val section: String, val up: (() -> Unit)?, val down: (() -> Unit)?)
+
 /**
- * Where a conversation is open: "" none, "nearby" the room, "code", "add", "newgroup", a contact's key,
+ * Where a conversation is open: "" none, "nearby" the room, "trash", "code", "add", "newgroup", a contact's key,
  * "g:<group id>" a group, or "g:<group id>/settings" its settings.
  */
 object ChatNav {
@@ -141,8 +158,6 @@ object ChatNav {
     var wide by mutableStateOf(false)
     /** Tablets: what the rail has picked, "" for direct messages or a group's id. */
     var space by mutableStateOf("")
-    /** The folder chip picked on the chat list ("" is All). */
-    var folder by mutableStateOf("")
     /** Each group's open text channel. */
     val channel = androidx.compose.runtime.mutableStateMapOf<String, String>()
 
@@ -240,6 +255,7 @@ fun ChatMain(app: Muninn) {
             "add" -> AddSomeone(app)
             "newgroup" -> NewGroup(app)
             "nearby" -> NearbyRoom(app)
+            "trash" -> TrashScreen(app) { ChatNav.open = "" }
             else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
     }
@@ -278,8 +294,8 @@ private fun RoomAvatar(size: Dp) {
 }
 
 @Composable
-private fun ListLabel(text: String, top: Dp = 4.dp, trailing: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = top, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ListLabel(text: String, top: Dp = 4.dp, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = top, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(text.uppercase(), style = labelStyle, modifier = Modifier.weight(1f).semantics { heading() })
         trailing()
     }
@@ -320,13 +336,76 @@ private fun SelectBar(n: Int, onText: () -> Unit, onCall: () -> Unit, onFolders:
     }
 }
 
-/** One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold to pick, or for folders. */
+/**
+ * Touch on a chat row that can be moved. A tap is a tap; a hold does [onLong] when let go; a hold and then a
+ * drag moves the row ([onDrag] with each step, then [onDrop]: true when let go, false when the touch was
+ * taken away). Moving before the hold is a scroll and is left to the list. The touch is taken first, so the
+ * row's clickable only sees keys and TalkBack; [press] still shows the ripple.
+ */
+private suspend fun PointerInputScope.holdToDrag(press: MutableInteractionSource, onTap: () -> Unit, onHeld: () -> Unit, onLong: () -> Unit,
+                                                 onDrag: (Float) -> Unit, onDrop: (Boolean) -> Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        down.consume()
+        val p = PressInteraction.Press(down.position)
+        press.tryEmit(p)
+        // 0: still deciding, 1: a tap, 2: not ours (a scroll, or the touch went away).
+        var outcome = 0
+        withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+            while (outcome == 0) {
+                val c = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+                if (c == null) outcome = 2
+                else if (!c.pressed) { c.consume(); outcome = 1 }
+                else if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) outcome = 2
+            }
+        }
+        if (outcome == 1) { press.tryEmit(PressInteraction.Release(p)); onTap(); return@awaitEachGesture }
+        if (outcome == 2) { press.tryEmit(PressInteraction.Cancel(p)); return@awaitEachGesture }
+        // Held: from here the row has the touch.
+        onHeld()
+        var dragging = false
+        var ended = false
+        var total = 0f
+        try {
+            while (true) {
+                val c = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                val dy = c.position.y - c.previousPosition.y
+                c.consume()
+                if (!c.pressed) { ended = true; break }
+                total += dy
+                if (!dragging && abs(total) > viewConfiguration.touchSlop) { dragging = true; press.tryEmit(PressInteraction.Cancel(p)); onDrag(total) }
+                else if (dragging) onDrag(dy)
+            }
+        } finally {
+            if (!dragging) press.tryEmit(PressInteraction.Release(p))
+            if (dragging) onDrop(ended) else if (ended) onLong()
+        }
+    }
+}
+
+/**
+ * One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold to pick, or for folders.
+ * [onDrag]: hold then drag moves it (each step in px, then [onDrop] with false if the touch was taken away).
+ */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
-                      onLong: (() -> Unit)? = null, picked: Boolean = false, longLabel: String = "Options", onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(if (picked) Palette.accentFill else Color.Transparent)
-        .combinedClickable(role = Role.Button, onLongClickLabel = if (onLong != null) longLabel else null, onLongClick = onLong, onClick = onClick)
+                      onLong: (() -> Unit)? = null, picked: Boolean = false, longLabel: String = "Options", modifier: Modifier = Modifier,
+                      onDrag: ((Float) -> Unit)? = null, onDrop: ((Boolean) -> Unit)? = null, onClick: () -> Unit) {
+    val press = remember { MutableInteractionSource() }
+    val haptic = LocalHapticFeedback.current
+    val tapNow by rememberUpdatedState(onClick)
+    val longNow by rememberUpdatedState(onLong)
+    val dragNow by rememberUpdatedState(onDrag)
+    val dropNow by rememberUpdatedState(onDrop)
+    // Touch goes through holdToDrag when the row can move; keys, D-pad and TalkBack still use the clickable below.
+    val touch = if (onDrag == null) Modifier else Modifier.pointerInput(Unit) {
+        holdToDrag(press, { tapNow() }, { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }, { longNow?.invoke() },
+            { dragNow?.invoke(it) }, { dropNow?.invoke(it) })
+    }
+    Row(modifier.fillMaxWidth().background(if (picked) Palette.accentFill else Color.Transparent).then(touch)
+        .combinedClickable(interactionSource = press, indication = LocalIndication.current, role = Role.Button,
+            onLongClickLabel = if (onLong != null) longLabel else null, onLongClick = onLong, onClick = onClick)
         .semantics { selected = picked }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box {
@@ -373,8 +452,14 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val gunread by app.chat.groups.unreadGroups.collectAsState()
     val ginvites by app.chat.groups.pending.collectAsState()
     val folders by app.chat.folders.all.collectAsState()
+    val topOrder by app.chat.folders.top.collectAsState()
+    val trashed by app.chat.trash.all.collectAsState()
     var query by remember { mutableStateOf("") }
     var foldersFor by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // The section the chat in [foldersFor] was held in ("" no folder), for Move up, Move down and Move to folder.
+    var heldIn by remember { mutableStateOf<String?>(null) }
+    var addingFolder by remember { mutableStateOf(false) }
+    var editingFolder by remember { mutableStateOf<Folders.Folder?>(null) }
     val activeMap by app.chat.active.collectAsState()
     // Messenger style: hold a contact to pick them, tap more, then Group text or Group call.
     var selected by remember { mutableStateOf(setOf<String>()) }
@@ -403,40 +488,130 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val chatRows = (contacts.filter { !it.groupOnly }.map { ChatRow(it.chatKey, it.shown, it.name) } +
         convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> ChatRow(k, met[k]?.name ?: app.chat.nameOf(k)) } +
         groups.values.map { ChatRow(Folders.groupKey(it.g), it.state.name, group = it.g) })
-        .filter { it.key !in blocked }
+        .filter { it.key !in blocked && it.key !in trashed }
         .sortedByDescending { lastTime(it) }
-    // A folder chip: only what's in it.
-    val folder = folders.firstOrNull { it.id == ChatNav.folder }
-    val inFolder = if (folder == null) chatRows else chatRows.filter { it.key in folder.keys }
     // Search: a chat's nickname, the name they chose, or its last message.
     val q = query.trim()
     fun lastText(r: ChatRow): String? = if (r.group != null) gmsgs[r.group]?.lastOrNull()?.let { groupPreview(app, it) } else convos[r.key]?.lastOrNull()?.let { preview(it) }
-    val shownRows = if (q.isEmpty()) inFolder else inFolder.filter { c ->
+    val shownRows = if (q.isEmpty()) chatRows else chatRows.filter { c ->
         c.name.contains(q, ignoreCase = true) || c.alt.contains(q, ignoreCase = true) || lastText(c)?.contains(q, ignoreCase = true) == true
     }
-    val shownStrangers = if (q.isEmpty() && folder == null) strangers else if (folder != null) emptyList() else strangers.filter { it.second.contains(q, ignoreCase = true) }
-    val roomPreview = if (app.identity.nearbyChat) "${around.size} around you · you're “${app.identity.username}”" else "Off"
-    val showRoom = folder == null && (q.isEmpty() || "Nearby room".contains(q, ignoreCase = true) || roomPreview.contains(q, ignoreCase = true))
+    // Hidden from people nearby: no Nearby room and nobody new around.
+    val visible = app.identity.visibleNearby
+    val shownStrangers = if (!visible) emptyList() else if (q.isEmpty()) strangers else strangers.filter { it.second.contains(q, ignoreCase = true) }
+    val roomPreview = if (app.identity.nearbyRoom) "${around.size} around you · you're “${app.identity.username}”" else "Off"
+    val showRoom = visible && (q.isEmpty() || "Nearby room".contains(q, ignoreCase = true) || roomPreview.contains(q, ignoreCase = true))
+    // Folders are sections that fold away (like Discord categories), with the chats in no folder above them.
+    // A chat in several folders shows under each. Newest first, except what was moved by hand.
+    val byKey = chatRows.associateBy { it.key }
+    val newest = chatRows.map { it.key }
+    val foldered = folders.flatMap { it.keys }.toSet()
+    fun sectionKeys(sec: String): List<String> = if (sec == Folders.NONE) Folders.arrange(newest.filter { it !in foldered }, topOrder)
+        else folders.firstOrNull { it.id == sec }?.let { f -> Folders.arrange(newest.filter { it in f.keys }, f.keys) }.orEmpty()
+    fun movesFor(sec: String?, key: String): ListMoves? {
+        if (sec == null) return null
+        val l = sectionKeys(sec)
+        val i = l.indexOf(key)
+        if (i < 0) return null
+        return ListMoves(sec, if (i > 0) ({ app.chat.folders.order(sec, Folders.shift(l, key, -1)) }) else null,
+            if (i < l.size - 1) ({ app.chat.folders.order(sec, Folders.shift(l, key, 1)) }) else null)
+    }
+    // Hold a chat and drag it: within its section to reorder, or onto another section (its header or a chat in it) to move it there.
+    val listState = rememberLazyListState()
+    var dragged by remember { mutableStateOf<Dragged?>(null) }
+    var dragBy by remember { mutableStateOf(0f) }
+    // Every list item a chat can be dropped on: its key to (section, the chat there or null for the section's header).
+    val spots = HashMap<String, Pair<String, String?>>()
+    fun dropSpot(): String? {
+        val d = dragged ?: return null
+        val seen = listState.layoutInfo.visibleItemsInfo
+        val me = seen.firstOrNull { it.key == d.item } ?: return null
+        val y = me.offset + me.size / 2 + dragBy
+        return seen.firstOrNull { val k = it.key as? String; k != null && k != d.item && spots.containsKey(k) && y >= it.offset && y < it.offset + it.size }?.key as? String
+    }
+    fun drop(commit: Boolean) {
+        val d = dragged ?: return
+        val spot = if (commit) dropSpot()?.let { spots[it] } else null
+        dragged = null; dragBy = 0f
+        val (to, onto) = spot ?: return
+        val now = sectionKeys(to)
+        val rest = now - d.key
+        // Onto a header: first in that section. Onto a chat: in its place (after it when moving down the same section).
+        val at = if (onto == null) 0 else rest.indexOf(onto).let { i ->
+            if (i < 0) rest.size else if (to == d.section && now.indexOf(d.key) in 0 until now.indexOf(onto)) i + 1 else i
+        }
+        val order = rest.toMutableList().apply { add(at.coerceIn(0, size), d.key) }
+        if (to != d.section) app.chat.folders.move(d.key, d.section, to)
+        app.chat.folders.order(to, order)
+    }
+    val sectioned = q.isEmpty()
+    if (sectioned) {
+        spots["h"] = Folders.NONE to null
+        sectionKeys(Folders.NONE).forEach { spots["c|$it"] = Folders.NONE to it }
+        folders.forEach { f ->
+            spots["h" + f.id] = f.id to null
+            if (!f.collapsed) {
+                val keys = sectionKeys(f.id)
+                keys.forEach { spots["c${f.id}|$it"] = f.id to it }
+                if (keys.isEmpty()) spots["e" + f.id] = f.id to null
+            }
+        }
+    }
+    val hover = dropSpot()
+
+    // One chat on the list. [sec]: the section it's under ("" no folder), null in search results (nothing to move there).
+    val chatRow: @Composable (ChatRow, String?, String) -> Unit = { c, sec, item ->
+        val lifted = dragged?.item == item
+        val rowMod = Modifier.then(if (lifted) Modifier.zIndex(1f).graphicsLayer { translationY = dragBy }.background(Palette.panel) else Modifier)
+            .then(if (hover == item) Modifier.background(Palette.focusFill) else Modifier)
+        val onDrag: ((Float) -> Unit)? = if (sec == null) null else ({ dy ->
+            if (dragged?.item != item) { dragged = Dragged(item, sec, c.key); dragBy = 0f }
+            dragBy += dy
+        })
+        val onDrop: ((Boolean) -> Unit)? = if (sec == null) null else ({ commit -> drop(commit) })
+        if (c.group != null) {
+            val grp = groups[c.group]
+            val msgs = gmsgs[c.group].orEmpty()
+            val last = msgs.lastOrNull()
+            val others = grp?.state?.members.orEmpty().filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
+            PersonRow(c.name, last?.let { groupPreview(app, it) } ?: when {
+                    grp?.readOnly == true -> "You're not in it any more"
+                    others.isEmpty() -> "Just you so far: invite people"
+                    else -> "${others.size + 1} people"
+                }, last?.let { when_(it.time) } ?: "",
+                if (c.group in gunread) groupUnread(msgs) else 0, false, { GroupAvatar(c.name, others, 48.dp) },
+                onLong = { heldIn = sec; foldersFor = c.key to c.name }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
+                if (selected.isNotEmpty()) Ui.say("Pick people for a new group. Groups open once you're done.") else ChatNav.openGroup(c.group)
+            }
+        } else {
+            val msgs = convos[c.key].orEmpty()
+            val last = msgs.lastOrNull()
+            val pickable = app.chat.isContact(c.key)
+            PersonRow(c.name, last?.let { preview(it) } ?: routeText(app.chat.route(c.key)), last?.let { when_(it.time) } ?: "",
+                if (c.key in unread) unreadCount(msgs) else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.name, 48.dp, 18.sp, online = c.key in activeMap) },
+                onLong = { heldIn = sec; if (pickable) selected = selected + c.key else foldersFor = c.key to c.name }, picked = c.key in selected,
+                longLabel = if (pickable) "Pick for a group" else "Options", modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
+                when {
+                    selected.isEmpty() -> ChatNav.open = c.key
+                    !pickable -> Ui.say("Only contacts can be put in a group.")
+                    c.key in selected -> selected = selected - c.key
+                    else -> selected = selected + c.key
+                }
+            }
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
             item {
                 if (selected.isNotEmpty()) SelectBar(selected.size, { startGroup(false) }, { startGroup(true) },
                     onFolders = if (selected.size == 1) ({ val k = selected.first(); foldersFor = k to app.chat.nameOf(k); selected = emptySet() }) else null) { selected = emptySet() }
                 else SearchBox(query) { query = it }
-                FolderChips(app, folders)
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger),
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(bottom = 8.dp))
-                    // Messages only arrive right away if Android lets Muninn run in the background.
-                    val ctx = LocalContext.current
-                    var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
-                    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
-                    if (app.identity.stayConnected && !free) Panel(Modifier.padding(bottom = 8.dp)) {
-                        Text("Get messages right away", style = Type.big)
-                        Text("Android's battery saver pauses Muninn while the phone sleeps, so messages and their notifications arrive late. Allow Muninn to run in the background to fix that.", style = Type.small)
-                        MButton("Allow", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
-                    }
+                    // Permissions still missing (microphone, camera, notifications, running in the background).
+                    SetupCard(app, Modifier.padding(bottom = 8.dp))
                 }
             }
             if (requests.isNotEmpty() || ginvites.isNotEmpty()) item { ListLabel("Wants to chat") }
@@ -468,59 +643,56 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     }
                 }
             }
-            item {
-                ListLabel(folder?.name ?: "Chats") {
+            item(key = "h") {
+                ListLabel("Chats", modifier = if (hover == "h") Modifier.background(Palette.focusFill) else Modifier) {
                     // Online: the internet relays are connected. Said in words too, never by the dot's color alone.
                     val on = nostrUp > 0
                     Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
                     Text(if (on) "Online" else "Offline", style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
+                    IconAction("folder", "New folder", Palette.textMuted, size = 18.dp) { addingFolder = true }
                 }
             }
-            if (showRoom) item(key = "room") {
-                PersonRow("Nearby room", roomPreview, room.lastOrNull()?.let { when_(it.time) } ?: "", 0, false, { RoomAvatar(48.dp) }) { ChatNav.open = "nearby" }
-            }
-            items(shownRows, key = { "c" + it.key }) { c ->
-                if (c.group != null) {
-                    val grp = groups[c.group]
-                    val msgs = gmsgs[c.group].orEmpty()
-                    val last = msgs.lastOrNull()
-                    val others = grp?.state?.members.orEmpty().filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
-                    PersonRow(c.name, last?.let { groupPreview(app, it) } ?: when {
-                            grp?.readOnly == true -> "You're not in it any more"
-                            others.isEmpty() -> "Just you so far: invite people"
-                            else -> "${others.size + 1} people"
-                        }, last?.let { when_(it.time) } ?: "",
-                        if (c.group in gunread) groupUnread(msgs) else 0, false, { GroupAvatar(c.name, others, 48.dp) },
-                        onLong = { foldersFor = c.key to c.name }) {
-                        if (selected.isNotEmpty()) Ui.say("Pick people for a new group. Groups open once you're done.") else ChatNav.openGroup(c.group)
+            if (!sectioned) items(shownRows, key = { "s" + it.key }) { c -> chatRow(c, null, "s" + c.key) }
+            else {
+                items(sectionKeys(Folders.NONE).mapNotNull { byKey[it] }, key = { "c|" + it.key }) { c -> chatRow(c, Folders.NONE, "c|" + c.key) }
+                folders.forEach { f ->
+                    val keys = sectionKeys(f.id)
+                    item(key = "h" + f.id) {
+                        FolderHeader(f, keys.count { it in unread || it.removePrefix("g:") in gunread }, hover == "h" + f.id,
+                            onToggle = { app.chat.folders.collapse(f.id, !f.collapsed) }, onEdit = { editingFolder = f })
                     }
-                } else {
-                    val msgs = convos[c.key].orEmpty()
-                    val last = msgs.lastOrNull()
-                    val pickable = app.chat.isContact(c.key)
-                    PersonRow(c.name, last?.let { preview(it) } ?: routeText(app.chat.route(c.key)), last?.let { when_(it.time) } ?: "",
-                        if (c.key in unread) unreadCount(msgs) else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.name, 48.dp, 18.sp, online = c.key in activeMap) },
-                        onLong = { if (pickable) selected = selected + c.key else foldersFor = c.key to c.name }, picked = c.key in selected,
-                        longLabel = if (pickable) "Pick for a group" else "Options") {
-                        when {
-                            selected.isEmpty() -> ChatNav.open = c.key
-                            !pickable -> Ui.say("Only contacts can be put in a group.")
-                            c.key in selected -> selected = selected - c.key
-                            else -> selected = selected + c.key
+                    if (!f.collapsed) {
+                        items(keys.mapNotNull { byKey[it] }, key = { "c${f.id}|" + it.key }) { c -> chatRow(c, f.id, "c${f.id}|" + c.key) }
+                        if (keys.isEmpty()) item(key = "e" + f.id) {
+                            Text("Empty. Hold a chat and drag it here, or hold it and pick Move to folder.", style = Type.small,
+                                modifier = Modifier.fillMaxWidth().background(if (hover == "e" + f.id) Palette.focusFill else Color.Transparent)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp))
                         }
                     }
                 }
             }
             if (chatRows.isEmpty()) item {
-                Text("No chats yet. Tap anyone under Around you to message them, no asking needed. To message someone far away, tap + to add them or to share your code.",
+                Text(if (visible) "No chats yet. Tap anyone under Around you to message them, no asking needed. To message someone far away, tap + to add them or to share your code."
+                    else "No chats yet. Tap + to add someone or to share your code.",
                     style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             } else if (shownRows.isEmpty() && q.isNotEmpty()) item {
                 Text("No chats match “$q”.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            } else if (shownRows.isEmpty() && folder != null) item {
-                Text("Nothing in ${folder.name} yet. Hold a chat, then tap the folder button to put it in one.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            if (shownStrangers.isNotEmpty()) item {
-                ListLabel("Around you", top = 18.dp)
+            // Removed contacts wait here for 30 days.
+            if (trashed.isNotEmpty() && q.isEmpty()) item(key = "trash") {
+                PersonRow("Trash", "${trashed.size} ${if (trashed.size == 1) "contact" else "contacts"} · deleted for good after ${io.github.ravenor907.muninn.net.Trash.DAYS} days",
+                    "", 0, false, { TrashAvatar(48.dp) }) { ChatNav.open = "trash" }
+            }
+            // Nearby is always last, in a section of its own.
+            if (showRoom || shownStrangers.isNotEmpty()) item(key = "nearby") {
+                Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp).height(1.dp).background(Palette.hairline))
+                ListLabel("Nearby")
+            }
+            if (showRoom) item(key = "room") {
+                PersonRow("Nearby room", roomPreview, room.lastOrNull()?.let { when_(it.time) } ?: "", 0, false, { RoomAvatar(48.dp) }) { ChatNav.open = "nearby" }
+            }
+            if (shownStrangers.isNotEmpty()) item(key = "around") {
+                ListLabel("Around you", top = 10.dp)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     shownStrangers.forEach { (k, name, r) ->
@@ -556,7 +728,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             }
         }
     }
-    foldersFor?.let { (key, name) -> FolderPicker(app, key, name) { foldersFor = null } }
+    foldersFor?.let { (key, name) -> FolderPicker(app, key, name, movesFor(heldIn, key)) { foldersFor = null } }
+    FolderDialogs(app, addingFolder, editingFolder) { addingFolder = false; editingFolder = null }
 }
 
 /**
@@ -616,7 +789,7 @@ private fun DayLabel(t: Long) {
 private fun NearbyRoom(app: Muninn) {
     val msgs by app.chat.nearby.collectAsState()
     var text by remember { mutableStateOf("") }
-    var on by remember { mutableStateOf(app.identity.nearbyChat) }
+    var on by remember { mutableStateOf(app.identity.nearbyRoom) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     Column(Modifier.fillMaxSize().imePadding()) {
@@ -625,8 +798,11 @@ private fun NearbyRoom(app: Muninn) {
         }
         if (!on) {
             Column(Modifier.padding(16.dp)) {
-                Text("Nearby chat is off, so nobody can see or message you here.", style = Type.normal)
-                MButton("Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { app.identity.nearbyChat = true; on = true; app.net.announce() }
+                val hidden = !app.identity.visibleNearby
+                Text(if (hidden) "You're hidden from people nearby, so nobody can see or message you here." else "Nearby chat is off, so nobody can see or message you here.", style = Type.normal)
+                MButton(if (hidden) "Be visible to people nearby" else "Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+                    app.identity.visibleNearby = true; app.identity.nearbyChat = true; on = true; app.net.announce(); app.close.readvertise()
+                }
             }
             return@Column
         }
@@ -1318,33 +1494,52 @@ private fun Chip(text: String, on: Boolean, icon: String? = null, onLong: (() ->
     }
 }
 
-/** The folder chips under the search box: All, each folder, and + for a new one. */
+/**
+ * A folder's section header on the chat list: tap to fold it away or open it, hold to rename or delete it.
+ * [unread]: chats in it with something new, shown on the header so a folded section still says so.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun FolderChips(app: Muninn, folders: List<Folders.Folder>) {
-    var adding by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Folders.Folder?>(null) }
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Chip("All", folders.none { it.id == ChatNav.folder }) { ChatNav.folder = "" }
-        folders.forEach { f -> Chip(f.name, ChatNav.folder == f.id, onLong = { editing = f }) { ChatNav.folder = if (ChatNav.folder == f.id) "" else f.id } }
-        val shape = RoundedCornerShape(20.dp)
-        Box(Modifier.size(40.dp).clip(shape).border(1.dp, Palette.lineMuted, shape).clickable(role = Role.Button) { adding = true }
-            .semantics { contentDescription = "New folder" }, contentAlignment = Alignment.Center) {
-            MIcon("plus", Palette.accent, 14.dp, weight = 2f)
-        }
+private fun FolderHeader(f: Folders.Folder, unread: Int, hover: Boolean, onToggle: () -> Unit, onEdit: () -> Unit) {
+    Row(Modifier.fillMaxWidth().background(if (hover) Palette.focusFill else Color.Transparent)
+        .combinedClickable(role = Role.Button, onClickLabel = if (f.collapsed) "Show" else "Fold away", onLongClickLabel = "Rename or delete",
+            onLongClick = onEdit, onClick = onToggle)
+        .semantics { heading(); stateDescription = if (f.collapsed) "Folded away" else "Showing" }
+        .heightIn(min = 44.dp).padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        MIcon("forward", Palette.textMuted, 14.dp, Modifier.rotate(if (f.collapsed) 0f else 90f), weight = 2f)
+        Spacer(Modifier.width(6.dp))
+        Text(f.name.uppercase(), style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (unread > 0) Box(Modifier.size(8.dp).clip(CircleShape).background(Palette.gold).semantics { contentDescription = "$unread unread" })
     }
-    if (adding) NameDialog("New folder", "", "Add", "Folder name", note = "Only on this phone. Hold a chat to put it in a folder.") { n ->
-        adding = false
-        if (n != null) app.chat.folders.add(n)?.let { ChatNav.folder = it }
+}
+
+/** New folder, and renaming or deleting one (from its header). [done]: the dialog closed. */
+@Composable
+private fun FolderDialogs(app: Muninn, adding: Boolean, editing: Folders.Folder?, done: () -> Unit) {
+    if (adding) NameDialog("New folder", "", "Add", "Folder name", note = "Only on this phone. Hold a chat and drag it into a folder, or hold it and pick Move to folder.") { n ->
+        done()
+        if (n != null) app.chat.folders.add(n)
     }
     editing?.let { f ->
         NameDialog("Folder", f.name, "Save", "Folder name", extra = "Delete folder", onExtra = {
-            editing = null
+            done()
             Ui.sure(Ask("Delete ${f.name}?", "Only the folder goes. The chats in it stay.", "Delete", danger = true,
-                onConfirm = { app.chat.folders.delete(f.id); if (ChatNav.folder == f.id) ChatNav.folder = "" }))
-        }) { n -> editing = null; if (n != null) app.chat.folders.rename(f.id, n) }
+                onConfirm = { app.chat.folders.delete(f.id) }))
+        }) { n -> done(); if (n != null) app.chat.folders.rename(f.id, n) }
     }
 }
+
+/** The trash row's picture. */
+@Composable
+private fun TrashAvatar(size: Dp) {
+    Box(Modifier.size(size).clip(CircleShape).background(Palette.coolTint), contentAlignment = Alignment.Center) {
+        MIcon("delete", Palette.textMuted, size * 0.46f)
+    }
+}
+
+/** What putting a contact in the trash does, said the same way everywhere. */
+internal const val TRASH_NOTE = "Their chat is hidden and nothing from them reaches you. Restore them from the trash within 30 days, or they're deleted for good."
 
 /** A name in a dialog (new folder, rename folder). [done] gets null for Cancel. */
 @Composable
@@ -1371,17 +1566,42 @@ private fun NameDialog(title: String, start: String, confirm: String, hint: Stri
     )
 }
 
-/** Which folders [key] (a contact's key, or "g:" + group) is in. Folders stay on this phone. */
+/**
+ * Which folders [key] (a contact's key, or "g:" + group) is in. Folders stay on this phone.
+ * [moves]: held on the chat list, so it can also be moved up, down or to another folder, and a contact put in the trash.
+ */
 @Composable
-internal fun FolderPicker(app: Muninn, key: String, name: String, done: () -> Unit) {
+internal fun FolderPicker(app: Muninn, key: String, name: String, moves: ListMoves? = null, done: () -> Unit) {
     val folders by app.chat.folders.all.collectAsState()
     @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // the new name shows at once
     var newName by remember { mutableStateOf("") }
     // Holding a chat or a person: their nickname is here too (a contact only, never a group).
     val contact = app.chat.contacts.contact(key)
     var renaming by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
     if (renaming && contact != null) {
         RenameDialog(contact) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
+        return
+    }
+    if (moving && moves != null) {
+        // Move to folder: out of the section it was held in, into the one picked.
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { moving = false },
+            containerColor = Palette.panel,
+            title = { Text("Move $name to", style = Type.big) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (moves.section != Folders.NONE) Line("No folder", "At the top of the list", icon = "chat") {
+                        app.chat.folders.move(key, moves.section, Folders.NONE); done()
+                    }
+                    folders.filter { it.id != moves.section }.forEach { f ->
+                        Line(f.name, if (key in f.keys) "Already in it too" else "", icon = "folder") { app.chat.folders.move(key, moves.section, f.id); done() }
+                    }
+                    if (folders.none { it.id != moves.section }) Text("No other folders yet. Add one with the folder button on the chat list.", style = Type.small)
+                }
+            },
+            confirmButton = { MButton("Cancel") { moving = false } },
+        )
         return
     }
     androidx.compose.material3.AlertDialog(
@@ -1391,6 +1611,18 @@ internal fun FolderPicker(app: Muninn, key: String, name: String, done: () -> Un
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (contact != null) MButton("Rename", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
+                if (moves != null) {
+                    Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Move up", Modifier.weight(1f), enabled = moves.up != null) { moves.up?.invoke() }
+                        MButton("Move down", Modifier.weight(1f), enabled = moves.down != null) { moves.down?.invoke() }
+                    }
+                    MButton("Move to folder…", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "folder") { moving = true }
+                    if (contact != null) MButton("Move to trash", Modifier.fillMaxWidth().padding(bottom = 8.dp), Kind.Danger, icon = "delete") {
+                        done()
+                        Ui.sure(Ask("Move ${contact.shown} to the trash?", TRASH_NOTE, "Move to trash", danger = true,
+                            onConfirm = { app.chat.trashContact(key); Ui.say("${contact.shown} is in the trash.") }))
+                    }
+                }
                 Text("Folders are only on this phone. Nobody else sees them.", style = Type.small, modifier = Modifier.padding(bottom = 6.dp))
                 folders.forEach { f ->
                     val on = key in f.keys
@@ -1884,7 +2116,7 @@ private fun MemberDialog(app: Muninn, g: String, s: Proto06.State, m: Proto06.Me
 @Composable
 private fun InviteDialog(app: Muninn, g: String, s: Proto06.State, done: () -> Unit) {
     val contacts by app.chat.contacts.all.collectAsState()
-    val people = contacts.filter { !it.groupOnly && !s.has(it.chatKey) }.sortedBy { it.shown.lowercase() }
+    val people = contacts.filter { !it.groupOnly && !s.has(it.chatKey) && !app.chat.trash.has(it.chatKey) }.sortedBy { it.shown.lowercase() }
     // Whose app can join: ask the ones not known yet (their answers update this list).
     LaunchedEffect(Unit) { people.forEach { app.chat.probeCaps(it.chatKey) } }
     var sent by remember { mutableStateOf(setOf<String>()) }

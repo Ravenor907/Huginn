@@ -12,6 +12,7 @@
 #include <QNetworkInterface>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRegularExpression>
 #include <QRandomGenerator>
 #include <QSslConfiguration>
 #include <QSslSocket>
@@ -795,15 +796,38 @@ void LocalSend::endSession(bool ok, const QString &message)
     Q_EMIT finished(ok, message);
 }
 
-QString LocalSend::savePath(const QString &name) const
+QStringList LocalSend::safeParts(const QString &name)
 {
-    // Senders may include folders ("Photos/a.jpg"). Keep them, but never let a name climb out of the save folder.
+    // Senders may include folders ("Photos/a.jpg"). Keep them, but never let a name climb out of the save folder:
+    // split on both slashes (Windows takes "\" as one), and drop "." and "..", and anything with a ":" (a drive
+    // letter like "C:", or a Windows stream like "a.txt:x") so no part can make the path absolute.
     QStringList parts;
-    for (const QString &p : name.split(QLatin1Char('/'), Qt::SkipEmptyParts))
-        if (p != QLatin1String(".") && p != QLatin1String(".."))
+    static const QRegularExpression seps(QStringLiteral("[/\\\\]"));
+    for (const QString &p : name.split(seps, Qt::SkipEmptyParts))
+        if (p != QLatin1String(".") && p != QLatin1String("..") && !p.contains(QLatin1Char(':')))
             parts << p;
     if (parts.isEmpty())
         parts << QStringLiteral("from-phone");
+    return parts;
+}
+
+bool LocalSend::selfTest()
+{
+    const auto is = [](const QString &name, const QString &want) { return safeParts(name).join(QLatin1Char('/')) == want; };
+    return is(QStringLiteral("Photos/a.jpg"), QStringLiteral("Photos/a.jpg"))
+        && is(QStringLiteral("..\\..\\Startup\\x.bat"), QStringLiteral("Startup/x.bat"))
+        && is(QStringLiteral("../../.bashrc"), QStringLiteral(".bashrc"))
+        && is(QStringLiteral("C:/Windows/x.dll"), QStringLiteral("Windows/x.dll"))
+        && is(QStringLiteral("C:\\Users\\x.exe"), QStringLiteral("Users/x.exe"))
+        && is(QStringLiteral("\\\\server\\share\\x"), QStringLiteral("server/share/x"))
+        && is(QStringLiteral("a.txt:secret"), QStringLiteral("from-phone"))
+        && is(QStringLiteral("/etc/passwd"), QStringLiteral("etc/passwd"))
+        && is(QStringLiteral(".."), QStringLiteral("from-phone"));
+}
+
+QString LocalSend::savePath(const QString &name) const
+{
+    QStringList parts = safeParts(name);
     const QString file = parts.takeLast();
     const QString dir = QDir(m_settings->transferFolder()).filePath(parts.join(QLatin1Char('/')));
     QString path = QDir(dir).filePath(file);

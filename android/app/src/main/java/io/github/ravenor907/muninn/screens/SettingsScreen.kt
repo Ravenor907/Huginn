@@ -48,6 +48,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var name by remember { mutableStateOf(id.username) }
     var device by remember { mutableStateOf(id.deviceName) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
+    var visible by remember { mutableStateOf(id.visibleNearby) }
     var keep by remember { mutableStateOf(id.keepNearbyHistory) }
     var muted by remember { mutableStateOf(id.muted()) }
     val up by app.updater.state.collectAsState()
@@ -137,7 +138,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
                 var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
                 ToggleRow("Panic lock", "Lock Muninn in one move from anywhere: the “Lock Muninn” quick settings tile, or “Lock now” when you long-press Muninn's icon. " +
-                    "Message notifications are cleared and new ones hide their text until you unlock", panic) {
+                    "Any call ends, message notifications are cleared, and Muninn forgets its key: nothing can be read until you unlock. New messages still arrive", panic) {
                     panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
                 }
                 if (panic) {
@@ -168,13 +169,21 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         }
         Section("Nearby chat")
         Panel {
-            ToggleRow("Nearby chat", "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you", nearby) {
-                nearby = it; id.nearbyChat = it; app.net.announce()
+            ToggleRow("Visible to people nearby", if (visible) "People close by or on the same Wi-Fi can see your name and message you"
+                else "Hidden: only your contacts can reach you close by or on the same Wi-Fi. Your name isn't sent out", visible) {
+                visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise()
             }
-            Text("Your name in Nearby chat", style = Type.small, modifier = Modifier.padding(top = 8.dp))
-            Row(Modifier.padding(top = 4.dp)) {
-                Field(name, { name = it.take(24) }, "A name, not your real one", Modifier.weight(1f))
-                MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name != id.username) { id.username = name; app.net.announce(); Ui.say("You're “${id.username}” now.") }
+            if (visible) {
+                ToggleRow("Nearby chat", "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you", nearby) {
+                    nearby = it; id.nearbyChat = it; app.net.announce()
+                }
+                Text("Your name in Nearby chat", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.padding(top = 4.dp)) {
+                    Field(name, { name = it.take(24) }, "A name, not your real one", Modifier.weight(1f))
+                    MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name != id.username) {
+                        id.username = name; app.net.announce(); app.close.readvertise(); Ui.say("You're “${id.username}” now.")
+                    }
+                }
             }
             ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
 

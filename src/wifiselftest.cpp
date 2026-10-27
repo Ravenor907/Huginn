@@ -162,6 +162,7 @@ void sendFirst(Run *run)
 void begin(Run *run)
 {
     run->check("home-network address rules", Lan::selfTest());
+    run->check("received file names stay in the save folder", LocalSend::selfTest());
     std::printf("wifi resources: %s, %s\n", qPrintable(Platform::resource(QStringLiteral("raven_message.wav"))),
                 qPrintable(Platform::resource(QStringLiteral("raven-gold.png"))));
 #ifdef Q_OS_WIN

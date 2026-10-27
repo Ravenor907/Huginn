@@ -1,8 +1,9 @@
 import QtQuick
 import Huginn
 
-// The 9-dot pattern, like Android's, in Huginn's colors. Draw with a finger on the touchscreen,
-// or with the controller: the D-pad moves, A connects the dot, X starts over, Y is done.
+// The 9-dot pattern, like Android's, in Huginn's colors. Draw with a finger or the mouse, or with
+// the controller or the arrow keys: move the ring to a dot, A (Enter) starts there, moving on picks
+// up each dot the ring reaches, A again is done and B starts over.
 // Passing straight over a dot in between picks it up too, as on Android.
 Item {
     id: pad
@@ -10,6 +11,8 @@ Item {
     property bool enabled: true
     property var dots: []
     property int cursor: 4
+    property bool drawing: false      // a controller pattern is under way
+    property bool keyed: false        // the D-pad or arrow keys have been used, so the ring shows
     property point finger: Qt.point(-1, -1)
     signal done(var dots)
 
@@ -42,28 +45,53 @@ Item {
     function finish() {
         const d = dots
         dots = []
+        drawing = false
         finger = Qt.point(-1, -1)
         canvas.requestPaint()
         if (d.length) done(d)
     }
-    function clear() { dots = []; canvas.requestPaint() }
+    function clear() { dots = []; drawing = false; canvas.requestPaint() }
+    // A wrong pattern: a short shake, as on the phone.
+    function shake() { if (Theme.motion) shaking.restart() }
 
+    function move(to) {
+        cursor = to
+        if (drawing) add(to)
+    }
+    // B is only used here while a pattern is under way; otherwise the lock gets it (Back).
     function handleButton(b) {
         if (!enabled) return false
         switch (b) {
-        case "up": cursor = cursor >= 3 ? cursor - 3 : cursor; break
-        case "down": cursor = cursor < 6 ? cursor + 3 : cursor; break
-        case "left": cursor = cursor % 3 ? cursor - 1 : cursor; break
-        case "right": cursor = cursor % 3 < 2 ? cursor + 1 : cursor; break
-        case "a": add(cursor); break
-        case "x": clear(); break
-        case "y": finish(); break
+        case "up": move(cursor >= 3 ? cursor - 3 : cursor); break
+        case "down": move(cursor < 6 ? cursor + 3 : cursor); break
+        case "left": move(cursor % 3 ? cursor - 1 : cursor); break
+        case "right": move(cursor % 3 < 2 ? cursor + 1 : cursor); break
+        case "a":
+            if (drawing) finish()
+            else { dots = []; drawing = true; add(cursor) }
+            break
+        case "b":
+            if (!drawing) return false
+            clear()
+            break
         default: return false
         }
+        keyed = true
         canvas.requestPaint()
         return true
     }
     onErrorChanged: canvas.requestPaint()
+    onEnabledChanged: if (!enabled) clear()
+
+    transform: Translate { id: nudge }
+    SequentialAnimation {
+        id: shaking
+        NumberAnimation { target: nudge; property: "x"; to: -Theme.px(12); duration: 50 }
+        NumberAnimation { target: nudge; property: "x"; to: Theme.px(12); duration: 80 }
+        NumberAnimation { target: nudge; property: "x"; to: -Theme.px(8); duration: 70 }
+        NumberAnimation { target: nudge; property: "x"; to: Theme.px(4); duration: 60 }
+        NumberAnimation { target: nudge; property: "x"; to: 0; duration: 50 }
+    }
 
     Canvas {
         id: canvas
@@ -90,7 +118,7 @@ Item {
                 ctx.beginPath()
                 ctx.arc(c.x, c.y, width / (on ? 22 : 34), 0, Math.PI * 2)
                 ctx.fill()
-                if (i === pad.cursor && Gamepad.connected && pad.enabled) {
+                if (i === pad.cursor && (Gamepad.connected || pad.keyed) && pad.enabled) {
                     // The controller's cursor: a ring around the dot it's on.
                     ctx.strokeStyle = Theme.accent
                     ctx.lineWidth = Math.max(2, width / 120)
@@ -106,7 +134,7 @@ Item {
     MouseArea {
         anchors.fill: parent
         enabled: pad.enabled
-        onPressed: m => { pad.dots = []; pad.finger = Qt.point(m.x, m.y); pad.add(pad.hit(m.x, m.y)); canvas.requestPaint() }
+        onPressed: m => { pad.drawing = false; pad.dots = []; pad.finger = Qt.point(m.x, m.y); pad.add(pad.hit(m.x, m.y)); canvas.requestPaint() }
         onPositionChanged: m => { pad.finger = Qt.point(m.x, m.y); pad.add(pad.hit(m.x, m.y)); canvas.requestPaint() }
         onReleased: pad.finish()
     }

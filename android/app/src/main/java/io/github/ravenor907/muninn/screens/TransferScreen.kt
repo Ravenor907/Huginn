@@ -79,7 +79,7 @@ object Share {
         val root = File(context.cacheDir, "outgoing")
         if (!busy && pending.isEmpty()) root.deleteRecursively()
         val dir = File(root, System.currentTimeMillis().toString()).also { it.mkdirs() }
-        return uris.mapNotNull { u ->
+        return uris.filter { handedOver(context, it) }.mapNotNull { u ->
             try {
                 var name = "shared"
                 context.contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0)?.let { name = it } }
@@ -89,6 +89,13 @@ object Share {
             } catch (e: Exception) { null }
         }
     }
+
+    /**
+     * Only content another app hands over. A file:// path would be opened with Muninn's own rights, so any
+     * app could get Muninn to copy its private files out; links into Muninn's own provider are refused too.
+     */
+    fun handedOver(context: Context, u: Uri): Boolean =
+        u.scheme.equals("content", ignoreCase = true) && u.authority?.startsWith(context.packageName) != true
 }
 
 private val labelStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 1.5.sp, color = Palette.textMuted)

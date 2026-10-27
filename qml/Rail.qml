@@ -6,7 +6,7 @@ import Huginn
 // items = [{ id, kind: "raven" | "group" | "add" | "icon", label, icon, letter, badge, bottom }].
 // Direct messages (the raven) sits on top, then the groups (round initials; the one on screen is a
 // gold rounded square with a gold pill beside it) and + for a new group. Calls, Files, Settings and
-// Exit sit at the foot. LB and RB step through them (Main.qml); the D-pad moves the rail focus.
+// Exit sit at the foot. LB steps through them (Main.qml); the D-pad moves the rail focus.
 Rectangle {
     id: rail
     property var items: []
@@ -70,7 +70,7 @@ Rectangle {
         id: groupView
         anchors.top: top.bottom
         anchors.topMargin: Theme.px(12)
-        anchors.bottom: rbChip.visible ? rbChip.top : bottomCol.top
+        anchors.bottom: bottomCol.top
         anchors.bottomMargin: Theme.px(10)
         width: parent.width
         contentWidth: width
@@ -87,14 +87,6 @@ Rectangle {
             }
         }
     }
-    Chip {
-        id: rbChip
-        visible: !Theme.desktop
-        key: "rb"
-        anchors.bottom: bottomCol.top
-        anchors.bottomMargin: Theme.px(12)
-    }
-
     Column {
         id: bottomCol
         anchors.bottom: parent.bottom
@@ -108,7 +100,7 @@ Rectangle {
         }
     }
 
-    // LB / RB, so the shoulder buttons are easy to find on a handheld.
+    // LB, so the shoulder button that moves along the rail is easy to find on a handheld.
     component Chip: Rectangle {
         property string key
         anchors.horizontalCenter: parent.horizontalCenter

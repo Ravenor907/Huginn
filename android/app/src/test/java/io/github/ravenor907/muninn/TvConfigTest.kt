@@ -119,6 +119,37 @@ class TvConfigTest {
     }
 
     @Test
+    fun parentsShareTheConfigTheTvRuns() {
+        val privA = ChatCrypto.privateFrom(chat.getString("privA"))
+        val privB = ChatCrypto.privateFrom(chat.getString("privB"))
+        val quick = TvRules.DEFAULT_QUICK.map { Quick(TvRules.quickId(), it) }
+        val people = listOf(TvPerson(kA, "Dad", "a".repeat(64)), TvPerson(kB, "Mom", "b".repeat(64)))
+        // A adds B as a parent: B's phone takes the config A signed, through the TV's "applied" or A's card.
+        val both = TvRules.config(privA, kTV, 4, kA, listOf(kA, kB), quick, people, false, 1761500000004)
+        val applied = JSONObject(TvRules.appliedMessage(4, "0.9", both))
+        val got = TvRules.shared(kTV, kB, applied.getJSONObject("cfg"))!!
+        assertEquals(listOf(kA, kB).sorted(), got.parents)
+        assertEquals(4L, got.v)
+        val card = JSONObject(TvRules.cardMessage("MUNINN1:x", both))
+        assertEquals(Canon.of(both), Canon.of(card.getJSONObject("cfg")))
+        assertFalse(JSONObject(TvRules.cardMessage("MUNINN1:x")).has("cfg"))
+        // B's own change at the next version is one the TV takes from a parent.
+        val fromB = TvRules.config(privB, kTV, 5, kB, got.parents, quick, people, true, 1761500000005)
+        assertTrue(TvRules.accept(kTV, got.parents, both, fromB).first)
+        // Not for this phone: another TV, a config that doesn't list it, or a forged signature.
+        assertEquals(null, TvRules.shared(kA, kB, both))
+        val onlyA = TvRules.config(privA, kTV, 4, kA, listOf(kA), quick, people, false, 1761500000004)
+        assertEquals(null, TvRules.shared(kTV, kB, onlyA))
+        val forged = JSONObject(both.toString()).put("dictation", true)
+        assertEquals(null, TvRules.shared(kTV, kB, forged))
+        assertEquals(null, TvRules.shared(kTV, kB, null))
+        // A free disconnect carries the flag outside the signed part; a plain one doesn't.
+        val d = TvRules.disconnect(privA, kTV, 5, kA, 1761500000006)
+        assertTrue(JSONObject(TvRules.disconnectMessage(d, free = true)).getBoolean("free"))
+        assertFalse(JSONObject(TvRules.disconnectMessage(d)).has("free"))
+    }
+
+    @Test
     fun refusesMalformedConfigs() {
         val good = cfg("cfg2")
         fun bad(why: String, f: (JSONObject) -> Unit) {

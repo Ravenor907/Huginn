@@ -2,25 +2,34 @@ import QtQuick
 import Huginn
 
 // A group, Discord style: the channel column (TEXT channels, VOICE rooms), the open channel's
-// conversation, and on the desktop the member column. X opens the group's options (invite, the
-// group code, channels, members, rename, leave). D-pad left and right move between the columns.
+// conversation with its message box, and the member column (or a thread or the pins beside it).
+// The same on a desktop and a handheld, only bigger there. LT opens the group's options (invite,
+// the group code, channels, members, rename, leave). D-pad left and right move between the columns.
 Rectangle {
     id: page
     color: Theme.ground
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     readonly property string gid: Ui.main && Ui.main.pageName.startsWith("g:") ? Ui.main.pageName.substring(2) : ""
     property bool tour: false
-    property string zone: "channels"       // "channels", "messages" or "members"
+    property string zone: "channels"       // "channels", "messages", "side" (a thread or the pins) or "members"
     property string channelId: "main"
     property int chRow: 0
     property int memRow: 0
     property int sel: -1
+    property int sideSel: -1               // the message picked in the thread or pins panel
     property string viewing: ""            // a photo open full size
     property string shownCode: ""          // the group code on screen
     property real codeUntil: 0
-    // Desktop with a mouse and keyboard: type straight into the box at the bottom (Game Mode and
-    // controllers keep the big TextPrompt).
-    readonly property bool typeHere: Theme.desktop && !System.gameMode
+    // The controller or its pointer is in use: what opens takes the controller's focus, not a text cursor.
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
+    // Narrow screens (a Steam Deck at handheld sizes, or a big Size): the member column folds away
+    // so the conversation keeps room to read, and a thread or the pins slide over the conversation
+    // instead of sitting beside it.
+    readonly property bool membersFit: width - chanCol.width - Theme.px(230) >= Theme.px(520)
+    readonly property bool sideDocked: width - chanCol.width - Theme.px(360) >= Theme.px(420)
+    // The message box the controller is typing in, if any (picking a message takes it out).
+    readonly property var typingIn: compose.hasFocus && zone === "messages" && sel < 0 ? compose
+                                  : threadBox.hasFocus && zone === "side" && sideSel < 0 ? threadBox : null
     // Cap m1: answering, editing, where "New messages" starts, the reaction picker's message, and the
     // side panel ("thread" for one message and its replies, "pins" for this channel's pins).
     property string replyId: ""
@@ -50,6 +59,13 @@ Rectangle {
         if (a.groupOptions) Qt.callLater(groupOptions)
     }
     onGidChanged: { channelId = "main"; sel = -1; Voice.stop() }
+    onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
+    onSideChanged: {
+        sideSel = -1
+        if (side === "" && zone === "side") zone = "messages"
+        // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
+        if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
+    }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
     readonly property bool isTour: tour || gid.startsWith("tour-")
@@ -104,9 +120,13 @@ Rectangle {
     readonly property string chatKey: "g:" + gid + ":" + channelId
 
     readonly property var prompts: shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
-        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "x", label: "Group options" }, { key: "b", label: "Back" }]
-        : zone === "members" ? [{ key: "a", label: "Choose" }, { key: "x", label: "Group options" }, { key: "b", label: "Back" }]
-        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "x", label: "Options" }, { key: "b", label: "Back" }])
+        : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
+        : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
+                            .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
+        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
+        : zone === "members" ? [{ key: "a", label: "Choose" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
+        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "lt", label: "Options" }, { key: "b", label: "Back" }])
     readonly property string status: Chat.netStatus
 
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
@@ -121,7 +141,7 @@ Rectangle {
 
     onChatKeyChanged: {
         sel = -1; replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; if (side === "thread") side = ""
-        if (typeHere) compose.text = ""
+        compose.text = ""
         // Where the unread ones start, for the "New messages" line (before they're marked read).
         newFrom = -1
         const n = channel.unread || 0
@@ -282,7 +302,7 @@ Rectangle {
     Item {
         id: main
         anchors.left: chanCol.right
-        anchors.right: sidePanel.visible ? sidePanel.left : memberCol.visible ? memberCol.left : parent.right
+        anchors.right: sidePanel.visible && page.sideDocked ? sidePanel.left : memberCol.visible ? memberCol.left : parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
@@ -296,7 +316,7 @@ Rectangle {
             // Pinned messages of this channel (only on this computer).
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: page.typeHere && !page.locked && page.exists
+                visible: !page.locked && page.exists
                 text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
                 fontSize: 15
                 onClicked: page.side = page.side === "pins" ? "" : "pins"
@@ -345,7 +365,8 @@ Rectangle {
                     at: index
                     picked: page.active && page.zone === "messages" && page.sel === index
                     lineH: index === page.newFrom ? Theme.px(30) : 0
-                    hoverTools: page.typeHere && !page.readOnly
+                    hoverTools: !page.readOnly
+                    onChosen: { page.zone = "messages"; page.sel = index }
                     onOptions: { page.zone = "messages"; page.sel = index; page.messageOptions() }
                 }
             }
@@ -403,7 +424,7 @@ Rectangle {
             // Drop pictures (or other files) on the channel to send them.
             DropArea {
                 anchors.fill: parent
-                enabled: page.typeHere && !page.readOnly && !page.isTour
+                enabled: !page.readOnly && !page.isTour
                 onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
                 Rectangle {
                     anchors.fill: parent
@@ -422,10 +443,10 @@ Rectangle {
             }
         }
 
-        // Desktop: the message box, docked at the bottom and typed into directly. Handheld writes with A.
+        // The message box, docked at the bottom and typed into directly (A puts the controller in it).
         Composer {
             id: compose
-            visible: page.typeHere && !page.locked && page.exists && !page.readOnly
+            visible: !page.locked && page.exists && !page.readOnly
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20); anchors.bottomMargin: Theme.px(18)
             height: implicitHeight
@@ -436,6 +457,7 @@ Rectangle {
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.replyMsg.name) : ""
             bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
             onSend: t => page.sendText(t, page.replyId)
+            onHasFocusChanged: if (hasFocus) { page.zone = "messages"; page.sel = -1 }
             onEditLast: page.editLast()
             onEscaped: page.escapeKey()
             onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
@@ -443,16 +465,18 @@ Rectangle {
         }
     }
 
-    // ============================================================= side panel (desktop): a thread or the pins
+    // ============================================================= side panel: a thread or the pins
     property alias threadCompose: threadBox
     Rectangle {
         id: sidePanel
-        visible: Theme.desktop && !page.locked && page.exists && page.side !== ""
+        visible: !page.locked && page.exists && page.side !== ""
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(360)
+        width: Math.min(Theme.px(360), page.width - chanCol.width - Theme.px(48))
         color: Theme.column
+        // Over the conversation on a narrow screen: an edge so it reads as on top.
+        Rectangle { visible: !page.sideDocked; width: 1; height: parent.height; color: Theme.lineStrong }
         PageHeader {
             id: sideHead
             width: parent.width
@@ -475,8 +499,10 @@ Rectangle {
                 m: modelData
                 at: index
                 inThread: true
-                hoverTools: page.typeHere && !page.readOnly
-                onOptions: { const i = page.messages.findIndex(x => x.id === modelData.id); if (i >= 0) { page.sel = i; page.messageOptions() } }
+                picked: page.active && page.zone === "side" && page.sideSel === index
+                hoverTools: !page.readOnly
+                onChosen: { page.zone = "side"; page.sideSel = index }
+                onOptions: page.sideOptions(index)
             }
         }
         Text {
@@ -489,7 +515,7 @@ Rectangle {
         }
         Composer {
             id: threadBox
-            visible: page.side === "thread" && page.typeHere && !page.readOnly
+            visible: page.side === "thread" && !page.readOnly
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.margins: Theme.px(12)
             height: implicitHeight
@@ -497,15 +523,16 @@ Rectangle {
             target: page.isTour ? "" : page.chatKey
             mentionNames: page.memberNames
             onSend: t => page.sendText(t, page.threadRoot)
+            onHasFocusChanged: if (hasFocus) { page.zone = "side"; page.sideSel = -1 }
             onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
             onAttach: page.pickPicture()
         }
     }
 
-    // ============================================================= member column (desktop)
+    // ============================================================= member column (folds away when narrow)
     Rectangle {
         id: memberCol
-        visible: Theme.desktop && !page.locked && page.exists && !sidePanel.visible
+        visible: page.membersFit && !page.locked && page.exists && !sidePanel.visible
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
@@ -517,6 +544,7 @@ Rectangle {
         readonly property var ordered: admins.concat(rest)
 
         Flickable {
+            id: memFlick
             anchors.fill: parent
             anchors.topMargin: Theme.px(18)
             anchors.leftMargin: Theme.px(14)
@@ -666,7 +694,7 @@ Rectangle {
     function write() {
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
         if (isTour) return
-        if (typeHere) { zone = "messages"; compose.focusField(); return }
+        if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         const g = gid, ch = channelId, re = replyId
         Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "Encrypted for everyone in " + info.name, "", "Send",
                t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" }, false, true)
@@ -709,7 +737,7 @@ Rectangle {
             people.push({ name: "Invite someone", detail: "A contact gets an invite to say yes to", url: "invite" })
             people.push({ name: "Show the group code", detail: "For anyone else: they scan or paste it within the hour", url: "code" })
         }
-        if (!Theme.desktop) people.push({ name: "Members", detail: info.count + (info.count === 1 ? " person" : " people"), url: "members" })
+        if (!memberCol.visible) people.push({ name: "Members", detail: info.count + (info.count === 1 ? " person" : " people"), url: "members" })
         if (!readOnly && info.amAdmin) {
             chans.push({ name: "Add a text channel", url: "addtext" }, { name: "Add a voice room", detail: "Up to " + Rooms.maxPeople + " people talk at once", url: "addvoice" })
             const r = rows[chRow]
@@ -718,6 +746,7 @@ Rectangle {
             if (target.id !== "main") chans.push({ name: "Remove " + (target.type === "voice" ? "" : "#") + target.name, detail: "Its messages stay on this device", url: "rmch:" + target.id })
             group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
         }
+        if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
         if (!readOnly) group.push({ name: "Send a picture", detail: "To #" + channel.name, url: "picture" })
         if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
@@ -735,6 +764,7 @@ Rectangle {
             else if (a === "callsome") pickCallees([])
             else if (a === "code") showCode()
             else if (a === "members") pickMember()
+            else if (a === "pins") openPins()
             else if (a === "picture") pickPicture()
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
@@ -791,7 +821,7 @@ Rectangle {
         if (!m.unsent && !readOnly) {
             items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
             items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
-            if (typeHere) items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
+            items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
         }
         if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", detail: "Everyone sees it marked (edited)", url: "edit" })
         if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
@@ -840,12 +870,12 @@ Rectangle {
         if (readOnly) return
         editId = ""
         replyId = id
-        if (typeHere) compose.focusField(); else write()
+        write()
     }
     function startEdit(m) {
         if (!m || !m.mine || m.photo || m.unsent || readOnly) return
         replyId = ""
-        if (typeHere) { editId = m.id; compose.setText(m.text) }
+        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
         else { const g = gid, id = m.id; Ui.ask("Edit your message", "Everyone sees it marked (edited)", m.text, "Save", t => tell(Chat.editGroup(g, id, t), ""), false, true) }
     }
     function editLast() {
@@ -865,10 +895,26 @@ Rectangle {
         replyId = ""
         newFrom = -1
     }
+    // A thread beside the channel. The controller (or its pointer) goes into the panel; a mouse
+    // gets a cursor in its reply box.
     function openThread(id) {
         threadRoot = id
         side = "thread"
-        Qt.callLater(() => threadBox.focusField())
+        if (pad) { zone = "side"; sideSel = threadMsgs.length - 1 }
+        else Qt.callLater(() => threadBox.focusField())
+    }
+    function openPins() {
+        side = "pins"
+        if (pad) { zone = "side"; sideSel = pinnedMsgs.length ? 0 : -1 }
+    }
+    function sideMsgs() { return side === "thread" ? threadMsgs : side === "pins" ? pinnedMsgs : [] }
+    // Options for a message in the panel: the same as in the channel.
+    function sideOptions(i) {
+        const m = sideMsgs()[i]
+        if (!m) return
+        zone = "side"; sideSel = i
+        const at = messages.findIndex(x => x.id === m.id)
+        if (at >= 0) { sel = at; messageOptions() }
     }
     function togglePin(id) {
         if (isTour) return
@@ -896,7 +942,7 @@ Rectangle {
         const g = gid, id = m.id
         const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
         if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
-        if (typeHere) items.push({ name: "More emoji", url: "+" })
+        items.push({ name: "More emoji", url: "+" })
         Ui.pickFrom("React", [{ header: "", items: items }], e => {
             if (e === "+") { openReact(id, m.myReaction || ""); return }
             tell(Chat.reactGroup(g, id, e === m.myReaction ? "" : e), "")
@@ -908,6 +954,51 @@ Rectangle {
         let i = chRow
         do { i += dir } while (i >= 0 && i < rows.length && !selectable(i))
         if (i >= 0 && i < rows.length) chRow = i
+    }
+    // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
+    function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : zone === "members" ? memFlick : chanList }
+    // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
+    // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
+    function boxButton(box, b) {
+        switch (b) {
+        case "a": case "start": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "y": System.showSteamKeyboard(); return true
+        case "x": boxOptions(box); return true
+        case "down": return true
+        }
+        box.leave()
+        return b === "b"
+    }
+    function boxOptions(box) {
+        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" },
+                       { name: "Send a picture", detail: "To #" + channel.name, url: "picture" }]
+        if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
+        items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
+        Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
+            if (a === "send") box.enter()
+            else if (a === "emoji") box.toggleEmoji()
+            else if (a === "picture") pickPicture()
+            else if (a === "cancel") box.cancelBanner()
+            else if (a === "leave") box.leave()
+        })
+    }
+    // A thread or the pins: up and down pick, A answers in the thread or goes to a pin, B closes.
+    function sideButton(b) {
+        const n = sideMsgs().length
+        switch (b) {
+        case "up": if (n) sideSel = sideSel < 0 ? n - 1 : Math.max(0, sideSel - 1); return true
+        case "down": if (sideSel >= 0) sideSel = Math.min(n - 1, sideSel + 1); return true
+        case "left": zone = "messages"; return true
+        case "right": return true
+        case "a":
+            if (side === "thread") { if (threadBox.visible) threadBox.focusField(); else Ui.say("You're no longer in this group.", true) }
+            else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
+            return true
+        case "x": if (sideSel >= 0) sideOptions(sideSel); else groupOptions(); return true
+        case "y": return true
+        case "b": side = ""; threadRoot = ""; return true
+        }
+        return false
     }
     function handleButton(b) {
         if (locked) {
@@ -923,6 +1014,11 @@ Rectangle {
         if (viewing !== "") { if (b === "b" || b === "a") viewing = ""; return true }
         if (Voice.recording) { if (b === "b") { Voice.cancel(); Ui.say("Recording cancelled.") } return true }
         if (!exists) return b !== "left" && b !== "b"
+        if (reactPicker.visible) return reactPicker.handleButton(b)
+        if (compose.emojiShown) return compose.emojiButton(b)
+        if (threadBox.emojiShown) return threadBox.emojiButton(b)
+        if (typingIn && boxButton(typingIn, b)) return true
+        if (zone === "side") return sideButton(b)
         const memCount = memberCol.ordered.length
         switch (b) {
         case "up":
@@ -937,6 +1033,7 @@ Rectangle {
             return true
         case "right":
             if (zone === "channels") zone = "messages"
+            else if (zone === "messages" && sidePanel.visible) { const n = sideMsgs().length; zone = "side"; sideSel = !n ? -1 : side === "thread" ? n - 1 : 0 }
             else if (zone === "messages" && memberCol.visible && memCount > 0) { zone = "members"; memRow = Math.min(memRow, memCount - 1) }
             return true
         case "left":

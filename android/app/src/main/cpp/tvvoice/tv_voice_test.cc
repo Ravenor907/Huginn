@@ -1,6 +1,7 @@
 // Host check for tv_voice (not part of the app): a made-up room where the TV's speakers play the far
 // end and the microphone hears it back 150 ms later, plus a steady hiss. Checks that the echo canceller
-// takes most of the echo out, that RNNoise takes the hiss down, and that every rate pairing runs.
+// takes most of the echo out, that RNNoise takes the hiss down, that the speaker gets the far end at
+// full level, and that every rate pairing runs.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -79,6 +80,27 @@ static int check_noise() {
   return cut >= 10 ? 0 : 1;
 }
 
+// The speaker gets the call: what goes into tvv_render comes out at the speaker's rate, as loud.
+static int check_render() {
+  for (int flags : {TVV_AEC | TVV_RNNOISE | TVV_AGC, 0}) for (int play_rate : {16000, 48000}) {
+    TvVoice *v = tvv_create(48000, 16000, 16000, play_rate, flags);
+    if (!v) { std::puts("create failed (render)"); return 1; }
+    auto far = talk(16000, 2, 300, 9);
+    std::vector<int16_t> play(far.size() * size_t(play_rate) / 16000), mic(480, 0), o(160);
+    const size_t step = size_t(play_rate / 100);
+    for (size_t f = 0, p = 0; f + 160 <= far.size(); f += 160, p += step) {
+      if (tvv_render(v, &far[f], &play[p]) != int(step)) { std::puts("render length"); return 1; }
+      tvv_capture(v, mic.data(), o.data());
+    }
+    tvv_destroy(v);
+    double in = energy(far, 1600, far.size()), out = energy(play, step * 10, play.size());
+    double db = 10 * std::log10(out / in);
+    if (std::fabs(db) > 1.0) { std::printf("render flags %d at %d Hz: speaker level %.1f dB off\n", flags, play_rate, db); return 1; }
+  }
+  std::puts("render: the speaker gets the call");
+  return 0;
+}
+
 static int check_rates() {
   const int ins[] = {16000, 44100, 48000};
   const int outs[] = {16000, 44100, 48000};
@@ -116,6 +138,7 @@ int main() {
     return 0;
   }
   int bad = check_rates();
+  bad |= check_render();
   bad |= check_echo();
   bad |= check_noise();
   std::puts(bad ? "FAILED" : "ok");

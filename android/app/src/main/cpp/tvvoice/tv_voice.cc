@@ -28,7 +28,7 @@ struct TvVoice {
   webrtc::PushResampler<int16_t> down;    // RNNoise's 48 kHz to out_rate
   webrtc::PushResampler<int16_t> up;      // render_rate to play_rate
   webrtc::PushResampler<int16_t> plain;   // in_rate to out_rate, when the APM fails
-  std::vector<int16_t> mid, rendered;
+  std::vector<int16_t> mid, rendered, reverse;  // reverse: the canceller's own output, never played
   std::vector<float> fin, fout;
   std::atomic<int> delay{0};
   std::atomic<float> vad{-1.f};
@@ -85,6 +85,7 @@ extern "C" TvVoice *tvv_create(int in_rate, int out_rate, int render_rate, int p
   v->plain.InitializeIfNeeded(in_rate, out_rate, 1);
   v->mid.resize(v->mid_cfg.num_frames());
   v->rendered.resize(v->render_cfg.num_frames());
+  v->reverse.resize(v->render_cfg.num_frames());
   return v.release();
 }
 
@@ -121,12 +122,10 @@ extern "C" int tvv_render(TvVoice *v, const int16_t *in, int16_t *out) {
   if (!v) return -1;
   const size_t n = v->render_cfg.num_frames();
   const size_t nplay = static_cast<size_t>(v->play_rate / 100);
-  if (v->flags & TVV_AEC) {
-    if (v->apm->ProcessReverseStream(in, v->render_cfg, v->render_cfg, v->rendered.data()) != webrtc::AudioProcessing::kNoError)
-      for (size_t i = 0; i < n; i++) v->rendered[i] = in[i];
-  } else {
-    for (size_t i = 0; i < n; i++) v->rendered[i] = in[i];
-  }
+  // The speaker plays the call as it came; the echo canceller only listens. ProcessReverseStream writes
+  // its output only when a render pre-processor runs (none does here), so it gets a buffer of its own.
+  for (size_t i = 0; i < n; i++) v->rendered[i] = in[i];
+  if (v->flags & TVV_AEC) v->apm->ProcessReverseStream(in, v->render_cfg, v->render_cfg, v->reverse.data());
   if (v->play_rate == v->render_rate) {
     for (size_t i = 0; i < n; i++) out[i] = v->rendered[i];
     return static_cast<int>(n);

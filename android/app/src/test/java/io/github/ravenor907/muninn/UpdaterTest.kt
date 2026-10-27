@@ -34,6 +34,18 @@ class UpdaterTest {
     }
 
     @Test
+    fun readsReleaseDigests() {
+        val hex = "B730D4368CFCDC2A07F1951B0900DD2FFA927FDED665BA862F2E8A9824BB1554"
+        assertEquals(hex.lowercase(), Updater.shaOf("sha256:$hex"))                 // GitHub's asset digest
+        assertEquals(hex.lowercase(), Updater.shaOf("${hex.lowercase()}  Muninn.apk\n"))  // sha256sum's line
+        assertEquals(hex.lowercase(), Updater.shaOf(hex))
+        assertNull(Updater.shaOf(""))
+        assertNull(Updater.shaOf("sha1:" + "a".repeat(40)))
+        assertNull(Updater.shaOf("a".repeat(63)))
+        assertNull(Updater.shaOf("a".repeat(65)))
+    }
+
+    @Test
     fun readsTagFromLatestLink() {
         assertEquals("v0.6", Updater.tagFromLatest("https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.6"))
         assertEquals("v0.61", Updater.tagFromLatest("https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.61?x=1"))

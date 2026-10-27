@@ -40,6 +40,13 @@ data class ManagedTv(
     val micAt: Long = 0, val micOnTv: Boolean = false, val used: Long = -1, val usedAt: Long = 0,
     /** People picked before they accepted this phone back: invited as soon as they're contacts. (key to since) */
     val waiting: Map<String, Long> = emptyMap(),
+    /**
+     * Names and mailboxes of people on the TV's list, as the TV's config has them: another parent may have
+     * put someone on it this phone doesn't have as a contact, and they stay on the list all the same.
+     */
+    val others: List<TvPerson> = emptyList(),
+    /** Other parents this phone already handed the TV to (a card with the config), so they get it once. */
+    val sharedWith: List<String> = emptyList(),
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -132,6 +139,7 @@ object TvParent {
         val me = TvPerson(app.identity.publicKey, TvRules.clean(t.myName, TvRules.MAX_NAME).ifEmpty { "Parent" }, app.nostr.publicKey)
         val others = t.reach.filter { it != t.key && it != me.k }.mapNotNull { k ->
             app.contacts.get(k)?.let { TvPerson(k, TvRules.clean(it.shown, TvRules.MAX_NAME).ifEmpty { "Someone" }, it.mailbox ?: "") }
+                ?: t.others.firstOrNull { it.k == k }
         }
         return (listOf(me) + others).take(TvRules.MAX_CONTACTS)
     }
@@ -139,6 +147,8 @@ object TvParent {
     private fun flush(key: String) {
         val app = app ?: return
         val plain: String
+        val newParents: List<String>
+        val signed: JSONObject
         synchronized(lock) {
             val t = _tvs.value[key] ?: return
             if (t.disconnecting) return
@@ -149,14 +159,39 @@ object TvParent {
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the TV (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
-            put(t.copy(v = v, pending = listOf(plain), pendingV = v, since = System.currentTimeMillis(), extrasSent = extras != null))
+            newParents = TvRules.parse(cfg).parents.filter { it != me && it !in t.sharedWith }
+            put(t.copy(v = v, pending = listOf(plain), pendingV = v, since = System.currentTimeMillis(), extrasSent = extras != null,
+                sharedWith = (t.sharedWith + newParents).distinct()))
             tries[key] = 1 to System.currentTimeMillis() + RETRY[0]
+            signed = cfg
         }
         send(app, key, listOf(plain))
+        // A parent just added: their app gets the TV (a card) and this config, so it manages the TV too.
+        val tv = app.contacts.get(key)
+        if (tv != null) for (p in newParents) try {
+            Tv.bridge(app)?.sendTvRoom(p, TvRules.cardMessage(Contacts.code(tv.name, key, tv.mailbox ?: ""), signed))
+        } catch (_: Exception) {}
     }
 
-    /** Disconnect: the TV erases everything and goes back to pairing. Signed for the TV's version and the last one sent. */
-    fun disconnect(key: String) {
+    /** Another parent for the TV: someone this phone has as a contact, with a Muninn that manages TVs (k1). */
+    fun addParent(app: Muninn, tvKey: String, person: String): String? {
+        val c = app.contacts.contact(person) ?: return "Add them as a contact first."
+        if ("k1" !in c.caps) { app.chat.probeCaps(person); return "${app.chat.nameOf(person)}'s app can't look after a Kids' TV yet. They need Muninn on a phone, up to date." }
+        change(tvKey) { t -> t.copy(parents = (t.parents + person).distinct(), reach = (t.reach + person).distinct().take(TvRules.MAX_CONTACTS - 1)) }
+        return null
+    }
+
+    /** Takes a parent off the TV. They can't change it any more; they stay on the list of people it can reach. */
+    fun removeParent(app: Muninn, tvKey: String, person: String) {
+        if (person == app.identity.publicKey) return
+        change(tvKey) { t -> t.copy(parents = t.parents - person, sharedWith = t.sharedWith - person) }
+    }
+
+    /**
+     * Disconnect: the TV erases everything and goes back to pairing. Signed for the TV's version and the last
+     * one sent. [free]: the TV may then be used as a normal Muninn; otherwise it can only be paired again.
+     */
+    fun disconnect(key: String, free: Boolean = false) {
         val app = app ?: return
         val msgs: List<String>
         synchronized(lock) {
@@ -165,7 +200,7 @@ object TvParent {
             val me = app.identity.publicKey
             val now = System.currentTimeMillis()
             msgs = listOf(t.applied, t.v).filter { it >= 1 }.distinct()
-                .map { TvRules.disconnectMessage(TvRules.disconnect(app.identity.keys.private, key, it, me, now)) }
+                .map { TvRules.disconnectMessage(TvRules.disconnect(app.identity.keys.private, key, it, me, now), free) }
             if (msgs.isEmpty()) { forget(app, key); return }
             put(t.copy(disconnecting = true, pending = msgs, since = now))
             tries[key] = 1 to now + RETRY[0]
@@ -182,25 +217,77 @@ object TvParent {
      */
     fun handle(app: Muninn, fromKey: String, plain: String): Boolean {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
-        if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"))
+        if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
         if (o.optString("t") == "status") return takeStatus(fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
+        val me = app.identity.publicKey
+        // The TV's own config (newer TVs send it): what it really runs, checked like the TV checks it.
+        val runs = TvRules.shared(fromKey, me, o.optJSONObject("cfg"))
         var resend = false
+        var lostTo: String? = null
         synchronized(lock) {
-            // Another parent's TV answers every parent: nothing to do here, but nothing wrong either.
-            val t = _tvs.value[fromKey] ?: return true
+            val t = _tvs.value[fromKey]
+            if (t == null) {
+                // A TV whose parents now include this phone: it shows up here, to look after with them.
+                if (runs != null && app.contacts.get(fromKey) != null) join(app, fromKey, runs, null)
+                return true
+            }
             if (t.disconnecting) { forget(app, fromKey); return true }
-            val done = v >= t.pendingV
             val version = Canon.runCatching { text(o.opt("app"), 16) }.getOrNull() ?: t.app
-            put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version))
-            if (done) tries.remove(fromKey)
-            // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
-            resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC)
+            when {
+                // The TV runs something newer than this phone sent (or another parent's at the same version): their
+                // change, or this phone's own from before a backup was restored. This phone takes it, so it shows
+                // what's really on the TV.
+                runs != null && runs.v > t.applied && (runs.v > t.pendingV || (runs.v == t.pendingV && runs.by != me)) -> {
+                    if (t.pending.isNotEmpty() && runs.by != me) lostTo = app.chat.nameOf(runs.by)
+                    put(adopted(app, t, runs).copy(app = version))
+                    tries.remove(fromKey)
+                }
+                // The TV lost its settings (it says version 0): send it everything again.
+                v == 0L && runs == null && t.applied > 0 -> { put(t.copy(app = version)); resend = true }
+                // An older TV app that is ahead of this phone: this phone's change goes out on top of it.
+                runs == null && v > t.pendingV && t.pending.isNotEmpty() -> {
+                    put(t.copy(applied = v, v = maxOf(t.v, v), app = version)); resend = true
+                }
+                else -> {
+                    val done = v >= t.pendingV
+                    put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version))
+                    if (done) tries.remove(fromKey)
+                    // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
+                    resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC)
+                }
+            }
         }
+        lostTo?.let { Ui.say("$it changed the TV just before you, so your last change didn't go through. Make it again.", true) }
         if (resend) change(fromKey) { it }
         return true
+    }
+
+    /** [t] as the TV's config [cfg] has it (another parent's, or newer than this phone's). */
+    private fun adopted(app: Muninn, t: ManagedTv, cfg: TvConfig): ManagedTv {
+        val me = app.identity.publicKey
+        val people = cfg.contacts.filter { it.k != me && it.k != t.key }
+        return t.copy(
+            v = cfg.v, applied = cfg.v, pendingV = cfg.v, pending = emptyList(),
+            quick = cfg.quick, reach = people.map { it.k }, others = people, dictation = cfg.dictation,
+            parents = cfg.parents, calls = cfg.calls, mic = cfg.mic, extrasSent = cfg.raw.has("mic"),
+            myName = cfg.contacts.firstOrNull { it.k == me }?.n ?: t.myName,
+            sharedWith = (t.sharedWith + cfg.parents.filter { it != me }).distinct(),
+        )
+    }
+
+    /** This phone became one of the TV's parents ([by] added it, or the TV said so): it manages the TV from now on. */
+    private fun join(app: Muninn, tvKey: String, cfg: TvConfig, by: String?) {
+        val me = app.identity.publicKey
+        put(adopted(app, ManagedTv(tvKey, myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME)), cfg))
+        val tvName = app.contacts.get(tvKey)?.shown ?: "the Kids' TV"
+        val who = app.chat.nameOf(by ?: cfg.by)
+        if (cfg.by != me) {
+            Ui.say("$who made you a parent of $tvName. You can change what it shows from its chat.")
+            try { app.notify(who, "Made you a parent of $tvName", tvKey) } catch (_: Exception) {}
+        }
     }
 
     /**
@@ -270,12 +357,19 @@ object TvParent {
             .map { (k, m) -> k to m.name }
 
     /** A card: add the TV as a contact, only from someone who is already a contact, and never as a key change. */
-    private fun takeCard(app: Muninn, fromKey: String, code: String): Boolean {
+    private fun takeCard(app: Muninn, fromKey: String, code: String, cfg: JSONObject?): Boolean {
         if (app.contacts.get(fromKey) == null) return false
         val tv = Contacts.parse(code) ?: return false
-        if (tv.chatKey == app.identity.publicKey || app.contacts.get(tv.chatKey) != null) return true
+        if (tv.chatKey == app.identity.publicKey) return true
+        // A parent made this phone a parent too: the config they signed lists it (and them) as parents.
+        val shared = TvRules.shared(tv.chatKey, app.identity.publicKey, cfg)?.takeIf { it.by == fromKey }
+        if (app.contacts.get(tv.chatKey) != null) {
+            if (shared != null && !isManaged(tv.chatKey)) synchronized(lock) { join(app, tv.chatKey, shared, fromKey) }
+            return true
+        }
         if (app.chat.keyChangeFor(tv) != null) return true
         app.chat.addContact(tv.copy(invite = null))
+        if (shared != null) { synchronized(lock) { join(app, tv.chatKey, shared, fromKey) }; return true }
         val who = app.chat.nameOf(fromKey)
         Ui.say("$who added you to ${tv.name}. You can talk with the kids there now.")
         try { app.notify(who, "Added you to ${tv.name}: you can talk with the kids there now", tv.chatKey) } catch (_: Exception) {}
@@ -383,7 +477,9 @@ object TvParent {
             .put("myName", t.myName).put("pending", JSONArray(t.pending)).put("pendingV", t.pendingV).put("since", t.since)
             .put("disconnecting", t.disconnecting).put("calls", t.calls).put("mic", t.mic).put("extrasSent", t.extrasSent).put("app", t.app)
             .put("micAt", t.micAt).put("micOnTv", t.micOnTv).put("used", t.used).put("usedAt", t.usedAt)
-            .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } }))
+            .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } })
+            .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
+            .put("sharedWith", JSONArray(t.sharedWith)))
     }
 
     private fun fromJson(o: JSONObject): Map<String, ManagedTv> = o.keys().asSequence().mapNotNull { k ->
@@ -397,7 +493,9 @@ object TvParent {
                 strs(x.optJSONArray("pending")), x.optLong("pendingV"), x.optLong("since"), x.optBoolean("disconnecting"),
                 x.optBoolean("calls", true), x.optInt("mic", TvRules.DEFAULT_MIC), x.optBoolean("extrasSent"), x.optString("app"),
                 x.optLong("micAt"), x.optBoolean("micOnTv"), x.optLong("used", -1), x.optLong("usedAt"),
-                x.optJSONObject("waiting")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap())
+                x.optJSONObject("waiting")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap(),
+                x.optJSONArray("others")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { e -> TvPerson(e.getString("k"), e.getString("n"), e.getString("p")) } } } ?: emptyList(),
+                strs(x.optJSONArray("sharedWith")))
         } catch (e: Exception) { null }
     }.toMap()
 }

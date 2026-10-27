@@ -50,8 +50,20 @@ object KidMode {
         return decide(app, if (app.contacts.all.value.isEmpty()) "kids" else "normal")
     }
 
-    /** Before pairing only: run this TV as an ordinary Muninn (with a lock and Settings) from now on. */
-    fun useNormally(app: Muninn) { decide(app, "normal") }
+    /**
+     * Before pairing only: run this TV as an ordinary Muninn (with a lock and Settings) from now on. Once a
+     * parent has paired it, only a parent can let it go: their Disconnect with "make it a normal TV" ([free]).
+     */
+    fun useNormally(app: Muninn) { if (!paired(app)) decide(app, "normal") }
+
+    /** A parent has paired this TV at some point and hasn't let it go: the kids can't leave kids' mode. */
+    fun paired(context: Context): Boolean = prefs(context).getBoolean("paired", false)
+    fun markPaired(context: Context) { if (!paired(context)) prefs(context).edit().putBoolean("paired", true).apply() }
+    /** A parent's Disconnect said the TV may be used normally: the pairing screen offers it again. */
+    fun free(context: Context) { prefs(context).edit().putBoolean("paired", false).apply() }
+
+    /** Kids' mode as saved, without deciding anything: for Chat before the TV side is installed. */
+    fun saved(context: Context): Boolean = prefs(context).getString("mode", null) == "kids"
 
     private fun decide(app: Muninn, m: String): Boolean {
         prefs(app).edit().putString("mode", m).apply()
@@ -192,11 +204,14 @@ object KidTv {
                 val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)
                 if (!ok) {
                     // Older or the same from a parent (it opened with their key): say where the TV is, so their app stops resending.
+                    // The TV's own config goes along, so a parent whose phone is behind (another parent's change,
+                    // or a restored backup) catches up instead of thinking theirs went through.
                     val cur = s.cfg
-                    if (cur != null && fromKey in s.parents) { answer(app, listOf(fromKey), cur.v); return true }
+                    if (cur != null && fromKey in s.parents) { answer(app, listOf(fromKey), cur.v, cur.raw); return true }
                     return false
                 }
                 val cfg = try { TvRules.parse(new) } catch (e: Exception) { return false }
+                KidMode.markPaired(app)
                 apply(app, cfg, fromKey, mailbox)
                 // A parent who picked another microphone level wins over one set on the TV (the last change wins);
                 // a config that only carries the level on keeps the TV's own.
@@ -209,7 +224,7 @@ object KidTv {
                 io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { c ->
                     if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
                 }
-                answer(app, cfg.parents, cfg.v)
+                answer(app, cfg.parents, cfg.v, cfg.raw)
                 statusSoon(app)
                 true
             }
@@ -218,7 +233,7 @@ object KidTv {
                 val cur = s.cfg ?: return false
                 if (fromKey !in s.parents) return false
                 TvUpdate.checkNow(app)
-                answer(app, listOf(fromKey), cur.v)
+                answer(app, listOf(fromKey), cur.v, cur.raw)
                 true
             }
             "usage" -> {
@@ -238,6 +253,8 @@ object KidTv {
                 val cur = s.cfg ?: return false
                 if (!TvRules.acceptDisconnect(me, s.parents, cur.v, d).first) return false
                 wiping.value = true
+                // A parent who said the TV may be used normally from now on: the pairing screen offers it again.
+                if (o.optBoolean("free")) KidMode.free(app)
                 answer(app, s.parents, cur.v)   // their apps stop resending; sent before the contacts go
                 Thread { try { Thread.sleep(3000); wipe(app) } catch (_: Exception) {} finally { wiping.value = false } }.start()
                 true
@@ -264,10 +281,21 @@ object KidTv {
         else app.contacts.set(c.copy(name = name, mailbox = mailbox ?: c.mailbox, nickname = null))
     }
 
-    private fun answer(app: Muninn, to: List<String>, v: Long) {
+    /** "applied" to [to], with the TV's signed config [cfg] so every parent's phone sees what the TV runs. */
+    private fun answer(app: Muninn, to: List<String>, v: Long, cfg: JSONObject? = null) {
         val b = Tv.bridge(app) ?: return
         val version = try { app.updater.current } catch (e: Exception) { null }
-        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version)) } catch (_: Exception) {} }
+        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version, cfg)) } catch (_: Exception) {} }
+    }
+
+    /**
+     * Paired, but the saved config can't be read (a damaged file, or an update that checks configs more
+     * strictly): the TV stays a Kids' TV and tells its parents it has nothing (version 0), so their phones
+     * send it again. Until then it shows "Getting this TV ready", never the pairing screen.
+     */
+    fun askParents(app: Muninn) {
+        val s = _state.value
+        if (s.parents.isNotEmpty() && s.cfg == null && !wiping.value) answer(app, s.parents, 0)
     }
 
     /** Disconnect: erase the chats, contacts, config and parent keys, then back to the pairing screen. */
@@ -312,12 +340,14 @@ object Tv : TvHandler {
         TvRing.watch(app)
         TvUpdate.start(app)
         TvStorage.start(app)
+        KidTv.askParents(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null
 
     override fun allow(fromKey: String, room: String): Boolean {
-        val a = app ?: return true
+        // Never let anything through before the TV side knows its parents: only configs, which it checks itself.
+        val a = app ?: return room == "tvconfig"
         return if (KidMode.on(a)) KidTv.allow(fromKey, room) else true
     }
 

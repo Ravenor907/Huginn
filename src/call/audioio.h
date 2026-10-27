@@ -12,6 +12,8 @@
 #include <functional>
 #include <vector>
 
+struct TvVoice;
+
 class QAudioSink;
 class QAudioSource;
 class QIODevice;
@@ -19,6 +21,9 @@ class QMediaDevices;
 
 // The microphone and the speaker for a call: 16 kHz mono 16-bit, 20 ms frames. When a device won't
 // take that format, its own preferred format is used and the sound is converted and resampled here.
+// With voice processing in the build (HUGINN_HAVE_VOICE), the microphone goes through WebRTC's echo
+// canceller, noise suppressor and level control, which hears everything the speaker plays: the people on
+// the call don't hear themselves back from laptop speakers, as on Muninn.
 //  - captured(pcm): one 20 ms frame (320 samples, 640 bytes) from the microphone.
 //  - pull: asked for the next 20 ms to play whenever the speaker has room (the speaker's clock sets
 //    the pace, which is what the jitter buffer wants).
@@ -70,4 +75,6 @@ private:
     QTimer m_pump;
     QString m_outputId;
     bool m_running = false;
+    TvVoice *m_voice = nullptr;    // the echo canceller, while running (null without it in the build)
+    std::vector<qint16> m_clean;   // a processed microphone frame
 };

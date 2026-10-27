@@ -63,7 +63,7 @@ jobs:
           set +e
           flatpak install --user -y --noninteractive Huginn.flatpak > tour/install.txt 2>&1 || cat tour/install.txt
           timeout 240 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_QUICK_BACKEND=software \
-            io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
+            --filesystem="$PWD/tour" io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
           code=$?
           set -e
           cat tour/log.txt
@@ -144,8 +144,37 @@ jobs:
           cp fonts/Barlow-SemiBold.ttf $d/barlow_semibold.ttf
           cp fonts/Barlow-Bold.ttf $d/barlow_bold.ttf
           cp fonts/NotoSansRunic-Regular.ttf $d/noto_sans_runic.ttf
+      - name: Release signing key
+        # The private key (0.9 on) lives only in the repository's secrets. Pull requests from forks and local
+        # builds have none and sign with the test key; a push to main without it fails here instead of releasing
+        # an APK anyone could forge an update for.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MUNINN_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            # Spaces and line breaks from pasting are dropped from both, as Gradle does for the password.
+            if ! printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/muninn-release.p12"; then
+              echo "::error title=Release key unreadable::MUNINN_KEYSTORE_BASE64 isn't the whole key. Paste it again from MUNINN_KEYSTORE_BASE64.txt."
+              exit 1
+            fi
+            pass=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d ' \r\n')
+            # Say which secret is wrong here, rather than as a keystore error deep in the Gradle build.
+            if ! keytool -list -storetype pkcs12 -keystore "$RUNNER_TEMP/muninn-release.p12" -storepass "$pass" > /dev/null 2>&1; then
+              echo "::error title=Release key password wrong::MUNINN_KEYSTORE_PASSWORD doesn't open the key in MUNINN_KEYSTORE_BASE64. Paste it again from MUNINN_KEYSTORE_PASSWORD.txt."
+              exit 1
+            fi
+            echo "MUNINN_KEYSTORE=$RUNNER_TEMP/muninn-release.p12" >> "$GITHUB_ENV"
+          elif [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ]; then
+            echo "::error title=Release key missing::Add the secrets MUNINN_KEYSTORE_BASE64 and MUNINN_KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."
+            exit 1
+          else
+            echo "No release key here: the release APK is signed with the test key."
+          fi
       - name: Unit tests and APKs
         working-directory: android
+        env:
+          MUNINN_KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
         run: |
           ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease \
             2>&1 | tee build.log; status=${PIPESTATUS[0]}
@@ -164,7 +193,18 @@ jobs:
           PY
           done
       - name: Name the APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk Muninn.apk
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Muninn.apk
+          # Signed with the release key when CI has it: the certificate must be the one in android/signing.
+          if [ -n "$MUNINN_KEYSTORE" ]; then
+            want=$(tr -d ' \n' < android/signing/release-cert-sha256.txt)
+            apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+            # apksigner's own failure (or an output it words differently) shows in the log rather than as an empty digest.
+            certs=$("$apksigner" verify --print-certs Muninn.apk 2>&1) || { echo "$certs"; echo "::error title=APK check failed::apksigner couldn't verify Muninn.apk."; exit 1; }
+            got=$(printf '%s\n' "$certs" | sed -n 's/^.*Signer.*certificate SHA-256 digest: *//p' | head -1 | tr -d ' :' | tr A-F a-f)
+            if [ "$got" != "$want" ]; then echo "$certs"; echo "::error title=Wrong signing key::Muninn.apk is signed by ${got:-an unreadable certificate}, not $want."; exit 1; fi
+            echo "Muninn.apk is signed with the release key ($got)."
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: muninn-apk
@@ -551,6 +591,14 @@ jobs:
 
 
 
+  relay:
+    name: Relay Worker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Relay Worker tests
+        run: node relay-worker/test.mjs
+
   site:
     name: Add page (GitHub Pages)
     # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
@@ -573,7 +621,7 @@ jobs:
     # and only after every check above passed.
     name: Release
     # The Flatpak, Muninn and the Windows zip must all pass.
-    needs: [flatpak, muninn, muninn-screens, windows, wine]
+    needs: [flatpak, muninn, muninn-screens, windows, wine, relay]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -602,13 +650,12 @@ jobs:
         if: steps.v.outputs.new == '1'
         with:
           name: Huginn-Windows.zip
-      - name: SHA-256 of the Windows zip (Huginn checks it before installing an update)
+      - name: SHA-256 of every download (each app checks its own before installing an update)
         if: steps.v.outputs.new == '1'
         run: |
-          if [ -f Huginn-Windows.zip ]; then
-            sha256sum Huginn-Windows.zip > Huginn-Windows.zip.sha256
-            cat Huginn-Windows.zip.sha256
-          fi
+          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
+            if [ -f "$f" ]; then sha256sum "$f" > "$f.sha256"; cat "$f.sha256"; fi
+          done
       - uses: softprops/action-gh-release@v2
         if: steps.v.outputs.new == '1'
         with:
@@ -617,9 +664,11 @@ jobs:
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
             Huginn.flatpak
+            Huginn.flatpak.sha256
             Huginn-Windows.zip
             Huginn-Windows.zip.sha256
             Muninn.apk
+            Muninn.apk.sha256
           fail_on_unmatched_files: false
           prerelease: false
           make_latest: true

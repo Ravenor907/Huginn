@@ -15,7 +15,10 @@ import java.util.concurrent.ConcurrentHashMap
  * progress state, so the screens show it the same way as Wi-Fi transfers.
  */
 class CloseFiles(private val context: Context, private val close: Close, private val net: LocalSend) {
-    private class Offer(val id: String, val endpoint: String, val from: String, val files: List<Pair<String, Long>>)
+    private class Offer(val id: String, val endpoint: String, val from: String, val files: List<Pair<String, Long>>) {
+        /** Set by Accept: until then nothing from this phone is saved. */
+        @Volatile var accepted = false
+    }
     private class Outgoing(val id: String, val endpoint: String, val name: String, val files: List<File>)
 
     private val outgoing = ConcurrentHashMap<String, Outgoing>()
@@ -34,10 +37,10 @@ class CloseFiles(private val context: Context, private val close: Close, private
                 "offer" -> onOffer(endpoint, o)
                 "accept" -> outgoing.remove(o.optString("id"))?.let { send(it, o.optJSONArray("ids")) }
                 "decline" -> outgoing.remove(o.optString("id"))?.let { finish(false, "${it.name} turned the files down.") }
-                "file" -> expected[o.optLong("pid")] = o.optString("name") to o.optLong("size")
+                "file" -> if (offer?.let { it.accepted && it.endpoint == endpoint } == true) expected[o.optLong("pid")] = o.optString("name") to o.optLong("size")
             }
         }
-        close.onFile = { _, pid, file, uri -> save(pid, file, uri) }
+        close.onFile = { endpoint, pid, file, uri -> save(endpoint, pid, file, uri) }
         close.onSent = { if (--sending <= 0 && sentTo.isNotEmpty()) { net.logSent(sentNames, sentTo); finish(true, "Sent to $sentTo.") } }
         close.onProgress = { pid, done, all ->
             progress[pid] = done
@@ -84,6 +87,7 @@ class CloseFiles(private val context: Context, private val close: Close, private
 
     fun accept() {
         val o = offer ?: return
+        o.accepted = true
         pendingOffer.value = null
         total = o.files.sumOf { it.second }
         received = 0
@@ -99,8 +103,10 @@ class CloseFiles(private val context: Context, private val close: Close, private
         close.send(o.endpoint, JSONObject().put("t", "decline").put("id", o.id))
     }
 
-    private fun save(pid: Long, file: File?, uri: Uri?) {
-        val o = offer ?: return
+    private fun save(endpoint: String, pid: Long, file: File?, uri: Uri?) {
+        // Only files from the phone whose offer was accepted, and only after Accept; anything else is thrown away.
+        val o = offer?.takeIf { it.accepted && it.endpoint == endpoint }
+        if (o == null) { discard(file, uri); return }
         val (name, _) = expected.remove(pid) ?: ("file-$pid" to 0L)
         // Into Downloads (MediaStore on Android 10 and newer), out of Nearby's own temporary copy.
         var target: Received.Target? = null
@@ -124,6 +130,12 @@ class CloseFiles(private val context: Context, private val close: Close, private
             offer = null
             finish(true, "Received ${if (received == 1) "1 file" else "$received files"} from ${o.from}. They're in ${Received.place(context)}.")
         }
+    }
+
+    /** Deletes Nearby's temporary copy of a file nobody accepted. */
+    private fun discard(file: File?, uri: Uri?) {
+        if (uri != null) try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+        try { file?.delete() } catch (_: Exception) {}
     }
 
     private fun finish(ok: Boolean, message: String) {

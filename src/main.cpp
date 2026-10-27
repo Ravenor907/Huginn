@@ -172,7 +172,9 @@ int main(int argc, char *argv[])
     auto *ble = new Ble([&chat] {
         if (!chat || !chat->ready())
             return QByteArray();
-        return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->username()},
+        // Hidden from people nearby: no name. The chat key still goes out, or contacts close by
+        // couldn't find this computer, so whoever already knows the key can tell it's here.
+        return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
                                          {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
                                          {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
     }, &app);

@@ -237,13 +237,33 @@ object TvRules {
     // ---- the plaintexts in room "tvconfig"
     fun configMessage(cfg: JSONObject): String = JSONObject().put("t", "config").put("cfg", cfg).toString()
     /** [app]: the TV's Muninn version (k2, so a parent's phone can show it and offer Update TV). */
-    fun appliedMessage(v: Long, app: String? = null): String =
-        JSONObject().put("t", "applied").put("v", v).apply { if (!app.isNullOrEmpty()) put("app", app) }.toString()
+    /**
+     * [cfg]: the TV's signed config as it runs now, so a parent whose phone is behind (another parent's
+     * change, a restored backup) catches up. Older apps ignore it.
+     */
+    fun appliedMessage(v: Long, app: String? = null, cfg: JSONObject? = null): String =
+        JSONObject().put("t", "applied").put("v", v).apply { if (!app.isNullOrEmpty()) put("app", app); cfg?.let { put("cfg", it) } }.toString()
     /** k2: a parent asks the TV to look for a new Muninn now and install it. */
     fun updateMessage(): String = JSONObject().put("t", "update").toString()
     /** t1 (7.6): a parent hands someone they invited the TV's contact code, so their app adds the TV. */
-    fun cardMessage(code: String): String = JSONObject().put("t", "card").put("code", code).toString()
-    fun disconnectMessage(d: JSONObject): String = JSONObject().put("t", "disconnect").put("d", d).toString()
+    fun cardMessage(code: String, cfg: JSONObject? = null): String =
+        JSONObject().put("t", "card").put("code", code).apply { cfg?.let { put("cfg", it) } }.toString()
+
+    /**
+     * A config a TV or a fellow parent handed this phone ([me]), read only if it is a well-formed config for
+     * [tvKey], lists [me] as a parent and is signed by one of its parents. Null otherwise.
+     */
+    fun shared(tvKey: String, me: String, c: JSONObject?): TvConfig? {
+        if (c == null) return null
+        try { check(c) } catch (e: IllegalArgumentException) { return null }
+        if (c.opt("tv") != tvKey) return null
+        val cfg = try { parse(c) } catch (e: Exception) { return null }
+        if (me !in cfg.parents || !Canon.verify(cfg.by, CONFIG, c)) return null
+        return cfg
+    }
+    /** [free]: the parent lets the TV be used as a normal Muninn afterwards (its pairing screen offers it again). */
+    fun disconnectMessage(d: JSONObject, free: Boolean = false): String =
+        JSONObject().put("t", "disconnect").put("d", d).apply { if (free) put("free", true) }.toString()
 
     // ---- k3 (7.7): the TV's microphone level set on the TV, its storage, and Clear history
     /**

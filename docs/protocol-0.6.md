@@ -1000,6 +1000,29 @@ Neither is retried; the parent's app asks again when its Kids' TV screen opens. 
 keeps its storage small (recent messages only, smaller photos, voice messages for two weeks, caches
 emptied); that is local and not on the wire.
 
+### 7.8 Several parents and keeping them in step (0.9)
+
+All three additions are optional fields that older apps ignore.
+
+- **`applied` carries the config.** The TV adds its current signed config to every `applied`:
+  `{"t":"applied","v":<v>,"app":"0.9","cfg":{...}}`. A parent's app takes `cfg` only if it passes 7.2's
+  checks for that TV, lists the app's own key in `parents`, and is signed by its `by`. If that config is
+  newer than the last one the app sent, the app adopts it: the TV runs another parent's change, or the app
+  was restored from an older backup. If the app had a change of its own waiting, it tells the parent that
+  the change didn't go through instead of reporting the TV as up to date. An app that isn't managing the TV
+  yet but finds itself in `parents` starts managing it.
+- **Adding a parent.** A parent's app puts the new parent's key in `parents` and sends them a card with the
+  config: `{"t":"card","code":"MUNINN1:...","cfg":{...}}`. Their app adds the TV, checks `cfg` the same way
+  (and that `by` is the sender), and manages the TV from then on. Only apps that manage TVs (`k1`) can be
+  parents.
+- **A TV that loses its config** (a damaged file, or stricter checks after an update) stays a Kids' TV,
+  shows "Getting this TV ready", and sends its parents `{"t":"applied","v":0}`. Their apps send the whole
+  config again under a new version.
+- **Leaving kids' mode.** Once a TV has been paired, its pairing screen no longer offers "Use Muninn
+  normally". A parent's disconnect plaintext may carry `"free":true` (`{"t":"disconnect","d":{...},
+  "free":true}`). The TV then offers it again. The flag rides in the parent's sealed envelope, which the TV
+  only takes from a parent.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |

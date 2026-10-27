@@ -67,13 +67,26 @@ android {
         }
     }
 
+    // Releases (0.9 on) are signed with a private key that only CI has (secrets MUNINN_KEYSTORE_BASE64 and
+    // MUNINN_KEYSTORE_PASSWORD, see .github/workflows/build.yml). Without it, builds use the repo's test key,
+    // which anyone can sign with, so CI refuses to release one.
+    val releaseKey = System.getenv("MUNINN_KEYSTORE").orEmpty()
     signingConfigs {
-        // The repo's shared test key, so every build installs over the last one.
+        // The repo's shared test key: debug builds, and local builds without the release key.
         create("muninn") {
             storeFile = rootProject.file("signing/test-key.p12")
             storePassword = "muninn-test"
             keyAlias = "muninn"
             keyPassword = "muninn-test"
+            storeType = "pkcs12"
+        }
+        // A password pasted into GitHub's secret box can carry a stray space or line break.
+        val releasePassword = System.getenv("MUNINN_KEYSTORE_PASSWORD").orEmpty().trim()
+        if (releaseKey.isNotEmpty()) create("release") {
+            storeFile = file(releaseKey)
+            storePassword = releasePassword
+            keyAlias = "muninn"
+            keyPassword = releasePassword
             storeType = "pkcs12"
         }
     }
@@ -83,7 +96,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("muninn")
+            signingConfig = signingConfigs.getByName(if (releaseKey.isNotEmpty()) "release" else "muninn")
         }
         debug {
             signingConfig = signingConfigs.getByName("muninn")

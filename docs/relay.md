@@ -46,9 +46,10 @@ protection is the Worker's daily caps.
 {"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
 ```
 
-- `id`: lowercase hex SHA-256 (64 chars) of the raw SubjectPublicKeyInfo DER of the caller's chat key: the
-  bytes whose standard base64 is the `fromKey` of its envelopes (not that base64 text, and not the bare EC
-  point). Huginn `RelayCredentials::body`, Muninn `TurnCreds.body`; both self-tests check the same example.
+- `id`: lowercase hex SHA-256 (64 chars) of a random 32-byte relay id that each install makes once and keeps in
+  its vault (`relayId` in `secrets.json`). Until 0.8 it was the hash of the chat key, which anyone who knew the
+  key could compute, use up that person's 30 daily logins with, and which let the Worker see who called.
+  Huginn `RelayCredentials::body`, Muninn `TurnCreds.body`; both self-tests check the same example.
 - `t`: current Unix time in whole seconds (a JSON integer, not a string).
 - `sig`: lowercase hex HMAC-SHA256 with key `APP_SECRET` (the UTF-8 bytes of the string) over the UTF-8
   string `id + "." + t`, for example `aaaa...aaaa.1800000000` (the 64-char id, a dot, then the digits of t).

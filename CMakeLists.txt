@@ -212,6 +212,7 @@ qt_add_qml_module(huginn
         qml/HoverBar.qml
         qml/MessageRow.qml
         qml/QuickSwitcher.qml
+        qml/StickPointer.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/raven_message.wav
@@ -222,7 +223,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher)
+                   HoverBar MessageRow QuickSwitcher StickPointer)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
@@ -280,6 +281,16 @@ elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
     message(FATAL_ERROR "libvpx wasn't found: the Windows build installs it with vcpkg (libvpx:x64-windows).")
 else()
     message(STATUS "libvpx not found: video calls are left out of this build")
+endif()
+
+# Echo cancellation, noise suppression and level in calls (src/call/audioio.cpp): WebRTC Audio Processing, built
+# exactly as for the Kids' TV (android/app/src/main/cpp/tvvoice), with its pinned sources (cmake/voice.cmake).
+option(HUGINN_VOICE "Echo cancellation and noise suppression in calls" ON)
+if(HUGINN_VOICE)
+    include(cmake/voice.cmake)
+    add_subdirectory(android/app/src/main/cpp/tvvoice ${CMAKE_BINARY_DIR}/tvvoice)
+    target_link_libraries(huginn PRIVATE tvvoice_core)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VOICE)
 endif()
 
 include(GNUInstallDirs)

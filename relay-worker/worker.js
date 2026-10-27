@@ -41,15 +41,6 @@ async function readBody(request) {
   }
 }
 
-const memStore = new Map();
-const memKV = {
-  async get(k) { const v = memStore.get(k); return v && v.exp > Date.now() ? v.val : null; },
-  async put(k, val, opts) {
-    if (memStore.size > 20000) memStore.clear();
-    memStore.set(k, { val, exp: Date.now() + (opts && opts.expirationTtl ? opts.expirationTtl * 1000 : 172800000) });
-  },
-};
-
 async function takeQuota(kv, id, nowSec) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
   const gKey = "g:" + day;
@@ -78,9 +69,12 @@ async function handleTurn(request, env, nowSec) {
   if (Math.abs(nowSec - t) > SKEW) return json(401, { error: "stale" });
   if (!(await verifySig(env.APP_SECRET, id, t, sig))) return json(401, { error: "bad_sig" });
 
+  // Without the KV store the limits can't be kept (memory resets whenever Cloudflare restarts the Worker),
+  // so nothing is handed out: the daily caps are the only thing guarding the TURN account.
+  if (!env.LIMITS) return json(503, { error: "limits_unavailable" });
   let quota;
   try {
-    quota = await takeQuota(env.LIMITS || memKV, id, nowSec);
+    quota = await takeQuota(env.LIMITS, id, nowSec);
   } catch {
     return json(503, { error: "limits_unavailable" });
   }

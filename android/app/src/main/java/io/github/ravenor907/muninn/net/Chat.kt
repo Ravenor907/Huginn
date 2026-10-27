@@ -137,6 +137,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val groups: Groups = Groups(id.keys, id.publicKey, GroupHost(), { vault.read(File(groupDir, it)) }, { f, t -> groupDir.mkdirs(); vault.write(File(groupDir, f), t) })
     /** Contact folders: local only. */
     val folders = Folders({ vault.read(File(context.filesDir, "folders.json")) }, { vault.write(File(context.filesDir, "folders.json"), it) })
+    /** Contacts removed from the list, kept 30 days so they can come back: local only. */
+    val trash = Trash({ vault.read(File(context.filesDir, "trash.json")) }, { vault.write(File(context.filesDir, "trash.json"), it) })
     private val groupTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val callTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
@@ -159,13 +161,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         nostr.onEnvelope = { content ->
             try { unwrap(content)?.let { receive(it, "internet") }; true } catch (_: Exception) { true }
         }
-        // Auto-delete: check every minute for messages past the chosen age.
-        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep() } catch (_: Exception) {} } }
+        // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
+        bg { emptyOldTrash() }
+        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash() } catch (_: Exception) {} } }
     }
 
-    /** What close-by phones learn about this one. */
-    fun hello(): JSONObject = JSONObject().put("name", id.username).put("chatKey", id.publicKey).put("mailbox", nostr.publicKey)
-        .put("device", id.deviceName)
+    /**
+     * What close-by phones learn about this one. Hidden from people nearby, no name goes out: the chat key and
+     * mailbox still do, or contacts couldn't find this phone close by (so a stranger can still tell it's the
+     * same phone as before, just not whose).
+     */
+    fun hello(): JSONObject = JSONObject().put("name", if (id.visibleNearby) id.username else Identity.HIDDEN_NAME)
+        .put("chatKey", id.publicKey).put("mailbox", nostr.publicKey)
+        .put("device", if (id.visibleNearby) id.deviceName else Identity.HIDDEN_NAME)
 
     /** A new code each time it's shown, with an invite good for an hour. */
     fun myCode(): String {
@@ -285,16 +293,40 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val _blocked = MutableStateFlow(id.muted())
     val blocked: StateFlow<Set<String>> = _blocked.asStateFlow()
 
-    /** Removes a contact (and anyone met close by); the chat stays unless deleted too. */
+    /** Removes a contact (and anyone met close by) for good; the chat stays unless deleted too. */
     fun removeContact(peerKey: String) {
         val was = contacts.get(peerKey)
         contacts.remove(peerKey)
         folders.forget(peerKey)
+        trash.drop(peerKey)
         // Still in a group together: they stay reachable for the group, as a group peer.
         if (was != null && groups.sharesGroup(peerKey)) contacts.peer(peerKey, was.name, was.mailbox ?: "")
         synchronized(ratchets.lock(peerKey)) { ratchets.drop(peerKey) }
         synchronized(lock) { _met.update { it - peerKey }; saveMet() }
     }
+
+    /**
+     * Removing a contact puts them in the trash: hidden with their chat, and nothing from them gets through
+     * (dropped quietly, like blocked). Restore brings everything back; after 30 days they go for good.
+     */
+    fun trashContact(peerKey: String) {
+        trash.put(peerKey, System.currentTimeMillis())
+        _unread.update { it - peerKey }
+        _typing.update { it - peerKey }
+        _active.update { it - peerKey }
+    }
+
+    fun restoreContact(peerKey: String) = trash.drop(peerKey)
+
+    /** Out of the trash for good: the contact and the chat with them. */
+    fun deleteForGood(peerKey: String) {
+        deleteConversation(peerKey)
+        removeContact(peerKey)
+    }
+
+    fun emptyTrash() = trash.all.value.keys.toList().forEach { deleteForGood(it) }
+
+    private fun emptyOldTrash() = trash.expired(System.currentTimeMillis()).forEach { deleteForGood(it) }
 
     /** Deletes one message on this phone. */
     fun deleteMessage(peerKey: String, msgId: String) {
@@ -377,10 +409,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val fromKey = o.optString("fromKey")
         val name = o.optString("fromName").take(40).ifEmpty { "Someone" }
         if (fromKey.isEmpty() || fromKey == id.publicKey) return 400 to "{}"
-        if (fromKey in id.muted()) return 200 to "{}"   // blocked: dropped quietly
+        if (fromKey in id.muted() || trash.has(fromKey)) return 200 to "{}"   // blocked or in the trash: dropped quietly
         val room = o.optString("room")
         // A Kids' TV only talks to the people its parents listed, and only about what it allows.
-        if (tvHandler?.allow(fromKey, room) == false) return 403 to "{}"
+        // Before the TV side is hooked up, a Kids' TV still takes nothing but configs (which it checks itself).
+        val tv = tvHandler
+        if (if (tv != null) !tv.allow(fromKey, room) else room != "tvconfig" && io.github.ravenor907.muninn.tv.KidMode.saved(context)) return 403 to "{}"
         if (room == "photo") return receivePiece(o, fromKey, name, via)
         if (room == "gphoto") return receiveGroupPiece(o, fromKey, name)
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
@@ -500,7 +534,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             "call" -> { if (contacts.get(fromKey) == null) return 403 to "{}"; onSignal(fromKey, opened); return 200 to "{}" }
             "tvconfig" -> if (tvHandler?.onTvRoom(fromKey, mailbox, opened, inviteOk(o.optString("invite"))) != true) return 403 to "{}"
             "nearby" -> {
-                if (!id.nearbyChat || via == "internet") return 403 to "{}"
+                if (!id.nearbyRoom || via == "internet") return 403 to "{}"
                 addNearby(msg)
             }
             "private" -> {
@@ -514,6 +548,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else if (fromKey in id.muted()) {
                     return 200 to "{}"
+                } else if (via != "internet" && !id.visibleNearby) {
+                    // Hidden from people nearby: only contacts get through close by or on the Wi-Fi.
+                    return 403 to "{}"
                 } else if (via != "internet" || _met.value.containsKey(fromKey)) {
                     // Close by or on the same Wi-Fi (or someone met that way): no asking first.
                     val m = _met.value[fromKey]
@@ -730,6 +767,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * over, and both a notice and a line in the chat say so until the code is checked.
      */
     private fun putContact(c: Contact) {
+        // Adding someone in the trash again brings them back.
+        trash.drop(c.chatKey)
         val old = ChatWire.keyChangeFor(contacts.all.value, c)
         if (old == null) { contacts.put(c); return }
         val now = ChatWire.afterKeyChange(old, c)
@@ -794,7 +833,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun sendNearby(text: String) {
         val t = text.trim().take(MAX)
-        if (t.isEmpty() || !id.nearbyChat) return
+        if (t.isEmpty() || !id.nearbyRoom) return
         val mine = Msg(UUID.randomUUID().toString(), id.publicKey, id.username, t, true, System.currentTimeMillis())
         addNearby(mine)
         val muted = id.muted()
@@ -973,7 +1012,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val plain = Rich.liveMsg("active", on, now)
         val muted = id.muted()
         // Contacts with m1, the ones chatted with most lately first, at most 20 (each is a relay event).
-        val recentFirst = contacts.all.value.filter { !it.groupOnly && Rich.CAP in it.caps && it.chatKey !in muted }
+        val recentFirst = contacts.all.value.filter { !it.groupOnly && Rich.CAP in it.caps && it.chatKey !in muted && !trash.has(it.chatKey) }
             .sortedByDescending { _private.value[it.chatKey]?.lastOrNull()?.time ?: 0L }.take(20)
         recentFirst.forEach { c -> sendLive(c.chatKey, plain) }
     }

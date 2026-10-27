@@ -18,6 +18,8 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QRandomGenerator>
 #include <QUrl>
 
 #ifdef Q_OS_LINUX
@@ -329,7 +331,24 @@ void CallManager::prepare(const QString &key)
 
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {
-    m_relay->get(QByteArray::fromBase64(m_signal->myKey().toLatin1()), std::move(done));
+    m_relay->get(relayId(), std::move(done));
+}
+
+QByteArray CallManager::relayId()
+{
+    // The relay Worker counts logins per id. A random id made once and kept in the vault, not the chat key:
+    // anyone who knows a chat key could use up that person's logins, and the Worker would see who calls.
+    if (m_vault->locked())
+        return QByteArray();
+    QJsonObject s = QJsonDocument::fromJson(m_vault->read(QStringLiteral("secrets.json"))).object();
+    QByteArray id = QByteArray::fromHex(s.value(QStringLiteral("relayId")).toString().toLatin1());
+    if (id.size() != 32) {
+        id.resize(32);
+        QRandomGenerator::system()->fillRange(reinterpret_cast<quint32 *>(id.data()), 8);
+        s.insert(QStringLiteral("relayId"), QString::fromLatin1(id.toHex()));
+        m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(s).toJson(QJsonDocument::Compact));
+    }
+    return id;
 }
 
 QString CallManager::call(const QString &key) { return startCall(key, false); }

@@ -1,29 +1,45 @@
 import QtQuick
 import Huginn
 
-// Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, the Nearby
-// room, chats and people around you. Main column: the open conversation. Locked with a pattern or
-// password like Muninn.
+// Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, people in no
+// folder, then each folder as a section that folds away (like Discord categories), the Trash, and at
+// the very bottom the Nearby room and people around you. Main column: the open conversation and its
+// message box, with a thread or the pins beside it. The same on a desktop and a handheld, only bigger
+// there. Locked with a pattern or password like Muninn.
 Rectangle {
     id: page
     color: Theme.ground
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "chips" (folder filters), "list" or "messages"
-    property string folder: ""        // the folder filter, "" for everyone
-    property int chip: 0
+    property string zone: "list"      // "list", "messages" or "side" (a thread or the pins)
+    // A person being dragged with the mouse (from which section), and where they'd land: the line
+    // (in the list's content), the section, and whether that's onto a folder's header.
+    property string dragKey: ""
+    property string dragFrom: ""
+    property string dragName: ""
+    property real dragY: 0
+    property real dropLine: -1
+    property string dropSection: ""
+    property int dropAt: -1
+    property bool dropOnHeader: false
     property string openKey: ""       // "" = Nearby room, otherwise a private chat
     property int sel: -1              // selected message, for its options
+    property int sideSel: -1          // the message picked in the thread or pins panel
     property bool showCode: false
     property string viewing: ""       // a photo open full size
     property bool tour: false
     property bool changeLock: false
     // Groups arrive later; a direct message never shows the member column.
     readonly property bool isGroup: false
-    // Desktop with a mouse and keyboard: type straight into the box at the bottom (Game Mode and
-    // controllers keep the big TextPrompt).
-    readonly property bool typeHere: Theme.desktop && !System.gameMode
+    // The controller or its pointer is in use: what opens takes the controller's focus, not a text cursor.
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
+    // Narrow screens (a Steam Deck at handheld sizes, or a big Size): a thread or the pins slide over
+    // the conversation instead of sitting beside it, so it keeps room to read.
+    readonly property bool sideDocked: width - middle.width - Theme.px(360) >= Theme.px(420)
+    // The message box the controller is typing in, if any (picking a message takes it out).
+    readonly property var typingIn: compose.hasFocus && zone === "messages" && sel < 0 ? compose
+                                  : threadBox.hasFocus && zone === "side" && sideSel < 0 ? threadBox : null
     // Cap m1: the message being answered or edited, where the "New messages" line goes, the message
     // whose reaction picker is open.
     property string replyId: ""
@@ -31,8 +47,8 @@ Rectangle {
     property int newFrom: -1
     property string reactFor: ""
     readonly property var replyMsg: replyId === "" ? null : messages.find(m => m.id === replyId) || null
-    // The side panel (desktop, a 1:1 chat only): "thread" for one message and its replies, "pins" for
-    // this chat's pins (only on this computer), the same as in groups.
+    // The side panel (a 1:1 chat only): "thread" for one message and its replies, "pins" for this
+    // chat's pins (only on this computer), the same as in groups.
     property string side: ""
     property string threadRoot: ""
     readonly property bool isTour: tour
@@ -46,48 +62,64 @@ Rectangle {
         tour = !!a.tour
         changeLock = !!a.changeLock
         if (a.zone) zone = a.zone
-        if (a.folders) { zone = "chips"; chip = Math.min(1, chips.length - 1) }
+        if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; zone = "messages" }   // from Contacts › Message
     }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
-    // The lock's own LB / RB (pattern or password) win over moving along the rail.
+    // The lock's own LB (pattern or password) wins over moving along the rail.
     readonly property bool ownsShoulders: lock.visible && lock.mode !== "unlock"
 
-    // Folder chips at the top: All, each folder, then + to make one.
-    readonly property var chips: [{ id: "", name: "All" }].concat(Chat.folders).concat([{ id: "+", name: "+ Folder" }])
+    // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
+    // keep their own order; people in no folder go newest first until they're moved.
     readonly property var entries: {
         const out = [{ kind: "add", name: "Add someone", detail: "Paste their code, or a group code" },
                      { kind: "code", name: "My code", detail: "A QR anyone can scan to message you" }]
-        if (folder !== "") {
-            Chat.chats.filter(c => (c.folders || []).indexOf(folder) >= 0)
-                .forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
-            return out
-        }
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName,
                                                   detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
-        out.push({ kind: "nearby", name: "Nearby room", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
-        Chat.chats.forEach(c => out.push({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route }))
-        Chat.around.forEach(p => out.push({ kind: "stranger", key: p.key, name: p.name, detail: page.routeText(p.route) + " · A to message", route: p.route }))
+        const chats = Chat.chats, byKey = {}
+        chats.forEach(c => byKey[c.key] = c)
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route, section: section })
+        const order = Chat.topOrder
+        const loose = chats.filter(c => !(c.folders || []).length)
+        loose.filter(c => order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
+        order.forEach(k => { const c = byKey[k]; if (c && !(c.folders || []).length) out.push(person(c, "")) })
+        Chat.folders.forEach(f => {
+            const keys = (f.keys || []).filter(k => !!byKey[k])
+            out.push({ kind: "folder", id: f.id, name: f.name, collapsed: !!f.collapsed, count: keys.length,
+                       unread: !!f.collapsed && keys.some(k => byKey[k].unread) })
+            if (!f.collapsed) keys.forEach(k => out.push(person(byKey[k], f.id)))
+        })
+        const trash = Chat.trash
+        if (trash.length) out.push({ kind: "trash", name: "Trash", detail: trash.length + (trash.length === 1 ? " person" : " people") + " · deleted for good after 30 days" })
+        // Nearby always last, in its own section. Hidden from people nearby: none of it.
+        if (Chat.visibleNearby) {
+            out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
+            Chat.around.forEach((p, i) => out.push({ kind: "stranger", key: p.key, name: p.name, label: i === 0 ? "Around you" : "", detail: page.routeText(p.route) + " · A to message", route: p.route }))
+        }
         return out
     }
     readonly property var messages: {
         if (tour && openKey === "")
             return [{ id: "1", name: "Raven 4821", text: "Anyone have the Emerald save from yesterday?", mine: false, time: Date.now() - 60000 },
                     { id: "2", name: Chat.username, text: "Sending it over LocalSend now", mine: true, time: Date.now(), state: "read" }]
-        return openKey === "" ? Chat.nearby : (Chat.chats, Chat.messagesWith(openKey))
+        return openKey === "" ? (Chat.visibleNearby ? Chat.nearby : []) : (Chat.chats, Chat.messagesWith(openKey))
     }
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
     readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
 
-    // What the hint bar shows (Main.qml adds LB RB).
-    readonly property var prompts: lock.visible ? [{ key: "b", label: "Back" }]
-        : zone === "chips" ? [{ key: "a", label: "Show" }, { key: "x", label: "Folder options" }, { key: "b", label: "Back" }]
-        : zone === "list" ? [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+    // What the hint bar shows (Main.qml adds LB). LT opens the options (the page gets it as X).
+    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }, { key: "b", label: "Back" }]
+        : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
+        : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
+                            .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
+        : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
+                             { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
-            .concat(sel >= 0 || openKey !== "" ? [{ key: "x", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
+            .concat(sel >= 0 || openKey !== "" ? [{ key: "lt", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
     readonly property string status: lock.visible ? "" : Chat.netStatus
 
     function routeText(r) {
@@ -110,7 +142,7 @@ Rectangle {
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
         replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
-        if (typeHere) compose.text = ""
+        compose.text = ""
         // Where the unread ones start (after my last message), for the "New messages" line.
         newFrom = -1
         if (openKey !== "" && !tour && !locked) {
@@ -128,6 +160,13 @@ Rectangle {
     }
     // Read only counts when someone is actually looking: not while a game is in front.
     onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
+    onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
+    onSideChanged: {
+        sideSel = -1
+        if (side === "" && zone === "side") zone = "messages"
+        // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
+        if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
+    }
     Component.onCompleted: Vault.back()   // away more than a minute: locked again
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
     Connections {
@@ -146,47 +185,36 @@ Rectangle {
         width: Theme.px(270)
         color: Theme.column
 
-        PageHeader { id: listHead; width: parent.width; title: "Direct messages" }
-
-        // Folders (only on this computer) as filter chips.
-        Flow {
-            id: chipRow
-            visible: !page.locked
-            anchors.top: listHead.bottom
-            anchors.topMargin: Theme.px(10)
-            x: Theme.px(10)
-            width: parent.width - Theme.px(20)
-            spacing: Theme.px(6)
-            Repeater {
-                model: page.chips
-                Rectangle {
-                    readonly property bool on: page.active && page.zone === "chips" && page.chip === index
-                    readonly property bool picked: modelData.id === page.folder && modelData.id !== "+"
-                    height: Theme.px(30)
-                    width: chipLabel.implicitWidth + Theme.px(22)
-                    radius: height / 2
-                    color: picked ? Theme.accentFill : chipHover.hovered ? Theme.raised : Theme.tile
-                    border.width: on ? Theme.focusWidth : picked ? 1 : 0
-                    border.color: Theme.accent
-                    Accessible.role: Accessible.Button
-                    Accessible.name: modelData.id === "+" ? "New folder" : "Show " + modelData.name
-                    Text {
-                        id: chipLabel
-                        anchors.centerIn: parent
-                        text: modelData.name || ""
-                        color: parent.picked ? Theme.accent : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: parent.picked ? Font.DemiBold : Font.Normal
-                    }
-                    HoverHandler { id: chipHover }
-                    TapHandler { onTapped: { page.zone = "chips"; page.chip = index; page.pickChip() } }
+        PageHeader {
+            id: listHead
+            width: parent.width
+            title: "Direct messages"
+            // Folders are sections of the list below; this makes a new one (with a pointer).
+            Rectangle {
+                visible: !page.locked
+                anchors.verticalCenter: parent.verticalCenter
+                height: Theme.px(30)
+                width: newFolderLabel.implicitWidth + Theme.px(22)
+                radius: height / 2
+                color: newFolderHover.hovered ? Theme.raised : Theme.tile
+                Accessible.role: Accessible.Button
+                Accessible.name: "New folder"
+                Text {
+                    id: newFolderLabel
+                    anchors.centerIn: parent
+                    text: "+ Folder"
+                    color: Theme.textSoft
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
+                HoverHandler { id: newFolderHover }
+                TapHandler { onTapped: page.newFolder("") }
             }
         }
 
         ListView {
             id: listPane
             visible: !page.locked
-            anchors.top: chipRow.visible ? chipRow.bottom : listHead.bottom
+            anchors.top: listHead.bottom
             anchors.topMargin: Theme.px(10)
             anchors.bottom: netStrip.top
             anchors.bottomMargin: Theme.px(6)
@@ -198,72 +226,223 @@ Rectangle {
             currentIndex: page.row
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
-            delegate: Rectangle {
+            delegate: Item {
+                id: entry
                 readonly property bool on: page.active && page.zone === "list" && page.row === index
-                readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
-                readonly property bool person: modelData.kind === "chat" || modelData.kind === "stranger" || modelData.kind === "request"
+                readonly property bool isHeader: modelData.kind === "folder"
+                readonly property real labelHeight: modelData.label ? Theme.px(34) : 0
                 width: listPane.width
-                height: Theme.px(56)
-                radius: Theme.px(10)
-                color: on || here ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
-                border.width: on ? Theme.focusWidth : 0
-                border.color: Theme.accent
-                Accessible.role: Accessible.ListItem
-                Accessible.name: modelData.name + ", " + modelData.detail
-                Rectangle {
-                    id: ava
-                    anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Theme.px(34); height: width; radius: width / 2
-                    color: parent.person ? Theme.avatar(modelData.name).bg : Theme.raised
+                height: labelHeight + (isHeader ? Theme.px(36) : Theme.px(56))
+
+                // The start of the bottom section (Nearby), or of the people around you.
+                Item {
+                    visible: !!modelData.label
+                    width: parent.width
+                    height: entry.labelHeight
+                    Rectangle { visible: modelData.kind === "nearby"; anchors.top: parent.top; anchors.topMargin: Theme.px(6); width: parent.width; height: 1; color: Theme.line }
                     Text {
-                        visible: parent.parent.person
-                        anchors.centerIn: parent
-                        text: page.initial(modelData.name)
-                        color: Theme.avatar(modelData.name).fg
-                        font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(4)
+                        text: String(modelData.label || "").toUpperCase()
+                        color: Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
                     }
+                }
+
+                // A folder's header: tap (or A) folds it away, X for its options.
+                Rectangle {
+                    visible: entry.isHeader
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: Theme.px(36)
+                    radius: Theme.px(8)
+                    color: entry.on || (page.dragKey !== "" && page.dropSection === modelData.id && page.dropOnHeader) ? Theme.tile : headHover.hovered ? Theme.raised : "transparent"
+                    border.width: entry.on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.name + (modelData.collapsed ? ", folded away" : "")
                     Icon {
-                        visible: !parent.parent.person
-                        anchors.centerIn: parent
-                        size: Theme.px(18)
-                        name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : "people"
-                        color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
+                        id: chevron
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "down"; size: Theme.px(14)
+                        rotation: modelData.collapsed ? -90 : 0
+                        color: Theme.textMuted
                     }
-                    // Requests wait for an answer: a lock badge so they stand out.
+                    Text {
+                        anchors.left: chevron.right; anchors.leftMargin: Theme.px(6)
+                        anchors.right: headDot.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: String(modelData.name || "").toUpperCase() + "  ·  " + (modelData.count || 0)
+                        color: entry.on || modelData.unread ? Theme.text : Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
+                    }
                     Rectangle {
-                        visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
-                        anchors.right: parent.right; anchors.bottom: parent.bottom
-                        anchors.margins: -Theme.px(2)
-                        width: Theme.px(14); height: width; radius: width / 2
+                        id: headDot
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(8); height: width; radius: width / 2
                         color: Theme.accent
+                        visible: !!modelData.unread
+                    }
+                    HoverHandler { id: headHover }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.listOptions(); else page.choose() }
                     }
                 }
-                Column {
-                    anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                    anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text {
-                        width: parent.width; elide: Text.ElideRight; text: modelData.name
-                        color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.DemiBold
-                    }
-                    Text {
-                        width: parent.width; elide: Text.ElideRight; text: modelData.detail
-                        color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                    }
-                }
+
                 Rectangle {
-                    id: dot
-                    anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Theme.px(9); height: width; radius: width / 2
-                    color: Theme.accent
-                    visible: !!modelData.unread
+                    readonly property bool on: entry.on
+                    readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
+                    readonly property bool person: modelData.kind === "chat" || modelData.kind === "stranger" || modelData.kind === "request"
+                    visible: !entry.isHeader
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: Theme.px(56)
+                    radius: Theme.px(10)
+                    // The one being dragged stays dim in its old place until it's dropped.
+                    opacity: page.dragKey !== "" && modelData.kind === "chat" && modelData.key === page.dragKey && modelData.section === page.dragFrom ? 0.4 : 1
+                    color: on || here ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
+                    border.width: on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.ListItem
+                    Accessible.name: modelData.name + ", " + modelData.detail
+                    Rectangle {
+                        id: ava
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(34); height: width; radius: width / 2
+                        color: parent.person ? Theme.avatar(modelData.name).bg : Theme.raised
+                        Text {
+                            visible: parent.parent.person
+                            anchors.centerIn: parent
+                            text: page.initial(modelData.name)
+                            color: Theme.avatar(modelData.name).fg
+                            font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                        }
+                        Icon {
+                            visible: !parent.parent.person
+                            anchors.centerIn: parent
+                            size: Theme.px(18)
+                            name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : modelData.kind === "trash" ? "close" : "people"
+                            color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
+                        }
+                        // Requests wait for an answer: a lock badge so they stand out.
+                        Rectangle {
+                            visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
+                            anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.margins: -Theme.px(2)
+                            width: Theme.px(14); height: width; radius: width / 2
+                            color: Theme.accent
+                        }
+                    }
+                    Column {
+                        anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
+                        anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text {
+                            width: parent.width; elide: Text.ElideRight; text: modelData.name || ""
+                            color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
+                            font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.DemiBold
+                        }
+                        Text {
+                            width: parent.width; elide: Text.ElideRight; text: modelData.detail || ""   // folder headers and some rows have none
+                            color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                        }
+                    }
+                    Rectangle {
+                        id: dot
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.px(9); height: width; radius: width / 2
+                        color: Theme.accent
+                        visible: !!modelData.unread
+                    }
+                    HoverHandler { id: rowHover }
+                    TapHandler {
+                        enabled: modelData.kind !== "chat"
+                        onTapped: { page.zone = "list"; page.row = index; page.choose() }
+                    }
+                    // People: a click opens, a right click shows their options, and a mouse drag moves
+                    // them up or down or into another folder. Touch still scrolls the list.
+                    MouseArea {
+                        id: dragArea
+                        anchors.fill: parent
+                        enabled: modelData.kind === "chat"
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        property real startY: 0
+                        property bool moved: false
+                        onPressed: mouse => {
+                            startY = mouse.y
+                            moved = false
+                            preventStealing = mouse.button === Qt.LeftButton && mouse.source === Qt.MouseEventNotSynthesized
+                        }
+                        onPositionChanged: mouse => {
+                            if (!preventStealing) return
+                            if (!moved && Math.abs(mouse.y - startY) > Theme.px(8)) { moved = true; page.startDrag(modelData) }
+                            if (moved) page.dragTo(mapToItem(listPane, mouse.x, mouse.y).y)
+                        }
+                        onReleased: { if (moved) page.dropHere() }
+                        onCanceled: { if (moved) page.cancelDrag(); moved = false }
+                        onClicked: mouse => {
+                            if (moved) return
+                            page.zone = "list"; page.row = index
+                            if (mouse.button === Qt.RightButton) page.listOptions(); else page.choose()
+                        }
+                        Component.onDestruction: if (moved) page.cancelDrag()
+                    }
                 }
-                HoverHandler { id: rowHover }
-                TapHandler { onTapped: { page.zone = "list"; page.row = index; page.choose() } }
+            }
+            // Where a dragged person would land.
+            Rectangle {
+                visible: page.dragKey !== "" && page.dropLine >= 0 && !page.dropOnHeader
+                y: page.dropLine - height / 2
+                z: 5
+                width: listPane.width
+                height: Theme.px(3)
+                radius: height / 2
+                color: Theme.accent
+            }
+        }
+        // The person being dragged, under the pointer.
+        Rectangle {
+            visible: page.dragKey !== ""
+            z: 6
+            x: listPane.x + Theme.px(16)
+            y: listPane.y + page.dragY - height / 2
+            width: listPane.width - Theme.px(32)
+            height: Theme.px(40)
+            radius: Theme.px(10)
+            color: Theme.raised
+            border.width: 1
+            border.color: Theme.accent
+            opacity: 0.95
+            Text {
+                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                text: page.dragName
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
+            }
+        }
+        // Near the top or bottom edge while dragging: the list scrolls.
+        Timer {
+            interval: 30
+            repeat: true
+            running: page.dragKey !== ""
+            onTriggered: {
+                const edge = Theme.px(36), maxY = Math.max(0, listPane.contentHeight - listPane.height)
+                let dy = 0
+                if (page.dragY < edge) dy = -Theme.px(10)
+                else if (page.dragY > listPane.height - edge) dy = Theme.px(10)
+                if (dy === 0) return
+                listPane.contentY = Math.max(listPane.originY, Math.min(listPane.originY + maxY, listPane.contentY + dy))
+                page.dragTo(page.dragY)
             }
         }
         Text {
@@ -310,7 +489,7 @@ Rectangle {
     Item {
         id: main
         anchors.left: middle.right
-        anchors.right: sidePanel.visible ? sidePanel.left : members.visible ? members.left : parent.right
+        anchors.right: sidePanel.visible && page.sideDocked ? sidePanel.left : members.visible ? members.left : parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
@@ -348,7 +527,7 @@ Rectangle {
             // Pinned messages of this chat (only on this computer).
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: page.typeHere && !page.locked && page.openKey !== ""
+                visible: !page.locked && page.openKey !== ""
                 text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
                 fontSize: 15
                 onClicked: page.side = page.side === "pins" ? "" : "pins"
@@ -527,13 +706,13 @@ Rectangle {
                         Reactions {
                             width: parent.width
                             list: modelData.rxList || []
-                            add: page.typeHere && page.openKey !== ""
+                            add: page.openKey !== ""
                             onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
                             onMore: page.openReact(modelData.id, modelData.myReaction || "")
                         }
                         // A thread: how many replies, opening them beside the chat.
                         Text {
-                            visible: page.typeHere && page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
+                            visible: page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
                             text: (modelData.replies === 1 ? "1 reply" : modelData.replies + " replies") + " ›"
                             color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                             Accessible.role: Accessible.Button
@@ -542,9 +721,11 @@ Rectangle {
                             TapHandler { onTapped: page.openThread(modelData.id) }
                         }
                     }
-                    // Desktop: react, reply, edit and more over the corner while the pointer is on it.
+                    // React, reply, edit and more over the corner while the pointer is on it or the
+                    // controller has it picked.
                     HoverBar {
-                        visible: page.typeHere && page.openKey !== "" && msgHover.hovered && !modelData.system && !modelData.unsent
+                        id: tools
+                        visible: page.openKey !== "" && (msgHover.hovered || msg.picked) && !modelData.system && !modelData.unsent
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         y: msg.lineH - Theme.px(6)
                         z: 2
@@ -560,14 +741,22 @@ Rectangle {
                         onMore: { page.zone = "messages"; page.sel = index; page.options() }
                     }
                     HoverHandler { id: msgHover }
-                    // Click: a photo opens; right click (or a click on a handheld) opens the options.
+                    // A click (a mouse or the right stick's pointer) picks it and opens a photo; a
+                    // right click opens the options. A finger has no right click, so a tap opens them.
                     TapHandler {
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onTapped: (point, button) => {
+                            // The tools over the corner answer their own clicks.
+                            if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
-                            if (button === Qt.RightButton || !page.typeHere) page.options()
+                            if (button === Qt.RightButton) page.options()
                             else if (modelData.photo && !modelData.voice && !modelData.unsent) page.viewing = modelData.photo
                         }
+                    }
+                    TapHandler {
+                        acceptedDevices: PointerDevice.TouchScreen
+                        onTapped: { page.zone = "messages"; page.sel = index; page.options() }
                     }
                 }
             }
@@ -579,7 +768,7 @@ Rectangle {
                 visible: list.count === 0
                 text: page.openKey === "" ? (Chat.nearbyOn ? (Chat.nearbyCount === 0 ? "Nobody else is here yet. Open Muninn on a phone close by or on this Wi-Fi." : "Say hello. Press A to write.")
                                                            : "Nearby chat is off. Turn it on in Settings › Chat.")
-                                          : "No messages yet. Press A to write, hold Y to talk, X for a picture."
+                                          : "No messages yet. Press A to write, hold Y to talk, LT for a picture and more."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             }
 
@@ -639,7 +828,7 @@ Rectangle {
             // Drop pictures (or other files) on the chat to send them.
             DropArea {
                 anchors.fill: parent
-                enabled: page.typeHere && page.openKey !== "" && !page.locked
+                enabled: page.openKey !== "" && !page.locked
                 onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
                 Rectangle {
                     anchors.fill: parent
@@ -659,10 +848,10 @@ Rectangle {
             }
         }
 
-        // Desktop: the message box, docked at the bottom and typed into directly. Handheld writes with A.
+        // The message box, docked at the bottom and typed into directly (A puts the controller in it).
         Composer {
             id: compose
-            visible: page.typeHere && !lock.visible
+            visible: !lock.visible
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20); anchors.bottomMargin: Theme.px(18)
             height: implicitHeight
@@ -672,6 +861,7 @@ Rectangle {
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.openName) : ""
             bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
             onSend: t => page.sendText(t)
+            onHasFocusChanged: if (hasFocus) { page.zone = "messages"; page.sel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEditLast: page.editLast()
             onEscaped: page.escapeKey()
@@ -680,16 +870,18 @@ Rectangle {
         }
     }
 
-    // ============================================================= side panel (desktop): a thread or the pins
+    // ============================================================= side panel: a thread or the pins
     property alias threadCompose: threadBox
     Rectangle {
         id: sidePanel
-        visible: page.typeHere && !lock.visible && page.openKey !== "" && page.side !== ""
+        visible: !lock.visible && page.openKey !== "" && page.side !== ""
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(360)
+        width: Math.min(Theme.px(360), page.width - middle.width - Theme.px(48))
         color: Theme.column
+        // Over the conversation on a narrow screen: an edge so it reads as on top.
+        Rectangle { visible: !page.sideDocked; width: 1; height: parent.height; color: Theme.lineStrong }
         PageHeader {
             id: sideHead
             width: parent.width
@@ -713,8 +905,10 @@ Rectangle {
                 at: index
                 who: page.senderName(modelData)
                 inThread: true
-                hoverTools: page.typeHere
-                onOptions: { const i = page.messages.findIndex(x => x.id === modelData.id); if (i >= 0) { page.zone = "messages"; page.sel = i; page.options() } }
+                picked: page.active && page.zone === "side" && page.sideSel === index
+                hoverTools: true
+                onChosen: { page.zone = "side"; page.sideSel = index }
+                onOptions: page.sideOptions(index)
             }
         }
         Text {
@@ -734,6 +928,7 @@ Rectangle {
             placeholder: "Reply in the thread"
             target: page.openKey
             onSend: t => page.sendText(t, page.threadRoot)
+            onHasFocusChanged: if (hasFocus) { page.zone = "side"; page.sideSel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
             onAttach: page.pickPicture()
@@ -785,7 +980,7 @@ Rectangle {
 
     // ============================================================= actions
     function write() {
-        if (typeHere && !lock.visible) { zone = "messages"; compose.focusField(); return }
+        if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › Chat.", true); return }
             Ui.ask("Message everyone nearby", "You're " + Chat.username, "", "Send", t => Chat.sendNearby(t), false, true)
@@ -843,7 +1038,8 @@ Rectangle {
         items.push(
                        { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
-                       { name: "Folders", detail: folderNames(openKey), url: "folders" })
+                       { name: "Folders", detail: folderNames(openKey), url: "folders" },
+                       { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -860,6 +1056,7 @@ Rectangle {
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
+            else if (a === "pins") openPins()
         })
     }
     // ------------------------------------------------------------- folders (only on this computer)
@@ -883,27 +1080,163 @@ Rectangle {
             Ui.say((on ? "Added to " : "Taken out of ") + (f ? f.name : "the folder") + ".")
         })
     }
-    function pickChip() {
-        const c = chips[chip]
-        if (!c) return
-        if (c.id === "+") {
-            Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => { if (Chat.addFolder(t) === "") Ui.say("Give the folder a name.", true) }, false, true)
+    // ------------------------------------------------------------- sections: folders, order, trash
+    function folderName(id) {
+        const f = Chat.folders.find(x => x.id === id)
+        return f ? f.name : ""
+    }
+    // Who is shown in a section, top to bottom.
+    function sectionKeys(section) {
+        return entries.filter(e => e.kind === "chat" && e.section === section).map(e => e.key)
+    }
+    // Back on an entry after the list changed under it.
+    function focusEntry(test) {
+        Qt.callLater(() => { const i = page.entries.findIndex(test); if (i >= 0) page.row = i })
+    }
+    function newFolder(key, from) {
+        Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => {
+            const f = Chat.addFolder(t)
+            if (f === "") { Ui.say("Give the folder a name.", true); return }
+            if (key) Chat.placeIn(key, from || "", f, [key])
+        }, false, true)
+    }
+    // X (or a right click) on a row of the list.
+    function listOptions() {
+        const e = entries[row]
+        if (!e) return
+        if (e.kind === "chat") { personOptions(e); return }
+        if (e.kind === "folder") { folderOptions(e); return }
+        if (e.kind === "trash") { openTrash(); return }
+        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" }] }], a => { if (a === "folder") newFolder("") })
+    }
+    function personOptions(e) {
+        const k = e.key, section = e.section, keys = sectionKeys(section), at = keys.indexOf(k)
+        const items = [{ name: "Open", url: "open" }]
+        if (at > 0) items.push({ name: "Move up", url: "up" })
+        if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
+        items.push({ name: "Move to folder…", detail: section === "" ? "Now in no folder" : "Now in " + folderName(section), url: "move" },
+                   { name: "Folders", detail: folderNames(k), url: "folders" },
+                   { name: "Rename", detail: "A name only you see", url: "rename" },
+                   { name: "Remove", detail: "Goes to the Trash with your chat. Restore brings both back within 30 days", url: "remove" })
+        Ui.pickFrom(e.name, [{ header: "", items: items }], a => {
+            if (a === "open") { openKey = k; zone = "messages" }
+            else if (a === "up" || a === "down") {
+                const next = keys.slice()
+                const to = a === "up" ? at - 1 : at + 1
+                next.splice(at, 1)
+                next.splice(to, 0, k)
+                Chat.placeIn(k, section, section, next)
+                focusEntry(x => x.kind === "chat" && x.key === k && x.section === section)
+            }
+            else if (a === "move") moveToFolder(e)
+            else if (a === "folders") pickFolders(k)
+            else if (a === "rename") rename(k)
+            else if (a === "remove") removePerson(k, e.name)
+        })
+    }
+    function moveToFolder(e) {
+        const k = e.key, from = e.section
+        const items = from === "" ? [] : [{ name: "No folder", detail: "Near the top of the list", url: "-" }]
+        Chat.folders.filter(f => f.id !== from).forEach(f => items.push({ name: f.name, detail: Chat.foldersOf(k).indexOf(f.id) >= 0 ? "Already in it too" : "", url: f.id }))
+        items.push({ name: "New folder", detail: "Make one and move them into it", url: "+" })
+        Ui.pickFrom("Move " + e.name + " to", [{ header: from === "" ? "" : "Out of " + folderName(from), items: items }], id => {
+            if (id === "+") { newFolder(k, from); return }
+            const to = id === "-" ? "" : id
+            Chat.placeIn(k, from, to, sectionKeys(to).concat([k]))
+            focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
+        })
+    }
+    function removePerson(k, name) {
+        Ui.sure("Remove " + name + "?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
+                "Remove", () => { if (openKey === k) { openKey = ""; zone = "list" } Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
+    }
+    function folderOptions(e) {
+        const id = e.id, ids = Chat.folders.map(f => f.id), at = ids.indexOf(id)
+        const items = [{ name: e.collapsed ? "Expand" : "Collapse", url: "fold" }]
+        if (at > 0) items.push({ name: "Move up", url: "up" })
+        if (at >= 0 && at < ids.length - 1) items.push({ name: "Move down", url: "down" })
+        items.push({ name: "Rename", url: "rename" },
+                   { name: "Delete the folder", detail: "The people in it stay", url: "delete" },
+                   { name: "New folder", url: "new" })
+        Ui.pickFrom(e.name, [{ header: "Only on this computer", items: items }], a => {
+            if (a === "fold") Chat.setCollapsed(id, !e.collapsed)
+            else if (a === "up" || a === "down") { Chat.moveFolder(id, a === "up" ? -1 : 1); focusEntry(x => x.kind === "folder" && x.id === id) }
+            else if (a === "rename") Ui.ask("Rename " + e.name, "A name only you see", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
+            else if (a === "delete") Ui.sure("Delete " + e.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete", () => Chat.deleteFolder(id), false, false)
+            else if (a === "new") newFolder("")
+        })
+    }
+    function openTrash() {
+        const t = Chat.trash
+        if (!t.length) { Ui.say("The Trash is empty."); return }
+        const items = t.map(p => ({ name: p.name, detail: p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left · Restore or Delete for good", url: p.key }))
+        Ui.pickFrom("Trash", [{ header: "Deleted for good after 30 days", items: items },
+                              { header: "", items: [{ name: "Empty trash", detail: "Everyone here and your chats with them go for good", url: "!empty" }] }], k => {
+            if (k === "!empty") {
+                Ui.sure("Empty trash?", "Everyone in the Trash and your chats with them are deleted for good.", "Hold to empty", () => { Chat.emptyTrash(); Ui.say("Trash emptied.") }, true, true)
+                return
+            }
+            const p = t.find(x => x.key === k)
+            if (!p) return
+            Ui.pickFrom(p.name, [{ header: "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left", items: [
+                { name: "Restore", detail: "They and your chat come back", url: "restore" },
+                { name: "Delete for good", detail: "Your chat with them goes too", url: "delete" }] }], a => {
+                if (a === "restore") { Chat.restore(k); Ui.say(p.name + " is back.") }
+                else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "They and your chat with them can't be brought back.", "Delete for good",
+                                                 () => { Chat.deleteForGood(k); Ui.say(p.name + " deleted for good.") }, false, true)
+            })
+        })
+    }
+    // ------------------------------------------------------------- dragging people with the mouse
+    function startDrag(e) {
+        dragKey = e.key
+        dragFrom = e.section
+        dragName = e.name
+        dropLine = -1
+        dropAt = -1
+    }
+    // y in the list's own coordinates. Lands before or after a person (by which half of them the
+    // pointer is on), at the top of a folder when over its header, or at the top of the list.
+    function dragTo(y) {
+        dragY = y
+        dropLine = -1; dropAt = -1; dropOnHeader = false
+        const cy = y + listPane.contentY
+        const i = listPane.indexAt(listPane.width / 2, cy)
+        const e = entries[i]
+        const item = i >= 0 ? listPane.itemAtIndex(i) : null
+        if (!e || !item) return
+        if (e.kind === "folder") { dropSection = e.id; dropAt = i + 1; dropOnHeader = true; return }
+        if (e.kind === "chat") {
+            const after = cy > item.y + item.labelHeight + (item.height - item.labelHeight) / 2
+            dropSection = e.section
+            dropAt = after ? i + 1 : i
+            dropLine = after ? item.y + item.height + listPane.spacing / 2 : item.y + item.labelHeight - listPane.spacing / 2
             return
         }
-        folder = c.id
-        row = 0
+        if (e.kind === "add" || e.kind === "code" || e.kind === "ginvite" || e.kind === "request") {
+            const first = entries.findIndex(x => x.kind === "chat" && x.section === "")
+            const at = first >= 0 ? first : i + 1
+            const it = listPane.itemAtIndex(first >= 0 ? first : i)
+            dropSection = ""
+            dropAt = at
+            if (it) dropLine = first >= 0 ? it.y - listPane.spacing / 2 : it.y + it.height + listPane.spacing / 2
+        }
     }
-    function chipOptions() {
-        const c = chips[chip]
-        if (!c || c.id === "" || c.id === "+") { pickChip(); return }
-        const id = c.id
-        Ui.pickFrom(c.name, [{ header: "Only on this computer", items: [
-            { name: "Rename", url: "rename" },
-            { name: "Delete the folder", detail: "The people in it stay", url: "delete" }] }], a => {
-            if (a === "rename") Ui.ask("Rename " + c.name, "A name only you see", c.name, "Save", t => Chat.renameFolder(id, t), false, true)
-            else if (a === "delete") Ui.sure("Delete " + c.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete",
-                                         () => { if (folder === id) folder = ""; Chat.deleteFolder(id) }, false, false)
-        })
+    function dropHere() {
+        const k = dragKey, from = dragFrom, to = dropSection, at = dropAt
+        cancelDrag()
+        if (k === "" || at < 0) return
+        // The target's people as shown, with the dragged one taken out and put where it was let go.
+        const before = [], after = []
+        entries.forEach((x, j) => { if (x.kind === "chat" && x.section === to && x.key !== k) (j < at ? before : after).push(x.key) })
+        Chat.placeIn(k, from, to, before.concat([k]).concat(after))
+        focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
+    }
+    function cancelDrag() {
+        dragKey = ""
+        dropLine = -1
+        dropAt = -1
+        dropOnHeader = false
     }
     function choose() {
         const e = entries[row]
@@ -912,6 +1245,8 @@ Rectangle {
         case "add": addSomeone(); return
         case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; zone = "messages"; return
+        case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
+        case "trash": openTrash(); return
         case "ginvite":
             if (e.waiting) {
                 Ui.sure("Waiting for " + e.fromName, "They let you in to " + e.name + " when their app gets your request. Stop waiting?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
@@ -954,7 +1289,7 @@ Rectangle {
         const k = openKey, id = m.id
         const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
         if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
-        if (typeHere) items.push({ name: "More emoji", url: "+" })
+        items.push({ name: "More emoji", url: "+" })
         Ui.pickFrom("React", [{ header: "", items: items }], e => {
             if (e === "+") { openReact(id, m.myReaction || ""); return }
             const r = Chat.react(k, id, e === m.myReaction ? "" : e)
@@ -975,7 +1310,7 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
             items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
-            if (typeHere) items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
+            items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
         }
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
@@ -1006,6 +1341,10 @@ Rectangle {
             else if (a === "picture") pickPicture()
             else if (a === "rename") rename(k)
             else if (a === "code") checkCode(k)
+            else if (a === "folders") pickFolders(k)
+            else if (a === "pins") openPins()
+            else if (a === "call") startCall()
+            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
         })
     }
 
@@ -1031,13 +1370,13 @@ Rectangle {
         if (openKey === "") return
         editId = ""
         replyId = id
-        if (typeHere) compose.focusField(); else write()
+        write()
     }
     function startEdit(m) {
         if (!m || !m.mine || m.photo || m.unsent || openKey === "") return
         if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs a newer Huginn or Muninn to see edits.", true); return }
         replyId = ""
-        if (typeHere) { editId = m.id; compose.setText(m.text) }
+        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
         else { const k = openKey, id = m.id; Ui.ask("Edit your message", "They see it marked (edited)", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
     }
     // Up in an empty box: edit my last text message.
@@ -1052,12 +1391,28 @@ Rectangle {
         replyId = ""; editId = ""; newFrom = -1
         if (openKey !== "") Chat.markRead(openKey)
     }
-    // A thread: the message and its replies beside the chat, with its own reply box.
+    // A thread: the message and its replies beside the chat, with its own reply box. The controller
+    // (or its pointer) goes into the panel; a mouse gets a cursor in its reply box.
     function openThread(id) {
-        if (openKey === "" || !typeHere) return
+        if (openKey === "") return
         threadRoot = id
         side = "thread"
-        Qt.callLater(() => threadBox.focusField())
+        if (pad) { zone = "side"; sideSel = threadMsgs.length - 1 }
+        else Qt.callLater(() => threadBox.focusField())
+    }
+    function openPins() {
+        if (openKey === "") return
+        side = "pins"
+        if (pad) { zone = "side"; sideSel = pinnedMsgs.length ? 0 : -1 }
+    }
+    function sideMsgs() { return side === "thread" ? threadMsgs : side === "pins" ? pinnedMsgs : [] }
+    // Options for a message in the panel: the same as in the chat.
+    function sideOptions(i) {
+        const m = sideMsgs()[i]
+        if (!m) return
+        zone = "side"; sideSel = i
+        const at = messages.findIndex(x => x.id === m.id)
+        if (at >= 0) { sel = at; options() }
     }
     function togglePin(id) {
         if (tour || openKey === "") return
@@ -1098,6 +1453,51 @@ Rectangle {
         }
     }
 
+    // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
+    function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : listPane }
+    // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
+    // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
+    function boxButton(box, b) {
+        switch (b) {
+        case "a": case "start": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "y": System.showSteamKeyboard(); return true
+        case "x": boxOptions(box); return true
+        case "down": return true
+        }
+        box.leave()
+        return b === "b"
+    }
+    function boxOptions(box) {
+        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" }]
+        if (openKey !== "") items.push({ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" })
+        if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
+        items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
+        Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
+            if (a === "send") box.enter()
+            else if (a === "emoji") box.toggleEmoji()
+            else if (a === "picture") pickPicture()
+            else if (a === "cancel") box.cancelBanner()
+            else if (a === "leave") box.leave()
+        })
+    }
+    // A thread or the pins: up and down pick, A answers in the thread or goes to a pin, B closes.
+    function sideButton(b) {
+        const n = sideMsgs().length
+        switch (b) {
+        case "up": if (n) sideSel = sideSel < 0 ? n - 1 : Math.max(0, sideSel - 1); return true
+        case "down": if (sideSel >= 0) sideSel = Math.min(n - 1, sideSel + 1); return true
+        case "left": zone = "messages"; return true
+        case "right": return true
+        case "a":
+            if (side === "thread") threadBox.focusField()
+            else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
+            return true
+        case "x": if (sideSel >= 0) sideOptions(sideSel); else conversationOptions(); return true
+        case "y": return true
+        case "b": side = ""; threadRoot = ""; return true
+        }
+        return false
+    }
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)
@@ -1109,40 +1509,36 @@ Rectangle {
         }
         if (viewing !== "") { if (b === "b" || b === "a") viewing = ""; return true }
         if (Voice.recording) { if (b === "b") { Voice.cancel(); Ui.say("Recording cancelled.") } return true }
+        if (reactPicker.visible) return reactPicker.handleButton(b)
+        if (compose.emojiShown) return compose.emojiButton(b)
+        if (threadBox.emojiShown) return threadBox.emojiButton(b)
+        if (typingIn && boxButton(typingIn, b)) return true
+        if (zone === "side") return sideButton(b)
         if (zone === "messages" && openKey !== "" && keep.visible) {
             if (b === "start") { Chat.keepInTouch(openKey); return true }
             if (b === "back") { Chat.notNow(openKey); return true }
         }
-        if (zone === "chips") {
-            switch (b) {
-            case "left": if (chip === 0) return false; chip--; return true
-            case "right": chip = Math.min(chips.length - 1, chip + 1); return true
-            case "down": zone = "list"; return true
-            case "a": pickChip(); return true
-            case "x": chipOptions(); return true
-            case "b": zone = "list"; return true
-            case "up": return true
-            }
-            return false
-        }
         switch (b) {
         case "up":
-            if (zone === "list" && row === 0 && !locked) { zone = "chips"; chip = Math.max(0, chips.findIndex(c => c.id === folder)) }
-            else if (zone === "list") row = Math.max(0, row - 1)
+            if (zone === "list") row = Math.max(0, row - 1)
             else if (messages.length > 0) { sel = sel < 0 ? messages.length - 1 : Math.max(0, sel - 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "down":
             if (zone === "list") row = Math.min(entries.length - 1, row + 1)
             else if (sel >= 0) { sel = Math.min(messages.length - 1, sel + 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
-        case "right": zone = "messages"; return true
+        case "right":
+            if (zone === "messages" && sidePanel.visible) { const n = sideMsgs().length; zone = "side"; sideSel = !n ? -1 : side === "thread" ? n - 1 : 0 }
+            else zone = "messages"
+            return true
         case "left":
             if (zone === "list") return false
             zone = "list"; sel = -1
             return true
         case "a": if (zone === "list") choose(); else write(); return true
         case "x":
-            if (zone === "messages" && sel >= 0) options()
+            if (zone === "list") listOptions()
+            else if (zone === "messages" && sel >= 0) options()
             else if (zone === "messages" && openKey !== "") conversationOptions()
             else if (zone === "messages") write()
             return true

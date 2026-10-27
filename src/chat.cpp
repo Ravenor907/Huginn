@@ -38,6 +38,7 @@ const QString kPrefix = QStringLiteral("MUNINN1:");
 const QString kPage = QStringLiteral("https://ravenor907.github.io/Huginn-Muninn/add/#");
 const int kKeepAfter = 10;
 const qint64 kDay = 86400000;
+const qint64 kTrashDays = 30;   // removed people stay in the trash this long, then go for good
 // Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min.
 const qint64 kRetry[] = {5000, 10000, 20000, 60000, 300000};
 
@@ -94,6 +95,8 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
             m_gtokens.clear();
             m_gout.clear();
             m_folders.clear();
+            m_topOrder.clear();
+            m_trash.clear();
             m_mxOut.clear();
             m_pins.clear();
         }
@@ -140,6 +143,11 @@ void Chat::start()
                       {QStringLiteral("mailbox"), m_nostr->publicKey()}};
         if (nearbyOn())
             o.insert(QStringLiteral("chatName"), username());
+        // Hidden from people nearby: no name at all, not even the computer's (LocalSend's alias).
+        // The chat key is still there, or contacts couldn't find this computer on the Wi-Fi, so
+        // someone who already has the key can still tell it's here.
+        if (!visibleNearby())
+            o.insert(QStringLiteral("alias"), QStringLiteral("Huginn"));
         return o;
     };
     m_net->chatReceive = [this](const QByteArray &body, const QString &) { return receive(body, QStringLiteral("wifi")); };
@@ -210,6 +218,17 @@ void Chat::setUsername(const QString &v)
 void Chat::setNearbyOn(bool v)
 {
     m_settings.setValue(QStringLiteral("chat/nearbyOn"), v);
+    m_net->announce();
+    Q_EMIT changed();
+}
+
+void Chat::setVisibleNearby(bool v)
+{
+    if (v == visibleNearby())
+        return;
+    m_settings.setValue(QStringLiteral("chat/visibleNearby"), v);
+    // New Bluetooth links get a hello without the name too (main.cpp); links already open keep the
+    // hello they had until they reconnect.
     m_net->announce();
     Q_EMIT changed();
 }
@@ -343,6 +362,7 @@ void Chat::addContact(const QString &text, const QString &sameAs)
         entry.insert(QStringLiteral("nick"), nick);
     m_contacts.insert(key, entry);
     m_met.remove(key);
+    m_trash.remove(key);   // adding someone from the trash again takes them out of it
     saveContacts();
     saveMet();
     Q_EMIT changed();
@@ -573,7 +593,7 @@ void Chat::probeCaps(const QString &key)
 
 void Chat::sendCall(const QString &key, const QJsonObject &msg)
 {
-    if (!m_ready || key.isEmpty() || isBlocked(key))
+    if (!m_ready || key.isEmpty() || isBlocked(key) || isTrashed(key))
         return;
     // Sealed once (a ratchet message moves the session on) and the same copy sent on every
     // route at once: the other side keeps the first and drops the rest. Never kept for resending.
@@ -589,7 +609,7 @@ QByteArray Chat::signWithChatKey(const QByteArray &bytes) const { return CallCry
 
 bool Chat::canCall(const QString &key) const
 {
-    if (key.isEmpty() || isBlocked(key))
+    if (key.isEmpty() || isBlocked(key) || isTrashed(key))
         return false;
     if (m_caps.value(key).contains(QStringLiteral("c1")))
         return isContact(key) || isGroupPeer(key);
@@ -617,9 +637,10 @@ void Chat::loadFolders()
         saveFolders();
         return;
     }
-    const QJsonArray a = QJsonDocument::fromJson(raw).object().value(QStringLiteral("folders")).toArray();
-    for (const QJsonValue &v : a)
+    const QJsonObject o = QJsonDocument::fromJson(raw).object();
+    for (const QJsonValue &v : o.value(QStringLiteral("folders")).toArray())
         m_folders << v.toObject().toVariantMap();
+    m_topOrder = o.value(QStringLiteral("top")).toVariant().toStringList();
 }
 
 void Chat::saveFolders()
@@ -627,7 +648,7 @@ void Chat::saveFolders()
     QJsonArray a;
     for (const QVariantMap &f : std::as_const(m_folders))
         a << QJsonObject::fromVariantMap(f);
-    m_vault->write(QStringLiteral("folders.json"), compact(QJsonObject{{QStringLiteral("folders"), a}}));
+    m_vault->write(QStringLiteral("folders.json"), compact(QJsonObject{{QStringLiteral("folders"), a}, {QStringLiteral("top"), QJsonArray::fromStringList(m_topOrder)}}));
 }
 
 QVariantList Chat::folders() const
@@ -635,7 +656,9 @@ QVariantList Chat::folders() const
     QVariantList out;
     for (const QVariantMap &f : m_folders)
         out << QVariantMap{{QStringLiteral("id"), f.value(QStringLiteral("id"))}, {QStringLiteral("name"), f.value(QStringLiteral("name"))},
-                           {QStringLiteral("count"), f.value(QStringLiteral("keys")).toStringList().size()}};
+                           {QStringLiteral("count"), f.value(QStringLiteral("keys")).toStringList().size()},
+                           {QStringLiteral("keys"), f.value(QStringLiteral("keys")).toStringList()},
+                           {QStringLiteral("collapsed"), f.value(QStringLiteral("collapsed")).toBool()}};
     return out;
 }
 
@@ -694,6 +717,63 @@ QStringList Chat::foldersOf(const QString &key) const
         if (f.value(QStringLiteral("keys")).toStringList().contains(key))
             out << str(f, "id");
     return out;
+}
+
+void Chat::placeIn(const QString &key, const QString &from, const QString &to, const QStringList &order)
+{
+    if (key.isEmpty() || !m_ready)
+        return;
+    QStringList next;
+    for (const QString &k : order)
+        if (!k.isEmpty() && !next.contains(k))
+            next << k;
+    if (!next.contains(key))
+        next << key;
+    for (QVariantMap &f : m_folders) {
+        const QString id = str(f, "id");
+        QStringList keys = f.value(QStringLiteral("keys")).toStringList();
+        if (!to.isEmpty() && id == to) {
+            // Anyone in it who isn't shown (blocked, or in the trash) keeps their place at the end.
+            QStringList all = next;
+            for (const QString &k : std::as_const(keys))
+                if (!all.contains(k))
+                    all << k;
+            keys = all;
+        } else if (to.isEmpty() || id == from) {
+            keys.removeAll(key);   // no folder means out of every one
+        }
+        f.insert(QStringLiteral("keys"), keys);
+    }
+    if (to.isEmpty())
+        m_topOrder = next;
+    saveFolders();
+    Q_EMIT changed();
+}
+
+void Chat::setCollapsed(const QString &id, bool on)
+{
+    for (QVariantMap &f : m_folders)
+        if (str(f, "id") == id) {
+            if (on)
+                f.insert(QStringLiteral("collapsed"), true);
+            else
+                f.remove(QStringLiteral("collapsed"));
+        }
+    saveFolders();
+    Q_EMIT changed();
+}
+
+void Chat::moveFolder(const QString &id, int by)
+{
+    int i = 0;
+    while (i < m_folders.size() && str(m_folders.at(i), "id") != id)
+        ++i;
+    const int j = i + by;
+    if (i >= m_folders.size() || j < 0 || j >= m_folders.size())
+        return;
+    m_folders.move(i, j);
+    saveFolders();
+    Q_EMIT changed();
 }
 
 QString Chat::route(const QString &key) const
@@ -854,20 +934,132 @@ void Chat::block(const QString &key, bool on)
 
 void Chat::removeContact(const QString &key)
 {
+    if (key.isEmpty() || m_trash.contains(key) || (!isContact(key) && !m_met.contains(key) && m_private.value(key).isEmpty()))
+        return;
+    // Everything stays as it was (conversation, folders, the ratchet), so restore() brings it all back.
+    const bool contact = isContact(key);
+    const QVariantMap met = m_met.take(key);
+    QVariantMap t = contact ? m_contacts.take(key)
+                            : QVariantMap{{QStringLiteral("key"), key}, {QStringLiteral("name"), met.value(QStringLiteral("name"), nameOf(key))},
+                                          {QStringLiteral("mailbox"), met.value(QStringLiteral("mailbox"))}};
+    if (!contact && !str(met, "nick").isEmpty())
+        t.insert(QStringLiteral("nick"), met.value(QStringLiteral("nick")));
+    t.insert(QStringLiteral("trashed"), now());
+    t.insert(QStringLiteral("contact"), contact);
+    if (!met.isEmpty())
+        t.insert(QStringLiteral("met"), met);
+    m_trash.insert(key, t);
+    m_unsentKeeps.remove(key);
+    m_requests.remove(key);
+    m_held.remove(key);
+    m_unread.remove(key);
+    m_typing.remove(key);
+    m_active.remove(key);
+    saveContacts();
+    saveMet();
+    refreshGroupPeers();
+    Q_EMIT liveChanged();
+    Q_EMIT changed();
+}
+
+QVariantList Chat::trash() const
+{
+    QVariantList out;
+    for (auto it = m_trash.cbegin(); it != m_trash.cend(); ++it) {
+        const qint64 at = it.value().value(QStringLiteral("trashed")).toLongLong();
+        const QString nick = str(it.value(), "nick");
+        out << QVariantMap{{QStringLiteral("key"), it.key()}, {QStringLiteral("name"), nick.isEmpty() ? str(it.value(), "name") : nick},
+                           {QStringLiteral("trashed"), at}, {QStringLiteral("daysLeft"), qMax<qint64>(1, (at + kTrashDays * kDay - now() + kDay - 1) / kDay)}};
+    }
+    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("trashed")).toLongLong() > b.toMap().value(QStringLiteral("trashed")).toLongLong();
+    });
+    return out;
+}
+
+void Chat::restore(const QString &key)
+{
+    if (!m_trash.contains(key))
+        return;
+    QVariantMap t = m_trash.take(key);
+    const bool contact = t.value(QStringLiteral("contact")).toBool();
+    const QVariantMap met = t.value(QStringLiteral("met")).toMap();
+    t.remove(QStringLiteral("trashed"));
+    t.remove(QStringLiteral("contact"));
+    t.remove(QStringLiteral("met"));
+    if (contact)
+        m_contacts.insert(key, t);
+    if (!met.isEmpty())
+        m_met.insert(key, met);
+    saveContacts();
+    saveMet();
+    refreshGroupPeers();
+    Q_EMIT changed();
+}
+
+void Chat::deleteForGood(const QString &key)
+{
+    if (!m_trash.contains(key))
+        return;
+    m_trash.remove(key);
+    forgetPerson(key);
+    Q_EMIT changed();
+}
+
+void Chat::emptyTrash()
+{
+    const QStringList keys = m_trash.keys();
+    for (const QString &k : keys) {
+        m_trash.remove(k);
+        forgetPerson(k);
+    }
+    Q_EMIT changed();
+}
+
+// Gone for good: the contact, their conversation with its photos and voice, folders, pins and the
+// ratchet. Someone you share a group with stays reachable there.
+void Chat::forgetPerson(const QString &key)
+{
     m_contacts.remove(key);
     m_met.remove(key);
     m_unsentKeeps.remove(key);
+    m_unread.remove(key);
     forgetRatchet(key);
     for (QVariantMap &f : m_folders) {
         QStringList keys = f.value(QStringLiteral("keys")).toStringList();
         if (keys.removeAll(key))
             f.insert(QStringLiteral("keys"), keys);
     }
+    m_topOrder.removeAll(key);
+    for (const QVariant &v : m_private.take(key)) {
+        const QVariantMap m = v.toMap();
+        if (!str(m, "photo").isEmpty())
+            m_vault->remove(QStringLiteral("photos/") + str(m, "photo"));
+        m_tries.remove(str(m, "id"));
+        dropSealed(str(m, "id"));
+    }
+    if (m_pins.remove(key))
+        savePins();
+    save();
     saveFolders();
     saveContacts();
     saveMet();
-    refreshGroupPeers();   // someone you share a group with stays reachable there
-    Q_EMIT changed();
+    refreshGroupPeers();
+}
+
+void Chat::pruneTrash()
+{
+    const qint64 cutoff = now() - kTrashDays * kDay;
+    QStringList old;
+    for (auto it = m_trash.cbegin(); it != m_trash.cend(); ++it)
+        if (it.value().value(QStringLiteral("trashed")).toLongLong() < cutoff)
+            old << it.key();
+    for (const QString &k : std::as_const(old)) {
+        m_trash.remove(k);
+        forgetPerson(k);
+    }
+    if (!old.isEmpty())
+        Q_EMIT changed();
 }
 
 // ------------------------------------------------------------------ receiving
@@ -943,8 +1135,8 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         name = QStringLiteral("Someone");
     if (fromKey.isEmpty() || fromKey == myKey())
         return 400;
-    if (isBlocked(fromKey))
-        return 200;   // blocked: dropped quietly
+    if (isBlocked(fromKey) || isTrashed(fromKey))
+        return 200;   // blocked or in the trash: dropped quietly
     const QString room = o.value(QStringLiteral("room")).toString();
     if (room == QLatin1String("photo"))
         return receivePiece(o, fromKey, name, via);
@@ -1108,8 +1300,9 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 Q_EMIT notice(QStringLiteral("Someone says they're %1 with a new security key. Check Chat before accepting.").arg(nameOf(claims)));
                 Q_EMIT arrived(nameOf(claims), QStringLiteral("Says their security key changed"), fromKey);
             }
-        } else if (via != QLatin1String("internet") || m_met.contains(fromKey)) {
-            // Close by or on the same Wi-Fi (or someone met that way): no asking first.
+        } else if ((via != QLatin1String("internet") && visibleNearby()) || m_met.contains(fromKey)) {
+            // Close by or on the same Wi-Fi (or someone met that way): no asking first. Hidden from
+            // people nearby, only those already met get through this way.
             commitPeer();
             QVariantMap m = m_met.value(fromKey);
             m.insert(QStringLiteral("name"), name);
@@ -1234,7 +1427,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             m_seen.add(fromKey, sentId, now());
             return 200;
         }
-        if (!m_met.contains(fromKey) && (via == QLatin1String("internet") || !contactWithMailbox(mailbox, fromKey).isEmpty()))
+        if (!m_met.contains(fromKey) && (via == QLatin1String("internet") || !visibleNearby() || !contactWithMailbox(mailbox, fromKey).isEmpty()))
             return 403;   // a new key with a contact's inbox goes through a request (a private message) instead
         commitPeer();
         m_seen.add(fromKey, sentId, now());
@@ -1408,7 +1601,7 @@ QList<QJsonObject> Chat::pieces(const QVariantMap &m)
 int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via)
 {
     const bool contact = isContact(fromKey);
-    if (!contact && via == QLatin1String("internet") && !m_met.contains(fromKey))
+    if (!contact && (via == QLatin1String("internet") || !visibleNearby()) && !m_met.contains(fromKey))
         return 403;
     const QString id = o.value(QStringLiteral("id")).toString();
     const int n = o.value(QStringLiteral("n")).toInt(), i = o.value(QStringLiteral("i")).toInt(-1);
@@ -1696,7 +1889,7 @@ void Chat::retryLoop()
         for (const QVariant &v : it.value()) {
             const QVariantMap m = v.toMap();
             const QString id = str(m, "id");
-            if (!m.value(QStringLiteral("mine")).toBool())
+            if (!m.value(QStringLiteral("mine")).toBool() || m_trash.contains(it.key()))
                 continue;
             if (str(m, "state") == QLatin1String("unsending")) {
                 Tries &t = m_tries[id];
@@ -2089,6 +2282,8 @@ void Chat::deleteAll()
 
 void Chat::prune()
 {
+    if (m_ready)
+        pruneTrash();
     const qint64 age = deleteAfter();
     if (age <= 0 || !m_ready)
         return;
@@ -2151,6 +2346,8 @@ void Chat::saveContacts()
     QJsonArray a;
     for (const QVariantMap &c : std::as_const(m_contacts))
         a << QJsonObject::fromVariantMap(c);
+    for (const QVariantMap &c : std::as_const(m_trash))
+        a << QJsonObject::fromVariantMap(c);   // marked "trashed"
     m_vault->write(QStringLiteral("contacts.json"), QJsonDocument(a).toJson(QJsonDocument::Compact));
 }
 
@@ -2189,8 +2386,10 @@ void Chat::load()
     for (auto it = met.begin(); it != met.end(); ++it)
         m_met.insert(it.key(), it.value().toObject().toVariantMap());
     const QJsonArray contacts = QJsonDocument::fromJson(m_vault->read(QStringLiteral("contacts.json"))).array();
-    for (const QJsonValue &c : contacts)
-        m_contacts.insert(c.toObject().value(QStringLiteral("key")).toString(), c.toObject().toVariantMap());
+    for (const QJsonValue &c : contacts) {
+        const QJsonObject o = c.toObject();
+        (o.contains(QStringLiteral("trashed")) ? m_trash : m_contacts).insert(o.value(QStringLiteral("key")).toString(), o.toVariantMap());
+    }
     const QJsonObject inv = QJsonDocument::fromJson(m_vault->read(QStringLiteral("invites.json"))).object();
     for (auto it = inv.begin(); it != inv.end(); ++it)
         m_invites.insert(it.key(), qint64(it.value().toDouble()));
@@ -2219,7 +2418,7 @@ QVariantList Chat::chats() const
             keys.insert(it.key());
     QVariantList out;
     for (const QString &k : keys) {
-        if (isBlocked(k))
+        if (isBlocked(k) || isTrashed(k))
             continue;
         const QVariantList msgs = m_private.value(k);
         const QVariantMap last = msgs.isEmpty() ? QVariantMap() : msgs.last().toMap();
@@ -2282,16 +2481,18 @@ QVariantList Chat::around() const
 {
     // Everyone reachable right now that there's no chat with yet: Bluetooth first, then Wi-Fi.
     QVariantList out;
+    if (!visibleNearby())
+        return out;   // hidden from them, so they're hidden here too
     QSet<QString> seen;
     for (const QVariant &v : m_ble->peers()) {
         const QString k = str(v.toMap(), "chatKey");
-        if (k.isEmpty() || seen.contains(k) || isBlocked(k) || isContact(k) || !m_private.value(k).isEmpty())
+        if (k.isEmpty() || seen.contains(k) || isBlocked(k) || isTrashed(k) || isContact(k) || !m_private.value(k).isEmpty())
             continue;
         seen.insert(k);
         out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), str(v.toMap(), "name")}, {QStringLiteral("route"), QStringLiteral("bluetooth")}};
     }
     for (const LocalSend::Peer &p : m_net->chatPeers()) {
-        if (p.chatKey.isEmpty() || seen.contains(p.chatKey) || isBlocked(p.chatKey) || isContact(p.chatKey) || !m_private.value(p.chatKey).isEmpty())
+        if (p.chatKey.isEmpty() || seen.contains(p.chatKey) || isBlocked(p.chatKey) || isTrashed(p.chatKey) || isContact(p.chatKey) || !m_private.value(p.chatKey).isEmpty())
             continue;
         seen.insert(p.chatKey);
         out << QVariantMap{{QStringLiteral("key"), p.chatKey}, {QStringLiteral("name"), p.chatName.isEmpty() ? p.alias : p.chatName}, {QStringLiteral("route"), QStringLiteral("wifi")}};
@@ -2321,7 +2522,7 @@ QVariantList Chat::people() const
                                {QStringLiteral("verified"), isVerified(it.key())}, {QStringLiteral("blocked"), isBlocked(it.key())}};
         }
     for (const QString &k : m_settings.value(QStringLiteral("chat/muted")).toStringList())
-        if (!seen.contains(k))
+        if (!seen.contains(k) && !isTrashed(k))
             out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), shown(k)}, {QStringLiteral("contact"), false},
                                {QStringLiteral("verified"), false}, {QStringLiteral("blocked"), true}};
     std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {

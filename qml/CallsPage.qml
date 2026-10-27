@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // Calls: everyone you called or who called you, newest first, missed ones marked. A calls back.
-// A call is started from a conversation (X there, then Call); this page is the history.
+// A call is started from a conversation (LT there, then Call); this page is the history.
 Rectangle {
     id: page
     color: Theme.ground
@@ -21,7 +21,7 @@ Rectangle {
     readonly property var picked: entries.length > 0 ? entries[Math.min(row, entries.length - 1)] : null
 
     readonly property var prompts: entries.length === 0 ? [{ key: "b", label: "Back" }]
-        : [{ key: "a", label: "Call back" }, { key: "x", label: "Options" }, { key: "b", label: "Back" }]
+        : [{ key: "a", label: "Call back" }, { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
     readonly property string status: Calls.available ? "" : "Calls aren't available in this build"
 
     Component.onCompleted: Calls.markSeen()
@@ -180,7 +180,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: page.picked ? page.detail(page.picked)
-                    : "Call the people you chat with, on Huginn or Muninn. Open their conversation, press X and pick Call. "
+                    : "Call the people you chat with, on Huginn or Muninn. Open their conversation, press LT and pick Call. "
                       + "Close by, the sound goes straight over Wi-Fi or Bluetooth; apart, it goes through a relay, still encrypted end to end."
                 color: page.picked && page.picked.missed ? Theme.danger : Theme.textMuted
                 font.family: Theme.body
