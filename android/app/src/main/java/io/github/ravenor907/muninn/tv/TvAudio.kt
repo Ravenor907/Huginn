@@ -36,9 +36,16 @@ object TvAudio {
  */
 class TvSpeech(private val context: Context) {
     private var rec: SpeechRecognizer? = null
+    /** Android 13+: the recognizer listens to our own microphone stream, made louder by [TvMic]. */
+    private var feed: Feed? = null
 
-    fun start(partial: (String) -> Unit, done: (String) -> Unit, fail: (String) -> Unit) {
+    fun start(partial: (String) -> Unit, done: (String) -> Unit, fail: (String) -> Unit) = start(partial, done, fail, boost = true)
+
+    private fun start(partial: (String) -> Unit, done: (String) -> Unit, fail: (String) -> Unit, boost: Boolean) {
         close()
+        val f = if (boost && Build.VERSION.SDK_INT >= 33 && TvMic.active) Feed.open() else null
+        feed = f
+        var heard = false
         val r = try {
             if (Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
             else SpeechRecognizer.createSpeechRecognizer(context)
@@ -52,13 +59,20 @@ class TvSpeech(private val context: Context) {
             override fun onEndOfSpeech() {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
             override fun onPartialResults(partialResults: Bundle?) {
-                first(partialResults)?.let(partial)
+                first(partialResults)?.let { heard = true; partial(it) }
             }
             override fun onResults(results: Bundle?) {
+                feed?.close()
                 val t = first(results)
                 if (t.isNullOrBlank()) fail("I didn't catch that. Try again?") else done(t)
             }
             override fun onError(error: Int) {
+                feed?.close()
+                // A recognizer that can't take our stream: once more with the TV's own microphone path.
+                val plain = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+                    error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || error == SpeechRecognizer.ERROR_NETWORK ||
+                    error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+                if (f != null && !heard && !plain) { android.os.Handler(android.os.Looper.getMainLooper()).post { start(partial, done, fail, boost = false) }; return }
                 fail(when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "I didn't catch that. Try again?"
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Muninn isn't allowed to use the microphone. Ask a parent."
@@ -71,15 +85,76 @@ class TvSpeech(private val context: Context) {
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        try { r.startListening(i) } catch (e: Exception) { fail("The microphone isn't working right now.") }
+        if (f != null && Build.VERSION.SDK_INT >= 33) {
+            i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, f.readSide)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, Feed.RATE)
+            f.start()
+        }
+        try { r.startListening(i) } catch (e: Exception) { feed?.close(); fail("The microphone isn't working right now.") }
     }
 
     private fun first(b: Bundle?): String? = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
 
-    fun stop() { try { rec?.stopListening() } catch (_: Exception) {} }
+    /** "Done": with our own stream, ending it is what tells the recognizer the person stopped. */
+    fun stop() { feed?.close(); try { rec?.stopListening() } catch (_: Exception) {} }
 
     fun close() {
+        feed?.close(); feed = null
         try { rec?.cancel(); rec?.destroy() } catch (_: Exception) {}
         rec = null
+    }
+
+    /** 16 kHz mono 16-bit PCM from [TvMic], louder, into a pipe the recognizer reads. */
+    private class Feed(private val record: android.media.AudioRecord, val readSide: android.os.ParcelFileDescriptor,
+                       private val writeSide: android.os.ParcelFileDescriptor) {
+        @Volatile private var stopped = false
+        private var thread: Thread? = null
+
+        fun start() {
+            thread = Thread({
+                val agc = TvMic.clipAgc(record.audioSessionId)
+                val gain = TvMic.Gain(TvMic.level)
+                val pcm = ShortArray(FRAME)
+                val bytes = ByteArray(FRAME * 2)
+                try {
+                    android.os.ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { os ->
+                        record.startRecording()
+                        while (!stopped) {
+                            val n = record.read(pcm, 0, FRAME)
+                            if (n <= 0) break
+                            gain.process(pcm, n)
+                            for (i in 0 until n) { bytes[2 * i] = pcm[i].toInt().toByte(); bytes[2 * i + 1] = (pcm[i].toInt() shr 8).toByte() }
+                            os.write(bytes, 0, n * 2)
+                        }
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { record.stop() } catch (_: Exception) {}
+                    record.release()
+                    try { agc?.release() } catch (_: Exception) {}
+                }
+            }, "muninn-tv-speech").apply { isDaemon = true; start() }
+        }
+
+        fun close() {
+            stopped = true
+            if (thread == null) { try { writeSide.close() } catch (_: Exception) {}; record.release() }
+            try { readSide.close() } catch (_: Exception) {}
+        }
+
+        companion object {
+            const val RATE = 16_000
+            private const val FRAME = 320
+
+            fun open(): Feed? {
+                val rec = TvMic.open(RATE, FRAME) ?: return null
+                return try {
+                    val p = android.os.ParcelFileDescriptor.createPipe()
+                    Feed(rec, p[0], p[1])
+                } catch (e: Exception) { rec.release(); null }
+            }
+        }
     }
 }

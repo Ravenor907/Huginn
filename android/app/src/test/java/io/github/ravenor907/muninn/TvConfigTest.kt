@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn
 import io.github.ravenor907.muninn.net.ChatCrypto
 import io.github.ravenor907.muninn.tv.Canon
 import io.github.ravenor907.muninn.tv.Quick
+import io.github.ravenor907.muninn.tv.TvExtras
 import io.github.ravenor907.muninn.tv.TvPerson
 import io.github.ravenor907.muninn.tv.TvRules
 import org.json.JSONArray
@@ -58,7 +59,7 @@ class TvConfigTest {
     @Test
     fun acceptsAndRefusesInOrder() {
         val acc = tv.getJSONArray("accept")
-        assertEquals(6, acc.length())
+        assertEquals(7, acc.length())
         for (i in 0 until acc.length()) {
             val a = acc.getJSONObject(i)
             val parents = a.getJSONArray("parents").let { p -> (0 until p.length()).map { if (p.getString(it) == "A") kA else kB } }
@@ -106,6 +107,12 @@ class TvConfigTest {
         val v2 = TvRules.config(privA, kTV, 2, kA, listOf(kA), quick.reversed(), people, false, 1761500000001)
         assertTrue(TvRules.accept(kTV, listOf(kA), got, v2).first)
         assertFalse(TvRules.accept(kTV, listOf(kA), v2, v2).first)
+        // With k2 extras the TV takes it and reads them back.
+        val v3 = TvRules.config(privA, kTV, 3, kA, listOf(kA), quick, people, false, 1761500000003, TvExtras(calls = false, mic = 90))
+        assertTrue(TvRules.accept(kTV, listOf(kA), v2, v3).first)
+        assertEquals(90, TvRules.parse(v3).mic); assertFalse(TvRules.parse(v3).calls)
+        assertEquals("0.61", JSONObject(TvRules.appliedMessage(3, "0.61")).getString("app"))
+        assertFalse(JSONObject(TvRules.appliedMessage(3)).has("app"))
         // Disconnect built here verifies too.
         val d = TvRules.disconnect(privA, kTV, 2, kA, 1761500000002)
         assertTrue(TvRules.acceptDisconnect(kTV, listOf(kA), 2, JSONObject(TvRules.disconnectMessage(d)).getJSONObject("d")).first)
@@ -132,6 +139,19 @@ class TvConfigTest {
         bad("too many quick messages") { val q = JSONArray(); repeat(25) { q.put(JSONObject().put("id", TvRules.quickId()).put("text", "hi")) }; it.put("quick", q) }
         bad("long name") { it.getJSONArray("contacts").getJSONObject(0).put("n", "n".repeat(41)) }
         bad("contacts unsorted") { val c = it.getJSONArray("contacts"); it.put("contacts", JSONArray().put(c.get(1)).put(c.get(0))) }
+        // k2 (7.5): calls and mic may be there, well-formed; nothing else extra.
+        val k2 = cfg("cfg4")
+        val parsed = TvRules.parse(k2)
+        assertFalse(parsed.calls); assertEquals(80, parsed.mic)
+        assertTrue(TvRules.parse(good).calls); assertEquals(TvRules.DEFAULT_MIC, TvRules.parse(good).mic)
+        fun badK2(why: String, f: (JSONObject) -> Unit) {
+            val c = JSONObject(k2.toString()); f(c)
+            try { TvRules.check(c); fail("should refuse: $why") } catch (e: IllegalArgumentException) {}
+        }
+        badK2("mic over 100") { it.put("mic", 101) }
+        badK2("mic not a number") { it.put("mic", true) }
+        badK2("calls not true or false") { it.put("calls", 1) }
+        badK2("extra field next to k2") { it.put("x", 1) }
         // 80 characters counted as code points: 80 runes are fine.
         val ok = JSONObject(good.toString()); ok.getJSONArray("quick").getJSONObject(0).put("text", "ᚺ".repeat(80)); TvRules.check(ok)
     }

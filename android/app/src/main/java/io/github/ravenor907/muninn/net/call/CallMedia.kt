@@ -222,6 +222,7 @@ class CallMedia(
     private var oldMode = AudioManager.MODE_NORMAL
     private var mic: Thread? = null
     private var player: Thread? = null
+    private var tvGain: io.github.ravenor907.muninn.tv.TvMic.Gain? = null
 
     /** Starts the microphone and the speaker. False if the microphone couldn't open (no permission?). */
     @SuppressLint("MissingPermission")
@@ -232,11 +233,12 @@ class CallMedia(
         routeDefault()
         val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = try {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
+            AudioRecord(io.github.ravenor907.muninn.tv.TvMic.callSource(), Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
         } catch (e: Exception) { null }
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return false }
         record = rec
+        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId)   // Kids' TV: louder microphone
         if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
         if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
         val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -263,6 +265,7 @@ class CallMedia(
                 var got = 0
                 while (got < Opus.FRAME && !stopped) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }
                 if (got < Opus.FRAME) continue
+                tvGain?.process(pcm, got)
                 if (muted) continue   // pings go on; no audio while muted (5.5)
                 enc.encode(pcm)?.let { send(CallCrypto.AUDIO, it) }
             }
@@ -348,6 +351,7 @@ class CallMedia(
         try { record?.release() } catch (_: Exception) {}
         try { track?.release() } catch (_: Exception) {}
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
+        if (tvGain != null) io.github.ravenor907.muninn.tv.TvMic.release()
         proximityOn(false)
         try {
             if (Build.VERSION.SDK_INT >= 31) audio.clearCommunicationDevice()
