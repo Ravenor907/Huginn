@@ -30,6 +30,9 @@ Q_SIGNALS:
 
 private:
     void release();
+    void listen();
+    // The lock is held but nobody answers on the socket: a killed copy's lock, taken over.
+    bool takeOverStaleLock();
     QString m_name;
     QLockFile *m_lock = nullptr;
     QLocalServer *m_server = nullptr;

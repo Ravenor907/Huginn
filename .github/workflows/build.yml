@@ -514,6 +514,7 @@ jobs:
             rm -f "$log"
             s=0; HUGINN_KEEP_START_LOG=1 timeout 60 "$@" > out.log 2>&1 || s=$?
             wineserver -k 2>/dev/null || true
+            n=$((n+1)); mkdir -p wine-logs; cp out.log "wine-logs/start$n-out.log"; cp "$log" "wine-logs/start$n-Huginn-start.log" 2>/dev/null || true
             echo "--- $* (exit $s)"; tail -n 30 out.log; echo "--- Huginn-start.log"; cat "$log" 2>/dev/null || echo "(none)"
             # Still running when the minute was up (124) and the window drew: it started.
             if [ $s -eq 124 ] && grep -q "window shown" "$log" 2>/dev/null; then
@@ -524,10 +525,21 @@ jobs:
               bad=1
             fi
           }
-          bad=0
+          bad=0; n=0
           start env QT_QPA_PLATFORM=offscreen wine "$h"
           start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
           exit $bad
+      - name: Publish the Wine logs to the ci-wine branch
+        if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          [ -d wine-logs ] || exit 0
+          cd wine-logs
+          git init -q -b ci-wine
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Wine logs for ${GITHUB_SHA::7}" || exit 0
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-wine
 
 
 
