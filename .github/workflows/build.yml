@@ -571,7 +571,7 @@ jobs:
     # and only after every check above passed.
     name: Release
     # The Flatpak, Muninn and the Windows zip must all pass.
-    needs: [flatpak, muninn, muninn-screens, windows]
+    needs: [flatpak, muninn, muninn-screens, windows, wine]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
