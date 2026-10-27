@@ -10,7 +10,7 @@
 
 Odin sends two ravens out every morning: Huginn (thought) and Muninn (memory). They fly the world and come back with what he needs to know.
 
-These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS handhelds. **Muninn** runs on Android phones, tablets and Google TV. Together they are a private place to talk: messages, groups, calls and file sharing, with no accounts, no phone numbers, no servers that can read anything, and no tracking.
+These two do the same for you. **Huginn** runs on Windows and Linux, and works with a controller on handhelds like the Steam Deck. **Muninn** runs on Android phones, tablets and Google TV. Together they are a private place to talk: messages, groups, calls and file sharing, with no accounts, no phone numbers, no servers that can read anything, and no tracking.
 
 ## Why
 
@@ -20,7 +20,18 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 - **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
 
-## What's new in 0.9
+## What's new in 0.91
+
+| | |
+|---|---|
+| **Noise removal switch** | Settings › Calls › Noise removal, in Muninn and in Huginn. Turn it off if people say you sound quiet; echo is still removed. |
+| **Send apps to a TV** | Files › Send an app sends an app from your phone (or an .apk file) to a TV with Muninn on the same Wi-Fi. The TV asks before it installs. |
+| **Apps for the Kids' TV** | On the TV's page, Apps › Send an app. The TV takes only the app its parent sends, and Android asks on the TV before installing. |
+| **Settings in folders** | Settings opens on a short list (Notifications, Privacy, Lock, Calls, Nearby and sharing, Display and accessibility, Backup and erase, About and updates), the same in both apps. |
+
+Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phones still on 0.8 need the one-time reinstall described under 0.9.
+
+## Also in 0.9
 
 > **Muninn needs reinstalling once.** From 0.9 Muninn is signed with a private key instead of the shared test key, so nobody else can make an update your phone would accept. Android won't install it over 0.8, so on each phone: Settings › **Back up chats**, uninstall Muninn, install Muninn.apk from this release, then **Restore from backup**. A Kids' TV is reinstalled the same way and added again from the parent's phone. Updates after this one install as normal. Huginn updates as usual.
 
@@ -93,12 +104,15 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 | **Sent, delivered, read** | Ticks for each message. Read receipts can be turned off. |
 | **Unsend** | Remove a message from every device in the chat. |
 | **Photos and voice messages** | Photos are scrubbed of location and camera data. Voice messages carry no metadata. |
-| **File sharing** | Encrypted transfers between Huginn, Muninn and any LocalSend app on the same Wi-Fi. |
+| **Groups and channels** | Group chats with their own channels, members and admins. Every message is encrypted to each member separately. |
+| **Calls** | Voice and video calls, group calls and voice rooms, and screen share from Huginn, all end-to-end encrypted. Switch between the phone, speaker, wired or Bluetooth headset, and turn noise removal on or off. |
+| **File sharing** | Encrypted transfers between Huginn, Muninn and any LocalSend app on the same Wi-Fi. A phone can also send its apps to a TV with Muninn. |
 | **Lock** | A 9-dot pattern or a password opens the app. Everything on disk is encrypted with it. |
 | **Private nicknames** | Rename anyone. Only you see it. |
 | **Encrypted backup** | Save all your chats to one password-protected file and restore them later. |
 | **Panic lock** | Lock everything instantly: a quick settings tile, a shortcut or a hard shake on Muninn; hold L3 and R3 on Huginn. |
 | **Accessibility** | Interface size, larger text, high contrast, a color blind palette and reduced motion. |
+| **Kids' TV** | Muninn on a Google TV becomes a simple, locked-down screen for children: big buttons, calls and messages with the people a parent approves. Parents pair it, manage it and send it apps from their phones. |
 
 ## Install
 
@@ -145,7 +159,7 @@ A mouse and keyboard work too (Tab and Shift+Tab switch sections, Page Up and Pa
 
 ## Versions
 
-One dot only, read as a decimal: 0.5, 0.6, 0.7, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
+One dot only, read as a decimal: 0.8, 0.9, 0.91, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
 
 ## Building
 
