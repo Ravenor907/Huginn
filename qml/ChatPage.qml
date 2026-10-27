@@ -643,7 +643,7 @@ Rectangle {
             onSend: t => page.sendText(t)
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEditLast: page.editLast()
-            onEscape: page.escapeKey()
+            onEscaped: page.escapeKey()
             onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
             onAttach: page.pickPicture()
         }

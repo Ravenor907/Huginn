@@ -436,7 +436,7 @@ Rectangle {
             bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
             onSend: t => page.sendText(t, page.replyId)
             onEditLast: page.editLast()
-            onEscape: page.escapeKey()
+            onEscaped: page.escapeKey()
             onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
             onAttach: page.pickPicture()
         }
@@ -495,7 +495,7 @@ Rectangle {
             target: page.isTour ? "" : page.chatKey
             mentionNames: page.memberNames
             onSend: t => page.sendText(t, page.threadRoot)
-            onEscape: { page.side = ""; page.threadRoot = ""; compose.focusField() }
+            onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
             onAttach: page.pickPicture()
         }
     }

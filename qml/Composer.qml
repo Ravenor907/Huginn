@@ -17,7 +17,7 @@ Item {
     signal send(string text)
     signal typing(bool on)
     signal editLast()
-    signal escape()
+    signal escaped()
     signal cancelBanner()
     signal attach()
 
@@ -162,7 +162,7 @@ Item {
                             event.accepted = true
                         } else if (event.key === Qt.Key_Escape) {
                             if (box.bannerTitle !== "") box.cancelBanner()
-                            else box.escape()
+                            else box.escaped()
                             event.accepted = true
                         } else if (event.matches(StandardKey.Paste) && box.target !== "" && Chat.clipboardHasImage()) {
                             if (Chat.pasteImage(box.target)) Ui.say("Sending the picture.")
