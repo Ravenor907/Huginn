@@ -18,6 +18,9 @@ class CallManager;
 class CallSession;
 class CallSignal;
 class Chime;
+class QVideoSink;
+class VideoReceiver;
+class VideoSender;
 struct TurnLogin;
 
 // Voice rooms and group calls for QML (the "Rooms" singleton), docs/protocol-0.6.md section 6.
@@ -47,6 +50,11 @@ class RoomManager : public QObject
     Q_PROPERTY(QString ringGroup READ ringGroup NOTIFY changed)   // the group's name
     Q_PROPERTY(int presence READ presenceSerial NOTIFY presenceChanged)   // bumps when whoIn() may differ
     Q_PROPERTY(int maxPeople READ maxPeople CONSTANT)
+    // Screen share (docs/protocol-0.6.md 5.8.7): this build can share; this computer shares now; the
+    // name of someone else who shares ("" when nobody does).
+    Q_PROPERTY(bool canShare READ canShare CONSTANT)
+    Q_PROPERTY(bool sharing READ sharing NOTIFY changed)
+    Q_PROPERTY(QString sharerName READ sharerName NOTIFY changed)
 
 public:
     using LoginFetcher = std::function<void(std::function<void(const TurnLogin &, const QString &)>)>;
@@ -77,6 +85,9 @@ public:
     QString ringGroup() const;
     int presenceSerial() const { return m_serial; }
     int maxPeople() const { return RoomWire::kMaxPeople; }
+    bool canShare() const;
+    bool sharing() const { return m_share != nullptr; }
+    QString sharerName() const;
 
     // "" when joined, otherwise what to tell the person.
     Q_INVOKABLE QString join(const QString &g, const QString &ch);
@@ -94,6 +105,10 @@ public:
     // Members that can't take part yet (their app has no voice rooms).
     Q_INVOKABLE bool needsUpdate(const QString &key) const { return lacksRooms && lacksRooms(key); }
     Q_INVOKABLE bool isIn(const QString &g, const QString &ch) const { return !m_g.isEmpty() && m_g == g && m_ch == ch; }
+    // Starts or stops sharing this computer's screen with everyone in the room.
+    Q_INVOKABLE void toggleShare();
+    // Where someone else's shared screen is shown (a QML VideoOutput's videoSink).
+    Q_INVOKABLE void setScreenSink(QObject *videoSink);
 
 Q_SIGNALS:
     void changed();
@@ -144,4 +159,14 @@ private:
     qint64 m_ringSince = 0;
     Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     int m_gen = 0;   // bumps on every join, so timers of an earlier room do nothing
+    // Screen share (5.8.7).
+    void watchMedia(const QString &key, CallSession *s);
+    void shareTo(CallSession *s, bool on);
+    void pickSharer();
+    void stopShare();
+    VideoSender *m_share = nullptr;
+    VideoReceiver *m_view = nullptr;
+    QString m_sharer;
+    QPointer<QVideoSink> m_screenSink;
+    QTimer m_shareRate;
 };

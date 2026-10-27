@@ -12,7 +12,7 @@ namespace
 const qint64 kLiveMs = 4000;          // a path with nothing authentic for this long is dead
 const qint64 kSilenceEveryMs = 400;   // DTX: one silent packet this often
 const qint64 kEagerMs = 15000;        // pings to paths not live yet: fast at first
-const qint64 kFreshMs = 750;          // a free path that carried something this recently rests the relay
+const qint64 kFreshMs = 750;          // a free path that answered a ping this recently rests the relay
 const qint64 kReportEveryMs = 1000;   // receiver reports (c2)
 const int kKeepFrames = 64;           // sent video frames kept for resends
 const int kMaxResendPerTick = 120;
@@ -136,7 +136,7 @@ bool CallMedia::live(Path p) const { return now() - m_paths[p].lastRx < kLiveMs;
 bool CallMedia::freeFresh() const
 {
     const qint64 t = now();
-    return t - m_paths[Wifi].lastRx < kFreshMs || t - m_paths[Direct].lastRx < kFreshMs;
+    return t - m_paths[Wifi].lastPong < kFreshMs || t - m_paths[Direct].lastPong < kFreshMs;
 }
 
 bool CallMedia::candidate(Path p) const
@@ -236,7 +236,8 @@ void CallMedia::tick()
             changed = true;
         }
     }
-    const bool free = live(Wifi) || live(Direct);
+    // The video size follows a free path that answered pings within 3 s (steadier than the 750 ms rule).
+    const bool free = t - m_paths[Wifi].lastPong < 3000 || t - m_paths[Direct].lastPong < 3000;
     if (free != m_wasFree) {
         m_wasFree = free;
         m_rate[0].setCap(profile(VideoWire::Camera).capKbps);
@@ -392,6 +393,7 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &hos
         break;
     case CallCrypto::Pong:
         ++m_stats.pongs;
+        m_paths[from].lastPong = now();
         if (p.payload == m_pingPayload)
             m_rtt = int(now() - m_pingSentAt);
         break;
@@ -482,7 +484,7 @@ void CallMedia::onReport(const VideoWire::Report &r)
 
 VideoWire::Profile CallMedia::profile(int stream) const
 {
-    const bool free = live(Wifi) || live(Direct);
+    const bool free = m_wasFree;
     return (stream & 1) == VideoWire::Screen ? VideoWire::screenProfile(free) : VideoWire::cameraProfile(free);
 }
 

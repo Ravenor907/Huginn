@@ -89,7 +89,8 @@ public:
 
     bool live(Path p) const;
     bool anyLive() const { return live(Relay) || live(Wifi) || live(Ble) || live(Direct); }
-    // A free path (Wi-Fi or Direct) carried something within the last 750 ms: the relay rests.
+    // A free path (Wi-Fi or Direct) answered a ping within the last 750 ms (so it works both ways,
+    // not only towards us past a one-way firewall): the relay rests.
     bool freeFresh() const;
     bool gotMedia() const { return m_gotMedia; }
     bool speaking() const { return m_speaking.on(); }
@@ -140,6 +141,7 @@ private:
     struct PathState {
         qint64 lastRx = -1000000;
         qint64 lastPing = -1000000;
+        qint64 lastPong = -1000000;   // a pong proves the path works both ways
     };
     void onFrame(const qint16 *pcm);
     void onPull(qint16 *pcm);

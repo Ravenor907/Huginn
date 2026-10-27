@@ -57,6 +57,7 @@ object CallManager {
     fun init(app: Muninn, signal: CallSignal) {
         this.app = app; this.signal = signal
         exec.execute { _history.value = load(app); loadTrust(app) }
+        work.execute { Vp8.available }   // looks the codecs up once, off the main thread
     }
 
     // ------------------------------------------------------------------ trusted contacts (5.8.1)

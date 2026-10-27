@@ -246,13 +246,15 @@ object CallLogic {
 
     enum class Kind { RELAY, WIFI, BLUETOOTH, DIRECT }
 
-    /** A free path (Wi-Fi or Direct) that had an authentic packet this recently rests the relay (5.8.3). */
+    /** A free path (Wi-Fi or Direct) that answered a ping this recently rests the relay (5.8.3). */
     const val FRESH_MS = 750L
 
     /** One way to reach the peer. Live while an authentic packet came on it within 4 s. */
     class Path(val kind: Kind, val addr: InetSocketAddress?) {
         @Volatile var lastIn = 0L
         @Volatile var lastPing = 0L
+        /** The last pong on this path: it works both ways (not only towards us past a one-way firewall). */
+        @Volatile var lastPong = 0L
         @Volatile var rttMs = -1L
         val added = System.currentTimeMillis()
         fun live(now: Long) = lastIn > 0 && now - lastIn < PATH_DEAD_MS

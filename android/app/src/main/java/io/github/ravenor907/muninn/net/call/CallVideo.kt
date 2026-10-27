@@ -200,6 +200,56 @@ class Vp8Decoder(private val surface: Surface) : AutoCloseable {
 }
 
 /**
+ * Someone's VP8 picture (their camera, or a screen they share) decoded onto a Surface on its own thread. Frames
+ * that come while there is no surface are dropped; a new surface asks for a keyframe ([askKey]).
+ */
+class RemoteVideo(private val thread: String, private val askKey: () -> Unit, private val onSize: (Int, Int, Int) -> Unit) {
+    private val queue = LinkedBlockingQueue<Triple<ByteArray, Boolean, Int>>(60)
+    private var worker: Thread? = null
+    @Volatile private var surface: Surface? = null
+    @Volatile private var changed = false
+    private var w = 0; private var h = 0; private var r = 0
+
+    fun surface(sf: Surface?) {
+        surface = sf
+        changed = true
+        if (sf != null) askKey()
+    }
+
+    fun frame(data: ByteArray, key: Boolean, rotation: Int) {
+        if (worker == null) start()
+        if (!queue.offer(Triple(data, key, rotation))) { queue.clear(); askKey() }
+    }
+
+    @Synchronized fun start() {
+        if (worker != null) return
+        worker = Thread({
+            var dec: Vp8Decoder? = null
+            var decSurface: Surface? = null
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val (data, key, rot) = queue.poll(500, TimeUnit.MILLISECONDS) ?: continue
+                    val sf = surface
+                    if (changed || sf !== decSurface) { changed = false; dec?.close(); dec = null; decSurface = sf }
+                    if (sf == null) continue
+                    val d = dec ?: Vp8Decoder(sf).also { dec = it }
+                    if (!d.decode(data, key)) { askKey(); continue }
+                    val sz = d.videoSize ?: continue
+                    if (sz.width != w || sz.height != h || rot != r) { w = sz.width; h = sz.height; r = rot; onSize(w, h, r) }
+                }
+            } catch (_: InterruptedException) {
+            } finally { dec?.close() }
+        }, thread).apply { isDaemon = true; start() }
+    }
+
+    @Synchronized fun stop() {
+        worker?.interrupt(); worker = null
+        queue.clear()
+        w = 0; h = 0; r = 0
+    }
+}
+
+/**
  * The video of the 1:1 call (5.8.5, 5.8.6): the camera (CameraX) encoded with [Vp8Encoder] and sent through the
  * call's media, which seals it with the call's keys; the peer's frames decoded onto the screen's surface. The call
  * screen binds the camera while it is visible (Android doesn't let an app film in the background), so the
@@ -224,10 +274,9 @@ object CallVideo {
 
     @Volatile private var session: CallSession? = null
     @Volatile private var app: Context? = null
-    private val decodeQueue = LinkedBlockingQueue<Triple<ByteArray, Boolean, Int>>(60)
-    private var decodeThread: Thread? = null
-    @Volatile private var surface: Surface? = null
-    @Volatile private var surfaceChanged = false
+    private val remote = RemoteVideo("muninn-video-dec", { session?.mediaNow?.requestKeyframe(VideoWire.CAMERA) }) { w, h, r ->
+        update { it.copy(width = w, height = h, rotation = r) }
+    }
     private val cameraExec = Executors.newSingleThreadExecutor { r -> Thread(r, "muninn-video-enc").apply { isDaemon = true } }
     @Volatile private var encoder: Vp8Encoder? = null
     @Volatile private var lastFrameAt = 0L
@@ -258,7 +307,7 @@ object CallVideo {
         val possible = s.videoBoth
         update { it.copy(possible = possible, cameraOn = it.cameraOn && possible, peerCamera = m.peerSending(VideoWire.CAMERA)) }
         if (possible && _state.value.cameraOn) { m.setVideoSending(VideoWire.CAMERA, true); rebind() }
-        startDecoder()
+        if (possible) remote.start()
     }
 
     /** Before the call connects: start with the camera on (answering a video call with video). */
@@ -270,8 +319,7 @@ object CallVideo {
         readyFor = null
         flipped = false
         stopCamera()
-        decodeThread?.interrupt(); decodeThread = null
-        decodeQueue.clear()
+        remote.stop()
         _state.value = State()
     }
 
@@ -279,7 +327,7 @@ object CallVideo {
 
     fun onFrame(s: CallSession, stream: Int, data: ByteArray, key: Boolean, rotation: Int) {
         if (s !== session || stream != VideoWire.CAMERA) return
-        if (!decodeQueue.offer(Triple(data, key, rotation))) { decodeQueue.clear(); s.mediaNow?.requestKeyframe(VideoWire.CAMERA) }
+        remote.frame(data, key, rotation)
     }
 
     fun onKeyWanted(s: CallSession, stream: Int) { if (s === session && stream == VideoWire.CAMERA) keyWanted = true }
@@ -292,33 +340,7 @@ object CallVideo {
     // ------------------------------------------------------------------ the peer's picture
 
     /** The call screen's TextureView surface, or null when it goes away. */
-    fun remoteSurface(sf: Surface?) {
-        surface = sf
-        surfaceChanged = true
-        if (sf != null) session?.mediaNow?.requestKeyframe(VideoWire.CAMERA)
-    }
-
-    private fun startDecoder() {
-        if (decodeThread != null) return
-        decodeThread = Thread({
-            var dec: Vp8Decoder? = null
-            var decSurface: Surface? = null
-            try {
-                while (!Thread.currentThread().isInterrupted) {
-                    val (data, key, rot) = decodeQueue.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                    val sf = surface
-                    if (surfaceChanged || sf !== decSurface) { surfaceChanged = false; dec?.close(); dec = null; decSurface = sf }
-                    if (sf == null) continue
-                    val d = dec ?: Vp8Decoder(sf).also { dec = it }
-                    if (!d.decode(data, key)) { session?.mediaNow?.requestKeyframe(VideoWire.CAMERA); continue }
-                    val sz = d.videoSize
-                    if (sz != null && (sz.width != _state.value.width || sz.height != _state.value.height || rot != _state.value.rotation))
-                        update { it.copy(width = sz.width, height = sz.height, rotation = rot) }
-                }
-            } catch (_: InterruptedException) {
-            } finally { dec?.close() }
-        }, "muninn-video-dec").apply { isDaemon = true; start() }
-    }
+    fun remoteSurface(sf: Surface?) = remote.surface(sf)
 
     // ------------------------------------------------------------------ the camera
 

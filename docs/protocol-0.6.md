@@ -613,7 +613,9 @@ Candidates, only in messages to someone trusted (and never more than 8 in all, 5
 
 Sound, video and the packets below go out on every live path, except:
 
-- the relay is left out while Wi-Fi or Direct had an authentic packet within the last 750 ms;
+- the relay is left out while Wi-Fi or Direct answered one of this side's pings (a pong on that path) within
+  the last 750 ms. A pong proves the path works both ways; packets that only come in (a firewall on the
+  other side that lets nothing in) never rest the relay;
 - video (and its resends) never goes over Bluetooth.
 
 So the relay is a standby: it keeps its 1 s pings (it stays live) and takes over within a second when the
@@ -692,7 +694,7 @@ Switching between the front and the back camera is the sender's business (a keyf
 
 #### 5.8.6 Size and bitrate
 
-| | over the relay | on a free path (Wi-Fi or Direct live) |
+| | over the relay | on a free path (Wi-Fi or Direct answered a ping within 3 s) |
 |---|---|---|
 | camera | 640 x 480, 24 fps, at most 700 kbps | 1280 x 720, 30 fps, at most 2000 kbps |
 | screen | 1280 x 720, 8 fps, at most 800 kbps | 1920 x 1080, 10 fps, at most 2500 kbps |

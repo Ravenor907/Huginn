@@ -195,20 +195,25 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
 
 /** The other person's camera, fitted whole into the screen and turned upright. */
 @Composable
-private fun RemoteVideo(v: CallVideo.State, modifier: Modifier) {
+private fun RemoteVideo(v: CallVideo.State, modifier: Modifier) =
+    VideoPicture({ CallVideo.remoteSurface(it) }, v.width, v.height, v.rotation, modifier, "Their camera")
+
+/** A decoded picture ([onSurface] gets the TextureView's surface), fitted whole and turned [rotation] degrees. Also the room's shared screen. */
+@Composable
+fun VideoPicture(onSurface: (Surface?) -> Unit, width: Int, height: Int, rotation: Int, modifier: Modifier, description: String) {
     AndroidView(factory = { ctx ->
         TextureView(ctx).apply {
             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                 private var surface: Surface? = null
-                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { surface = Surface(st); CallVideo.remoteSurface(surface) }
+                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { surface = Surface(st); onSurface(surface) }
                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { CallVideo.remoteSurface(null); surface?.release(); surface = null; return true }
+                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { onSurface(null); surface?.release(); surface = null; return true }
                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
             }
         }
     }, update = { tv ->
-        tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), v.width, v.height, v.rotation))
-    }, modifier = modifier.semantics { contentDescription = "Their camera" })
+        tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), width, height, rotation))
+    }, modifier = modifier.semantics { contentDescription = description })
 }
 
 /** Your own camera, small in the corner (picture in picture), mirrored like a mirror. */

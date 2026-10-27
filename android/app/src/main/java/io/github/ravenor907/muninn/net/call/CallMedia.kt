@@ -263,7 +263,7 @@ class CallMedia(
             CallCrypto.PING -> path(kind, from)?.let { send(CallCrypto.PONG, o.payload, only = it) }
             CallCrypto.PONG -> synchronized(pings) { pings.remove(CallCrypto.hex(o.payload)) }?.let { sentAt ->
                 val r = System.currentTimeMillis() - sentAt
-                path(kind, from)?.rttMs = r
+                path(kind, from)?.let { it.rttMs = r; it.lastPong = System.currentTimeMillis() }
                 rttMs = r.toInt()
             }
             CallCrypto.VIDEO -> if (c2) onVideo(o.payload)
@@ -310,7 +310,7 @@ class CallMedia(
     }
 
     private var lastReportText = ""
-    private var wasFree = false
+    @Volatile private var wasFree = false
     private var wasDirect = false
 
     private fun tick() {
@@ -335,7 +335,8 @@ class CallMedia(
         val report = "$r$w$b"
         if (report != lastReportText) { lastReportText = report; events.onPaths(r, w, b) }
         if (d != wasDirect) { wasDirect = d; events.onDirect(d) }
-        val free = w || d
+        // The video size follows a free path that answered pings within 3 s (steadier than the 750 ms rule).
+        val free = paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastPong > 0 && now - it.lastPong < 3_000 }
         if (free != wasFree) {
             wasFree = free
             rate[0].setCap(profile(VideoWire.CAMERA).capKbps); rate[1].setCap(profile(VideoWire.SCREEN).capKbps)
@@ -347,9 +348,9 @@ class CallMedia(
 
     fun anyLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.live(now) } }
 
-    /** A free path (Wi-Fi or Direct) carried something within 750 ms: the relay rests (5.8.3). */
+    /** A free path (Wi-Fi or Direct) answered a ping within 750 ms (so it works both ways): the relay rests (5.8.3). */
     fun freeFresh(now: Long = System.currentTimeMillis()) =
-        paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastIn > 0 && now - it.lastIn < CallLogic.FRESH_MS }
+        paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastPong > 0 && now - it.lastPong < CallLogic.FRESH_MS }
 
     /** Live paths the UI shows: true while the direct path carries the call. */
     fun directLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.kind == CallLogic.Kind.DIRECT && it.live(now) } }
@@ -430,8 +431,7 @@ class CallMedia(
 
     /** The size, frame rate and bitrate cap for [stream] right now: 480p over the relay, up to 720p on a free path. */
     fun profile(stream: Int): VideoWire.Profile {
-        val now = System.currentTimeMillis()
-        val free = paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.live(now) }
+        val free = wasFree
         return if ((stream and 1) == VideoWire.SCREEN) VideoWire.screenProfile(free) else VideoWire.cameraProfile(free)
     }
 
