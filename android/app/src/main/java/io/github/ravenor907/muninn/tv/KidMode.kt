@@ -62,8 +62,12 @@ object KidMode {
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
 
-/** What a Kids' TV holds: its parents' keys (empty while pairing) and the config they last sent. */
-data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null)
+/**
+ * What a Kids' TV holds: its parents' keys (empty while pairing) and the config they last sent.
+ * [micLocal]: a microphone level set on the TV itself (7.7), used instead of the config's until a parent
+ * changes it; [micAt]: when (this TV's clock).
+ */
+data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null, val micLocal: Int? = null, val micAt: Long = 0)
 
 /**
  * The TV side of protocol 0.6 section 7: pairing, taking configs, the people it may talk to, and
@@ -87,20 +91,61 @@ object KidTv {
         val ps = o.optJSONArray("parents")
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
         val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); TvRules.parse(c) } catch (e: Exception) { null } }
-        _state.value = KidState(parents, cfg)
-        if (KidMode.on(app)) tune(cfg)
+        val local = if (o.has("micLocal")) o.optInt("micLocal").coerceIn(0, TvRules.MAX_MIC) else null
+        _state.value = KidState(parents, cfg, local, o.optLong("micAt"))
+        if (KidMode.on(app)) tune(_state.value)
     }
 
-    /** The parent's microphone level and call setting take effect on this TV. */
-    private fun tune(cfg: TvConfig?) {
-        TvMic.active = cfg != null
-        TvMic.level = cfg?.mic ?: TvRules.DEFAULT_MIC
+    /** The microphone level (the TV's own, else the parent's) and the call setting take effect on this TV. */
+    private fun tune(s: KidState) {
+        TvMic.active = s.cfg != null
+        TvMic.level = s.micLocal ?: s.cfg?.mic ?: TvRules.DEFAULT_MIC
+        micLevel.value = TvMic.level
     }
+
+    /** The level in use, for the TV's own slider. */
+    val micLevel = MutableStateFlow(TvRules.DEFAULT_MIC)
 
     private fun save(app: Muninn, s: KidState) {
         val o = JSONObject().put("parents", JSONArray(s.parents))
         s.cfg?.let { o.put("cfg", it.raw) }
+        s.micLocal?.let { o.put("micLocal", it).put("micAt", s.micAt) }
         app.vault.write(file(app), o.toString())
+    }
+
+    /**
+     * Anyone at the TV moved its microphone slider: it takes effect at once (a call going on too), stays
+     * until a parent picks another level, and the parents' phones are told (7.7) so theirs shows it.
+     */
+    fun setMic(app: Muninn, level: Int) {
+        val l = level.coerceIn(0, TvRules.MAX_MIC)
+        synchronized(lock) {
+            val s = _state.value
+            if (s.cfg == null || wiping.value) return
+            val next = s.copy(micLocal = l, micAt = System.currentTimeMillis())
+            _state.value = next
+            try { save(app, next) } catch (_: Exception) {}
+            tune(next)
+        }
+        statusSoon(app)
+    }
+
+    private val statusTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-status").apply { isDaemon = true } }
+    @Volatile private var statusDue: java.util.concurrent.ScheduledFuture<*>? = null
+
+    /** The status (7.7) to every parent whose app takes it, a moment after the last slider move. */
+    private fun statusSoon(app: Muninn, to: List<String>? = null) {
+        statusDue?.cancel(false)
+        statusDue = statusTimer.schedule({ try { sendStatus(app, to) } catch (_: Exception) {} }, 1, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    private fun sendStatus(app: Muninn, to: List<String>?) {
+        val s = _state.value
+        val cfg = s.cfg ?: return
+        val b = Tv.bridge(app) ?: return
+        val ts = if (s.micLocal != null) s.micAt else cfg.ts
+        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts)
+        for (k in to ?: s.parents) if ("k3" in (app.contacts.get(k)?.caps ?: emptySet())) try { b.sendTvRoom(k, msg) } catch (_: Exception) {}
     }
 
     /** The QR code a parent scans: this TV's contact code with a fresh invite (an hour) and "tv":1. */
@@ -152,15 +197,19 @@ object KidTv {
                 }
                 val cfg = try { TvRules.parse(new) } catch (e: Exception) { return false }
                 apply(app, cfg, fromKey, mailbox)
-                val next = KidState(cfg.parents, cfg)
+                // A parent who picked another microphone level wins over one set on the TV (the last change wins);
+                // a config that only carries the level on keeps the TV's own.
+                val parentMic = s.cfg == null || cfg.mic != s.cfg.mic
+                val next = if (parentMic) KidState(cfg.parents, cfg) else KidState(cfg.parents, cfg, s.micLocal, s.micAt)
                 save(app, next)
                 _state.value = next
-                tune(cfg)
+                tune(next)
                 // Someone taken off the list (or calls turned off) mid-call: the call ends.
                 io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { c ->
                     if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
                 }
                 answer(app, cfg.parents, cfg.v)
+                statusSoon(app)
                 true
             }
             "update" -> {
@@ -169,6 +218,18 @@ object KidTv {
                 if (fromKey !in s.parents) return false
                 TvUpdate.checkNow(app)
                 answer(app, listOf(fromKey), cur.v)
+                true
+            }
+            "usage" -> {
+                // k3 (7.7): a parent's phone asks how much room Muninn takes and which level is in use.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                TvStorage.later { sendStatus(app, listOf(fromKey)) }
+                true
+            }
+            "clear" -> {
+                // k3 (7.7): a parent's "Clear history": messages, photos, voice messages and caches. Pairing and contacts stay.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                TvStorage.later { TvStorage.clear(app); sendStatus(app, null) }
                 true
             }
             "disconnect" -> {
@@ -214,7 +275,7 @@ object KidTv {
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
         _state.value = KidState()
-        tune(null)
+        tune(KidState())
     }
 
     /** The vault can't be opened (its key store key is gone): nothing on it is readable, so start the TV over. */
@@ -249,6 +310,7 @@ object Tv : TvHandler {
         io.github.ravenor907.muninn.net.MessageService.start(app)
         TvRing.watch(app)
         TvUpdate.start(app)
+        TvStorage.start(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

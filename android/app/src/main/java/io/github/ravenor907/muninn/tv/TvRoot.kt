@@ -11,6 +11,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,7 +46,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +56,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -102,6 +107,20 @@ internal fun tvText(size: TextUnit, color: Color = Palette.text, weight: FontWei
     TextStyle(fontFamily = Type.body, fontSize = size, fontWeight = weight, color = color)
 
 internal fun tvTitle(size: TextUnit) = TextStyle(fontFamily = Type.display, fontWeight = FontWeight.Bold, fontSize = size, letterSpacing = 1.sp, color = Palette.text)
+
+/**
+ * Which conversation the TV shows. Kept outside the screen so MainActivity can set it: opening Muninn
+ * fresh (the launcher, not a notification) lands on "Who do you want to talk to?", and a message
+ * notification or banner opens that person.
+ */
+object TvNav {
+    /** The person whose conversation is open ("": Who do you want to talk to?). */
+    var open by mutableStateOf("")
+    /** The last one opened, for the focus on the home screen. */
+    var last by mutableStateOf("")
+    fun home() { open = "" }
+    fun show(key: String) { open = key; last = key }
+}
 
 /** The whole app on a Kids' TV: pairing until a parent sets it up, then the kids' screens. No lock, no sign in. */
 @Composable
@@ -229,8 +248,8 @@ private fun TvChip(text: String, requester: FocusRequester?, quiet: Boolean = fa
 
 @Composable
 private fun TvKids(app: Muninn, cfg: TvConfig) {
-    var open by rememberSaveable { mutableStateOf("") }
-    var last by rememberSaveable { mutableStateOf("") }
+    val open = TvNav.open
+    val last = TvNav.last
     val person = cfg.contacts.firstOrNull { it.k == open }
     var setup by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -238,8 +257,10 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     val needs by produceState(TvUpdate.needs(context)) { while (true) { value = TvUpdate.needs(context); if (value.none { it.id == "install" }) TvUpdate.resume(context); delay(3000) } }
     LaunchedEffect(Unit) { if (!TvUpdate.setupShown(context)) { TvUpdate.markSetupShown(context); if (TvUpdate.needs(context).isNotEmpty()) setup = true } }
     // Someone a parent just took off the list: back to the people who are still on it.
-    if (person == null) TvHome(app, cfg, last, needs.isNotEmpty(), onSetup = { setup = true }) { open = it; last = it }
-    else TvTalk(app, cfg, person) { open = "" }
+    var micLevel by remember { mutableStateOf(false) }
+    if (person == null) TvHome(app, cfg, last, needs.isNotEmpty(), onSetup = { setup = true }, onMic = { micLevel = true }) { TvNav.show(it) }
+    else TvTalk(app, cfg, person, onMic = { micLevel = true }) { TvNav.home() }
+    if (micLevel) TvMicDialog(app) { micLevel = false }
     if (setup) TvSetup(needs) { setup = false }
     TvUpdatePrompt { setup = true }
 }
@@ -306,7 +327,7 @@ private fun unreadCount(list: List<Chat.Msg>, unread: Boolean): Int {
 }
 
 @Composable
-private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Boolean, onSetup: () -> Unit, onOpen: (String) -> Unit) {
+private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Boolean, onSetup: () -> Unit, onMic: () -> Unit, onOpen: (String) -> Unit) {
     val convs by app.chat.conversations.collectAsState()
     val unread by app.chat.unread.collectAsState()
     val people = remember(cfg) { ordered(cfg) }
@@ -332,7 +353,11 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         }
         Spacer(Modifier.weight(1f))
         Latest(people, convs, onOpen)
-        if (setupLeft) Box(Modifier.padding(top = 10.dp)) { TvChip("For a parent: finish setting up this TV", null, quiet = true, onClick = onSetup) }
+        val level by KidTv.micLevel.collectAsState()
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvChip("Microphone: $level", null, quiet = true, onClick = onMic)
+            if (setupLeft) TvChip("For a parent: finish setting up this TV", null, quiet = true, onClick = onSetup)
+        }
     }
     LaunchedEffect(people) {
         if (people.isEmpty()) return@LaunchedEffect
@@ -406,7 +431,7 @@ private sealed interface Overlay {
 }
 
 @Composable
-private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) {
+private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onMic: () -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val convs by app.chat.conversations.collectAsState()
     val msgs = convs[p.k].orEmpty().filter { it.unsent.isEmpty() }
@@ -418,6 +443,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     val canDictate = remember { TvAudio.canDictate(context) }
     val dictate = cfg.dictation && canDictate
     var sent by remember { mutableStateOf("") }
+    /** A photo shown full screen (its message id); Back goes back to the conversation. */
+    var viewing by remember { mutableStateOf<String?>(null) }
 
     fun finishRecording() {
         val r = TvRecorder.finish()
@@ -503,7 +530,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             Spacer(Modifier.weight(1f))
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 if (msgs.isEmpty()) Text("Pick a message to send to ${p.n}.", style = tvText(17.sp, Palette.textMuted))
-                msgs.takeLast(5).forEach { TalkBubble(app, it, p.n, playing) }
+                msgs.takeLast(5).forEach { TalkBubble(app, it, p.n, playing) { viewing = it.id } }
+                if (mic) Box(Modifier.padding(top = 6.dp)) {
+                    val level by KidTv.micLevel.collectAsState()
+                    TvChip("Microphone: $level", null, quiet = true, onClick = onMic)
+                }
             }
         }
         LazyVerticalGrid(GridCells.Fixed(2), Modifier.weight(1f).fillMaxHeight(),
@@ -522,6 +553,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         }
     }
     LaunchedEffect(firstId) { if (firstId != null) { delay(80); try { first.requestFocus() } catch (_: Exception) {} } }
+
+    viewing?.let { id ->
+        val photos = msgs.filter { it.photo.isNotEmpty() && it.voice == 0 }
+        TvPhoto(app, photos, id, onMove = { viewing = it }) { viewing = null }
+    }
 
     overlay?.let { o ->
         TvDialog(onBack = { cancel() }) {
@@ -572,7 +608,7 @@ private fun Status(app: Muninn, key: String) {
 }
 
 @Composable
-private fun TalkBubble(app: Muninn, m: Chat.Msg, name: String, playing: String) {
+private fun TalkBubble(app: Muninn, m: Chat.Msg, name: String, playing: String, onPhoto: () -> Unit) {
     val shape = if (m.mine) RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp) else RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
     Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
@@ -593,14 +629,70 @@ private fun TalkBubble(app: Muninn, m: Chat.Msg, name: String, playing: String) 
                 }
             }
             m.photo.isNotEmpty() -> {
-                val bmp = remember(m.photo) { try { app.chat.photo(m.photo)?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } } catch (e: Throwable) { null } }
-                if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(150.dp, 110.dp).clip(shape))
+                val bmp = remember(m.photo) { try { app.chat.photo(m.photo)?.let { thumb(it) } } catch (e: Throwable) { null } }
+                var focused by remember { mutableStateOf(false) }
+                // OK on a photo shows it full screen.
+                if (bmp != null) Image(bmp, contentDescription = "Photo. Press OK to see it big.", contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(150.dp, 110.dp).onFocusChanged { focused = it.isFocused }.clip(shape)
+                        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+                        .clickable(role = Role.Image, onClick = onPhoto))
                 else Text("Photo", style = tvText(17.sp, Palette.textMuted), modifier = Modifier.clip(shape).background(bg).padding(horizontal = 13.dp, vertical = 9.dp))
             }
             else -> Text(m.text, style = tvText(17.sp), maxLines = 4, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.clip(shape).background(bg).padding(horizontal = 13.dp, vertical = 9.dp))
         }
+    }
+}
+
+/** A small copy for the conversation: a big photo decoded whole would take a TV's memory. */
+private fun thumb(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap? {
+    val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, b)
+    var sample = 1
+    while (maxOf(b.outWidth, b.outHeight) / (sample * 2) >= 400) sample *= 2
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+}
+
+/**
+ * A photo from the conversation, full screen. Left and Right go to the one before or after, Back (or OK)
+ * goes back to the conversation.
+ */
+@Composable
+private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (String) -> Unit, onClose: () -> Unit) {
+    val i = photos.indexOfFirst { it.id == id }
+    val m = photos.getOrNull(i) ?: run { LaunchedEffect(Unit) { onClose() }; return }
+    val context = LocalContext.current
+    val bmp = remember(m.photo) {
+        try {
+            app.chat.photo(m.photo)?.let { bytes ->
+                // No bigger than the screen.
+                val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, b)
+                val screen = maxOf(context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels).coerceAtLeast(1280)
+                var sample = 1
+                while (maxOf(b.outWidth, b.outHeight) / (sample * 2) >= screen) sample *= 2
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+            }
+        } catch (e: Throwable) { null }
+    }
+    val focus = remember { FocusRequester() }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black).focusRequester(focus)
+            .onKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (e.key) {
+                    Key.DirectionLeft -> { photos.getOrNull(i - 1)?.let { onMove(it.id) }; true }
+                    Key.DirectionRight -> { photos.getOrNull(i + 1)?.let { onMove(it.id) }; true }
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { onClose(); true }
+                    else -> false
+                }
+            }.focusable(), contentAlignment = Alignment.Center) {
+            if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            else Text("This photo can't be shown.", style = tvText(22.sp, Palette.textMuted))
+            if (photos.size > 1) Text("${i + 1} of ${photos.size} · Left and Right for the others · Back to go back", style = tvText(15.sp, Palette.textSoft),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(18.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xAA000000)).padding(horizontal = 14.dp, vertical = 6.dp))
+        }
+        LaunchedEffect(Unit) { delay(60); try { focus.requestFocus() } catch (_: Exception) {} }
     }
 }
 
@@ -644,7 +736,7 @@ internal fun DialogButtons(buttons: List<Pair<String, () -> Unit>>) {
     val first = remember { FocusRequester() }
     Row(Modifier.padding(top = 26.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
         buttons.forEachIndexed { i, (label, act) ->
-            Box(Modifier.width(240.dp)) { BigButton(label, requester = if (i == 0) first else null, onClick = act) }
+            Box(Modifier.width(if (buttons.size > 2) 190.dp else 240.dp)) { BigButton(label, requester = if (i == 0) first else null, onClick = act) }
         }
     }
     LaunchedEffect(buttons.map { it.first }) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }

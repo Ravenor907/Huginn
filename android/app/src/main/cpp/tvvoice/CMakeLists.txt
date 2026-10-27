@@ -70,7 +70,7 @@ target_compile_options(webrtc_apm PRIVATE -O2 -w -fno-strict-aliasing)
 set(RNNOISE_SOURCES denoise.c rnn.c pitch.c kiss_fft.c celt_lpc.c nnet.c nnet_default.c parse_lpcnet_weights.c rnnoise_data.c rnnoise_tables.c)
 list(TRANSFORM RNNOISE_SOURCES PREPEND "${RNNOISE_SRC}/src/")
 add_library(rnnoise STATIC ${RNNOISE_SOURCES})
-target_include_directories(rnnoise PUBLIC "${RNNOISE_SRC}/include" PRIVATE "${RNNOISE_SRC}/src")
+target_include_directories(rnnoise PUBLIC "${RNNOISE_SRC}/include" PRIVATE "${RNNOISE_SRC}/src" "${CMAKE_CURRENT_LIST_DIR}/rnnoise_shim")
 # The model is built in; no cpu-specific code paths (RNNoise's x86 RTCD is left out).
 target_compile_definitions(rnnoise PRIVATE RNNOISE_BUILD)
 target_compile_options(rnnoise PRIVATE -O2 -w)

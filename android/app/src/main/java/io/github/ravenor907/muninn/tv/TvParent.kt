@@ -36,6 +36,10 @@ data class ManagedTv(
     val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC,
     /** The last config sent had the k2 fields; and the Muninn version the TV last said it runs. */
     val extrasSent: Boolean = false, val app: String = "",
+    /** k3 (7.7): when [mic] last changed (here, or on the TV: then [micOnTv]); the TV's storage in bytes and when it said so. */
+    val micAt: Long = 0, val micOnTv: Boolean = false, val used: Long = -1, val usedAt: Long = 0,
+    /** People picked before they accepted this phone back: invited as soon as they're contacts. (key to since) */
+    val waiting: Map<String, Long> = emptyMap(),
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -179,6 +183,7 @@ object TvParent {
     fun handle(app: Muninn, fromKey: String, plain: String): Boolean {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"))
+        if (o.optString("t") == "status") return takeStatus(fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
@@ -197,6 +202,69 @@ object TvParent {
         if (resend) change(fromKey) { it }
         return true
     }
+
+    /**
+     * k3 (7.7): the TV's microphone level and storage. A level set on the TV after the last change here
+     * becomes this phone's too, and goes back out in a config, so every parent's screen shows it and
+     * later configs carry it (the last change wins).
+     */
+    private fun takeStatus(fromKey: String, o: JSONObject): Boolean {
+        val (mic, used, ts) = TvRules.status(o) ?: return false
+        var adopt = false
+        synchronized(lock) {
+            val t = _tvs.value[fromKey] ?: return true
+            if (t.disconnecting) return true
+            adopt = mic != t.mic && ts > t.micAt
+            put(t.copy(used = used, usedAt = System.currentTimeMillis(),
+                mic = if (adopt) mic else t.mic, micAt = if (adopt) ts else t.micAt, micOnTv = if (adopt) true else t.micOnTv))
+        }
+        if (adopt) change(fromKey) { it }
+        return true
+    }
+
+    /** The parent moved the microphone slider here. */
+    fun setMic(key: String, level: Int) = change(key) { it.copy(mic = level.coerceIn(0, TvRules.MAX_MIC), micAt = System.currentTimeMillis(), micOnTv = false) }
+
+    /** The TV's app said "k3": it reports its level and storage and takes Clear history. */
+    fun k3(app: Muninn, key: String): Boolean = "k3" in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** Asks the TV for its storage and level (the Kids' TV screen opens). False if its app is too old. */
+    fun askUsage(app: Muninn, key: String): Boolean {
+        if (!k3(app, key)) { app.chat.probeCaps(key); return false }
+        send(app, key, listOf(TvRules.usageMessage()))
+        return true
+    }
+
+    /** "Clear history": the TV erases its messages, photos, voice messages and caches. False if its app is too old. */
+    fun clearTv(app: Muninn, key: String): Boolean {
+        if (!k3(app, key)) return false
+        send(app, key, listOf(TvRules.clearMessage()))
+        return true
+    }
+
+    /**
+     * Someone the parent picked who hasn't accepted this phone yet (Keep in touch, waiting for them): kept
+     * on the TV's list of [ManagedTv.waiting] and invited by [tick] the moment they're a contact.
+     */
+    fun inviteLater(tvKey: String, people: Collection<String>) {
+        if (people.isEmpty()) return
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
+            val t = _tvs.value[tvKey] ?: return
+            put(t.copy(waiting = t.waiting + people.associateWith { t.waiting[it] ?: now }))
+        }
+    }
+
+    /** Stop waiting for someone (unticked before they accepted). */
+    fun dropWaiting(tvKey: String, people: Collection<String>) = synchronized(lock) {
+        val t = _tvs.value[tvKey] ?: return@synchronized
+        if (people.any { it in t.waiting }) put(t.copy(waiting = t.waiting - people.toSet()))
+    }
+
+    /** People this phone asked to keep in touch who haven't said yes back yet (key, name): not contacts, so not invitable yet. */
+    fun notYetConnected(app: Muninn): List<Pair<String, String>> =
+        app.chat.met.value.filter { (k, m) -> m.iSaid && !m.theySaid && !m.dismissed && app.contacts.contact(k) == null }
+            .map { (k, m) -> k to m.name }
 
     /** A card: add the TV as a contact, only from someone who is already a contact, and never as a key change. */
     private fun takeCard(app: Muninn, fromKey: String, code: String): Boolean {
@@ -239,6 +307,10 @@ object TvParent {
         return true
     }
 
+    private fun notifyJoined(app: Muninn, k: String) {
+        Ui.say("${app.chat.nameOf(k)} accepted, so they can talk with the kids on the TV now.")
+    }
+
     /** A parent's "Update TV": the TV looks for a new Muninn now and installs it. False if the TV's app is too old to be asked. */
     fun updateTv(app: Muninn, key: String): Boolean {
         if (!k2(app, key)) return false
@@ -257,6 +329,11 @@ object TvParent {
         val app = app ?: return
         val now = System.currentTimeMillis()
         for ((person, w) in cards.entries.toList()) sendCard(app, person, now - w.second > 60_000)
+        // Someone picked before they accepted: now a contact, so the invite goes through (or, after 30 days, it's let go).
+        for (t in _tvs.value.values) for ((k, since) in t.waiting) {
+            if (app.contacts.contact(k) != null) { dropWaiting(t.key, listOf(k)); invite(app, t.key, listOf(k)); notifyJoined(app, k) }
+            else if (now - since > 30 * DAY) dropWaiting(t.key, listOf(k))
+        }
         for (t in _tvs.value.values) {
             if (t.pending.isEmpty()) continue
             if (now - t.since > DAY) {
@@ -301,7 +378,9 @@ object TvParent {
             .put("quick", JSONArray().apply { t.quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
             .put("reach", JSONArray(t.reach)).put("dictation", t.dictation).put("parents", JSONArray(t.parents))
             .put("myName", t.myName).put("pending", JSONArray(t.pending)).put("pendingV", t.pendingV).put("since", t.since)
-            .put("disconnecting", t.disconnecting).put("calls", t.calls).put("mic", t.mic).put("extrasSent", t.extrasSent).put("app", t.app))
+            .put("disconnecting", t.disconnecting).put("calls", t.calls).put("mic", t.mic).put("extrasSent", t.extrasSent).put("app", t.app)
+            .put("micAt", t.micAt).put("micOnTv", t.micOnTv).put("used", t.used).put("usedAt", t.usedAt)
+            .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } }))
     }
 
     private fun fromJson(o: JSONObject): Map<String, ManagedTv> = o.keys().asSequence().mapNotNull { k ->
@@ -313,7 +392,9 @@ object TvParent {
                 (0 until q.length()).map { q.getJSONObject(it).let { e -> Quick(e.getString("id"), e.getString("text")) } },
                 strs(x.optJSONArray("reach")), x.optBoolean("dictation"), strs(x.optJSONArray("parents")), x.optString("myName"),
                 strs(x.optJSONArray("pending")), x.optLong("pendingV"), x.optLong("since"), x.optBoolean("disconnecting"),
-                x.optBoolean("calls", true), x.optInt("mic", TvRules.DEFAULT_MIC), x.optBoolean("extrasSent"), x.optString("app"))
+                x.optBoolean("calls", true), x.optInt("mic", TvRules.DEFAULT_MIC), x.optBoolean("extrasSent"), x.optString("app"),
+                x.optLong("micAt"), x.optBoolean("micOnTv"), x.optLong("used", -1), x.optLong("usedAt"),
+                x.optJSONObject("waiting")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap())
         } catch (e: Exception) { null }
     }.toMap()
 }
