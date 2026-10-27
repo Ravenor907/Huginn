@@ -25,6 +25,7 @@ QString assetName()
 #ifndef Q_OS_WIN
 
 bool supported() { return false; }
+void tidyOldLayout() {}
 QString folderProblem() { return {}; }
 void install(const QString &, QObject *, std::function<void(bool, const QString &)> done)
 {
@@ -36,7 +37,15 @@ void install(const QString &, QObject *, std::function<void(bool, const QString 
 
 namespace
 {
-QString appDir() { return QCoreApplication::applicationDirPath(); }
+// The portable folder people unzipped: the one with the launcher Huginn.exe. Huginn itself runs
+// from its lib\ folder; an older zip had everything at the top.
+QString appDir()
+{
+    const QDir d(QCoreApplication::applicationDirPath());
+    if (d.dirName().compare(QLatin1String("lib"), Qt::CaseInsensitive) == 0 && QFileInfo::exists(d.absoluteFilePath(QStringLiteral("../Huginn.exe"))))
+        return QDir::cleanPath(d.absoluteFilePath(QStringLiteral("..")));
+    return d.absolutePath();
+}
 QString stagingDir() { return appDir() + QStringLiteral("/update-staging"); }
 
 // PowerShell single-quoted literal: only ' needs doubling.
@@ -116,6 +125,29 @@ QString folderProblem()
     probe.close();
     probe.remove();
     return {};
+}
+
+void tidyOldLayout()
+{
+#ifdef HUGINN_WINDOWS_PORTABLE
+    // Updating from a zip that had everything at the top leaves those files beside the new lib\.
+    // Remove only what lib\ now has a copy of (same name), so nothing else in the folder is touched.
+    const QString root = appDir(), lib = QCoreApplication::applicationDirPath();
+    if (QDir(root) == QDir(lib))
+        return;
+    static const QStringList keep{QStringLiteral("Huginn.exe"), QStringLiteral("LICENSE.txt"), QStringLiteral("lib"), QStringLiteral("update-staging")};
+    for (const QFileInfo &fi : QDir(root).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
+        if (keep.contains(fi.fileName(), Qt::CaseInsensitive))
+            continue;
+        const QFileInfo twin(lib + QLatin1Char('/') + fi.fileName());
+        if (!twin.exists() || twin.isDir() != fi.isDir())
+            continue;
+        if (fi.isDir())
+            QDir(fi.absoluteFilePath()).removeRecursively();
+        else
+            QFile::remove(fi.absoluteFilePath());
+    }
+#endif
 }
 
 void install(const QString &zipPath, QObject *context, std::function<void(bool, const QString &)> done)

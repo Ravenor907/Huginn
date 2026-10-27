@@ -16,15 +16,17 @@
 #include "schnorr.h"
 #include "vault.h"
 #include "voice.h"
+#include "platform/chime.h"
 #include "platform/notify.h"
 #include "platform/singleinstance.h"
+#include "platform/winupdate.h"
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSoundEffect>
 #include "settings.h"
 #include "system.h"
 #include "transfer.h"
 #include "updater.h"
+#include "wifiselftest.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -90,7 +92,14 @@ int main(int argc, char *argv[])
     args.addOption(backupTest);
     QCommandLineOption callTest(QStringLiteral("call-selftest"), QStringLiteral("Check calls against the shared test vectors and an in-process loopback (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(callTest);
+    QCommandLineOption wifiTest(QStringLiteral("wifi-selftest"), QStringLiteral("Run on a throwaway profile, receive an encrypted message from a pretend Muninn over the local HTTPS endpoint, raise the call and a notification (for CI), then quit."));
+    args.addOption(wifiTest);
     args.process(app);
+    const bool wifiSelf = args.isSet(wifiTest);
+    if (wifiSelf)
+        WifiSelfTest::isolate();
+    // The screenshot tour and the Wi-Fi self-test stay off the internet and don't claim the single instance.
+    const bool quiet = args.isSet(tour) || wifiSelf;
     if (args.isSet(callTest))
         return CallSelfTest::run(args.value(callTest)) ? 0 : 1;
     if (args.isSet(chatTest)) {
@@ -111,8 +120,10 @@ int main(int argc, char *argv[])
 
     // One copy at a time: two would share the same chat folder and vault files.
     auto *one = new SingleInstance(&app);
-    if (!args.isSet(tour) && !one->claim())
+    if (!quiet && !one->claim())
         return 0;
+    if (!quiet)
+        WinUpdate::tidyOldLayout();
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())
@@ -122,7 +133,7 @@ int main(int argc, char *argv[])
     QApplication::setFont(base);
 
     auto *settings = new Settings(&app);
-    auto *system = new System(settings, args.value(tour), args.isSet(windowed) || args.isSet(tour), &app);
+    auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
     auto *transfer = new TransferServer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
@@ -136,7 +147,7 @@ int main(int argc, char *argv[])
                                          {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
-    if (args.isSet(tour) && !vault->exists())
+    if (quiet && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // CI screenshots: no lock to draw
     auto *updater = new Updater(settings, &app);
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
@@ -165,10 +176,9 @@ int main(int argc, char *argv[])
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
-    auto *sound = new QSoundEffect(&app);
-    sound->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
+    auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
 
-    if (!args.isSet(tour)) {
+    if (!quiet) {
         // Stay reachable while Huginn runs: the relays (reconnecting by themselves) and Bluetooth.
         // Locked: say something came, once per message (replaced by Chat once unlocked).
         // At most once every few minutes: retries and receipts would otherwise each raise one.
@@ -202,7 +212,9 @@ int main(int argc, char *argv[])
         }
     });
     auto *direct = new Direct(&app);
-    if (!args.isSet(tour)) {
+    if (wifiSelf)
+        localSend->start();
+    if (!quiet) {
         if (settings->nearbySharing())
             localSend->start();
         QObject::connect(settings, &Settings::changed, localSend, [settings, localSend] {
@@ -237,7 +249,9 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(2); }, Qt::QueuedConnection);
     engine.loadFromModule("Huginn", "Main");
-    if (!args.isSet(tour))
+    if (wifiSelf)
+        WifiSelfTest::start(chat, localSend, sound);
+    if (!quiet)
         updater->startAutoUpdate();
     return app.exec();
 }

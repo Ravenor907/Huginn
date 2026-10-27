@@ -92,6 +92,7 @@ jobs:
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
+          run timeout 150 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --wifi-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
           exit $bad
@@ -241,6 +242,16 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtwebsockets qtconnectivity qtmultimedia
           cache: true
+          # The cache is keyed by the text "6.10.*", so it would keep the first 6.10 it ever got. A new
+          # prefix fetches the newest 6.10 again (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          cache-key-prefix: qt-6.10-2026-10
+      - name: Qt is 6.10.2 or newer
+        run: |
+          v=$("$QT_ROOT_DIR/bin/qtpaths.exe" --qt-version 2>/dev/null || "$QT_ROOT_DIR/bin/qmake.exe" -query QT_VERSION)
+          v=$(echo "$v" | tr -d '\r')
+          echo "Qt $v"
+          p=$(echo "$v" | cut -d. -f3)
+          case "$v" in 6.10.*) [ "${p:-0}" -ge 2 ] || { echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1; } ;; esac
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -293,6 +304,41 @@ jobs:
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
           Copy-Item "$($crt.FullName)/*.dll" $out
           Copy-Item LICENSE "$out/LICENSE.txt"
+      - name: Tidy the folder (Huginn.exe on top, everything else in lib/)
+        run: |
+          d=dist/Huginn
+          mkdir -p "$d/lib"
+          for f in "$d"/* "$d"/.[!.]*; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in lib|LICENSE.txt) ;; *) mv "$f" "$d/lib/" ;; esac
+          done
+          # The launcher (src/platform/launcher_windows.cpp) starts lib/Huginn.exe, whose DLLs sit beside it.
+          cp build/HuginnLauncher.exe "$d/Huginn.exe"
+          # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
+          find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
+            -o -iname '*.prl' -o -iname '*.cmake' -o -iname '*.debug' \) -print -delete
+          top=$(ls -A "$d" | tr '\n' ' ')
+          [ "$top" = "Huginn.exe LICENSE.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt and lib/, not: $top"; exit 1; }
+          # Huginn's own QML is compiled into lib/Huginn.exe: no copy of it loose, and no source text inside.
+          loose=$(grep -rl --include='*.qml' -E '^import Huginn|Huginn\.' "$d" || true)
+          [ -z "$loose" ] || { echo "::error title=Loose QML::$loose"; exit 1; }
+          n=$(grep -c -a "^import QtQuick" "$d/lib/Huginn.exe" || true)
+          [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in lib/Huginn.exe"; exit 1; }
+          echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
+      - name: Zip it, then unpack the zip and test exactly what ships
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
+          $7z = "C:/Program Files/7-Zip/7z.exe"
+          Push-Location dist
+          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
+          Pop-Location
+          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
+          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
+          Remove-Item -Recurse -Force dist/Huginn
+          Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
+          if (-not (Test-Path dist/Huginn/lib/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/lib/Huginn.exe"; exit 1 }
       - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
         run: |
           h=dist/Huginn/Huginn.exe
@@ -310,6 +356,8 @@ jobs:
           run "$h" --ratchet-selftest tests/ratchet-vectors.json
           run "$h" --nostr-selftest tests/nostr-vectors.json
           run "$h" --privacy-selftest
+          # A message from a pretend Muninn over the local HTTPS endpoint, with the raven call and a notification.
+          run timeout 150 "$h" --wifi-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
           exit $bad
@@ -319,24 +367,23 @@ jobs:
           QT_QUICK_BACKEND: software
         run: |
           mkdir -p tour-windows
-          timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")"
+          s=0; timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")" > tour.log 2>&1 || s=$?
+          cat tour.log
+          n=$(ls tour-windows/*.png 2>/dev/null | wc -l)
+          w=$(grep -ciE "warning|qml:" tour.log || true)
+          if [ $s -ne 0 ] || [ "$n" -eq 0 ]; then
+            e=$(tail -n 20 tour.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::warning title=Windows tour (exit $s, $n screenshots)::$e"
+          else
+            echo "::notice title=Windows tour::$n screenshots in the huginn-windows-tour artifact; $w warning lines in its log"
+          fi
+          exit $s
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: huginn-windows-tour
           path: tour-windows
           if-no-files-found: ignore
-      - name: Zip it
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
-          $7z = "C:/Program Files/7-Zip/7z.exe"
-          Push-Location dist
-          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
-          Pop-Location
-          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
-          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
-          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
       - uses: actions/upload-artifact@v4
         with:
           name: Huginn-Windows.zip

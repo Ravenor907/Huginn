@@ -57,6 +57,8 @@ qt_add_executable(huginn
     src/ble.cpp src/ble.h
     src/bleframes.cpp src/bleframes.h
     src/tls.cpp src/tls.h
+    src/lan.cpp src/lan.h
+    src/wifiselftest.cpp src/wifiselftest.h
     # 1:1 voice calls (docs/protocol-0.6.md section 5, TURN relay only over the internet)
     src/call/relayconfig.h
     src/call/callsignal.h
@@ -79,6 +81,7 @@ target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
 # builds a version of it that explains the Windows way instead.
 target_sources(huginn PRIVATE
     src/platform/notify.h
+    src/platform/chime.h
     src/platform/qrcode.h
     src/platform/keepawake.h
     src/platform/singleinstance.cpp src/platform/singleinstance.h
@@ -87,6 +90,7 @@ target_sources(huginn PRIVATE
 if(WIN32)
     target_sources(huginn PRIVATE
         src/platform/notify_windows.cpp
+        src/platform/chime_windows.cpp
         src/platform/qrcode_qrencode.cpp
         src/platform/keepawake_windows.cpp
         src/platform/direct_windows.cpp
@@ -111,15 +115,35 @@ if(WIN32)
     if(HUGINN_WINDOWS_PORTABLE)
         target_compile_definitions(huginn PRIVATE HUGINN_WINDOWS_PORTABLE)
     endif()
+    # Release: no debug info or PDB, unused code dropped, the same bytes for the same source.
+    target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
+    target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Brepro>)
+
+    # The Huginn.exe people open: a tiny launcher at the top of the zip that starts lib/Huginn.exe,
+    # so Qt, OpenSSL and the rest stay out of sight in lib/ (see the Windows job in build.yml).
+    add_executable(huginn-launcher WIN32 src/platform/launcher_windows.cpp ${CMAKE_CURRENT_BINARY_DIR}/huginn.rc)
+    set_target_properties(huginn-launcher PROPERTIES OUTPUT_NAME HuginnLauncher AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
+                          MSVC_RUNTIME_LIBRARY MultiThreaded)
+    target_compile_definitions(huginn-launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /Brepro>)
+    target_link_options(huginn-launcher PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
+    target_link_libraries(huginn-launcher PRIVATE user32)
 else()
     target_sources(huginn PRIVATE
         src/platform/notify_linux.cpp
+        src/platform/chime_linux.cpp
         src/platform/qrcode_prison.cpp
         src/direct.cpp
     )
 endif()
 
 set_source_files_properties(qml/Theme.qml qml/Ui.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+if(WIN32)
+    # Windows: only the compiled QML goes into Huginn.exe, not its source text (qmlcachegen still
+    # compiles every file; the engine runs the compiled form, which matches the Qt shipped beside it).
+    file(GLOB HUGINN_QML_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/qml/*.qml)
+    set_source_files_properties(${HUGINN_QML_SOURCES} PROPERTIES QT_DISCARD_FILE_CONTENTS TRUE)
+endif()
 
 # Fonts are fetched by tools/get-fonts.sh (CI does it before every build).
 file(GLOB HUGINN_FONTS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} fonts/*.ttf)
@@ -181,6 +205,8 @@ if(WIN32)
     target_link_libraries(huginn PRIVATE
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
         ${QRENCODE_LIBRARY}
+        winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
+        advapi32   # the Wi-Fi self-test's separate registry key
     )
     if(TARGET Qt6::DBus)
         target_link_libraries(huginn PRIVATE Qt6::DBus)
