@@ -180,7 +180,7 @@ class TorTest {
             buildList {
                 if (f.name != "LocalSend.kt" && (text.contains("openConnection(") || text.contains("HttpURLConnection"))) add("${f.name}: HttpURLConnection")
                 if (f.name != "Tor.kt" && text.contains("OkHttpClient.Builder(")) add("${f.name}: own OkHttp client")
-                if (text.contains("InetAddress.getByName(") && f.name !in setOf("LocalSend.kt", "Direct.kt")) add("${f.name}: DNS lookup")
+                if (text.contains("InetAddress.getByName(") && f.name !in setOf("LocalSend.kt", "Direct.kt", "CallLogic.kt")) add("${f.name}: DNS lookup")  // CallLogic: IPv6 literals only, never a name
                 if (text.contains("WebView")) add("${f.name}: WebView")
             }
         }.toList()
