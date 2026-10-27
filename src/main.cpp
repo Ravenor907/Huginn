@@ -20,6 +20,7 @@
 #include "platform/chime.h"
 #include "platform/notify.h"
 #include "platform/singleinstance.h"
+#include "platform/winstart.h"
 #include "platform/winupdate.h"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -81,6 +82,8 @@ static void dropTorFiles()
 
 int main(int argc, char *argv[])
 {
+    // Windows: a start log next to Huginn.exe, cleanup after an update, settings that work under Wine.
+    Platform::beginStart();
     s_previous = qInstallMessageHandler(messages);
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Huginn"));
@@ -88,6 +91,7 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION));
     QApplication::setDesktopFileName(QStringLiteral("io.github.ravenor907.Huginn"));
     QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
+    Platform::chooseGraphics();
 
     QCommandLineParser args;
     args.addHelpOption();
@@ -116,33 +120,40 @@ int main(int argc, char *argv[])
         WifiSelfTest::isolate();
     // The screenshot tour and the Wi-Fi self-test stay off the internet and don't claim the single instance.
     const bool quiet = args.isSet(tour) || wifiSelf;
+    // Command-line self-tests: a passing one leaves no start log behind.
+    auto selfTested = [](bool ok) {
+        if (ok)
+            Platform::noStartLog();
+        return ok ? 0 : 1;
+    };
     if (args.isSet(callTest))
-        return CallSelfTest::run(args.value(callTest)) ? 0 : 1;
+        return selfTested(CallSelfTest::run(args.value(callTest)));
     if (args.isSet(chatTest)) {
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return a && b && c && d ? 0 : 1;
+        return selfTested(a && b && c && d);
     }
     if (args.isSet(backupTest))
-        return Vault::backupSelfTest() ? 0 : 1;
+        return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
-        return Ratchet::selfTest(args.value(ratchetTest)) ? 0 : 1;
+        return selfTested(Ratchet::selfTest(args.value(ratchetTest)));
     if (args.isSet(nostrTest))
-        return Nostr::selfTest(args.value(nostrTest)) ? 0 : 1;
+        return selfTested(Nostr::selfTest(args.value(nostrTest)));
     if (args.isSet(privacyTest)) {
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
-        return a && b && c ? 0 : 1;
+        return selfTested(a && b && c);
     }
 
     // One copy at a time: two would share the same chat folder and vault files.
     auto *one = new SingleInstance(&app);
-    if (!quiet && !one->claim())
+    if (!quiet && !one->claim()) {
+        Platform::noStartLog();
         return 0;
-    if (!quiet) {
-        WinUpdate::tidyOldLayout();
-        dropTorFiles();
     }
+    if (!quiet)
+        dropTorFiles();
+    Platform::startStep(QStringLiteral("single instance claimed"));
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())
@@ -225,7 +236,9 @@ int main(int argc, char *argv[])
         QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
         nostr->setKeepAlive(true);
         nostr->connectRelays();
-        ble->start();
+        // Wine and Proton have no Bluetooth of their own to offer Qt.
+        if (!Platform::underWine())
+            ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
@@ -276,8 +289,14 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
-    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(2); }, Qt::QueuedConnection);
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
+        Platform::startFailed(QStringLiteral("the main screen didn't load"));
+        QCoreApplication::exit(2);
+    }, Qt::QueuedConnection);
+    Platform::startStep(QStringLiteral("loading the main screen"));
     engine.loadFromModule("Huginn", "Main");
+    if (!engine.rootObjects().isEmpty())
+        Platform::watchMainWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()));
     if (wifiSelf)
         WifiSelfTest::start(chat, localSend, sound);
     if (!quiet)
