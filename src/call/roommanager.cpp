@@ -31,6 +31,12 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
     : QObject(parent), m_signal(signal), m_calls(calls), m_login(std::move(login))
 {
     connect(m_signal, &CallSignal::received, this, &RoomManager::onSignal);
+    if (calls)
+        connect(calls, &CallManager::trustChanged, this, [this](const QString &key, bool on) {
+            const Peer p = m_peers.value(key);
+            if (!on && p.s)
+                p.s->setTrusted(false);
+        });
     connect(m_signal, &CallSignal::mediaReceived, this, [this](const QString &from, const QByteArray &pkt) {
         const Peer p = m_peers.value(from);
         if (p.s && p.s->media())

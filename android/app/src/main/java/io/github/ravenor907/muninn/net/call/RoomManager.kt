@@ -55,6 +55,9 @@ object RoomManager {
     }
     @Volatile private var sharer = ""
 
+    /** "Direct calls" turned off for [k]: the room's call with them stops going direct. */
+    fun untrust(k: String) = exec.execute { peers[k]?.s?.untrust() }
+
     private fun sharerMedia(): CallMedia? = if (sharer.isEmpty()) null else peers[sharer]?.s?.mediaNow
 
     /** The room screen's surface for the shared screen, or null when it goes away. */

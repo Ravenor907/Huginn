@@ -533,6 +533,55 @@ void vp8Loopback()
     b.stop();
 }
 
+// Someone who copies a real packet and sends it again from their own address must not become the
+// Direct path: only packets that open as new teach an address (5.8.2).
+void directReplay()
+{
+    std::printf("direct path: replayed packets teach nothing\n");
+    DirectPath::g_testLocal = true;
+    QByteArray root(32, 0);
+    for (int i = 0; i < 32; ++i)
+        root[i] = char(i * 13 + 5);
+    const QByteArray tag = CallCrypto::tag(QByteArray(16, 'r'));
+    CallMedia a(root, tag, true), b(root, tag, false);
+    QUdpSocket *sa = CallMedia::bindLan(nullptr), *sb = CallMedia::bindLan(nullptr);
+    QUdpSocket thief;
+    thief.bind(QHostAddress(QHostAddress::LocalHost), 0);
+    if (!sa || !sb) {
+        check(false, "two UDP sockets");
+        return;
+    }
+    const quint16 pa = sa->localPort(), pb = sb->localPort();
+    a.adoptLan(sa);
+    b.adoptLan(sb);
+    a.enableDirect({CallNet::fromHost(QHostAddress(QHostAddress::LocalHost), pb)});
+    b.enableDirect({CallNet::fromHost(QHostAddress(QHostAddress::LocalHost), pa)});
+    QByteArray copied;
+    // A copy of what B really got (on a second path): to B, the thief's packet is a duplicate.
+    QPointer<CallMedia> pB(&b);
+    a.setBle([&copied, pB](const QByteArray &pkt) {
+        if (copied.isEmpty())
+            copied = pkt;
+        if (pB)
+            pB->receive(pkt, CallMedia::Ble);
+        return true;
+    });
+    a.start(false);
+    b.start(false);
+    check(waitFor([&] { return a.live(CallMedia::Direct) && b.live(CallMedia::Direct) && !copied.isEmpty(); }, 3000), "direct path live both ways");
+    const Stun::Address before = b.directAddr();
+    const int dups = b.stats().duplicates;
+    for (int i = 0; i < 5; ++i)
+        thief.writeDatagram(copied, QHostAddress(QHostAddress::LocalHost), pb);
+    waitFor([] { return false; }, 300);
+    check(b.stats().duplicates > dups && b.directAddr() == before && b.directAddr().port == pa, "copies from another address are dropped and don't move the path");
+    b.disableDirect();
+    check(!b.directEnabled() && !b.directAddr().valid(), "turning Direct calls off drops the path at once");
+    a.stop();
+    b.stop();
+    DirectPath::g_testLocal = false;
+}
+
 // The fake STUN server of the direct test: answers every Binding with the address it came from.
 class FakeStun
 {
@@ -937,6 +986,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     vp8Loopback();
     signalingLoopback();
     directCall();
+    directReplay();
     relayCall();
     const bool ok = vectors && rooms && stun && jitter && dsp && video && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");

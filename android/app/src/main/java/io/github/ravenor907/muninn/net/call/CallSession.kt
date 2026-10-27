@@ -248,6 +248,7 @@ class CallSession(
     private var restarts = 0
     private var restartedAt = 0L
     private var candsQueued = false
+    private var relayOkAt = 0L
 
     private fun startRelay(again: Boolean = false) {
         if (!host.internetAllowed() || (relayStarted && !again) || relayBusy) return
@@ -255,6 +256,7 @@ class CallSession(
         relayStarted = true
         relayBusy = true
         relayTries++
+        val askedAt = System.currentTimeMillis()
         work.execute {
             val login = try { host.relayLogin() } catch (e: Exception) { null }
             val r = login?.let { m.startRelay(it, host::resolve) }
@@ -265,11 +267,13 @@ class CallSession(
                     note = if (login == null) TurnCreds.lastProblem.ifEmpty { "The internet relay isn't available" } else TurnClient.lastProblem.ifEmpty { "Couldn't reach the internet relay" }
                     host.changed(this)
                     // One more try a little later (a busy network, a server that didn't answer in time).
-                    if (relayTries < 2 && login != null) later(2_000) { if (myRelay == null) startRelay(again = true) }
+                    // (After a restart the old relay may still be known: what counts is that nothing worked since this try.)
+                    if (relayTries < 2 && login != null) later(2_000) { if (relayOkAt < askedAt) startRelay(again = true) }
                     return@execute
                 }
                 if (note.isNotEmpty()) { note = ""; host.changed(this) }
                 myRelay = r
+                relayOkAt = System.currentTimeMillis()
                 refreshCands()
             }
         }
@@ -316,12 +320,23 @@ class CallSession(
         host.send(peerKey, CallLogic.candsMsg(callId, myRelay, lanPortIfClose(), directCands()))
     }
 
+    /** The "Direct calls" switch went off during the call: no more addresses out, the direct path dropped now. */
+    fun untrust() {
+        if (!trusted) return
+        trusted = false
+        directOn = false
+        peerDirect = emptyList()
+        media?.disableDirect()
+        if (outgoing || answered) refreshCands()   // the next cands and resends carry no srflx or host
+        host.changed(this)
+    }
+
     /** Every path dead for 4 s: the network may have changed. A new relay allocation and STUN answer (5.8.2). */
     private fun restart() {
         val now = System.currentTimeMillis()
         if (restarts >= 3 || relayBusy || now - restartedAt < 6_000) return
         restarts++; restartedAt = now
-        relayTries = 1
+        relayTries = 0   // startRelay counts this one, so a failure of it gets its own second try
         startRelay(again = true)
         startProbe()
     }

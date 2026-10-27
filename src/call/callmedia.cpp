@@ -16,6 +16,7 @@ const qint64 kFreshMs = 750;          // a free path that answered a ping this r
 const qint64 kReportEveryMs = 1000;   // receiver reports (c2)
 const int kKeepFrames = 64;           // sent video frames kept for resends
 const int kMaxResendPerTick = 120;
+const qint64 kKeyGapMs = 300;         // keyframe requests at most this often; a keyframe this fresh answers one
 }
 
 CallMedia::CallMedia(const QByteArray &root, const QByteArray &tag, bool offerer, QObject *parent)
@@ -78,12 +79,24 @@ void CallMedia::setRelay(TurnClient *turn, const Stun::Address &peerRelayed)
 
 void CallMedia::enableDirect(const QList<Stun::Address> &cands)
 {
-    if (!m_direct)
+    if (!m_direct) {
         m_paths[Direct].lastPing = -1000000;
+        m_directSince = now();
+    }
     m_direct = true;
     for (const Stun::Address &a : cands)
         if (a.valid() && !m_directCands.contains(a) && m_directCands.size() < 4)
             m_directCands << a;
+}
+
+void CallMedia::disableDirect()
+{
+    // "Direct calls" turned off mid-call: nothing more goes to their address, nothing from it counts.
+    m_direct = false;
+    m_directCands.clear();
+    m_directAddr = Stun::Address();
+    m_paths[Direct] = PathState();
+    tick();
 }
 
 void CallMedia::setC2(bool on, bool room)
@@ -223,7 +236,8 @@ void CallMedia::tick()
             continue;
         // Live: Wi-Fi and Direct every 250 ms (so the relay takes over within a second if they
         // stop), the others every second. Not live yet: 50 ms for 2 s, then 250 ms to 15 s, then 2 s.
-        const qint64 age = t - m_started;
+        // Direct candidates are paced from when the direct path was turned on, not from the start of the call.
+        const qint64 age = t - (p == Direct ? m_directSince : m_started);
         const qint64 every = live(p) ? ((p == Wifi || p == Direct) ? 250 : 1000) : (age < 2000 ? 50 : age < kEagerMs ? 250 : 2000);
         if (t - m_paths[i].lastPing >= every)
             sendPing(p);
@@ -360,11 +374,11 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &hos
             ++m_stats.duplicates;
         else
             ++m_stats.refused;
-        // A duplicate is still proof this path works.
+        // A duplicate is still proof this path works, but only from where that path already is: a
+        // copy replayed from anywhere else proves nothing and never moves the Direct path (5.8.2).
         if (why == QLatin1String("duplicate")) {
-            m_paths[from].lastRx = now();
-            if (from == Direct && port)
-                m_directAddr = CallNet::fromHost(host, port);
+            if (from != Direct || (port && CallNet::fromHost(host, port) == m_directAddr))
+                m_paths[from].lastRx = now();
         }
         return;
     }
@@ -429,8 +443,13 @@ void CallMedia::handle(const QByteArray &pkt, Path from, const QHostAddress &hos
     }
     case CallCrypto::KeyRequest:
         if (m_c2 && p.payload.size() >= 1 && quint8(p.payload[0]) <= 1) {
+            // A keyframe that just went out answers it already (requests cross on the way).
+            const int st = quint8(p.payload[0]);
             ++m_stats.keyRequests;
-            Q_EMIT keyframeWanted(quint8(p.payload[0]));
+            if (now() - m_keySentAt[st] >= kKeyGapMs)
+                Q_EMIT keyframeWanted(st);
+            else
+                ++m_stats.keyIgnored;
         }
         break;
     case CallCrypto::Nack:
@@ -509,6 +528,8 @@ bool CallMedia::sendVideo(int stream, bool key, int rotation, const QByteArray &
     if (!m_c2 || !m_running || !m_sending[stream])
         return false;
     const quint16 n = m_videoFrame[stream]++;
+    if (key)
+        m_keySentAt[stream] = now();
     const QList<QByteArray> parts = VideoWire::split(stream, n, key, rotation, vp8);
     if (parts.isEmpty())
         return false;
@@ -531,8 +552,13 @@ bool CallMedia::sendVideo(int stream, bool key, int rotation, const QByteArray &
 
 void CallMedia::requestKeyframe(int stream)
 {
-    if (!m_c2 || !m_running)
+    stream &= 1;
+    // At most one request per max(300 ms, 2 round trips): a keyframe needs that long to come back.
+    const qint64 t = now();
+    if (!m_c2 || !m_running || t - m_keyAskedAt[stream] < std::max<qint64>(kKeyGapMs, 2 * m_rtt))
         return;
+    m_keyAskedAt[stream] = t;
+    ++m_stats.keyAsked;
     sendMedia(m_tx.seal(CallCrypto::KeyRequest, quint32(now() - m_started), QByteArray(1, char(stream & 1))), false);
 }
 
@@ -568,7 +594,7 @@ void CallMedia::pollVideo()
             sendMedia(m_tx.seal(CallCrypto::Nack, quint32(t - m_started), VideoWire::encodeNack(n)), false);
         }
         if (ask.keyframe)
-            sendMedia(m_tx.seal(CallCrypto::KeyRequest, quint32(t - m_started), QByteArray(1, char(s))), false);
+            requestKeyframe(s);
         VideoWire::Assembler::Frame out;
         while (m_asm[s].next(&out))
             Q_EMIT videoFrame(s, out.data, out.key, out.rotation);

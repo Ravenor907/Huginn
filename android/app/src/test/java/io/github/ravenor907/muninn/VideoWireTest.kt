@@ -77,6 +77,18 @@ class VideoWireTest {
         assertTrue(VideoWire.Assembler().poll(0, 40).keyframe)
     }
 
+    /** A jump of 500 frames: no placeholders for them all and no NACK storm, a keyframe asked for instead. */
+    @Test
+    fun wideGapWaitsForAKeyframe() {
+        val a = VideoWire.Assembler()
+        for (i in listOf(0, 500)) {
+            for (p in VideoWire.split(VideoWire.CAMERA, i, i == 0, 0, bytes(800, i))) a.add(VideoWire.decode(p)!!, 0)
+            a.next()
+        }
+        val ask = a.poll(100, 40)
+        assertTrue(ask.nacks.isEmpty()); assertTrue(ask.keyframe); assertEquals(1, a.stats.abandoned)
+    }
+
     @Test
     fun reportAndRate() {
         val e = VideoWire.encodeReport(VideoWire.Report(7, camera = true, jitterMs = 80, kbps = 812, rttMs = 45))

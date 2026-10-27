@@ -129,6 +129,7 @@ Q_SIGNALS:
     void historyChanged();
     void incoming(const QString &name);
     void finished(const QString &text);   // for a toast
+    void trustChanged(const QString &key, bool on);   // the rooms' sessions follow it too
 
 private:
     void onSignal(const QString &from, const QJsonObject &msg);

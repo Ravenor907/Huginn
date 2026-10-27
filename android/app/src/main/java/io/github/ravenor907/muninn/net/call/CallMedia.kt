@@ -26,6 +26,7 @@ private const val STUN_HOST = "stun.cloudflare.com"
 private const val STUN_PORT = 3478
 private const val KEEP_FRAMES = 64
 private const val MAX_RESEND = 120
+private const val KEY_GAP_MS = 300L
 
 /**
  * The media side of one call: sealed packets (5.4) on every live path at once, the audio (5.5), and between two c2
@@ -143,6 +144,12 @@ class CallMedia(
     @Volatile private var directSince = 0L
 
     /** Both trust each other: ping [cands] (their srflx and host candidates) from the call socket. More may follow. */
+    /** "Direct calls" turned off mid-call: nothing more goes to their address, nothing from it counts. */
+    fun disableDirect() {
+        directOn = false
+        paths.removeAll { it.kind == CallLogic.Kind.DIRECT }
+    }
+
     fun enableDirect(cands: List<InetSocketAddress>) {
         if (!directOn) directSince = System.currentTimeMillis()
         directOn = true
@@ -250,10 +257,11 @@ class CallMedia(
         val rx = receiver ?: return
         val o = try { rx.open(data) } catch (e: CallCrypto.Dropped) {
             // A copy that already came on another path still proves this path works.
-            if (e.why == "duplicate") markLive(kind, from)
+            // Only on a path we already have: a copy replayed from elsewhere teaches no address (5.8.2).
+            if (e.why == "duplicate") markLive(kind, from, fresh = false)
             return
         }
-        markLive(kind, from)
+        markLive(kind, from, fresh = true)
         // Authentic, relayed from an address the peer didn't advertise: answer there too.
         if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it) }
         if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
@@ -268,7 +276,9 @@ class CallMedia(
             }
             CallCrypto.VIDEO -> if (c2) onVideo(o.payload)
             CallCrypto.REPORT -> if (c2) VideoWire.decodeReport(o.payload)?.let { onReport(it) }
-            CallCrypto.KEY_REQUEST -> if (c2 && o.payload.isNotEmpty() && (o.payload[0].toInt() and 0xFF) <= 1) events.onKeyframeWanted(o.payload[0].toInt())
+            // A keyframe that just went out answers it already (requests cross on the way).
+            CallCrypto.KEY_REQUEST -> if (c2 && o.payload.isNotEmpty() && (o.payload[0].toInt() and 0xFF) <= 1 &&
+                System.currentTimeMillis() - keySentAt[o.payload[0].toInt()] >= KEY_GAP_MS) events.onKeyframeWanted(o.payload[0].toInt())
             CallCrypto.NACK -> if (c2) VideoWire.decodeNack(o.payload)?.let { onNack(it) }
         }
         forgetOldKeys()
@@ -291,16 +301,8 @@ class CallMedia(
     private fun path(kind: CallLogic.Kind, from: InetSocketAddress?) =
         paths.firstOrNull { it.kind == kind && ((kind != CallLogic.Kind.WIFI && kind != CallLogic.Kind.DIRECT) || it.addr == from) }
 
-    private fun markLive(kind: CallLogic.Kind, from: InetSocketAddress?) {
-        val now = System.currentTimeMillis()
-        var p = path(kind, from)
-        // A Wi-Fi packet from an address we didn't know (a second interface): it's a path now.
-        if (p == null && kind == CallLogic.Kind.WIFI && from != null && paths.count { it.kind == kind } < 3) { p = CallLogic.Path(kind, from); paths += p }
-        // Direct from an address that wasn't a candidate: their NAT picked another port. It's the Direct path now.
-        if (p == null && kind == CallLogic.Kind.DIRECT && from != null && paths.count { it.kind == kind } < 6) { p = CallLogic.Path(kind, from); paths += p }
-        // Relayed before their cands reached us: the relay is a path already.
-        if (p == null && kind == CallLogic.Kind.RELAY && from != null) { addPath(kind, from); p = path(kind, from) }
-        p?.lastIn = now
+    private fun markLive(kind: CallLogic.Kind, from: InetSocketAddress?, fresh: Boolean) {
+        CallLogic.markLive(paths, kind, from, fresh, System.currentTimeMillis())
     }
 
     /** 5.3: drop keys and chain values the window has moved past in both directions. */
@@ -441,11 +443,32 @@ class CallMedia(
         if (sending[s] == on) return
         sending[s] = on
         if (!on) synchronized(sent[s]) { sent[s].clear() }
-        if (c2 && gotFirst && !stopped) timer.execute { sendReport() }
+        if (c2 && gotFirst) post { sendReport() }
     }
 
-    /** Asks the peer for a keyframe now (the screen came back, or the decoder lost its place). */
-    fun requestKeyframe(stream: Int) { if (c2 && !stopped) timer.execute { send(CallCrypto.KEY_REQUEST, byteArrayOf((stream and 1).toByte())) } }
+    /** Runs [f] on the media's timer thread, unless the call has stopped (then the timer is gone). */
+    private fun post(f: () -> Unit) {
+        if (stopped) return
+        try { timer.execute { if (!stopped) f() } } catch (_: java.util.concurrent.RejectedExecutionException) {}
+    }
+
+    private val keyAskedAt = longArrayOf(-100_000, -100_000)
+    private val keySentAt = longArrayOf(-100_000, -100_000)
+
+    /**
+     * Asks the peer for a keyframe (the screen came back, or the decoder lost its place). At most one per
+     * max(300 ms, 2 round trips): a keyframe takes that long to come back.
+     */
+    fun requestKeyframe(stream: Int) {
+        val s = stream and 1
+        if (!c2 || stopped) return
+        synchronized(keyAskedAt) {
+            val now = System.currentTimeMillis()
+            if (now - keyAskedAt[s] < maxOf(KEY_GAP_MS, 2L * rttMs)) return
+            keyAskedAt[s] = now
+        }
+        post { send(CallCrypto.KEY_REQUEST, byteArrayOf(s.toByte())) }
+    }
 
     /** One encoded VP8 frame: cut into packets and sent. False when video can't go now. */
     fun sendVideo(stream: Int, key: Boolean, rotation: Int, vp8: ByteArray): Boolean {
@@ -453,6 +476,7 @@ class CallMedia(
         if (!c2 || stopped || keys == null || !sending[s]) return false
         val n = frameNo[s] and 0xFFFF
         frameNo[s]++
+        if (key) keySentAt[s] = System.currentTimeMillis()
         val parts = VideoWire.split(s, n, key, rotation, vp8)
         if (parts.isEmpty()) return false
         synchronized(sent[s]) {
@@ -472,26 +496,26 @@ class CallMedia(
         synchronized(counters) { videoDue++ }
         if (!peerSending[f.stream]) { peerSending[f.stream] = true; events.onPeerVideo(peerSending[0], peerSending[1]) }
         val a = asm[f.stream]
-        val out = ArrayList<VideoWire.Assembler.Frame>()
+        // Handed on under the assembler's lock: packets come on several threads (relay, Wi-Fi, timer), and the
+        // decoder must get the frames in order.
         synchronized(a) {
             a.add(f, System.currentTimeMillis())
-            while (true) out += a.next() ?: break
+            while (true) { val fr = a.next() ?: break; events.onVideoFrame(f.stream, fr.data, fr.key, fr.rotation) }
         }
-        for (fr in out) events.onVideoFrame(f.stream, fr.data, fr.key, fr.rotation)
     }
 
     private fun pollVideo(now: Long) {
         for (s in 0..1) {
             if (!peerSending[s]) continue
             val a = asm[s]
-            val out = ArrayList<VideoWire.Assembler.Frame>()
-            val ask = synchronized(a) { a.poll(now, rttMs).also { while (true) out += a.next() ?: break } }
+            val ask = synchronized(a) {
+                a.poll(now, rttMs).also { while (true) { val fr = a.next() ?: break; events.onVideoFrame(s, fr.data, fr.key, fr.rotation) } }
+            }
             for (n in ask.nacks) {
                 if (n.first) synchronized(counters) { videoLost += maxOf(1, n.indexes.size) }
                 send(CallCrypto.NACK, VideoWire.encodeNack(n))
             }
-            if (ask.keyframe) send(CallCrypto.KEY_REQUEST, byteArrayOf(s.toByte()))
-            for (fr in out) events.onVideoFrame(s, fr.data, fr.key, fr.rotation)
+            if (ask.keyframe) requestKeyframe(s)
         }
     }
 

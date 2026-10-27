@@ -145,8 +145,9 @@ void VideoEncodeWorker::encode(const I420 &pic)
 void VideoEncodeWorker::setProfile(int width, int height, int fps, int kbps)
 {
     const QSize t(width, height);
-    if (t != m_target || fps != m_fps)
-        m_enc.reset();   // the next frame starts a new encoder (with a keyframe)
+    if (t == m_target && fps == m_fps)
+        return;   // the same profile: the bitrate the reports gave stays
+    m_enc.reset();   // the next frame starts a new encoder (with a keyframe)
     m_target = t;
     m_fps = fps;
     setKbps(kbps);

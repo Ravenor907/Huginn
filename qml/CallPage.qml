@@ -32,6 +32,8 @@ Rectangle {
         anchors.fill: parent
         visible: page.videoUp
         fillMode: VideoOutput.PreserveAspectFit
+        // The sender says how far to turn it clockwise (5.8.5); VideoOutput's orientation turns clockwise too
+        // (Qt 6 docs: "the angle, in degrees, at which the displayed video is rotated clockwise").
         orientation: Calls.peerRotation
         Component.onCompleted: Calls.setRemoteSink(remote.videoSink)
         Accessible.role: Accessible.Graphic

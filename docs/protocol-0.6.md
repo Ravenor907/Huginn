@@ -578,7 +578,9 @@ Each app keeps, per contact and only on that device, whether it trusts them for 
   `calltrust.json`, both in the Vault).
 - The caller puts `p2p` and its direct candidates in the offer only when it trusts the callee. The callee
   puts `p2p` and its own in the answer only when the offer had `p2p` **and** it trusts the caller.
-- The direct path is tried only when both did (`p2p` both ways). Anyone else is relay only: they never get
+- The direct path is tried only when both did (`p2p` both ways). Switching "Direct calls" off during a
+  call stops it at once on that side: its later `cands` carry no `srflx` or `host`, it sends nothing more
+  to the peer's address and takes nothing from it, and the relay carries the call. Anyone else is relay only: they never get
   your address, and you never send anything to theirs. A caller who trusts the callee has shared its own
   address with them by its own choice, even if the callee doesn't trust back.
 
@@ -602,7 +604,8 @@ Candidates, only in messages to someone trusted (and never more than 8 in all, 5
 - Connectivity checks are the pings of 5.6, from the call socket to every direct candidate of the peer,
   on the same schedule (50 ms for 2 s, then 250 ms to 15 s, then 2 s). Both sides ping at once, which
   opens both NATs (hole punching). Once an authentic packet arrives on the call socket from an address
-  that isn't the peer's Wi-Fi address, that address is the Direct path and replies go there (the peer's
+  that isn't the peer's Wi-Fi address, and the packet opened as new (a duplicate never teaches an address,
+  so a copy replayed from somewhere else can't redirect the call), that address is the Direct path and replies go there (the peer's
   NAT may have picked another port than its `srflx`). Only between two trusted sides; otherwise such
   packets are dropped as in 5.6.
 - Live by the same rule as every path (an authentic packet within 4 s). A symmetric NAT on both sides
@@ -690,6 +693,11 @@ match) puts each stream's fragments back together and hands whole frames to the 
   the receiver asks for a keyframe (type 5), at most every `max(300 ms, 2 x round trip)`, and shows
   nothing new until a whole keyframe arrives. A whole keyframe ahead of a hole is taken at once.
 - A new receiver (or a stream that was off) asks for a keyframe first.
+- Keyframe requests go at most once per `max(300 ms, 2 x round trip)` per stream, whatever asks (the
+  reassembly, a decoder that lost its place, a picture that came back on screen). A sender ignores a request
+  that comes within 300 ms of a keyframe it sent (they cross on the way).
+- A gap of 120 frames or more between the next frame due and the newest one isn't asked for again: the
+  receiver waits for a keyframe instead.
 
 Camera on or off: the sender's report flags say it (and the sender sends a report at once when it
 changes); the receiver shows the picture while the flag is on and the person's initial otherwise.

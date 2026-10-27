@@ -176,19 +176,30 @@ class Vp8Decoder(private val surface: Surface) : AutoCloseable {
         }
         val c = codec ?: return false
         return try {
-            val i = c.dequeueInputBuffer(20_000)
-            if (i < 0) return true   // busy: this frame is skipped, the next ones go on
+            // A busy decoder gets a little time (its output drained meanwhile); skipping a frame would break the ones
+            // after it, so if it stays busy the caller asks for a keyframe instead.
+            var i = -1
+            for (tries in 0 until 5) {
+                i = c.dequeueInputBuffer(20_000)
+                if (i >= 0) break
+                drain(c)
+            }
+            if (i < 0) return false
             val b = c.getInputBuffer(i)!!
             b.clear(); b.put(data)
             c.queueInputBuffer(i, 0, data.size, pts, 0)
             pts += 33_000
-            while (true) {
-                val o = c.dequeueOutputBuffer(info, 0)
-                if (o < 0) break
-                c.releaseOutputBuffer(o, true)
-            }
+            drain(c)
             true
         } catch (e: Exception) { close(); false }
+    }
+
+    private fun drain(c: MediaCodec) {
+        while (true) {
+            val o = c.dequeueOutputBuffer(info, 0)
+            if (o < 0) break
+            c.releaseOutputBuffer(o, true)
+        }
     }
 
     val videoSize: Size? get() = size
@@ -210,9 +221,23 @@ class RemoteVideo(private val thread: String, private val askKey: () -> Unit, pr
     @Volatile private var changed = false
     private var w = 0; private var h = 0; private var r = 0
 
+    private val lock = Object()
+    /** The surface the decoder renders to right now (null when it has none). */
+    private var inUse: Surface? = null
+
+    /**
+     * The screen's surface, or null when it goes away. With null this waits (at most 1 s) until the decoder has let go
+     * of the old surface, so the caller can release it safely.
+     */
     fun surface(sf: Surface?) {
-        surface = sf
-        changed = true
+        synchronized(lock) {
+            surface = sf
+            changed = true
+            if (sf == null) {
+                val until = System.currentTimeMillis() + 1_000
+                while (inUse != null && worker != null && System.currentTimeMillis() < until) lock.wait(20)
+            }
+        }
         if (sf != null) askKey()
     }
 
@@ -228,17 +253,23 @@ class RemoteVideo(private val thread: String, private val askKey: () -> Unit, pr
             var decSurface: Surface? = null
             try {
                 while (!Thread.currentThread().isInterrupted) {
-                    val (data, key, rot) = queue.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                    val sf = surface
-                    if (changed || sf !== decSurface) { changed = false; dec?.close(); dec = null; decSurface = sf }
-                    if (sf == null) continue
+                    // Short polls, so a surface that goes away is let go of quickly.
+                    val next = queue.poll(20, TimeUnit.MILLISECONDS)
+                    synchronized(lock) {
+                        val now = surface
+                        if (changed || now !== decSurface) { changed = false; dec?.close(); dec = null; decSurface = now; inUse = null; lock.notifyAll() }
+                    }
+                    val (data, key, rot) = next ?: continue
+                    val sf = decSurface ?: continue
+                    val ok = synchronized(lock) { if (surface === sf) { inUse = sf; true } else { inUse = null; lock.notifyAll(); false } }
+                    if (!ok) continue
                     val d = dec ?: Vp8Decoder(sf).also { dec = it }
                     if (!d.decode(data, key)) { askKey(); continue }
                     val sz = d.videoSize ?: continue
                     if (sz.width != w || sz.height != h || rot != r) { w = sz.width; h = sz.height; r = rot; onSize(w, h, r) }
                 }
             } catch (_: InterruptedException) {
-            } finally { dec?.close() }
+            } finally { dec?.close(); synchronized(lock) { inUse = null; lock.notifyAll() } }
         }, thread).apply { isDaemon = true; start() }
     }
 

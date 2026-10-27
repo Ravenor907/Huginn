@@ -86,6 +86,9 @@ object CallManager {
         trustOn.remove(k); trustOff.remove(k)
         (if (on) trustOn else trustOff).add(k)
         _trust.value = _trust.value + 1
+        // Off mid-call: this phone's addresses stop going out and the direct path stops at once (5.8.1).
+        if (!on) exec.execute { session?.takeIf { it.peerKey == k }?.untrust() }
+        if (!on) RoomManager.untrust(k)
         val a = app ?: return
         exec.execute { saveTrust(a) }
     }
@@ -113,14 +116,17 @@ object CallManager {
     // ------------------------------------------------------------------ actions (from the screens)
 
     /** Can [peerKey] get video calls? Their app speaks c2 (5.8) and this phone has VP8. */
-    fun canVideo(peerKey: String): Boolean = Vp8.available && app?.let { a -> try { "c2" in (a.contacts.get(peerKey)?.caps ?: emptySet()) } catch (e: Exception) { false } } == true
+    /** This phone sends and shows video: it has VP8 and isn't a Kids' TV (the TV call screen shows no video). */
+    fun videoHere(): Boolean = Vp8.available && !io.github.ravenor907.muninn.tv.TvMic.active
+
+    fun canVideo(peerKey: String): Boolean = videoHere() && app?.let { a -> try { "c2" in (a.contacts.get(peerKey)?.caps ?: emptySet()) } catch (e: Exception) { false } } == true
 
     /** Starts a call to [peerKey] ([video]: with the camera on). False if a call is already going on or calling isn't set up yet. */
     fun start(peerKey: String, video: Boolean = false): Boolean {
         val a = app ?: return false
         if (session != null || RoomManager.busy || Opus.loadError != null) return false
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
-        s.wantVideo = video && Vp8.available
+        s.wantVideo = video && videoHere()
         CallVideo.attach(a, s, s.wantVideo)
         session = s
         remember(s.callId)
@@ -148,7 +154,7 @@ object CallManager {
     /** Answers the ring; [video]: with the camera on (only when they started a video call and the camera may be used). */
     fun answer(video: Boolean = false) { exec.execute { session?.let { s ->
         app?.let { Ringer.stop(it) }
-        s.wantVideo = video && Vp8.available
+        s.wantVideo = video && videoHere()
         CallVideo.want(s, s.wantVideo)
         s.answer(); app?.let { CallService.start(it) }
     } } }
@@ -231,7 +237,8 @@ object CallManager {
         override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false
         override fun trusted(peerKey: String) = this@CallManager.trusted(peerKey)
-        override fun videoCodec() = Vp8.available
+        // A Kids' TV says no VP8, so a parent's video call to it is a voice call (5.8.5).
+        override fun videoCodec() = videoHere()
         override fun newMedia(s: CallSession) = CallMedia(app!!, s.outgoing, s.callId, s.peerKey, bluetooth, object : CallMedia.Events {
             override fun onFirstMedia() = s.mediaFirst()
             override fun onPaths(relay: Boolean, wifi: Boolean, bluetooth: Boolean) = s.mediaPaths(relay, wifi, bluetooth)

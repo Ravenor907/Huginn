@@ -303,13 +303,30 @@ void CallSession::restartRelay()
     m_relayDone = false;
     ++m_restarts;
     m_restarted.start();
-    m_relayTries = 1;   // a failure of the new one gets its own second try
+    m_relayTries = 0;   // a failure of the new one gets its own second try (startRelay counts this one)
     startRelay();
     if (shareDirect() && m_media && m_media->lanSocket()) {
         delete m_probe;
         m_probe = nullptr;
         startProbe();
     }
+}
+
+void CallSession::setTrusted(bool on)
+{
+    if (on == trusted)
+        return;
+    trusted = on;
+    if (on)
+        return;   // turning it on takes effect from the next call
+    // Off mid-call: no more of this side's addresses go out, and the direct path stops at once.
+    m_directOn = false;
+    if (m_media)
+        m_media->disableDirect();
+    m_peerDirect.clear();
+    if (m_offerSent || m_answerSent)
+        relayReady();   // the next "cands" (and resends) carry no srflx or host
+    Q_EMIT pathsChanged();
 }
 
 void CallSession::startProbe()
@@ -326,6 +343,11 @@ void CallSession::startProbe()
     });
     if (m_lan && !m_media)
         connect(m_lan, &QUdpSocket::readyRead, this, &CallSession::onLanEarly);
+    if (m_media) {
+        // The media hands the STUN server's answer to this probe (a new one after a restart).
+        QPointer<StunProbe> probe = m_probe;
+        m_media->onOther = [probe](const QByteArray &b, const QHostAddress &from, quint16 port) { return probe && probe->take(b, from, port); };
+    }
     QString host = QString::fromLatin1(DirectPath::kStunHost);
     quint16 port = DirectPath::kStunPort;
     if (!stunHost.isEmpty()) {
