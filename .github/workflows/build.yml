@@ -199,8 +199,10 @@ jobs:
           if [ -n "$MUNINN_KEYSTORE" ]; then
             want=$(tr -d ' \n' < android/signing/release-cert-sha256.txt)
             apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
-            got=$("$apksigner" verify --print-certs Muninn.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' | head -1)
-            if [ "$got" != "$want" ]; then echo "::error title=Wrong signing key::Muninn.apk is signed by $got, not $want."; exit 1; fi
+            # apksigner's own failure (or an output it words differently) shows in the log rather than as an empty digest.
+            certs=$("$apksigner" verify --print-certs Muninn.apk 2>&1) || { echo "$certs"; echo "::error title=APK check failed::apksigner couldn't verify Muninn.apk."; exit 1; }
+            got=$(printf '%s\n' "$certs" | sed -n 's/^Signer.*certificate SHA-256 digest: *//p' | head -1 | tr -d ' :' | tr A-F a-f)
+            if [ "$got" != "$want" ]; then echo "$certs"; echo "::error title=Wrong signing key::Muninn.apk is signed by ${got:-an unreadable certificate}, not $want."; exit 1; fi
             echo "Muninn.apk is signed with the release key ($got)."
           fi
       - uses: actions/upload-artifact@v4
