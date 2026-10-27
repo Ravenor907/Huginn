@@ -63,6 +63,8 @@ public:
     // (more may follow); an authentic packet from any other internet address on the call socket is
     // the peer too (its NAT picked another port).
     void enableDirect(const QList<Stun::Address> &cands);
+    void disableDirect();
+    Stun::Address directAddr() const { return m_directAddr; }
     bool directEnabled() const { return m_direct; }
     // Datagrams on the call socket that aren't media (the STUN server's answer). True: used up.
     std::function<bool(const QByteArray &, const QHostAddress &, quint16)> onOther;
@@ -120,7 +122,7 @@ public:
     struct Stats {
         int audioSent = 0, audioIn = 0, duplicates = 0, refused = 0, pings = 0, pongs = 0, decoded = 0;
         int relayAudio = 0;      // audio packets that went through the relay
-        int reports = 0, videoSent = 0, videoIn = 0, resent = 0, keyRequests = 0;
+        int reports = 0, videoSent = 0, videoIn = 0, resent = 0, keyRequests = 0, keyIgnored = 0, keyAsked = 0;
     };
     const Stats &stats() const { return m_stats; }
     const JitterBuffer &jitter() const { return m_jitter; }
@@ -205,4 +207,6 @@ private:
     VideoWire::Assembler m_asm[2];
     VideoWire::RateControl m_rate[2];
     int m_resentThisTick = 0;
+    qint64 m_directSince = 0;
+    qint64 m_keySentAt[2] = {-100000, -100000}, m_keyAskedAt[2] = {-100000, -100000};
 };

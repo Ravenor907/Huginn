@@ -220,6 +220,12 @@ VideoWire::Assembler::Ask VideoWire::Assembler::poll(qint64 now, int rtt)
     rtt = clampi(rtt, 20, 1000);
     const qint64 nackGap = std::max(40, rtt * 6 / 5);
     const qint64 giveUp = std::max(250, 2 * rtt + 120);
+    if (!m_needKey && m_next >= 0 && m_high - m_next >= qint64(kMaxPending)) {
+        // A gap too wide to fill (or to hold placeholders for): wait for a keyframe instead.
+        ++m_stats.abandoned;
+        m_needKey = true;
+        dropBefore(m_high);
+    }
     if (!m_needKey && m_next >= 0) {
         for (qint64 ext = m_next; ext <= m_high; ++ext) {
             auto it = m_frames.find(ext);
@@ -431,6 +437,19 @@ bool VideoWire::selfTest()
         check(got == 5 + 10 && out.frame == 29, "frames from the next keyframe on play again");
         Assembler fresh;
         check(fresh.poll(0, 40).keyframe, "a new receiver asks for a keyframe at once");
+        // A jump of 500 frames: no placeholders for all of them, a keyframe asked for instead.
+        Assembler gap;
+        Assembler::Frame f0;
+        for (int i : {0, 500}) {
+            for (const QByteArray &pp : split(Camera, quint16(i), i == 0, 0, frameBytes(800, i))) {
+                Fragment fr;
+                decode(pp, &fr);
+                gap.add(fr, 0);
+            }
+            gap.next(&f0);
+        }
+        Assembler::Ask ga = gap.poll(100, 40);
+        check(ga.nacks.empty() && ga.keyframe && gap.stats().abandoned == 1, "a gap over 120 frames waits for a keyframe, no NACK storm");
     }
     {
         Report r;

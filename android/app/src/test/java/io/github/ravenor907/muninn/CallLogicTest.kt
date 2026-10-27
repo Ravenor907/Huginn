@@ -135,6 +135,22 @@ class CallLogicTest {
         assertFalse(CallLogic.pingDue(d, d.lastIn + 200)); assertTrue(CallLogic.pingDue(d, d.lastIn + 250))
     }
 
+    /** 5.8.2: a replayed duplicate from another address never becomes a path; a new authentic packet may. */
+    @Test
+    fun duplicatesTeachNoAddress() {
+        val real = InetSocketAddress(InetAddress.getByName("203.0.113.7"), 51820)
+        val thief = InetSocketAddress(InetAddress.getByName("198.51.100.9"), 40000)
+        val paths = java.util.concurrent.CopyOnWriteArrayList(listOf(CallLogic.Path(CallLogic.Kind.DIRECT, real)))
+        assertNull(CallLogic.markLive(paths, CallLogic.Kind.DIRECT, thief, fresh = false, now = 1000))
+        assertEquals(1, paths.size)
+        assertNull(CallLogic.markLive(paths, CallLogic.Kind.WIFI, thief, fresh = false, now = 1000))
+        assertEquals(1, paths.size)
+        assertEquals(1000L, CallLogic.markLive(paths, CallLogic.Kind.DIRECT, real, fresh = false, now = 1000)!!.lastIn)
+        // A packet that opened as new: their NAT really sends from there.
+        assertEquals(thief, CallLogic.markLive(paths, CallLogic.Kind.DIRECT, thief, fresh = true, now = 2000)!!.addr)
+        assertEquals(2, paths.size)
+    }
+
     @Test
     fun speaking() {
         val s = CallLogic.Speaking()

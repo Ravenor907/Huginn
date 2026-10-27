@@ -573,6 +573,9 @@ void CallManager::setTrusted(const QString &key, bool on)
     m_trustOff.remove(key);
     (on ? m_trustOn : m_trustOff).insert(key);
     saveTrust();
+    if (!on && m_session && m_session->peerKey() == key)
+        m_session->setTrusted(false);
+    Q_EMIT trustChanged(key, on);
     Q_EMIT changed();
 }
 

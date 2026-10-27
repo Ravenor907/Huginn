@@ -63,6 +63,8 @@ public:
     void decline();
     void hangup(const QString &why = QStringLiteral("hangup"));
     void setMuted(bool on);
+    // The "Direct calls" switch changed during the call (5.8.1): off stops the direct path at once.
+    void setTrusted(bool on);
     // Every room "call" message for this call id from the peer.
     void handle(const QJsonObject &msg);
 

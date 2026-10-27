@@ -175,6 +175,12 @@ object VideoWire {
             val nackGap = maxOf(40, rtt * 6 / 5).toLong()
             val giveUp = maxOf(250, 2 * rtt + 120).toLong()
             val nacks = ArrayList<Nack>()
+            if (!needKey && next >= 0 && high - next >= MAX_PENDING) {
+                // A gap too wide to fill (or to hold placeholders for): wait for a keyframe instead.
+                stats.abandoned++
+                needKey = true
+                dropBefore(high)
+            }
             if (!needKey && next >= 0) {
                 var ext = next
                 while (ext <= high) {

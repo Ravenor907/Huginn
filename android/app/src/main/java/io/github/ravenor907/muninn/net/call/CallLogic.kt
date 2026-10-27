@@ -260,6 +260,27 @@ object CallLogic {
         fun live(now: Long) = lastIn > 0 && now - lastIn < PATH_DEAD_MS
     }
 
+    /**
+     * An authentic packet came on [kind] from [from]: that path is live now. A [fresh] packet (it opened as new) may
+     * also teach a path: a Wi-Fi address on a second interface (up to 3), the Direct address the peer's NAT picked (up
+     * to 6), the relay before its cands arrived. A duplicate only refreshes a path that is already there: someone who
+     * replays a copy from their own address gains nothing (5.8.2).
+     */
+    fun markLive(paths: MutableList<Path>, kind: Kind, from: InetSocketAddress?, fresh: Boolean, now: Long): Path? {
+        fun find() = paths.firstOrNull { it.kind == kind && ((kind != Kind.WIFI && kind != Kind.DIRECT) || it.addr == from) }
+        var p = find()
+        if (p == null && fresh && from != null) {
+            when (kind) {
+                Kind.WIFI -> if (paths.count { it.kind == kind } < 3) p = Path(kind, from).also { paths += it }
+                Kind.DIRECT -> if (paths.count { it.kind == kind } < 6) p = Path(kind, from).also { paths += it }
+                Kind.RELAY -> if (paths.none { it.kind == kind }) p = Path(kind, from).also { paths += it }
+                else -> {}
+            }
+        }
+        p?.lastIn = now
+        return p
+    }
+
     /** Where one sealed packet goes: [kind] says which socket (the TURN allocation or the Wi-Fi one). */
     data class Dest(val kind: Kind, val addr: InetSocketAddress)
 
