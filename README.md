@@ -20,7 +20,24 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 - **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
 
-## What's new in 0.8
+## What's new in 0.9
+
+> **Muninn needs reinstalling once.** From 0.9 Muninn is signed with a private key instead of the shared test key, so nobody else can make an update your phone would accept. Android won't install it over 0.8, so on each phone: Settings › **Back up chats**, uninstall Muninn, install Muninn.apk from this release, then **Restore from backup**. A Kids' TV is reinstalled the same way and added again from the parent's phone. Updates after this one install as normal. Huginn updates as usual.
+
+| | |
+|---|---|
+| **Choose where call sound goes** | During a call or voice room, tap **Audio** to switch between the phone, the speaker, wired headphones or a Bluetooth headset. |
+| **Video calls you can see** | The name, connection and timer sit in a strip under the video instead of on top of it, and answering a video call asks for the camera if it's needed. |
+| **Tidy your contacts** | Remove a contact to the Trash (kept 30 days, with the chat, so Restore brings everything back), drag contacts to reorder them, and folders show as sections you can collapse. |
+| **Nearby, your way** | Nearby always sits at the bottom of the list, and **Visible to people nearby** in Settings hides you from strangers while your contacts still reach you. |
+| **Finish setting up** | A card on Muninn's main screen lists any missing permissions with one tap each. |
+| **Steam Deck like a PC** | Huginn on a handheld gets the full desktop layout. The right stick moves a mouse pointer (R3 or RB to click, RT to right-click), the left stick scrolls, LB switches section and LT opens options. |
+| **Pattern unlock with a controller or remote** | Draw your unlock pattern with the D-pad, a controller or a TV remote. |
+| **Kids' TV** | The child hears callers again, the TV is locked to its parents, and more than one parent can manage it. |
+| **Clearer calls on the PC** | Huginn now cancels echo and removes background noise, like Muninn. |
+| **Safer updates and files** | Every update is checked against its SHA-256 before it installs, the Flatpak only sees your Downloads, Documents, Pictures, Videos and Music folders, and with a password set, Panic lock now locks your keys away too. |
+
+## Also in 0.8
 
 | | |
 |---|---|
