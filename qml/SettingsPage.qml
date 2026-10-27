@@ -36,8 +36,9 @@ Rectangle {
         case 1: return [
             { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
             { kind: "button", key: "chatName", title: "Your name: " + Chat.username, note: "What people see instead of your real name", label: "Change" },
-            { kind: "toggle", key: "nearbyOn", chat: true, title: "Nearby chat", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
-            { kind: "toggle", key: "keepNearby", chat: true, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
+            { kind: "toggle", key: "visibleNearby", chat: true, title: "Visible to people nearby", note: "Off: no Nearby room, and strangers close by or on the same Wi-Fi can't see your name or message you. Your contacts still can. File sharing has its own switch" },
+            { kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby chat", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
+            { kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
             { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
               options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
@@ -50,7 +51,7 @@ Rectangle {
             { kind: "button", key: "restore", title: "Restore from backup", note: "Replaces everything in Chat on this computer with a backup from Documents", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Every conversation on this computer. Contacts stay", label: "Delete" },
             { kind: "button", key: "eraseChat", title: "Erase everything in Chat", note: "Messages, photos, voice, contacts, keys and the lock. Huginn closes", label: "Erase" }
-        ]
+        ].filter(r => !r.hide)
         case 2: return [
             { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts.",
               label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy }

@@ -1,7 +1,8 @@
 import QtQuick
 import Huginn
 
-// Settings › Chat › Contacts: everyone you're in touch with or met close by, and who's blocked.
+// Settings › Chat › Contacts: everyone you're in touch with or met close by, who's blocked, and who's
+// in the Trash (removed, kept 30 days).
 // Someone renamed here shows as "Nickname (their name)".
 // Blocking lives here, not in the chat itself.
 Rectangle {
@@ -12,13 +13,14 @@ Rectangle {
     property int row: 0
     function setArgs(a) {}
 
-    readonly property var people: Chat.people
+    readonly property var people: Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
     readonly property var person: people[row] || null
     readonly property var prompts: [{ key: "a", label: "Choose" }, { key: "b", label: "Back" }]
     readonly property string status: "Blocked people can't reach you, and aren't told"
 
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     function stateText(p) {
+        if (p.trashed) return "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left"
         return p.blocked ? "Blocked · A to unblock" : (p.contact ? "In touch" : "Met close by") + (p.verified ? " · verified" : "")
     }
 
@@ -56,8 +58,8 @@ Rectangle {
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
                     anchors.verticalCenter: parent.verticalCenter
                     width: Theme.px(34); height: width; radius: width / 2
-                    color: modelData.blocked ? Theme.raised : Theme.avatar(modelData.name).bg
-                    Text { anchors.centerIn: parent; text: page.initial(modelData.name); color: modelData.blocked ? Theme.textMuted : Theme.avatar(modelData.name).fg; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
+                    color: modelData.blocked || modelData.trashed ? Theme.raised : Theme.avatar(modelData.name).bg
+                    Text { anchors.centerIn: parent; text: page.initial(modelData.name); color: modelData.blocked || modelData.trashed ? Theme.textMuted : Theme.avatar(modelData.name).fg; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
                 }
                 Column {
                     anchors.left: ava.right; anchors.leftMargin: Theme.px(10); anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
@@ -107,7 +109,8 @@ Rectangle {
             }
             Text {
                 width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
-                text: "A: message, rename, check their code, block or remove. Blocked people can't reach you, and aren't told."
+                text: page.person && page.person.trashed ? "A: restore them and your chat, or delete them for good. Nothing from them reaches you meanwhile."
+                    : "A: message, rename, check their code, block or remove. Blocked people can't reach you, and aren't told."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
         }
@@ -116,6 +119,16 @@ Rectangle {
     function choose() {
         const p = people[row]
         if (!p) return
+        if (p.trashed) {
+            Ui.pickFrom(p.name, [{ header: "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left", items: [
+                { name: "Restore", detail: "They and your chat come back", url: "restore" },
+                { name: "Delete for good", detail: "Your chat with them goes too", url: "delete" }] }], a => {
+                if (a === "restore") { Chat.restore(p.key); Ui.say(p.name + " is back.") }
+                else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "They and your chat with them can't be brought back.", "Delete for good",
+                                                 () => { Chat.deleteForGood(p.key); Ui.say(p.name + " deleted for good.") }, false, true)
+            })
+            return
+        }
         if (p.blocked) {
             Ui.sure("Unblock " + p.name + "?", "Their messages reach you again, and your chat with them comes back.", "Unblock", () => Chat.block(p.key, false))
             return
@@ -128,7 +141,7 @@ Rectangle {
         items.push({ name: "Direct calls: " + Calls.trustText(p.key), detail: Calls.trusted(p.key) ? "Calls skip the relay when they trust you too. A turns it off"
                                                                                                 : "Calls go through the relay; neither of you sees the other's IP. A turns direct on", url: "trust" })
         items.push({ name: "Block", detail: "Nothing from them reaches you. They aren't told", url: "block" })
-        if (p.contact) items.push({ name: "Remove contact", detail: "Your chat with them stays", url: "remove" })
+        items.push({ name: "Remove", detail: "Goes to the Trash with your chat. Restore brings both back within 30 days", url: "remove" })
         Ui.pickFrom(p.name, [{ header: "", items: items }], a => {
             if (a === "open") Ui.openPage("dms", { open: p.key })
             else if (a === "code") Ui.sure("Check it's really " + p.name, "Code: " + Chat.codeWith(p.key) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
@@ -143,7 +156,8 @@ Rectangle {
                 Ui.say(on ? "Calls with " + p.name + " go direct when they trust you too." : "Calls with " + p.name + " go through the relay only.")
             }
             else if (a === "block") { Chat.block(p.key, true); Ui.say(p.name + " blocked.") }
-            else if (a === "remove") { Chat.removeContact(p.key); Ui.say(p.name + " removed. Your chat with them stays.") }
+            else if (a === "remove") Ui.sure("Remove " + p.name + "?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
+                                         "Remove", () => { Chat.removeContact(p.key); Ui.say(p.name + " is in the Trash.") }, false, true)
         })
     }
     // Folders are only on this computer; Direct messages shows them as filters.

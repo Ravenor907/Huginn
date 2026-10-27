@@ -48,6 +48,9 @@ class Chat : public QObject
     Q_PROPERTY(int unreadCount READ unreadCount NOTIFY changed)
     Q_PROPERTY(QString username READ username WRITE setUsername NOTIFY changed)
     Q_PROPERTY(bool nearbyOn READ nearbyOn WRITE setNearbyOn NOTIFY changed)
+    Q_PROPERTY(bool visibleNearby READ visibleNearby WRITE setVisibleNearby NOTIFY changed)
+    Q_PROPERTY(QVariantList trash READ trash NOTIFY changed)
+    Q_PROPERTY(QStringList topOrder READ topOrder NOTIFY changed)
     Q_PROPERTY(bool keepNearby READ keepNearby WRITE setKeepNearby NOTIFY changed)
     Q_PROPERTY(bool readReceipts READ readReceipts WRITE setReadReceipts NOTIFY changed)
     Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY changed)
@@ -78,8 +81,13 @@ public:
     int unreadCount() const { return int(m_unread.size()); }
     QString username() const;
     void setUsername(const QString &v);
-    bool nearbyOn() const { return m_settings.value(QStringLiteral("chat/nearbyOn"), true).toBool(); }
+    // The Nearby room is off too while hidden from people nearby.
+    bool nearbyOn() const { return visibleNearby() && m_settings.value(QStringLiteral("chat/nearbyOn"), true).toBool(); }
     void setNearbyOn(bool v);
+    // "Visible to people nearby". Off: no Nearby room, nobody new close by can message, and the name
+    // isn't sent out on Bluetooth or Wi-Fi. Contacts still reach this computer close by.
+    bool visibleNearby() const { return m_settings.value(QStringLiteral("chat/visibleNearby"), true).toBool(); }
+    void setVisibleNearby(bool v);
     bool keepNearby() const { return m_settings.value(QStringLiteral("chat/keepNearby"), false).toBool(); }
     void setKeepNearby(bool v);
     bool readReceipts() const { return m_settings.value(QStringLiteral("chat/readReceipts"), true).toBool(); }
@@ -168,7 +176,14 @@ public:
     Q_INVOKABLE void declineRequest(const QString &key);
     Q_INVOKABLE void block(const QString &key, bool on = true);
     Q_INVOKABLE bool isBlocked(const QString &key) const;
+    // Removing someone puts them in the trash for 30 days: hidden, their conversation kept, and
+    // nothing from them gets through (like blocked) until they're restored.
     Q_INVOKABLE void removeContact(const QString &key);
+    Q_INVOKABLE bool isTrashed(const QString &key) const { return m_trash.contains(key); }
+    QVariantList trash() const;                     // [{key, name, trashed, daysLeft}], newest first
+    Q_INVOKABLE void restore(const QString &key);
+    Q_INVOKABLE void deleteForGood(const QString &key);
+    Q_INVOKABLE void emptyTrash();
 
     // What their app can do (the "caps" of their envelopes). Unknown until they send something
     // from 0.6 or answer probeCaps (at most once an hour each).
@@ -184,13 +199,20 @@ public:
     bool canCall(const QString &key) const;     // contact or group peer, caps c1, not blocked
     QString lanHost(const QString &key) const;  // the host of their Wi-Fi route, or ""
 
-    // Contact folders, only on this computer: [{id, name, count}].
+    // Contact folders, only on this computer: [{id, name, count, keys (in their order), collapsed}].
     QVariantList folders() const;
+    // The order of the people in no folder (anyone not in it yet goes first, newest first).
+    QStringList topOrder() const { return m_topOrder; }
     Q_INVOKABLE QString addFolder(const QString &name);
     Q_INVOKABLE void renameFolder(const QString &id, const QString &name);
     Q_INVOKABLE void deleteFolder(const QString &id);
     Q_INVOKABLE void setInFolder(const QString &id, const QString &key, bool on);
     Q_INVOKABLE QStringList foldersOf(const QString &key) const;
+    // Moves someone from one folder to another ("" = no folder: out of every folder) and keeps the
+    // target's order as shown (order: everyone shown there afterwards, top to bottom).
+    Q_INVOKABLE void placeIn(const QString &key, const QString &from, const QString &to, const QStringList &order);
+    Q_INVOKABLE void setCollapsed(const QString &id, bool on);
+    Q_INVOKABLE void moveFolder(const QString &id, int by);
 
     // Groups (chatgroups.cpp). Calls that can fail return what to tell the person, "" when done.
     QVariantList groups() const;
@@ -288,6 +310,8 @@ private:
     void save();
     void saveMet();
     void saveContacts();
+    void forgetPerson(const QString &key);
+    void pruneTrash();
     void load();
     QByteArray keyWith(const QString &theirKey) const;
     QString myKey() const { return QString::fromLatin1(m_pub.toBase64()); }
@@ -405,7 +429,9 @@ private:
     QStringList m_openedCaps;
     QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
     QHash<QString, qint64> m_probed;                    // key -> last caps probe
-    QList<QVariantMap> m_folders;                       // {id, name, keys}
+    QList<QVariantMap> m_folders;                       // {id, name, keys, collapsed}
+    QStringList m_topOrder;                             // people in no folder, in the order shown
+    QHash<QString, QVariantMap> m_trash;                // key -> their contact entry + {trashed (ms), contact, met}
     QHash<QString, Group> m_groups;
     QHash<QString, QString> m_gidx;                     // group message id -> group
     QHash<QString, QVariantMap> m_gpeers;               // members who aren't contacts: key -> {key, name, mailbox}
