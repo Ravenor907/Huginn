@@ -23,7 +23,7 @@ protection is the Worker's daily caps.
 
 ## Request
 
-`POST {WORKER_URL}/turn`, `Content-Type: application/json`, sent over Tor like other network requests.
+`POST {WORKER_URL}/turn`, `Content-Type: application/json`, over HTTPS.
 
 ```json
 {"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
@@ -86,11 +86,9 @@ call fails with "Can't connect".
 
 ## Reaching the TURN server
 
-The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up through Tor only (SOCKS5
-RESOLVE on Tor's port), a few tries a second apart, and never fall back to the system resolver: that would
-tell the local network and its DNS server when this device makes a call. If Tor can't answer, the call has
-no relay and says "Can't reach the call relay right now". The audio itself then goes from the device to the
-TURN server's address directly (UDP, or TLS on 443), not through Tor.
+The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up with the system resolver,
+a few tries a second apart. If it can't be looked up, the call has no relay and says "Can't reach the call
+relay right now". The audio goes from the device to the TURN server's address directly (UDP, or TLS on 443).
 
 ## Health
 

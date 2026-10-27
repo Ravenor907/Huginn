@@ -15,9 +15,9 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 ## Why
 
 - **Private by design.** Every message, photo, voice note and call is end-to-end encrypted. Only the people talking can read or hear it.
-- **Your IP address stays hidden.** Internet messages travel over Tor, so no relay and no contact ever learns where you are. The app never shows anyone's IP address.
-- **Calls without delay.** Call audio goes through an encrypted relay instead of Tor, so voices arrive in real time and the person you call still never sees your address. Close by, calls go straight over Wi-Fi.
-- **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use Tor. Messages take every route at once and arrive by whichever is fastest.
+- **Relays see only a sealed envelope.** Internet messages go through public Nostr relays, end-to-end encrypted and sealed so a relay sees only a mailbox id, never who sent it or what it says. Relay servers can see the IP address that connects to them. The app never shows anyone's IP address.
+- **Calls without showing your address.** Internet calls go through the Cloudflare call relay, so the person you call never sees your IP address. Close by, calls go straight over Wi-Fi.
+- **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
 
 ## What's new in 0.6
@@ -30,7 +30,6 @@ These two do the same for you. **Huginn** runs on Windows, Linux and SteamOS han
 | **Kids' TV** | Muninn on a Google TV becomes a simple screen for children to reach Mom and Dad: big buttons, quick messages, voice clips and dictation. No sign-in. A parent pairs it once from their phone, edits its quick messages, and is the only one who can unlock it. |
 | **Windows** | Huginn as a portable zip: unzip anywhere and run, nothing to install. |
 | **New layouts** | Huginn, and Muninn on tablets, use a Discord-style rail of groups, channels and members. |
-| **Tor built in** | Both apps carry their own Tor. Each device has its own onion address for direct, private delivery. |
 
 ## The messenger (both apps)
 

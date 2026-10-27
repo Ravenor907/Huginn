@@ -81,6 +81,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="muninn" android:host="add" />
             </intent-filter>
+            <!-- The add page's address itself (the contact QR scanned with the camera, or a shared link):
+                 the code is after "#". Android offers Muninn for it, or opens the page, which has an open button. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ravenor907.github.io" android:pathPrefix="/Huginn-Muninn/add" />
+            </intent-filter>
             <!-- "Share" from any app sends with Muninn. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -132,10 +140,6 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <!-- Tor runs in Muninn's own process; only Muninn can reach it. -->
-        <service
-            android:name="org.torproject.jni.TorService"
-            android:exported="false" />
         <service
             android:name=".net.NearbyService"
             android:exported="false"

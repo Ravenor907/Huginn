@@ -95,7 +95,6 @@ class MainActivity : ComponentActivity() {
     private var uiLocked by mutableStateOf(false)
     /** Test builds only: the emulator screenshots open screens without setting a lock. */
     private val ciSkip get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && intent?.getBooleanExtra("ci", false) == true
-    private var awaySince = 0L
     private var netStarted = false
 
     private val closePermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -157,6 +156,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         io.github.ravenor907.muninn.ui.Panic.watch(this, this)
         secure()
+        // Decided before anything is drawn: a window opened after Muninn was away (the message service
+        // keeps the app running with no window) shows the lock first, never the chats behind it.
+        lockIfDue()
+        recents()
         if (app.ready.value) startNet()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -188,12 +191,20 @@ class MainActivity : ComponentActivity() {
 
     private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.space = ""; ChatNav.menu = false }
 
-    /** A scanned contact QR opened Muninn: go to Add someone with the code filled in. */
+    /**
+     * A scanned contact QR opened Muninn: go to Add someone with the code filled in. Either the add
+     * page's own link (muninn://add/CODE) or the page's address itself (https://...add/#MUNINN1:CODE).
+     */
     private fun openAdd(i: Intent?) {
         val d = i?.data ?: return
-        if (d.scheme != "muninn" || d.host != "add") return
-        val body = d.path?.trim('/')?.takeIf { it.isNotEmpty() } ?: return
-        ChatNav.incoming = io.github.ravenor907.muninn.net.Contacts.PREFIX + body
+        val code = when {
+            d.scheme == "muninn" && d.host == "add" ->
+                d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
+            d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString())
+                .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) && it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) }
+            else -> null
+        } ?: return
+        ChatNav.incoming = code
         tab = "chat"; ChatNav.open = "add"; intentChose = true
     }
 
@@ -231,26 +242,56 @@ class MainActivity : ComponentActivity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 
-    override fun onStart() {
-        super.onStart()
-        app.visible = true
-        if (app.vault.hasPassword && awaySince > 0 && System.currentTimeMillis() - awaySince >= app.identity.lockAfter) {
+    /** Away long enough (even with no window in between): the lock, before the first frame. */
+    private fun lockIfDue() {
+        val pw = app.vault.hasPassword
+        if (io.github.ravenor907.muninn.ui.AppLock.due(pw, io.github.ravenor907.muninn.ui.AppLock.awaySince,
+                android.os.SystemClock.elapsedRealtime(), app.identity.lockAfter)) {
             uiLocked = true
             // Away long enough to lock: come back to the chat list, not the chat that was open. A notification
             // tap can arrive just before or just after this (onNewIntent), so only its choice is kept.
             if (!intentChose) toList()
         }
+        io.github.ravenor907.muninn.ui.AppLock.awaySince = 0L
+    }
+
+    /**
+     * With a lock set, recent apps never gets a picture of Muninn: Android shows that picture when
+     * Muninn comes back, before Muninn has drawn the lock. Android 13+ can turn the picture off;
+     * older versions get FLAG_SECURE while Muninn is in the background (secure() puts it back after).
+     */
+    private fun recents() {
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(!app.vault.hasPassword)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        app.visible = true
+        lockIfDue()
         app.listen()   // relays (with reconnect) and the Wi-Fi side
+    }
+
+    override fun onPause() {
+        recents()
+        if (Build.VERSION.SDK_INT < 33 && app.vault.hasPassword) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onPause()
     }
 
     override fun onStop() {
         app.visible = false
-        awaySince = System.currentTimeMillis()
+        // A new window for a changed setting (dark mode, language) isn't leaving Muninn.
+        if (!isChangingConfigurations) {
+            io.github.ravenor907.muninn.ui.AppLock.awaySince = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)
+            // "Right away": the lock goes up now, so nothing else is ever drawn on the way back.
+            if (app.vault.hasPassword && app.identity.lockAfter == 0L && !ciSkip) uiLocked = true
+        }
         super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
+        secure()
+        recents()
         intentChose = false
         app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()

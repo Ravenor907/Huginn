@@ -1,7 +1,6 @@
 #include "updater.h"
 #include "settings.h"
 #include "system.h"
-#include "tor.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -38,10 +37,9 @@ qint64 rank(const QString &v)
 }
 }
 
-Updater::Updater(Settings *settings, Tor *tor, QObject *parent)
+Updater::Updater(Settings *settings, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
-    , m_tor(tor)
     , m_current(QCoreApplication::applicationVersion())
     , m_status(QStringLiteral("Up to date as far as Huginn knows"))
 {
@@ -71,7 +69,6 @@ void Updater::check()
     fetch(false);
 }
 
-// Every request to GitHub goes through Tor, on circuits of its own.
 QNetworkRequest Updater::request(const QUrl &url) const
 {
     QNetworkRequest req(url);
@@ -79,35 +76,9 @@ QNetworkRequest Updater::request(const QUrl &url) const
     return req;
 }
 
-// True when Tor is ready now. Otherwise the check runs by itself once it is.
-bool Updater::waitForTor(bool installAfter, bool autoMode)
-{
-    if (m_tor && m_tor->ready()) {
-        m_net.setProxy(m_tor->proxy(QStringLiteral("updater")));
-        return true;
-    }
-    if (!m_tor) {
-        m_status = QStringLiteral("Updates need the Tor connection.");
-        Q_EMIT changed();
-        return false;
-    }
-    m_status = QStringLiteral("Waiting for the Tor connection…");
-    Q_EMIT changed();
-    QObject::disconnect(m_waiting);
-    m_waiting = connect(m_tor, &Tor::readyChanged, this, [this, installAfter, autoMode] {
-        if (!m_tor->ready())
-            return;
-        QObject::disconnect(m_waiting);
-        fetch(installAfter, autoMode);
-    });
-    return false;
-}
-
 void Updater::fetch(bool installAfter, bool autoMode)
 {
     if (m_busy)
-        return;
-    if (!waitForTor(installAfter, autoMode))
         return;
     m_busy = true;
     m_status = QStringLiteral("Checking for updates…");
@@ -153,8 +124,6 @@ void Updater::fetch(bool installAfter, bool autoMode)
 
 void Updater::fetchLatestPage(bool installAfter, bool autoMode)
 {
-    if (!waitForTor(installAfter, autoMode))
-        return;
     m_busy = true;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kLatestPage)));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
@@ -209,14 +178,6 @@ void Updater::install()
 
 void Updater::download(const QString &url, const QString &tag)
 {
-    if (!m_tor || !m_tor->ready()) {
-        m_busy = false;
-        m_auto = false;
-        m_status = QStringLiteral("Tor isn't connected yet. Try again in a moment.");
-        Q_EMIT changed();
-        return;
-    }
-    m_net.setProxy(m_tor->proxy(QStringLiteral("updater")));
     m_busy = true;
     m_status = QStringLiteral("Downloading Huginn %1…").arg(versionFromTag(tag));
     Q_EMIT changed();

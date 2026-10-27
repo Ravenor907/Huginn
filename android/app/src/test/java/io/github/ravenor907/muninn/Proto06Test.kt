@@ -154,27 +154,26 @@ class Proto06Test {
     }
 
     @Test
-    fun contactKeepsCapsOnionAndGroupOnly() {
+    fun contactKeepsCapsAndGroupOnly() {
         val onion = "a".repeat(56)
-        val c = Contact(chat.getString("pubB"), "Moose", "b2".repeat(32), false, groupOnly = true, caps = setOf("r1", "g1"), onion = onion)
+        val c = Contact(chat.getString("pubB"), "Moose", "b2".repeat(32), false, groupOnly = true, caps = setOf("r1", "g1"))
         assertEquals(c, ChatWire.contactFromJson(JSONObject(ChatWire.contactToJson(c).toString())))
+        assertFalse(ChatWire.contactToJson(c).has("o"))
+        // A contact saved by 0.6 may have an onion address ("o"): it reads the same, the address ignored.
+        assertEquals(c, ChatWire.contactFromJson(ChatWire.contactToJson(c).put("o", onion)))
         // Older files have none of it.
         val old = ChatWire.contactFromJson(JSONObject().put("k", c.chatKey).put("n", "Moose").put("p", "").put("v", true))
-        assertFalse(old.groupOnly); assertTrue(old.caps.isEmpty()); assertNull(old.onion)
+        assertFalse(old.groupOnly); assertTrue(old.caps.isEmpty())
         // Adding a group peer as a contact clears groupOnly; caps only ever add up.
         val added = ChatWire.merge(c, Contact(c.chatKey, "Moose", null, true, caps = setOf("k1")))
-        assertFalse(added.groupOnly); assertEquals(setOf("r1", "g1", "k1"), added.caps); assertEquals(onion, added.onion)
+        assertFalse(added.groupOnly); assertEquals(setOf("r1", "g1", "k1"), added.caps)
         // A group peer with a contact's mailbox is not a key change of that contact.
         assertNull(ChatWire.keyChangeFor(listOf(c), Contact(chat.getString("pubA"), "Other", c.mailbox, true)))
         assertNotNull(ChatWire.keyChangeFor(listOf(c.copy(groupOnly = false)), Contact(chat.getString("pubA"), "Other", c.mailbox, true)))
-        // Onion addresses: 56 base32 letters, ".onion" optional, anything else refused.
-        assertEquals(onion, ChatWire.onion(onion.uppercase() + ".onion"))
-        assertNull(ChatWire.onion("a".repeat(55)))
-        assertNull(ChatWire.onion("1".repeat(56)))
-        // The contact code carries it as "o".
-        val code = ChatWire.code("Raven", chat.getString("pubA"), "a1".repeat(32), "tok", 3_600_000, onion)
+        // The contact code carries no onion address any more.
+        val code = ChatWire.code("Raven", chat.getString("pubA"), "a1".repeat(32), "tok", 3_600_000)
         val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(code.removePrefix(ChatWire.PREFIX))))
-        assertEquals(onion, o.getString("o"))
+        assertFalse(o.has("o")); assertEquals("tok", o.getString("i"))
         // Envelopes say what they speak, and cap stays exactly "r1" for 0.5 apps.
         val e = ChatWire.base("private", chat.getString("pubA"), "Raven", "fp", "a1".repeat(32), "m1")
         assertEquals("r1", e.getString("cap"))

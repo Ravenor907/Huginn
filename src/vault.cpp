@@ -58,6 +58,9 @@ QSettings &settings()
 Vault::Vault(QObject *parent)
     : QObject(parent)
 {
+    // Away from Chat: look every few seconds, so the lock is up before anyone comes back.
+    m_awayTimer.setInterval(5000);
+    connect(&m_awayTimer, &QTimer::timeout, this, [this] { if (!m_awaySince || checkAway()) m_awayTimer.stop(); });
     // Panic lock: both stick clicks held this long.
     m_combo.setSingleShot(true);
     m_combo.setInterval(1000);
