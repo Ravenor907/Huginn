@@ -62,7 +62,7 @@ object TvMic {
         /** The factor for the level right now: a new level applies from the next frame. */
         fun factor(): Float {
             val l = level()
-            if (l != at) { at = l; g = 10f.pow((gainDb(l) + offsetDb) / 20f) }
+            if (l != at) { at = l; val db = gainDb(l) + offsetDb; g = if (abs(db) < 0.05f) 1f else 10f.pow(db / 20f) }
             return g
         }
 
