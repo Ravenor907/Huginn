@@ -42,9 +42,16 @@ public:
     Q_INVOKABLE void away() { if (!locked()) { m_awaySince = QDateTime::currentMSecsSinceEpoch(); m_awayTimer.start(); } }
     Q_INVOKABLE void back() { checkAway(); m_awaySince = 0; m_awayTimer.stop(); }
     // Wall clock, so time asleep counts. True when the lock went up.
-    bool checkAway() { if (m_awaySince && !m_screenLocked && QDateTime::currentMSecsSinceEpoch() - m_awaySince > 60000) { lockScreen(); return true; } return false; }
+    bool checkAway() { if (m_awaySince && !m_screenLocked && QDateTime::currentMSecsSinceEpoch() - m_awaySince > kRelockMs) { lockScreen(); return true; } return false; }
+    static constexpr qint64 kRelockMs = 60000;
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
     bool screenLocked() const { return m_screenLocked || locked(); }
+    // The privacy cover: from the moment Huginn isn't the app in front (or the computer goes to
+    // sleep) while Chat is open behind a lock, the window shows nothing of it, so a minimized
+    // window, a taskbar preview or the picture shown on wake can't give a chat away. Back within
+    // the relock time it simply goes; past it, the lock is up instead.
+    Q_PROPERTY(bool covered READ covered NOTIFY changed)
+    bool covered() const { return m_covered && exists() && !screenLocked(); }
     // Erases every message, photo, voice message, contact and key. Huginn's other settings stay.
     Q_INVOKABLE void eraseAll();
 
@@ -115,8 +122,15 @@ Q_SIGNALS:
 private:
     QString keyFile() const;
     QByteArray m_key;
+    void leaving();   // Huginn went to the background: cover at once
+    void returning(); // in front again: lock if away too long, then uncover
+    void sleeping();  // Windows is going to sleep
+    void woke();      // and woke up
     bool m_screenLocked = false;
+    bool m_covered = false;
     qint64 m_awaySince = 0;
+    qint64 m_awayBeforeSleep = 0;   // the away clock as it was when sleep started (0: Chat was open)
+    bool m_asleep = false;
     bool m_busy = false;
     bool m_restarting = false;   // restored: nothing may be saved until Huginn starts again
     Files m_opened;

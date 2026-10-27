@@ -34,12 +34,14 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -62,6 +64,18 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
     if (s_previous)
         s_previous(type, ctx, msg);
 }
+}
+
+// 0.6 ran Tor: its data folder and this computer's onion key (in the chat folder) are no longer
+// used. Gone once; after that there is nothing left to find.
+static void dropTorFiles()
+{
+    const QString data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (data.isEmpty())
+        return;
+    QDir(data + QStringLiteral("/tor")).removeRecursively();
+    for (const char *f : {"/chat/tor-onion.key", "/chat/tor-onion.key.damaged"})
+        QFile::remove(data + QLatin1String(f));
 }
 
 int main(int argc, char *argv[])
@@ -123,8 +137,10 @@ int main(int argc, char *argv[])
     auto *one = new SingleInstance(&app);
     if (!quiet && !one->claim())
         return 0;
-    if (!quiet)
+    if (!quiet) {
         WinUpdate::tidyOldLayout();
+        dropTorFiles();
+    }
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())

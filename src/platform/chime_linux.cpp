@@ -18,6 +18,11 @@ void Chime::play()
     m_effect->play();
 }
 
+void Chime::stop()
+{
+    m_effect->stop();
+}
+
 bool Chime::ready() const
 {
     return m_effect->status() != QSoundEffect::Error;

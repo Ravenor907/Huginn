@@ -51,7 +51,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
-    // If this launcher is closed, Huginn goes with it; anything Huginn starts (Tor, the updater) doesn't.
+    // If this launcher is closed, Huginn goes with it; what Huginn starts itself (the updater, a folder or file it opens) doesn't.
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (job) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};

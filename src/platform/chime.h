@@ -13,15 +13,17 @@ namespace Platform
 QString resource(const QString &name);
 }
 
-// The raven call for a new message. Linux plays it with QSoundEffect. Windows plays it with the
-// system's own PlaySound from memory: Qt's QSoundEffect can crash there when it is played
-// (QTBUG-142694, Qt 6.8.3 to 6.10.1), and a notification chime needs nothing more.
+// The raven call for a new message, and the ring for calls and voice rooms (played again by their
+// timers). Linux plays it with QSoundEffect. Windows plays it with the system's own PlaySound from
+// memory: Qt's QSoundEffect can crash there when it is played (QTBUG-142694, Qt 6.8.3 to 6.10.1),
+// and a chime or a ring needs nothing more. Nothing on Windows may use QSoundEffect.
 class Chime : public QObject
 {
 public:
     Chime(const QString &resource, QObject *parent = nullptr);
     ~Chime() override;
     void play();
+    void stop();   // stops this sound if it is still playing (not another Chime's)
     bool ready() const;   // the sound loaded (for the self-test)
 
 private:

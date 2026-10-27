@@ -17,7 +17,7 @@ class AudioIO;
 class CallManager;
 class CallSession;
 class CallSignal;
-class QSoundEffect;
+class Chime;
 struct TurnLogin;
 
 // Voice rooms and group calls for QML (the "Rooms" singleton), docs/protocol-0.6.md section 6.
@@ -142,6 +142,6 @@ private:
     QTimer m_announce, m_ticker, m_presenceTick, m_clear, m_ringer;
     QString m_ringG, m_ringCh, m_ringFrom;
     qint64 m_ringSince = 0;
-    QSoundEffect *m_ringtone = nullptr;
+    Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     int m_gen = 0;   // bumps on every join, so timers of an earlier room do nothing
 };

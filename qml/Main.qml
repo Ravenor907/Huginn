@@ -108,6 +108,7 @@ Window {
 
     Rail {
         id: rail
+        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.top: parent.top
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.left: parent.left
@@ -120,6 +121,7 @@ Window {
 
     Loader {
         id: pageLoader
+        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.top: parent.top
         anchors.bottom: roomBar.visible ? roomBar.top : hints.visible ? hints.top : parent.bottom
         anchors.left: rail.right
@@ -141,6 +143,7 @@ Window {
     // In a voice room or group call: who's in it and the controls, under every page.
     RoomBar {
         id: roomBar
+        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.left: rail.right
         anchors.right: parent.right
@@ -170,10 +173,30 @@ Window {
     // ------------------------------------------------------------- overlays
     ListPicker { id: picker; z: 25 }
     TextPrompt { id: prompt; z: 30 }
-    CallPage { id: callPage; z: 36 }
-    IncomingCall { id: incomingCall; z: 37 }
+    CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
+    IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
+
+    // The privacy cover (see Vault.covered): Huginn is in the background with Chat open behind a lock.
+    // Nothing under it is drawn, so a minimized window, a taskbar preview or the picture Windows
+    // shows on wake has no chat in it. It goes when Huginn is in front again (or the lock shows).
+    readonly property bool privacyCovered: Vault.covered && !app.touring
+    Rectangle {
+        id: privacyCover
+        anchors.fill: parent
+        z: 99
+        visible: app.privacyCovered
+        color: Theme.ground
+        MouseArea { anchors.fill: parent }
+        Image {
+            anchors.centerIn: parent
+            source: "assets/raven-gold.png"
+            width: Theme.px(96); height: width
+            sourceSize.width: 256; sourceSize.height: 256
+            opacity: 0.5
+        }
+    }
 
     // Shown while Huginn updates itself at launch; it restarts on the new version after.
     Rectangle {

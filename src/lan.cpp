@@ -30,7 +30,10 @@ bool nameSaysNotLan(const QString &name)
     static const QStringList words{QStringLiteral("vpn"), QStringLiteral("tap-"), QStringLiteral("wireguard"), QStringLiteral("tailscale"),
                                    QStringLiteral("zerotier"), QStringLiteral("nordlynx"), QStringLiteral("mullvad"), QStringLiteral("proton"),
                                    QStringLiteral("wintun"), QStringLiteral("cellular"), QStringLiteral("mobile broadband"),
-                                   QStringLiteral("tunnel"), QStringLiteral("virtualbox"), QStringLiteral("vmware"), QStringLiteral("hamachi")};
+                                   QStringLiteral("tunnel"), QStringLiteral("virtualbox"), QStringLiteral("vmware"), QStringLiteral("hamachi"),
+                                   // Hyper-V's virtual switches on Windows, which WSL and Docker use: "vEthernet (WSL)",
+                                   // "vEthernet (Default Switch)", "Hyper-V Virtual Ethernet Adapter".
+                                   QStringLiteral("vethernet"), QStringLiteral("hyper-v"), QStringLiteral("wsl"), QStringLiteral("default switch")};
     for (const QString &p : prefixes)
         if (n.startsWith(p))
             return true;
@@ -146,7 +149,7 @@ bool selfTest()
     check("Wi-Fi and Ethernet count", lanKind(QNetworkInterface::Wifi, up, QStringLiteral("wlan0"), QStringLiteral("wlan0"))
                                           && lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32769"), QStringLiteral("Ethernet"))
                                           && lanKind(QNetworkInterface::Wifi, up, QStringLiteral("wireless_32768"), QStringLiteral("Wi-Fi")));
-    check("VPN, cellular, containers and loopback don't",
+    check("VPN, cellular, containers, Hyper-V/WSL and loopback don't",
           !lanKind(QNetworkInterface::Unknown, up, QStringLiteral("wg0"), QStringLiteral("wg0"))
               && !lanKind(QNetworkInterface::Unknown, up, QStringLiteral("tun0"), QStringLiteral("tun0"))
               && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32770"), QStringLiteral("OpenVPN TAP-Windows6"))
@@ -156,6 +159,12 @@ bool selfTest()
               && !lanKind(QNetworkInterface::Unknown, up, QStringLiteral("mbb_32768"), QStringLiteral("Cellular"))
               && !lanKind(QNetworkInterface::Ppp, up, QStringLiteral("ppp_32768"), QStringLiteral("Dial-up"))
               && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("docker0"), QStringLiteral("docker0"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32771"), QStringLiteral("vEthernet (WSL)"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32772"), QStringLiteral("vEthernet (WSL (Hyper-V firewall))"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32773"), QStringLiteral("vEthernet (Default Switch)"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32774"), QStringLiteral("Hyper-V Virtual Ethernet Adapter"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32775"), QStringLiteral("DEFAULT SWITCH"))
+              && !lanKind(QNetworkInterface::Ethernet, up, QStringLiteral("ethernet_32776"), QStringLiteral("vEthernet (DockerNAT)"))
               && !lanKind(QNetworkInterface::Ethernet, up | F::IsPointToPoint, QStringLiteral("eth1"), QStringLiteral("eth1"))
               && !lanKind(QNetworkInterface::Loopback, up | F::IsLoopBack, QStringLiteral("lo"), QStringLiteral("lo"))
               && !lanKind(QNetworkInterface::Wifi, F::IsUp, QStringLiteral("wlan0"), QStringLiteral("wlan0")));
