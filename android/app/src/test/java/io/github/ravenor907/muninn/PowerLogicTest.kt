@@ -1,6 +1,7 @@
 package io.github.ravenor907.muninn
 
 import io.github.ravenor907.muninn.net.PowerLogic
+import io.github.ravenor907.muninn.net.PowerLogic.Check
 import io.github.ravenor907.muninn.net.PowerLogic.Health
 import io.github.ravenor907.muninn.net.PowerLogic.Inputs
 import io.github.ravenor907.muninn.net.PowerLogic.Radio
@@ -186,5 +187,44 @@ class PowerLogicTest {
         assertEquals(PowerLogic.DUTY_ON_MS, PowerLogic.dutyNext(true))
         assertEquals(PowerLogic.DUTY_PERIOD_MS, PowerLogic.dutyNext(true) + PowerLogic.dutyNext(false))
         assertTrue(PowerLogic.DUTY_ON_MS * 4 <= PowerLogic.DUTY_PERIOD_MS)
+    }
+
+    @Test
+    fun scheduledChecksKeepNothingLiveWhileClosed() {
+        for ((c, why) in listOf(Check.QUARTER to Why.EVERY_15, Check.HOUR to Why.EVERY_HOUR)) {
+            val p = PowerLogic.plan(phoneAway.copy(check = c))
+            assertEquals(why, p.why)
+            assertEquals(0, p.relays)
+            assertEquals(Radio.OFF, p.radio)
+            assertEquals(Radio.OFF, p.wifi)
+            // Open, in a call or charging: fully connected as always.
+            assertEquals(Why.OPEN, PowerLogic.plan(phoneAway.copy(check = c, foreground = true, screenOn = true)).why)
+            assertEquals(Why.CALL, PowerLogic.plan(phoneAway.copy(check = c, inCall = true)).why)
+            assertEquals(Why.PLUGGED, PowerLogic.plan(phoneAway.copy(check = c, plugged = true)).why)
+            // Maximum speed belongs to "Right away" only.
+            assertEquals(why, PowerLogic.plan(phoneAway.copy(check = c, alwaysFull = true)).why)
+        }
+        assertEquals(15L, PowerLogic.checkEveryMinutes(Check.QUARTER))
+        assertEquals(60L, PowerLogic.checkEveryMinutes(Check.HOUR))
+    }
+
+    @Test
+    fun onlyWhenOpenIsQuietEvenOnTheCharger() {
+        val p = PowerLogic.plan(phoneAway.copy(check = Check.OPEN, plugged = true, alwaysFull = true))
+        assertEquals(Why.ONLY_OPEN, p.why)
+        assertEquals(0, p.relays)
+        assertEquals(0L, PowerLogic.checkEveryMinutes(Check.OPEN))
+        // Opened, or a call it started: fully connected.
+        assertEquals(Why.OPEN, PowerLogic.plan(phoneAway.copy(check = Check.OPEN, foreground = true, screenOn = true)).why)
+        assertEquals(Why.CALL, PowerLogic.plan(phoneAway.copy(check = Check.OPEN, inCall = true)).why)
+    }
+
+    @Test
+    fun rightAwayIsUnchangedAndKidsTvStaysLive() {
+        assertEquals(Why.SCREEN_OFF, PowerLogic.plan(phoneAway.copy(check = Check.LIVE)).why)
+        assertEquals(Why.ALWAYS, PowerLogic.plan(phoneAway.copy(check = Check.LIVE, alwaysFull = true)).why)
+        for (c in Check.entries) assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(check = c, kidsTv = true)).why)
+        assertEquals(Check.HOUR, Check.of("hour"))
+        assertNull(Check.of("weekly"))
     }
 }

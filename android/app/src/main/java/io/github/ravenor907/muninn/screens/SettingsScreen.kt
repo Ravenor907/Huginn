@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.PowerLogic.Check
 import io.github.ravenor907.muninn.ui.Bar
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
@@ -79,13 +80,23 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         if (folder == "notify") {
         Panel {
             val ctx = androidx.compose.ui.platform.LocalContext.current
-            var stay by remember { mutableStateOf(id.stayConnected) }
+            var check by remember { mutableStateOf(app.power.check) }
+            val stay = check == Check.LIVE
             var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
             androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
-            ToggleRow("Get messages right away", "Stays connected while Muninn is closed (a small silent “Listening” notification you can hide). Off: checks about every 15 minutes", stay) {
-                stay = it; id.stayConnected = it
-                if (it) io.github.ravenor907.muninn.net.MessageService.start(ctx) else io.github.ravenor907.muninn.net.MessageService.stop(ctx)
+            // How Muninn checks while it's closed: the biggest choice for the battery.
+            Text("Check for messages", style = Type.normal.copy(color = Palette.text))
+            Check.entries.chunked(2).forEach { row ->
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { c -> MButton(c.title, Modifier.weight(1f), if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c } }
+                }
             }
+            Text(when (check) {
+                Check.LIVE -> "Messages and calls arrive within seconds. Uses the most battery (a small silent “Listening” notification you can hide)."
+                Check.QUARTER -> "Saves battery. Messages arrive within about 15 minutes. Calls don't ring and show as missed. Fully connected while charging."
+                Check.HOUR -> "Saves more battery. Messages arrive within about an hour. Calls don't ring and show as missed. Fully connected while charging."
+                Check.OPEN -> "No notifications, messages or calls until you open Muninn, even while charging. Messages wait for you."
+            }, style = Type.small, modifier = Modifier.padding(top = 6.dp))
             if (stay && !free) {
                 Text("Android's battery saver can still pause Muninn while the phone sleeps, so messages arrive late.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                 MButton("Let Muninn run in the background", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
@@ -101,12 +112,13 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             var saver by remember { mutableStateOf(app.power.saver) }
             val away by app.power.away.collectAsState()
-            ToggleRow("Battery saver",
+            // Only "Right away" stays connected, so only it has a speed to trade.
+            if (stay) ToggleRow("Battery saver",
                 if (saver) "Saves battery while the screen is off. Messages and calls still arrive, sometimes a few seconds later."
                 else "Maximum speed: always fully connected. Uses more battery.", saver) {
                 saver = it; app.power.saver = it
             }
-            androidx.compose.runtime.LaunchedEffect(Unit) { app.power.refresh() }
+            androidx.compose.runtime.LaunchedEffect(check) { app.power.refresh() }
             Text(away.label, style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
@@ -268,7 +280,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
 private class Folder(val id: String, val title: String, val detail: String, val icon: String)
 
 private val FOLDERS = listOf(
-    Folder("notify", "Notifications", "Messages right away, battery saver, sounds", "chat"),
+    Folder("notify", "Notifications", "Check for messages, battery saver, sounds", "chat"),
     Folder("privacy", "Privacy", "Delete messages after, read receipts, active status, screenshots", "shield"),
     Folder("lock", "Lock", "Password or pattern, panic lock", "lock"),
     Folder("calls", "Calls", "Noise removal", "call"),

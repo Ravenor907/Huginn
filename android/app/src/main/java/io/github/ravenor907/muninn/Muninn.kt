@@ -8,16 +8,12 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import io.github.ravenor907.muninn.net.Chat
 import io.github.ravenor907.muninn.net.Close
 import io.github.ravenor907.muninn.net.CloseFiles
 import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.Direct
 import io.github.ravenor907.muninn.net.Identity
-import io.github.ravenor907.muninn.net.InboxWorker
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Nostr
 import io.github.ravenor907.muninn.net.Vault
@@ -27,7 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import java.util.concurrent.TimeUnit
 
 /**
  * One of each for the whole app. Everything that reads saved data starts only once the vault is
@@ -90,9 +85,9 @@ class Muninn : Application() {
         dropOldTools()
         dropTorFiles()
         io.github.ravenor907.muninn.net.MessageService.start(this)
-        // Every 15 minutes (Android's shortest), check the internet inbox even when Muninn is closed.
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<InboxWorker>(15, TimeUnit.MINUTES).build())
+        // Check the internet inbox even when Muninn is closed: every 15 minutes (Android's shortest) or every
+        // hour, as Settings › Check for messages says; never for "Only when open".
+        power.schedule()
     }
 
     /** Called once the vault is open. */

@@ -13,11 +13,23 @@ package io.github.ravenor907.muninn.net
  *   discovery off.
  * - Doze while Android may cut Muninn's network: no live connections; the 15-minute inbox check picks
  *   messages up.
+ * - Settings › Check for messages "Every 15 minutes" or "Every hour": nothing live while Muninn is closed
+ *   (unless charging); the inbox check ([checkEveryMinutes]) picks messages up and old calls show as missed.
+ *   "Only when open": nothing at all until Muninn is opened, charging or not.
  */
 object PowerLogic {
     enum class Radio { FULL, LOW, OFF }
 
-    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE }
+    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN }
+
+    /** Settings › Notifications › Check for messages. */
+    enum class Check(val key: String, val title: String) {
+        LIVE("live", "Right away"), QUARTER("15m", "Every 15 minutes"), HOUR("hour", "Every hour"), OPEN("open", "Only when open");
+        companion object { fun of(key: String?): Check? = entries.firstOrNull { it.key == key } }
+    }
+
+    /** How often the background inbox check runs for [c] (0: never, Muninn waits to be opened). */
+    fun checkEveryMinutes(c: Check): Long = when (c) { Check.LIVE, Check.QUARTER -> 15; Check.HOUR -> 60; Check.OPEN -> 0 }
 
     data class Inputs(
         val foreground: Boolean = false,
@@ -33,6 +45,8 @@ object PowerLogic {
         /** Muninn may run unrestricted in the background (Doze leaves its network alone then). */
         val unrestricted: Boolean = false,
         val onWifi: Boolean = false,
+        /** Settings › Check for messages. */
+        val check: Check = Check.LIVE,
     )
 
     /**
@@ -65,8 +79,13 @@ object PowerLogic {
             i.inCall -> full(Why.CALL)
             i.kidsTv -> full(Why.KIDS_TV)
             i.foreground -> full(Why.OPEN)
-            i.alwaysFull -> full(Why.ALWAYS)
+            // Nothing in the background, not even on the charger: Muninn catches up when it's opened.
+            i.check == Check.OPEN -> Plan(Why.ONLY_OPEN, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF)
+            i.alwaysFull && i.check == Check.LIVE -> full(Why.ALWAYS)
             i.plugged -> full(Why.PLUGGED)
+            // No live connections between the scheduled inbox checks; calls that come in between show as missed.
+            i.check == Check.QUARTER -> Plan(Why.EVERY_15, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF)
+            i.check == Check.HOUR -> Plan(Why.EVERY_HOUR, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF)
             i.doze && !i.unrestricted -> Plan(Why.DOZE, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF)
             // Calls must still ring: the same two relays as with the screen off, only Wi-Fi discovery stops.
             i.batterySaver -> Plan(Why.BATTERY_SAVER, SAVING_RELAYS, SLOW_PING_MS, Radio.LOW, Radio.OFF)
@@ -88,6 +107,9 @@ object PowerLogic {
         Why.SCREEN_OFF -> "Saving battery while the screen is off"
         Why.BATTERY_SAVER -> "Android's Battery Saver is on: saving battery, messages and calls still arrive"
         Why.DOZE -> "Phone is asleep: checking for messages about every 15 minutes"
+        Why.EVERY_15 -> "Checking for messages about every 15 minutes. Calls in between show as missed"
+        Why.EVERY_HOUR -> "Checking for messages about once an hour. Calls in between show as missed"
+        Why.ONLY_OPEN -> "Not checking until you open Muninn. No notifications or calls until then"
     }
 
     private fun rank(p: Plan): Int = when (p.relays) { null -> 3; 0 -> 0; else -> 1 } * 10 + (2 - p.radio.ordinal) * 3 + (2 - p.wifi.ordinal)

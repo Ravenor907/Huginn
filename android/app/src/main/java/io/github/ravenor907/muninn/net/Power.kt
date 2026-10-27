@@ -16,10 +16,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 import io.github.ravenor907.muninn.Muninn
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,10 +59,35 @@ class Power(private val app: Muninn) {
     /** What Muninn does once the screen goes off: the line Settings shows. */
     val away: StateFlow<PowerLogic.Plan> = _away.asStateFlow()
 
-    /** Muninn's own "Battery saver" switch (on unless the person wants maximum speed). */
+    /** Muninn's own "Battery saver" switch (on unless the person wants maximum speed), for "Right away". */
     var saver: Boolean
         get() = prefs.getBoolean("batterySaver", true)
         set(v) { prefs.edit().putBoolean("batterySaver", v).apply(); refresh() }
+
+    /**
+     * Settings › Check for messages. Before it existed, "Get messages right away" off meant the 15-minute
+     * check, so that is where such a phone starts. Only "Right away" keeps the Listening service.
+     */
+    var check: PowerLogic.Check
+        get() = PowerLogic.Check.of(prefs.getString("checkFor", null))
+            ?: if (prefs.getBoolean("stayConnected", true)) PowerLogic.Check.LIVE else PowerLogic.Check.QUARTER
+        set(v) {
+            prefs.edit().putString("checkFor", v.key).putBoolean("stayConnected", v == PowerLogic.Check.LIVE).apply()
+            if (v == PowerLogic.Check.LIVE) MessageService.start(app) else MessageService.stop(app)
+            schedule()
+            refresh()
+        }
+
+    /** The background inbox check, as often as [check] says (none for "Only when open"). */
+    fun schedule() {
+        val every = PowerLogic.checkEveryMinutes(check)
+        try {
+            val wm = WorkManager.getInstance(app)
+            if (every == 0L) wm.cancelUniqueWork("inbox")
+            else wm.enqueueUniquePeriodicWork("inbox", ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<InboxWorker>(every, TimeUnit.MINUTES).build())
+        } catch (_: Exception) {}
+    }
 
     fun install() {
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -113,7 +141,7 @@ class Power(private val app: Muninn) {
         return PowerLogic.Inputs(
             foreground = started > 0, screenOn = pm.isInteractive, inCall = inCall, kidsTv = kids, plugged = plugged,
             alwaysFull = !saver, batterySaver = pm.isPowerSaveMode, doze = pm.isDeviceIdleMode,
-            unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi,
+            unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
         )
     }
 
@@ -135,8 +163,9 @@ class Power(private val app: Muninn) {
         _plan.value = p
         app.nostr.plan(p.relays, p.pingMs)
         radios(p)
-        // No live connections now: check the inbox once at once, then the 15-minute check carries on.
-        if (p.relays == 0 && before?.relays != 0) try {
+        // No live connections now: check the inbox once at once, then the scheduled check carries on
+        // ("Only when open" checks nothing until Muninn is opened again).
+        if (p.relays == 0 && before?.relays != 0 && p.why != PowerLogic.Why.ONLY_OPEN) try {
             WorkManager.getInstance(app).enqueueUniqueWork("inbox-now", ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<InboxWorker>().setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
         } catch (_: Exception) {}
