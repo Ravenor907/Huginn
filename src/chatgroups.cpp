@@ -170,11 +170,12 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
     const auto it = m_groups.constFind(g);
     if (it == m_groups.cend())
         return out;
+    const M1Index idx = m1Index(it->messages);
     for (const QVariant &v : it->messages) {
         if (str(v.toMap(), "ch") != ch)
             continue;
         // Cap m1: the quoted message, reactions, edits, how many read it, and @mentions of me.
-        QVariantMap m = withM1(v.toMap(), it->messages, QString());
+        QVariantMap m = withM1(v.toMap(), it->messages, idx, QString());
         m.insert(QStringLiteral("readCount"), int(m.value(QStringLiteral("rd")).toStringList().size()));
         m.insert(QStringLiteral("mention"), !m.value(QStringLiteral("mine")).toBool() && RichWire::mentions(str(m, "text"), username()));
         if (m.value(QStringLiteral("mine")).toBool()) {
