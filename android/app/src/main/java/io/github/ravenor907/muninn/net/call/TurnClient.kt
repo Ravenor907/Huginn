@@ -209,7 +209,8 @@ class TurnClient(
         pending[id] = q
         try {
             if (l.reliable) { l.write(bytes); return q.poll(6, TimeUnit.SECONDS) }
-            var wait = 500L
+            // 250 ms, doubling: under 4 s before UDP counts as blocked and TLS on 443 is tried.
+            var wait = 250L
             repeat(4) {
                 l.write(bytes)
                 q.poll(wait, TimeUnit.MILLISECONDS)?.let { return it }

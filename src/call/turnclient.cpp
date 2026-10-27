@@ -507,8 +507,11 @@ void TurnClient::onResponse(const Stun::Message &m, const QByteArray &bytes)
     auto it = m_pending.find(m.tid);
     if (it == m_pending.end())
         return;
-    // Once we have a key, answers must carry a valid MESSAGE-INTEGRITY (the first 401 can't).
-    if (!m_key.isEmpty() && it->second.auth && !Stun::checkIntegrity(bytes, m_key))
+    // Once we have a key, a success must carry a valid MESSAGE-INTEGRITY. Errors may not: a 438 (stale
+    // nonce) usually comes without one, and dropping it would stall the request until it times out (a
+    // ChannelBind never bound, a Refresh that ends the allocation). An error can't do harm here: the
+    // request is only sent again with the nonce it brings, or given up.
+    if (m.cls == Stun::Success && !m_key.isEmpty() && it->second.auth && !Stun::checkIntegrity(bytes, m_key))
         return;
     Pending p = it->second;
     delete p.timer;
