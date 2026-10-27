@@ -46,8 +46,9 @@ private:
     void chosen(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
     QNetworkRequest request(const QUrl &url) const;
     void download(const QString &url, const QString &tag);
-    // Windows: checks the zip against the release's SHA-256 (GitHub's digest or the .sha256 file), then installs it.
+    // Checks the download against the release's SHA-256 (GitHub's digest or the .sha256 file), then installs it.
     void verifyThenInstall(const QString &path, const QString &tag);
+    void installFlatpak(const QString &path);
     void failed(const QString &status);
     Settings *m_settings;
     QNetworkAccessManager m_net;

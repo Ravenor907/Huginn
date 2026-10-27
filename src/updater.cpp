@@ -215,37 +215,38 @@ void Updater::download(const QString &url, const QString &tag)
         }
         f.write(r->readAll());
         f.close();
-        if (WinUpdate::supported()) {
-            // Windows: only a zip whose SHA-256 matches the release's is unpacked next to Huginn.exe.
-            verifyThenInstall(path, tag);
+        // Only a file whose SHA-256 matches the release's is installed: the Windows zip and the Flatpak alike.
+        verifyThenInstall(path, tag);
+    });
+}
+
+void Updater::installFlatpak(const QString &path)
+{
+    m_status = QStringLiteral("Installing…");
+    Q_EMIT changed();
+    auto *p = new QProcess(this);
+    QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
+                     QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};
+    QString program = QStringLiteral("flatpak-spawn");
+    if (System::inFlatpak())
+        args.prepend(QStringLiteral("--host"));
+    else
+        program = args.takeFirst();
+    connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus st) {
+        p->deleteLater();
+        m_busy = false;
+        if (st != QProcess::NormalExit || code != 0) {
+            m_auto = false;
+            m_status = QStringLiteral("Installing the update failed.");
+            Q_EMIT changed();
             return;
         }
-        m_status = QStringLiteral("Installing…");
+        m_status = QStringLiteral("Updated. Restarting…");
         Q_EMIT changed();
-        auto *p = new QProcess(this);
-        QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
-                         QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};
-        QString program = QStringLiteral("flatpak-spawn");
-        if (System::inFlatpak())
-            args.prepend(QStringLiteral("--host"));
-        else
-            program = args.takeFirst();
-        connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus st) {
-            p->deleteLater();
-            m_busy = false;
-            if (st != QProcess::NormalExit || code != 0) {
-                m_auto = false;
-                m_status = QStringLiteral("Installing the update failed.");
-                Q_EMIT changed();
-                return;
-            }
-            m_status = QStringLiteral("Updated. Restarting…");
-            Q_EMIT changed();
-            QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
-            QTimer::singleShot(300, qApp, &QCoreApplication::quit);
-        });
-        p->start(program, args);
+        QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
+        QTimer::singleShot(300, qApp, &QCoreApplication::quit);
     });
+    p->start(program, args);
 }
 
 void Updater::failed(const QString &status)
@@ -275,6 +276,10 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
             failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
             return;
         }
+        if (!WinUpdate::supported()) {
+            installFlatpak(path);
+            return;
+        }
         m_status = QStringLiteral("Installing…");
         Q_EMIT changed();
         WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
@@ -291,8 +296,9 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
         check(m_assetDigest);
         return;
     }
-    // Huginn-Windows.zip.sha256, published by the release job beside the zip.
-    QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + WinUpdate::digestName()));
+    // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
+    const QString digestFile = WinUpdate::supported() ? WinUpdate::digestName() : QStringLiteral("Huginn.flatpak.sha256");
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + digestFile));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     QNetworkReply *r = m_net.get(req);
     connect(r, &QNetworkReply::finished, this, [r, check] {

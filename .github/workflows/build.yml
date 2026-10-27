@@ -63,7 +63,7 @@ jobs:
           set +e
           flatpak install --user -y --noninteractive Huginn.flatpak > tour/install.txt 2>&1 || cat tour/install.txt
           timeout 240 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_QUICK_BACKEND=software \
-            io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
+            --filesystem="$PWD/tour" io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
           code=$?
           set -e
           cat tour/log.txt
