@@ -20,7 +20,19 @@ These two do the same for you. **Huginn** runs on Windows and Linux, and works w
 - **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
 - **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
 
-## What's new in 0.91
+## What's new in 0.92
+
+| | |
+|---|---|
+| **Choose how often to check** | Settings › Notifications › Check for messages: Right away, Every 15 minutes, Every hour, or Only when open. The saving modes keep nothing running while Muninn is closed; calls that come in between show as missed. |
+| **Low battery saves more** | Below 30% Muninn checks every 15 minutes, below 15% every hour, and goes back to your choice once it's charging. You can switch this off. |
+| **Quiet hours** | Check every hour, or not at all, overnight or whenever you choose. |
+| **Lighter in the background** | Bluetooth and Nearby only look for phones close by while Muninn is open (unless you turn on Find phones close by in the background), fewer connections stay open, and Wi-Fi discovery works hardest on the Files tab. |
+| **Battery report** | Settings › Notifications shows what Muninn kept running today, how often it checked, and the data it used. |
+| **True black** | A pure black background under Display, which saves a little on OLED screens. |
+| **Video calls on the speaker** | Video calls start on the speaker unless a Bluetooth headset or headphones are connected, and use less battery when it's low. |
+
+## Also in 0.91
 
 | | |
 |---|---|
@@ -106,6 +118,7 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | **Photos and voice messages** | Photos are scrubbed of location and camera data. Voice messages carry no metadata. |
 | **Groups and channels** | Group chats with their own channels, members and admins. Every message is encrypted to each member separately. |
 | **Calls** | Voice and video calls, group calls and voice rooms, and screen share from Huginn, all end-to-end encrypted. Switch between the phone, speaker, wired or Bluetooth headset, and turn noise removal on or off. |
+| **Battery** | Choose how often Muninn checks for messages, from right away to only when you open it, with quiet hours, automatic saving on a low battery, and a battery report. |
 | **File sharing** | Encrypted transfers between Huginn, Muninn and any LocalSend app on the same Wi-Fi. A phone can also send its apps to a TV with Muninn. |
 | **Lock** | A 9-dot pattern or a password opens the app. Everything on disk is encrypted with it. |
 | **Private nicknames** | Rename anyone. Only you see it. |
@@ -159,7 +172,7 @@ A mouse and keyboard work too (Tab and Shift+Tab switch sections, Page Up and Pa
 
 ## Versions
 
-One dot only, read as a decimal: 0.8, 0.9, 0.91, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
+One dot only, read as a decimal: 0.9, 0.91, 0.92, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
 
 ## Building
 
