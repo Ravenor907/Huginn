@@ -512,7 +512,7 @@ void vp8Loopback()
     // The last picture is close to what was sent (a broken decode would be far off).
     QVideoFrame last = rx.lastFrame();
     bool close = false;
-    if (last.isValid() && last.map(QtVideo::MapMode::ReadOnly)) {
+    if (last.isValid() && last.map(HUGINN_MAP_READ)) {
         const I420 want = VideoFrames::testPattern(640, 480, 71);
         qint64 diff = 0;
         const uchar *y = last.bits(0);

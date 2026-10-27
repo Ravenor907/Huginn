@@ -71,7 +71,7 @@ QVideoFrame VideoFrames::toFrame(const I420 &pic)
     if (!pic.valid())
         return QVideoFrame();
     QVideoFrame f(QVideoFrameFormat(QSize(pic.width, pic.height), QVideoFrameFormat::Format_YUV420P));
-    if (!f.map(QtVideo::MapMode::WriteOnly))
+    if (!f.map(HUGINN_MAP_WRITE))
         return QVideoFrame();
     const uchar *src[3] = {pic.y(), pic.u(), pic.v()};
     for (int p = 0; p < 3; ++p) {

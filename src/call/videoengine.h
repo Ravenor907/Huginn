@@ -10,12 +10,20 @@
 #include <QSize>
 #include <QThread>
 #include <QVideoFrame>
+#include <QVideoSink>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+#include <QtMultimedia/qtvideo.h>
+#define HUGINN_MAP_READ QtVideo::MapMode::ReadOnly
+#define HUGINN_MAP_WRITE QtVideo::MapMode::WriteOnly
+#else
+#define HUGINN_MAP_READ QVideoFrame::ReadOnly
+#define HUGINN_MAP_WRITE QVideoFrame::WriteOnly
+#endif
 #include <memory>
 
 class QCamera;
 class QMediaCaptureSession;
 class QScreenCapture;
-class QVideoSink;
 
 // Cameras, the screen and the pictures of video calls and screen share (docs/protocol-0.6.md 5.8.5
 // to 5.8.7). Frames come from Qt Multimedia (QCamera, QScreenCapture), are scaled to the call's
