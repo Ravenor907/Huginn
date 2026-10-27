@@ -26,4 +26,15 @@ class AppLockTest {
         assertFalse(AppLock.due(false, awaySince = 1, now = 10_000_000, lockAfter = 0))   // no password
         assertFalse(AppLock.due(true, awaySince = 0, now = 10_000_000, lockAfter = 0))    // still on screen
     }
+
+    @Test
+    fun notificationReplyNeverGetsPastTheLock() {
+        assertTrue(AppLock.canReply(ready = true, panic = false, kidsTv = false, lockDue = false))
+        assertFalse(AppLock.canReply(ready = false, panic = false, kidsTv = false, lockDue = false))   // vault not open
+        assertFalse(AppLock.canReply(ready = true, panic = true, kidsTv = false, lockDue = false))    // panic-locked
+        assertFalse(AppLock.canReply(ready = true, panic = false, kidsTv = true, lockDue = false))    // Kids' TV
+        // Away longer than the lock time: the lock would show on opening, so no reply from the notification.
+        val due = AppLock.due(true, awaySince = 1_000, now = 61_000, lockAfter = 60_000)
+        assertFalse(AppLock.canReply(ready = true, panic = false, kidsTv = false, lockDue = due))
+    }
 }

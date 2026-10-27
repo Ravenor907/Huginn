@@ -53,7 +53,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         context.getSystemService(android.os.PowerManager::class.java).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "muninn:relays")
             .apply { setReferenceCounted(false) }
     }
-    private var fastTick: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var fastTick: java.util.concurrent.ScheduledFuture<*>? = null
 
     /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
     var onEnvelope: ((String) -> Boolean)? = null
@@ -138,28 +138,48 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /**
      * One check for every socket together: a tiny request each relay answers at once. A socket that
-     * didn't answer the previous check is dropped and opened again. While saving battery this rides
-     * on an inexact alarm, which Android lines up with other apps' wake-ups.
+     * doesn't answer within [PowerLogic.ANSWER_MS] is dropped and opened again (one missed check is
+     * enough). While saving battery the check rides on an alarm that also runs while the phone dozes
+     * (exact when Android allows it without asking, else Android may run it a little late to batch it
+     * with other apps' wake-ups); a timer backs it up while the phone is awake anyway.
      */
     private fun tick() {
-        try { alarms?.cancel(alarm) } catch (_: Exception) {}
+        try { alarms?.cancel(alarmIntent) } catch (_: Exception) {}
         fastTick?.cancel(false); fastTick = null
         if (!keepAlive || keep == 0) { probedAt = 0L; return }
         val every = pingMs
         if (every <= PowerLogic.FAST_PING_MS) {
             fastTick = timer.scheduleWithFixedDelay({ probe() }, every, every, TimeUnit.MILLISECONDS)
-        } else try {
-            alarms?.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, android.os.SystemClock.elapsedRealtime() + every, "muninn:relays", alarm, main)
-        } catch (_: Exception) {
-            fastTick = timer.scheduleWithFixedDelay({ probe() }, every, every, TimeUnit.MILLISECONDS)
+            return
         }
+        val at = android.os.SystemClock.elapsedRealtime() + every
+        try {
+            val a = alarms!!
+            if (android.os.Build.VERSION.SDK_INT < 31 || a.canScheduleExactAlarms())
+                a.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent)
+            else a.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent)
+        } catch (_: Exception) {}
+        // Awake anyway (screen on, or another app woke the phone): check on time without waiting for the alarm.
+        fastTick = timer.schedule(Runnable { due() }, every, TimeUnit.MILLISECONDS)
     }
 
-    private val alarm = android.app.AlarmManager.OnAlarmListener {
-        // Long enough for the requests to go out and the answers to come back before the phone sleeps again.
-        try { wake.acquire(5_000) } catch (_: Exception) {}
-        timer.execute { probe() }
-        tick()
+    private val alarmIntent: android.app.PendingIntent by lazy {
+        android.app.PendingIntent.getBroadcast(context, 0, android.content.Intent(context, RelayAlarm::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    /** The keepalive alarm went off ([RelayAlarm]). */
+    fun onAlarm() {
+        // Long enough for the requests to go out, the answers to come back, and a dead socket to be replaced.
+        try { wake.acquire(PowerLogic.ANSWER_MS + 5_000) } catch (_: Exception) {}
+        timer.execute { due() }
+    }
+
+    /** The alarm or the backup timer, whichever comes first: one check, then the next one is set. */
+    private fun due() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (probedAt == 0L || now - probedAt >= pingMs / 2) probe()
+        main.post { tick() }
     }
 
     private fun probe() {
@@ -170,18 +190,40 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             val ws = sockets[url]
             if (ws == null) { open(url); continue }
             if (live[url] != true) continue
-            if (PowerLogic.silent(before, heardAt[url] ?: 0L) && (openedAt[url] ?: 0L) < before) {
-                // Quiet since the last check: a dead connection (often after a network change). Start over.
-                synchronized(sockets) { if (sockets.remove(url, ws)) { live.remove(url); _connected.value = live.size } }
-                ws.cancel()
-                retries.remove(url)
-                open(url)
-                continue
-            }
+            if (PowerLogic.silent(before, heardAt[url] ?: 0L) && (openedAt[url] ?: 0L) < before) { replace(url, ws); continue }
             val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("since", System.currentTimeMillis() / 1000).put("limit", 0)
             ws.send(JSONArray().put("REQ").put(PROBE).put(filter).toString())
         }
         probedAt = now
+        // One missed check is enough: look again once the answers should be in. Usually they all are within
+        // a second or two; then the phone may sleep again at once.
+        timer.schedule(Runnable { if (answered(now)) release() }, 2, TimeUnit.SECONDS)
+        timer.schedule(Runnable { verify(now) }, PowerLogic.ANSWER_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private fun answered(at: Long) = targets().all { url -> live[url] != true || (heardAt[url] ?: 0L) >= at }
+
+    private fun release() { try { if (wake.isHeld) wake.release() } catch (_: Exception) {} }
+
+    /** Sockets that didn't answer the check made at [at] are dead (often after a network change): start over. */
+    private fun verify(at: Long) {
+        if (!keepAlive || keep == 0) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        var replaced = false
+        for (url in targets()) {
+            val ws = sockets[url] ?: continue
+            if (live[url] != true) continue
+            if (PowerLogic.dead(at, heardAt[url] ?: 0L, openedAt[url] ?: 0L, now)) { replace(url, ws); replaced = true }
+        }
+        // A replaced socket keeps the phone awake a few seconds more (the wake lock's own timeout) to connect.
+        if (!replaced) release()
+    }
+
+    private fun replace(url: String, ws: WebSocket) {
+        synchronized(sockets) { if (!sockets.remove(url, ws)) return; live.remove(url); _connected.value = live.size }
+        ws.cancel()
+        retries.remove(url)
+        open(url)
     }
 
     /** One socket per relay, never two: only opens if there isn't one already. */
@@ -201,11 +243,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             retries.remove(url)
             open(url)
         }
-        // Sockets that look open may have died with the old network: ask now and check again shortly,
-        // so a dead one is replaced within seconds instead of at the next keepalive.
+        // Sockets that look open may have died with the old network: ask now (a socket that doesn't answer
+        // within seconds is replaced) and ask again shortly, instead of waiting for the next keepalive.
         if (keepAlive && keep != 0) timer.execute {
             probe()
-            timer.schedule(Runnable { probe() }, 10, TimeUnit.SECONDS)
+            timer.schedule(Runnable { probe() }, 15, TimeUnit.SECONDS)
         }
     }
 
@@ -343,5 +385,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             return JSONObject().put("id", Schnorr.hex(id)).put("pubkey", pub).put("created_at", createdAt).put("kind", kind)
                 .put("tags", tags).put("content", content).put("sig", Schnorr.hex(sig))
         }
+    }
+}
+
+/** The relay keepalive alarm (see [Nostr.onAlarm]): a PendingIntent alarm so it also runs while the phone dozes. */
+class RelayAlarm : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: android.content.Intent) {
+        (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.nostr?.onAlarm()
     }
 }
