@@ -217,9 +217,19 @@ class CallMedia(
     private var mic: Thread? = null
     private var player: Thread? = null
 
+    // ------------------------------------------------------------------ voice rooms (section 6)
+
+    /** In a voice room the room owns the microphone and the speaker for every peer: this media only seals and opens. */
+    @Volatile var externalAudio = false
+    /** One encoded 20 ms frame from the room's microphone (nothing while muted). */
+    fun sendOpus(opus: ByteArray) { if (!muted) send(CallCrypto.AUDIO, opus) }
+    /** What the room's player plays next for this peer. */
+    fun nextPlay(): CallLogic.Play = jitter.next()
+
     /** Starts the microphone and the speaker. False if the microphone couldn't open (no permission?). */
     @SuppressLint("MissingPermission")
     fun startAudio(): Boolean {
+        if (externalAudio) return true
         if (Opus.loadError != null) return false
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -343,7 +353,7 @@ class CallMedia(
         try { track?.release() } catch (_: Exception) {}
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
         proximityOn(false)
-        try {
+        if (!externalAudio) try {
             if (Build.VERSION.SDK_INT >= 31) audio.clearCommunicationDevice()
             else @Suppress("DEPRECATION") { audio.stopBluetoothSco(); audio.isBluetoothScoOn = false; audio.isSpeakerphoneOn = false }
             audio.mode = oldMode

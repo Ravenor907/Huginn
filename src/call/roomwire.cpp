@@ -14,7 +14,7 @@ const char RoomWire::kDomain[] = "huginn-muninn vroom v1";
 namespace
 {
 int g_fail = 0;
-void check(bool ok, const QString &what)
+void expect(bool ok, const QString &what)
 {
     std::printf("  %s %s\n", ok ? "ok  " : "FAIL", qPrintable(what));
     if (!ok)
@@ -171,9 +171,9 @@ bool RoomWire::selfTest(const QString &vectorsPath)
     const QJsonObject keys = all.value(QStringLiteral("keys")).toObject();
     const QJsonObject states = all.value(QStringLiteral("group")).toObject().value(QStringLiteral("states")).toObject();
     const QJsonObject msgs = r.value(QStringLiteral("messages")).toObject();
-    check(!msgs.isEmpty() && all.value(QStringLiteral("domains")).toObject().value(QStringLiteral("room")).toString() == QLatin1String(kDomain),
+    expect(!msgs.isEmpty() && all.value(QStringLiteral("domains")).toObject().value(QStringLiteral("room")).toString() == QLatin1String(kDomain),
           QStringLiteral("room section and domain"));
-    check(r.value(QStringLiteral("maxPeople")).toInt() == kMaxPeople && qint64(r.value(QStringLiteral("presenceTtlMs")).toDouble()) == kPresenceTtlMs
+    expect(r.value(QStringLiteral("maxPeople")).toInt() == kMaxPeople && qint64(r.value(QStringLiteral("presenceTtlMs")).toDouble()) == kPresenceTtlMs
               && qint64(r.value(QStringLiteral("freshPastMs")).toDouble()) == kFreshPastMs && qint64(r.value(QStringLiteral("freshAheadMs")).toDouble()) == kFreshAheadMs,
           QStringLiteral("limits: 8 people, 60 s / 120 s fresh, 25 minutes presence"));
     int signedOk = 0;
@@ -182,9 +182,9 @@ bool RoomWire::selfTest(const QString &vectorsPath)
         if (GroupWire::signedBytes(QString::fromLatin1(kDomain), x.value(QStringLiteral("msg")).toObject()) == x.value(QStringLiteral("signed")).toString().toUtf8())
             ++signedOk;
         else
-            check(false, QStringLiteral("signed bytes of ") + it.key());
+            expect(false, QStringLiteral("signed bytes of ") + it.key());
     }
-    check(signedOk == msgs.size(), QStringLiteral("signed bytes of %1 room messages").arg(msgs.size()));
+    expect(signedOk == msgs.size(), QStringLiteral("signed bytes of %1 room messages").arg(msgs.size()));
     auto keyOf = [&](const QJsonValue &v) { return keys.value(v.toString()).toString(); };
     const QJsonArray acc = r.value(QStringLiteral("accept")).toArray();
     int accOk = 0;
@@ -197,9 +197,9 @@ bool RoomWire::selfTest(const QString &vectorsPath)
         if (got == str(a, "result"))
             ++accOk;
         else
-            check(false, QStringLiteral("accept %1: wanted %2, got %3").arg(str(a, "msg"), str(a, "result"), got));
+            expect(false, QStringLiteral("accept %1: wanted %2, got %3").arg(str(a, "msg"), str(a, "result"), got));
     }
-    check(accOk == acc.size() && accOk > 0, QStringLiteral("%1 acceptance checks").arg(acc.size()));
+    expect(accOk == acc.size() && accOk > 0, QStringLiteral("%1 acceptance checks").arg(acc.size()));
     Presence p;
     const QString g = str(r, "g"), ch = str(r, "voiceRoom");
     const QJsonArray steps = r.value(QStringLiteral("presence")).toArray();
@@ -217,9 +217,9 @@ bool RoomWire::selfTest(const QString &vectorsPath)
         if (changed == s.value(QStringLiteral("changed")).toBool() && p.in(g, ch, now) == want)
             ++presOk;
         else
-            check(false, QStringLiteral("presence step at %1").arg(now));
+            expect(false, QStringLiteral("presence step at %1").arg(now));
     }
-    check(presOk == steps.size() && presOk > 0, QStringLiteral("%1 presence steps").arg(steps.size()));
+    expect(presOk == steps.size() && presOk > 0, QStringLiteral("%1 presence steps").arg(steps.size()));
     int glareOk = 0;
     const QJsonArray glare = r.value(QStringLiteral("glare")).toArray();
     for (const QJsonValue &v : glare) {
@@ -227,9 +227,9 @@ bool RoomWire::selfTest(const QString &vectorsPath)
         if (offerWins(keyOf(x.value(QStringLiteral("a"))), keyOf(x.value(QStringLiteral("b")))) == keyOf(x.value(QStringLiteral("wins"))))
             ++glareOk;
     }
-    check(glareOk == glare.size() && glareOk > 0, QStringLiteral("glare: the lower chat key's offer wins"));
-    check(!full(6) && full(7), QStringLiteral("full at 7 peers (8 people)"));
-    check(isGroupCall(newGroupCallId()) && isId(str(r, "voiceRoom"), 8) && !isRoomId(QStringLiteral("main")), QStringLiteral("room ids"));
+    expect(glareOk == glare.size() && glareOk > 0, QStringLiteral("glare: the lower chat key's offer wins"));
+    expect(!full(6) && full(7), QStringLiteral("full at 7 peers (8 people)"));
+    expect(isGroupCall(newGroupCallId()) && isId(str(r, "voiceRoom"), 8) && !isRoomId(QStringLiteral("main")), QStringLiteral("room ids"));
     std::printf("rooms: %s\n", g_fail == 0 ? "all good" : "FAILED");
     return g_fail == 0;
 }

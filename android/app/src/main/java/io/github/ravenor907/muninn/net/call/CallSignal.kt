@@ -13,7 +13,10 @@ interface CallSignal {
     fun send(contactKey: String, json: String)
 
     /** Chat calls this for every opened "call" plaintext from a contact or group peer. */
-    fun onSignal(contactKey: String, json: String) = CallManager.onSignal(contactKey, json)
+    fun onSignal(contactKey: String, json: String) {
+        CallManager.onSignal(contactKey, json)
+        RoomManager.onSignal(contactKey, json)   // voice rooms and group calls (section 6)
+    }
 }
 
 /**
