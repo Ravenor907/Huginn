@@ -77,7 +77,8 @@ object KidTv {
     /** A parent disconnected this TV: erasing, then back to the pairing screen. */
     val wiping = MutableStateFlow(false)
     private val lock = Any()
-    private val PRIVATE_ROOMS = setOf("private", "photo", "receipt", "unsend")
+    // "rich", "mx" and "live" (cap m1): replies, reactions, edits and typing from the same people.
+    private val PRIVATE_ROOMS = setOf("private", "photo", "receipt", "unsend", "rich", "mx", "live")
 
     private fun file(app: Muninn) = File(app.filesDir, FILE)
 

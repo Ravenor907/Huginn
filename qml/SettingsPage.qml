@@ -42,6 +42,7 @@ Rectangle {
               options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
             { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
+            { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" },
             { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },
             { kind: "toggle", key: "panicLock", vault: true, title: "Panic lock (hold L3 and R3)", note: "Hold both stick clicks for a second anywhere in Huginn: Chat locks at once and notifications hide message text until you unlock" },
             { kind: "toggle", key: "lockOnLeave", vault: true, title: "Lock when I leave Huginn", note: "Chat locks the moment you switch to Steam or another app, or the handheld sleeps" },

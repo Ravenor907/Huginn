@@ -168,13 +168,28 @@ class Muninn : Application() {
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVibrate(BUZZ).setOnlyAlertOnce(key == "inbox")
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
+            .apply { replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
         // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
         if (!visible) try {
             if (io.github.ravenor907.muninn.tv.KidMode.on(this))
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
+    }
+
+    /** Reply from the notification (a contact's chat or a group), only while Muninn is open and not panic-locked. */
+    private fun replyAction(key: String): NotificationCompat.Action? {
+        if (!ready.value || io.github.ravenor907.muninn.ui.Panic.locked.value) return null
+        if (!key.startsWith("g:") && !chat.isContact(key)) return null
+        val input = androidx.core.app.RemoteInput.Builder(io.github.ravenor907.muninn.net.ReplyReceiver.TEXT).setLabel("Reply").build()
+        val intent = Intent(this, io.github.ravenor907.muninn.net.ReplyReceiver::class.java)
+            .setAction(io.github.ravenor907.muninn.net.ReplyReceiver.ACTION).putExtra(io.github.ravenor907.muninn.net.ReplyReceiver.KEY, key)
+        // Android fills the typed text into the intent, so it has to be mutable.
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+        val pi = PendingIntent.getBroadcast(this, key.hashCode(), intent, flags)
+        return NotificationCompat.Action.Builder(R.drawable.ic_notify, "Reply", pi).addRemoteInput(input).setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY).setShowsUserInterface(false).build()
     }
 
     /** A short double buzz: a message arrived in the chat you're looking at. */
