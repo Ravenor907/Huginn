@@ -150,9 +150,20 @@ jobs:
         # an APK anyone could forge an update for.
         env:
           KEYSTORE_BASE64: ${{ secrets.MUNINN_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/muninn-release.p12"
+            # Spaces and line breaks from pasting are dropped from both, as Gradle does for the password.
+            if ! printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/muninn-release.p12"; then
+              echo "::error title=Release key unreadable::MUNINN_KEYSTORE_BASE64 isn't the whole key. Paste it again from MUNINN_KEYSTORE_BASE64.txt."
+              exit 1
+            fi
+            pass=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d ' \r\n')
+            # Say which secret is wrong here, rather than as a keystore error deep in the Gradle build.
+            if ! keytool -list -storetype pkcs12 -keystore "$RUNNER_TEMP/muninn-release.p12" -storepass "$pass" > /dev/null 2>&1; then
+              echo "::error title=Release key password wrong::MUNINN_KEYSTORE_PASSWORD doesn't open the key in MUNINN_KEYSTORE_BASE64. Paste it again from MUNINN_KEYSTORE_PASSWORD.txt."
+              exit 1
+            fi
             echo "MUNINN_KEYSTORE=$RUNNER_TEMP/muninn-release.p12" >> "$GITHUB_ENV"
           elif [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ]; then
             echo "::error title=Release key missing::Add the secrets MUNINN_KEYSTORE_BASE64 and MUNINN_KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."

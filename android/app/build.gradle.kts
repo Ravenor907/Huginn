@@ -80,11 +80,13 @@ android {
             keyPassword = "muninn-test"
             storeType = "pkcs12"
         }
+        // A password pasted into GitHub's secret box can carry a stray space or line break.
+        val releasePassword = System.getenv("MUNINN_KEYSTORE_PASSWORD").orEmpty().trim()
         if (releaseKey.isNotEmpty()) create("release") {
             storeFile = file(releaseKey)
-            storePassword = System.getenv("MUNINN_KEYSTORE_PASSWORD")
+            storePassword = releasePassword
             keyAlias = "muninn"
-            keyPassword = System.getenv("MUNINN_KEYSTORE_PASSWORD")
+            keyPassword = releasePassword
             storeType = "pkcs12"
         }
     }
