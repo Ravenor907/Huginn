@@ -1,4 +1,5 @@
 #include "audioio.h"
+#include "../settings.h"
 
 #include <QAudioSink>
 #include <QAudioSource>
@@ -67,7 +68,9 @@ bool AudioIO::start()
 #ifdef HUGINN_HAVE_VOICE
     // Echo canceller, WebRTC's noise suppressor and its level control, all at the call's 16 kHz. Its first guess
     // at the speaker-to-microphone delay: what is queued in the speaker plus the device's own latency.
-    m_voice = tvv_create(AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, TVV_AEC | TVV_NS | TVV_AGC);
+    // Settings › Calls › Noise removal off leaves the noise suppressor out (read when the call starts).
+    const int noise = Settings::saved(QStringLiteral("noiseRemoval"), true).toBool() ? TVV_NS : 0;
+    m_voice = tvv_create(AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, TVV_AEC | noise | TVV_AGC);
     if (m_voice)
         tvv_set_delay(m_voice, kSinkAheadMs + 40);
 #endif
