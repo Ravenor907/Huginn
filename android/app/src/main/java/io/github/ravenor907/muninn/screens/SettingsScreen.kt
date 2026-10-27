@@ -2,7 +2,10 @@ package io.github.ravenor907.muninn.screens
 
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +27,7 @@ import io.github.ravenor907.muninn.ui.Bar
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.MButton
+import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.ToggleRow
@@ -64,8 +68,15 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     var pw1 by remember { mutableStateOf("") }
     var pw2 by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    // Settings is a short list of folders (the same as Huginn's); each opens on its own, and Back comes out.
+    var folder by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    androidx.activity.compose.BackHandler(enabled = folder.isNotEmpty()) { folder = "" }
+    androidx.compose.runtime.key(folder) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
-        Section("Notifications")
+        // No folder open: the list. A folder: its title, then only its own settings below.
+        if (folder.isEmpty()) FolderList { folder = it }
+        FOLDERS.firstOrNull { it.id == folder }?.let { f -> FolderHeader(f.title) { folder = "" } }
+        if (folder == "notify") {
         Panel {
             val ctx = androidx.compose.ui.platform.LocalContext.current
             var stay by remember { mutableStateOf(id.stayConnected) }
@@ -104,7 +115,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 } catch (_: Exception) {}
             }
         }
-        Section("Privacy")
+        }
+        if (folder == "privacy") {
         Panel {
             Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)
             Text("Delete messages after a", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
@@ -121,7 +133,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
         }
-        Section("Calls")
+        }
+        if (folder == "calls") {
         Panel {
             val ctx = androidx.compose.ui.platform.LocalContext.current
             var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
@@ -131,7 +144,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             Text("Changes start with your next call.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         }
-        Section("Lock")
+        }
+        if (folder == "lock") {
         Panel {
             Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
             if (editingPw) LockSetup(app, onCancel = { editingPw = false }) { hasPw = app.vault.hasPassword; editingPw = false }
@@ -160,6 +174,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
             }
         }
+        }
+        if (folder == "data") {
         Section("Backup")
         BackupPanel(app)
         Section("Erase")
@@ -177,6 +193,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 }
             }
         }
+        }
+        if (folder == "nearby") {
         Section("Nearby chat")
         Panel {
             ToggleRow("Visible to people nearby", if (visible) "People close by or on the same Wi-Fi can see your name and message you"
@@ -207,7 +225,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             Text("Received files go to ${io.github.ravenor907.muninn.net.Received.place(androidx.compose.ui.platform.LocalContext.current)}.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
         }
-        Section("Accessibility")
+        }
+        if (folder == "display") {
         Panel {
             val A = io.github.ravenor907.muninn.ui.Access
             Text("Size of everything", style = Type.normal.copy(color = Palette.text))
@@ -227,6 +246,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("Color-blind friendly", "Warnings in amber instead of red; status always says it in words", A.colorBlind) { A.colorBlind = it; id.colorBlind = it }
             ToggleRow("Reduce motion", "No sliding or fading", A.reduceMotion) { A.reduceMotion = it; id.reduceMotion = it }
         }
+        }
+        if (folder == "about") {
         Section("Updates")
         Panel {
             Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal)
@@ -238,5 +259,53 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         }
         Section("About")
         Text("Muninn ${app.updater.current}: private chat and file sharing, Huginn's phone companion. Sends and receives with LocalSend. Made by Ravenor907. GPL-3.0.", style = Type.small, modifier = Modifier.padding(bottom = 24.dp))
+        }
+    }
+    }
+}
+
+/** One folder of Settings: what it's called, what's in it, and its icon. The same folders as Huginn's. */
+private class Folder(val id: String, val title: String, val detail: String, val icon: String)
+
+private val FOLDERS = listOf(
+    Folder("notify", "Notifications", "Messages right away, battery saver, sounds", "chat"),
+    Folder("privacy", "Privacy", "Delete messages after, read receipts, active status, screenshots", "shield"),
+    Folder("lock", "Lock", "Password or pattern, panic lock", "lock"),
+    Folder("calls", "Calls", "Noise removal", "call"),
+    Folder("nearby", "Nearby and sharing", "Visible to people nearby, Nearby chat, your names, received files", "wifi"),
+    Folder("display", "Display and accessibility", "Size, text size, contrast, color-blind, reduce motion", "image"),
+    Folder("data", "Backup and erase", "Back up, restore, delete all messages, erase everything", "download"),
+    Folder("about", "About and updates", "Muninn's version, check for updates", "info"),
+)
+
+/** The first thing Settings shows: the folders, one row each. */
+@Composable
+private fun FolderList(onOpen: (String) -> Unit) {
+    // The top bar already says Settings.
+    Spacer(Modifier.height(14.dp))
+    Panel {
+        FOLDERS.forEach { f ->
+            Row(Modifier.fillMaxWidth().clickable(role = androidx.compose.ui.semantics.Role.Button) { onOpen(f.id) }.padding(vertical = 12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                MIcon(f.icon, Palette.accent, 24.dp)
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                    Text(f.title, style = Type.normal.copy(color = Palette.text))
+                    Text(f.detail, style = Type.small)
+                }
+                MIcon("forward", Palette.textMuted, 20.dp)
+            }
+        }
+    }
+    Spacer(Modifier.height(24.dp))
+}
+
+/** A folder's title, with a way back to the list (Back does the same). */
+@Composable
+private fun FolderHeader(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Box(Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Back to Settings") { onBack() }.padding(10.dp)) {
+            MIcon("back", Palette.text, 24.dp)
+        }
+        Text(title, style = Type.big, modifier = Modifier.padding(start = 4.dp))
     }
 }
