@@ -173,8 +173,10 @@ Item {
                     Accessible.name: box.placeholder
                     // Editing a sent message is not typing a new one: no typing signals then.
                     onTextChanged: if (!box.settingText && !box.editing) box.typing(text.trim().length > 0)
-                    // Game Mode has no keyboard of its own: Steam's comes up (it does nothing elsewhere).
-                    onActiveFocusChanged: if (activeFocus) System.showSteamKeyboard()
+                    // Game Mode has no keyboard of its own: Steam's comes up (it does nothing elsewhere). Not when the focus
+                    // only came back because Huginn's window did, or a menu closed: the person didn't ask to type then.
+                    onActiveFocusChanged: if (activeFocus && focusReason !== Qt.ActiveWindowFocusReason && focusReason !== Qt.PopupFocusReason)
+                        System.showSteamKeyboard()
                     Keys.onPressed: event => {
                         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
                             box.enter()
