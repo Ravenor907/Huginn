@@ -97,12 +97,19 @@ class Contacts(context: Context, private val vault: Vault) {
         const val PAGE = "https://ravenor907.github.io/Huginn-Muninn/add/#"
         fun link(code: String) = PAGE + code
 
+        /**
+         * The code in a pasted link or a scanned page address, as well as a bare code. Some apps
+         * write the ":" in a link as "%3A": read that the same.
+         */
+        fun unlink(text: String): String = text.replace(Regex("MUNINN1%3A", RegexOption.IGNORE_CASE), PREFIX)
+
         /** Only ever my own name and keys: a nickname is never in a code. */
         fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String =
             ChatWire.code(name, chatKey, mailbox, invite, expires)
 
         /** When the code's invite runs out (ms), or 0 for older codes without one. */
-        fun expires(text: String): Long {
+        fun expires(link: String): Long {
+            val text = unlink(link)
             val i = text.indexOf(PREFIX)
             if (i < 0) return 0
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
@@ -110,7 +117,8 @@ class Contacts(context: Context, private val vault: Vault) {
         }
 
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
-        fun parse(text: String): Contact? {
+        fun parse(link: String): Contact? {
+            val text = unlink(link)
             val i = text.indexOf(PREFIX)
             if (i < 0) return null
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
