@@ -33,7 +33,7 @@ class TvMicTest {
         assertEquals(123, same[0].toInt()); assertEquals(-456, same[1].toInt())
         // The limiter is smooth and never goes past full scale.
         var last = 0f
-        for (i in 0..400) { val y = TvMic.Gain.shape(i / 100f); assertTrue(y >= last && y < 1f); last = y }
+        for (i in 0..400) { val y = TvMic.Gain.shape(i / 100f); assertTrue(y >= last && y <= 1f); last = y }
     }
 
     @Test
