@@ -236,6 +236,14 @@ void watchMainWindow(QQuickWindow *window)
         startFailed(QStringLiteral("no main window"));
         return;
     }
+    // No window could be made (no screen Windows or Wine can draw on): say so and stop, rather than
+    // run on with nothing to see.
+    QTimer::singleShot(0, window, [window] {
+        if (!window->handle()) {
+            startFailed(QStringLiteral("Windows couldn't make Huginn's window"));
+            QCoreApplication::exit(5);
+        }
+    });
     // Drawn once: the start worked.
     auto *once = new QObject(window);
     QObject::connect(window, &QQuickWindow::frameSwapped, once, [once] {

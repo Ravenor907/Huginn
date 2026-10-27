@@ -303,6 +303,8 @@ jobs:
           Copy-Item build/Huginn.exe $out
           windeployqt --release --qmldir qml --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw "$out/Huginn.exe"
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::windeployqt failed"; exit 1 }
+          # Qt's offscreen platform too, so Huginn can start with no screen (QT_QPA_PLATFORM=offscreen, CI under Wine).
+          Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$out/platforms/"
           # OpenSSL (chat crypto and Qt's TLS), Opus (calls), SDL2 (controllers), libqrencode (QR codes)
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
           # The Visual C++ runtime, so nothing has to be installed first
@@ -516,8 +518,9 @@ jobs:
             wineserver -k 2>/dev/null || true
             n=$((n+1)); mkdir -p wine-logs; cp out.log "wine-logs/start$n-out.log"; cp "$log" "wine-logs/start$n-Huginn-start.log" 2>/dev/null || true
             echo "--- $* (exit $s)"; tail -n 30 out.log; echo "--- Huginn-start.log"; cat "$log" 2>/dev/null || echo "(none)"
-            # Still running when the minute was up (124) and the window drew: it started.
-            if [ $s -eq 124 ] && grep -q "window shown" "$log" 2>/dev/null; then
+            # Still running when the minute was up (124; 0 when xvfb-run's screen is what gets stopped),
+            # and it drew its window and kept going for 5 seconds ("started"): it started.
+            if { [ $s -eq 124 ] || [ $s -eq 0 ]; } && grep -q "started" "$log" 2>/dev/null; then
               echo "::notice title=Wine start ($1)::$(grep -E 'Wine|graphics' "$log" | cut -c14- | tr '\n' ';')"
             else
               e=$( { echo "exit $s"; tail -n 25 "$log" 2>/dev/null; tail -n 10 out.log; } | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
