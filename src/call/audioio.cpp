@@ -6,9 +6,14 @@
 #include <QMediaDevices>
 #include <cstring>
 
+#ifdef HUGINN_HAVE_VOICE
+#include "tv_voice.h"
+#endif
+
 namespace
 {
 const int kSinkAheadMs = 60;    // keep this much queued in the speaker
+const int kStep = AudioDsp::kRate / 100;   // the echo canceller works in 10 ms steps
 }
 
 AudioIO::AudioIO(QObject *parent) : QObject(parent)
@@ -59,6 +64,13 @@ bool AudioIO::start()
     if (m_running)
         return true;
     m_running = true;
+#ifdef HUGINN_HAVE_VOICE
+    // Echo canceller, WebRTC's noise suppressor and its level control, all at the call's 16 kHz. Its first guess
+    // at the speaker-to-microphone delay: what is queued in the speaker plus the device's own latency.
+    m_voice = tvv_create(AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, AudioDsp::kRate, TVV_AEC | TVV_NS | TVV_AGC);
+    if (m_voice)
+        tvv_set_delay(m_voice, kSinkAheadMs + 40);
+#endif
     const bool in = startInput(), out = startOutput();
     if (!in)
         Q_EMIT error(QStringLiteral("The microphone isn't available right now."));
@@ -80,6 +92,11 @@ void AudioIO::stop()
     stopOutput();
     m_mono.clear();
     m_frame.clear();
+#ifdef HUGINN_HAVE_VOICE
+    if (m_voice)
+        tvv_destroy(m_voice);
+#endif
+    m_voice = nullptr;
 }
 
 bool AudioIO::startInput()
@@ -190,7 +207,17 @@ void AudioIO::onInput()
     for (float s : m_resampled) {
         m_frame.push_back(qint16(qRound(qBound(-1.f, s, 1.f) * 32767.f)));
         if (int(m_frame.size()) == AudioDsp::kFrame) {
-            Q_EMIT captured(QByteArray(reinterpret_cast<const char *>(m_frame.data()), AudioDsp::kFrame * 2));
+            const qint16 *frame = m_frame.data();
+#ifdef HUGINN_HAVE_VOICE
+            // Without what the speaker plays it can't cancel anything, so only while the speaker runs.
+            if (m_voice && m_sink) {
+                m_clean.resize(AudioDsp::kFrame);
+                for (int i = 0; i < AudioDsp::kFrame; i += kStep)
+                    tvv_capture(m_voice, m_frame.data() + i, m_clean.data() + i);
+                frame = m_clean.data();
+            }
+#endif
+            Q_EMIT captured(QByteArray(reinterpret_cast<const char *>(frame), AudioDsp::kFrame * 2));
             m_frame.clear();
         }
     }
@@ -214,6 +241,14 @@ void AudioIO::pump()
             return;
         qint16 pcm[AudioDsp::kFrame];
         pull(pcm);
+#ifdef HUGINN_HAVE_VOICE
+        // The echo canceller hears exactly what goes to the speaker (the same sound comes back at 16 kHz).
+        if (m_voice) {
+            qint16 heard[kStep];
+            for (int i = 0; i < AudioDsp::kFrame; i += kStep)
+                tvv_render(m_voice, pcm + i, heard);
+        }
+#endif
         float f[AudioDsp::kFrame];
         for (int i = 0; i < AudioDsp::kFrame; ++i)
             f[i] = float(pcm[i]) / 32768.f;

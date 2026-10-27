@@ -15,10 +15,15 @@
 #include "stun.h"
 #include "turnclient.h"
 
+#ifdef HUGINN_HAVE_VOICE
+#include "tv_voice.h"
+#endif
+
 #include <QColor>
 #include <QCoreApplication>
 #include <QImage>
 #include <QVideoFrame>
+#include <cmath>
 #include <cstdlib>
 #include <QFile>
 #include <QDateTime>
@@ -968,6 +973,57 @@ void relayCall()
     delete a.sig;
     delete b.sig;
 }
+
+// Echo cancellation (AudioIO, HUGINN_HAVE_VOICE): a made-up room at the call's 16 kHz where the microphone hears the
+// speaker 150 ms later, quieter and with a little reverb. The speaker must get the call unchanged, and once the
+// canceller has settled most of the echo must be gone from what the microphone sends.
+void voiceChecks()
+{
+#ifdef HUGINN_HAVE_VOICE
+    const int rate = AudioDsp::kRate, step = rate / 100, secs = 10, delay = rate * 150 / 1000;
+    const double pi = 3.14159265358979323846;   // M_PI is missing on MSVC
+    std::vector<qint16> far(size_t(rate) * secs), mic(far.size()), out(far.size()), play(far.size());
+    double ph = 0;
+    for (size_t i = 0; i < far.size(); ++i) {
+        const double t = double(i) / rate;
+        ph += 2 * pi * 180 * (1 + 0.15 * std::sin(2 * pi * 0.7 * t)) / rate;
+        const double env = std::sin(2 * pi * 3.1 * t) > -0.2 ? 1.0 : 0.05;   // on and off like syllables
+        double v = 0;
+        for (int h = 1; h <= 6; ++h)
+            v += std::sin(ph * h) / h;
+        far[i] = qint16(std::lrint(env * 6000 * v));
+    }
+    for (size_t i = 0; i < mic.size(); ++i) {
+        double v = 0;
+        if (i >= size_t(delay)) v += 0.5 * far[i - delay];
+        if (i >= size_t(delay + 160)) v += 0.2 * far[i - delay - 160];
+        mic[i] = qint16(std::lrint(v));
+    }
+    TvVoice *v = tvv_create(rate, rate, rate, rate, TVV_AEC);
+    check(v, "the echo canceller starts");
+    if (!v)
+        return;
+    tvv_set_delay(v, 150);
+    bool lengths = true;
+    for (size_t f = 0; f + size_t(step) <= far.size(); f += size_t(step)) {
+        lengths = tvv_render(v, &far[f], &play[f]) == step && lengths;
+        lengths = tvv_capture(v, &mic[f], &out[f]) == step && lengths;
+    }
+    tvv_destroy(v);
+    check(lengths, "the echo canceller takes and gives 10 ms at a time");
+    const auto energy = [](const std::vector<qint16> &x, size_t a, size_t b) {
+        double e = 1e-9;
+        for (size_t i = a; i < b; ++i)
+            e += double(x[i]) * x[i];
+        return e;
+    };
+    check(play == far, "the speaker plays the call exactly as it came");
+    const size_t from = size_t(rate) * 6;
+    const double removed = 10 * std::log10(energy(mic, from, mic.size()) / energy(out, from, out.size()));
+    std::printf("call self-test: echo removed %.1f dB\n", removed);
+    check(removed >= 10, "the echo canceller takes the echo out");
+#endif
+}
 }
 
 bool CallSelfTest::run(const QString &vectorsPath)
@@ -988,6 +1044,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     directCall();
     directReplay();
     relayCall();
+    voiceChecks();
     const bool ok = vectors && rooms && stun && jitter && dsp && video && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");
     std::fflush(stdout);

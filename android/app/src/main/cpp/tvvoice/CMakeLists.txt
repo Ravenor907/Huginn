@@ -1,4 +1,5 @@
-# Kids' TV voice processing: libmuninn_tvvoice.so, loaded only on a Kids' TV (tv/TvVoice.kt).
+# Kids' TV voice processing: libmuninn_tvvoice.so, loaded only on a Kids' TV (tv/TvVoice.kt). Huginn builds the
+# same code (tvvoice_core) for echo cancellation in calls on Linux, SteamOS and Windows (src/call/audioio.cpp).
 #  - WebRTC Audio Processing 1.3 (BSD-3-Clause): AEC3 echo canceller, high-pass filter, AGC2, noise suppressor.
 #  - RNNoise 0.2 (BSD-3-Clause): voice-focused noise suppression.
 #  - Abseil (Apache-2.0), headers only, which WebRTC's code includes.
@@ -14,15 +15,28 @@ foreach(dir WEBRTC_APM_SRC ABSEIL_SRC RNNOISE_SRC)
   endif()
 endforeach()
 
+# Plain C and C++ here: when Huginn builds this, Qt's moc/uic/rcc have nothing to do.
+set(CMAKE_AUTOMOC OFF)
+set(CMAKE_AUTOUIC OFF)
+set(CMAKE_AUTORCC OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(${CMAKE_CURRENT_LIST_DIR}/webrtc_apm_sources.cmake)
+if(WIN32)
+  # Windows has its own reader-writer lock (as webrtc-audio-processing's meson build picks it).
+  list(TRANSFORM WEBRTC_APM_SOURCES REPLACE "rw_lock_posix\\.cc$" "rw_lock_win.cc")
+endif()
 list(TRANSFORM WEBRTC_APM_SOURCES PREPEND "${WEBRTC_APM_SRC}/")
 
-set(defs WEBRTC_LIBRARY_IMPL NDEBUG WEBRTC_APM_DEBUG_DUMP=0 WEBRTC_POSIX WEBRTC_LINUX _GNU_SOURCE)
+if(WIN32)
+  # The defines webrtc-audio-processing's meson build uses on Windows.
+  set(defs WEBRTC_LIBRARY_IMPL NDEBUG WEBRTC_APM_DEBUG_DUMP=0 WEBRTC_WIN _WIN32 NOMINMAX _USE_MATH_DEFINES __STDC_FORMAT_MACROS=1)
+else()
+  set(defs WEBRTC_LIBRARY_IMPL NDEBUG WEBRTC_APM_DEBUG_DUMP=0 WEBRTC_POSIX WEBRTC_LINUX _GNU_SOURCE)
+endif()
 if(ANDROID)
   list(APPEND defs WEBRTC_ANDROID)
 endif()
@@ -53,19 +67,30 @@ elseif(x86)
   list(APPEND defs WEBRTC_ENABLE_AVX2)
   foreach(f ${WEBRTC_APM_X86_SSE2})
     list(APPEND extra "${WEBRTC_APM_SRC}/${f}")
-    set_source_files_properties("${WEBRTC_APM_SRC}/${f}" PROPERTIES COMPILE_OPTIONS "-msse2")
+    if(NOT MSVC)   # MSVC on x64 always has SSE2
+      set_source_files_properties("${WEBRTC_APM_SRC}/${f}" PROPERTIES COMPILE_OPTIONS "-msse2")
+    endif()
   endforeach()
   # Used only when the CPU says it has AVX2 (checked at run time).
   foreach(f ${WEBRTC_APM_X86_AVX2})
     list(APPEND extra "${WEBRTC_APM_SRC}/${f}")
-    set_source_files_properties("${WEBRTC_APM_SRC}/${f}" PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    if(MSVC)
+      set_source_files_properties("${WEBRTC_APM_SRC}/${f}" PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    else()
+      set_source_files_properties("${WEBRTC_APM_SRC}/${f}" PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    endif()
   endforeach()
 endif()
 
 add_library(webrtc_apm STATIC ${WEBRTC_APM_SOURCES} ${extra})
 target_include_directories(webrtc_apm PUBLIC "${WEBRTC_APM_SRC}" "${ABSEIL_SRC}")
 target_compile_definitions(webrtc_apm PUBLIC ${defs})
-target_compile_options(webrtc_apm PRIVATE -O2 -w -fno-strict-aliasing)
+if(MSVC)
+  target_compile_options(webrtc_apm PRIVATE /O2 /w)
+  target_link_libraries(webrtc_apm PUBLIC winmm)
+else()
+  target_compile_options(webrtc_apm PRIVATE -O2 -w -fno-strict-aliasing)
+endif()
 
 set(RNNOISE_SOURCES denoise.c rnn.c pitch.c kiss_fft.c celt_lpc.c nnet.c nnet_default.c parse_lpcnet_weights.c rnnoise_data.c rnnoise_tables.c)
 list(TRANSFORM RNNOISE_SOURCES PREPEND "${RNNOISE_SRC}/src/")
@@ -73,12 +98,21 @@ add_library(rnnoise STATIC ${RNNOISE_SOURCES})
 target_include_directories(rnnoise PUBLIC "${RNNOISE_SRC}/include" PRIVATE "${RNNOISE_SRC}/src" "${CMAKE_CURRENT_LIST_DIR}/rnnoise_shim")
 # The model is built in; no cpu-specific code paths (RNNoise's x86 RTCD is left out).
 target_compile_definitions(rnnoise PRIVATE RNNOISE_BUILD)
-target_compile_options(rnnoise PRIVATE -O2 -w)
-target_link_libraries(rnnoise PRIVATE m)
+if(MSVC)
+  target_compile_options(rnnoise PRIVATE /O2 /w)
+else()
+  target_compile_options(rnnoise PRIVATE -O2 -w)
+  target_link_libraries(rnnoise PRIVATE m)
+endif()
 
 add_library(tvvoice_core STATIC tv_voice.cc)
 target_link_libraries(tvvoice_core PUBLIC webrtc_apm rnnoise)
-target_compile_options(tvvoice_core PRIVATE -Wall -O2)
+target_include_directories(tvvoice_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
+if(MSVC)
+  target_compile_options(tvvoice_core PRIVATE /O2)
+else()
+  target_compile_options(tvvoice_core PRIVATE -Wall -O2)
+endif()
 
 if(ANDROID)
   add_library(muninn_tvvoice SHARED tv_voice_jni.cc)

@@ -282,6 +282,16 @@ else()
     message(STATUS "libvpx not found: video calls are left out of this build")
 endif()
 
+# Echo cancellation, noise suppression and level in calls (src/call/audioio.cpp): WebRTC Audio Processing, built
+# exactly as for the Kids' TV (android/app/src/main/cpp/tvvoice), with its pinned sources (cmake/voice.cmake).
+option(HUGINN_VOICE "Echo cancellation and noise suppression in calls" ON)
+if(HUGINN_VOICE)
+    include(cmake/voice.cmake)
+    add_subdirectory(android/app/src/main/cpp/tvvoice ${CMAKE_BINARY_DIR}/tvvoice)
+    target_link_libraries(huginn PRIVATE tvvoice_core)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VOICE)
+endif()
+
 include(GNUInstallDirs)
 install(TARGETS huginn RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(WIN32)
