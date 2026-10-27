@@ -428,15 +428,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger),
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(bottom = 8.dp))
-                    // Messages only arrive right away if Android lets Muninn run in the background.
-                    val ctx = LocalContext.current
-                    var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
-                    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
-                    if (app.identity.stayConnected && !free) Panel(Modifier.padding(bottom = 8.dp)) {
-                        Text("Get messages right away", style = Type.big)
-                        Text("Android's battery saver pauses Muninn while the phone sleeps, so messages and their notifications arrive late. Allow Muninn to run in the background to fix that.", style = Type.small)
-                        MButton("Allow", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
-                    }
+                    // Permissions still missing (microphone, camera, notifications, running in the background).
+                    SetupCard(app, Modifier.padding(bottom = 8.dp))
                 }
             }
             if (requests.isNotEmpty() || ginvites.isNotEmpty()) item { ListLabel("Wants to chat") }

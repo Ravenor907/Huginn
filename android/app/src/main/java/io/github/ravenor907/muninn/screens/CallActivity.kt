@@ -38,18 +38,28 @@ class CallActivity : ComponentActivity() {
     }
 
     private var pendingCamera: Pair<() -> Unit, () -> Unit>? = null
+    private var cameraRefused = NO_CAMERA
     private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val p = pendingCamera; pendingCamera = null
         if (ok) p?.first?.invoke() else {
-            Toast.makeText(this, "Video needs the camera. Allow it in Android's settings for Muninn.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, cameraRefused, Toast.LENGTH_LONG).show()
             p?.second?.invoke()
         }
     }
 
-    /** [f] once the camera may be used; [otherwise] when it may not (the call goes on without video). */
-    private fun withCamera(f: () -> Unit, otherwise: () -> Unit = {}) {
+    /** [f] once the camera may be used; [otherwise] when it may not (the call goes on without video, and [refused] says so). */
+    private fun withCamera(f: () -> Unit, otherwise: () -> Unit = {}, refused: String = NO_CAMERA) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) f()
-        else { pendingCamera = f to otherwise; askCamera.launch(Manifest.permission.CAMERA) }
+        else { pendingCamera = f to otherwise; cameraRefused = refused; askCamera.launch(Manifest.permission.CAMERA) }
+    }
+
+    /**
+     * Answers the ring. A video call is answered with the camera, which is asked for first if Android hasn't allowed it
+     * yet (the person answering was never asked before); refused, it's answered as a voice call.
+     */
+    private fun answer(video: Boolean) = withMic {
+        if (video && CallManager.videoHere()) withCamera({ CallManager.answer(video = true) }, { CallManager.answer() }, ANSWERED_VOICE)
+        else CallManager.answer()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,11 +71,11 @@ class CallActivity : ComponentActivity() {
         setContent {
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
-                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { withMic { CallManager.answer() } }, onClose = { close() })
+                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() })
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                }, onAnswer = { withMic { CallManager.answer() } }, hideName = Panic.locked.value || privateName(),
-                    onAnswerVideo = { withMic { withCamera({ CallManager.answer(video = true) }, { CallManager.answer() }) } },
+                }, onAnswer = { answer(false) }, hideName = Panic.locked.value || privateName(),
+                    onAnswerVideo = { answer(true) },
                     onCamera = { on -> if (on) withCamera({ CallManager.setCamera(true) }) else CallManager.setCamera(false) })
             }
         }
@@ -83,7 +93,11 @@ class CallActivity : ComponentActivity() {
 
     private fun handle(i: Intent?) {
         when (i?.action) {
-            ANSWER -> withMic { CallManager.answer() }
+            ANSWER -> {
+                i.action = SHOW   // a rotation or a return must not answer again
+                // The notification's Answer: a video call is answered with video, as its own screen's Video button would.
+                answer(CallManager.call.value?.videoCall == true)
+            }
             CALL -> {
                 val key = i.getStringExtra(KEY) ?: return finish()
                 val video = i.getBooleanExtra(VIDEO, false)
@@ -109,6 +123,8 @@ class CallActivity : ComponentActivity() {
         const val CALL = "io.github.ravenor907.muninn.call.CALL"
         private const val KEY = "peerKey"
         private const val VIDEO = "video"
+        private const val NO_CAMERA = "Video needs the camera. Allow it in Android's settings for Muninn."
+        private const val ANSWERED_VOICE = "Answered as a voice call: video needs the camera. Allow it in Android's settings for Muninn."
 
         /** Calls [peerKey]: opens the call screen, asks for the microphone (and for [video] the camera) if needed, and starts the call. */
         fun call(c: Context, peerKey: String, video: Boolean = false) = c.startActivity(Intent(c, CallActivity::class.java).setAction(CALL).putExtra(KEY, peerKey)
