@@ -92,11 +92,9 @@ jobs:
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
+          run timeout 150 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --wifi-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
-          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
-          tor() { timeout 330 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --tor-selftest; }
-          tor > /dev/null 2>&1 || run tor
           exit $bad
       - name: Draw the project banner (both ravens)
         if: always()
@@ -222,12 +220,6 @@ jobs:
       run:
         shell: bash
     env:
-      # Tor Expert Bundle (the official tor.exe for Windows). Pin the version here; after the first
-      # run, copy the sha256 the job prints into TOR_BUNDLE_SHA256. Until then the download is
-      # checked against the Tor Browser Developers signing key instead.
-      TOR_BUNDLE_VERSION: "15.0.24"
-      TOR_BUNDLE_SHA256: "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65"
-      TOR_SIGNING_KEY: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
       VCPKG_PACKAGES: openssl opus sdl2 libqrencode
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
@@ -250,6 +242,20 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtwebsockets qtconnectivity qtmultimedia
           cache: true
+          # The cache is keyed by the text "6.10.*", so it would keep the first 6.10 it ever got. A new
+          # prefix fetches the newest 6.10 again (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          cache-key-prefix: qt-6.10-2026-10
+      - name: Qt is 6.10.2 or newer
+        run: |
+          v=$("$QT_ROOT_DIR/bin/qtpaths.exe" --qt-version 2>/dev/null || "$QT_ROOT_DIR/bin/qmake.exe" -query QT_VERSION)
+          v=$(echo "$v" | tr -d '\r')
+          echo "Qt $v"
+          # Any Qt older than 6.10.2 (6.8.3 to 6.10.1 can crash in QSoundEffect, QTBUG-142694), or one that can't be read.
+          IFS=. read -r ma mi pa <<< "$v"
+          case "$ma.$mi.$pa" in *[!0-9.]*|.*|*..*|*.) echo "::error title=Qt version::Can't read the Qt version (\"$v\")"; exit 1 ;; esac
+          if [ $(( ma * 10000 + mi * 100 + pa )) -lt 61002 ]; then
+            echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1
+          fi
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -302,42 +308,41 @@ jobs:
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
           Copy-Item "$($crt.FullName)/*.dll" $out
           Copy-Item LICENSE "$out/LICENSE.txt"
-      - name: Tor (official Expert Bundle, pinned and checked)
+      - name: Tidy the folder (Huginn.exe on top, everything else in lib/)
         run: |
-          v="$TOR_BUNDLE_VERSION"
-          f="tor-expert-bundle-windows-x86_64-$v.tar.gz"
-          mkdir -p torbundle && cd torbundle
-          for base in "https://dist.torproject.org/torbrowser/$v" "https://archive.torproject.org/tor-package-archive/torbrowser/$v"; do
-            curl -fsSL --retry 3 -o "$f" "$base/$f" && curl -fsSL --retry 3 -o "$f.asc" "$base/$f.asc" && break
-            rm -f "$f" "$f.asc"
+          d=dist/Huginn
+          mkdir -p "$d/lib"
+          for f in "$d"/* "$d"/.[!.]*; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in lib|LICENSE.txt) ;; *) mv "$f" "$d/lib/" ;; esac
           done
-          [ -f "$f" ] || { echo "::error title=Tor bundle::Couldn't download $f (is TOR_BUNDLE_VERSION right?)"; exit 1; }
-          sum=$(sha256sum "$f" | cut -d' ' -f1)
-          if [ -n "$TOR_BUNDLE_SHA256" ]; then
-            [ "$sum" = "$TOR_BUNDLE_SHA256" ] || { echo "::error title=Tor bundle checksum::expected $TOR_BUNDLE_SHA256, got $sum"; exit 1; }
-          else
-            export GNUPGHOME="$PWD/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
-            gpg --batch --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org \
-              || gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$TOR_SIGNING_KEY"
-            gpg --batch --status-fd 1 --verify "$f.asc" "$f" 2>/dev/null | grep -q "VALIDSIG.*$TOR_SIGNING_KEY" \
-              || { echo "::error title=Tor bundle signature::$f is not signed by the Tor Browser Developers key"; exit 1; }
-            echo "::warning title=Pin the Tor bundle::Signature checked. Set TOR_BUNDLE_SHA256: \"$sum\" in build.yml"
-          fi
-          mkdir -p x && tar -xzf "$f" -C x
-          exe=$(find x -name tor.exe | head -n1)
-          [ -n "$exe" ] || { echo "::error::tor.exe isn't in $f"; exit 1; }
-          dir=$(dirname "$exe")
-          cp "$exe" ../dist/Huginn/tor.exe
-          # Any DLLs tor.exe needs go beside it, but never over one of ours (same name, other build).
-          for d in "$dir"/*.dll; do
-            [ -f "$d" ] || continue
-            n=$(basename "$d")
-            if [ -f "../dist/Huginn/$n" ]; then echo "::error title=Tor DLL clash::$n is both Tor's and Huginn's"; exit 1; fi
-            cp "$d" ../dist/Huginn/
-          done
-          mkdir -p ../dist/Huginn/licenses/tor
-          find x -iname "*LICENSE*" -type f -exec cp {} ../dist/Huginn/licenses/tor/ \; || true
-          echo "Tor $v: $(../dist/Huginn/tor.exe --version | head -n1)"
+          # The launcher (src/platform/launcher_windows.cpp) starts lib/Huginn.exe, whose DLLs sit beside it.
+          cp build/HuginnLauncher.exe "$d/Huginn.exe"
+          # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
+          find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
+            -o -iname '*.prl' -o -iname '*.cmake' -o -iname '*.debug' \) -print -delete
+          top=$(ls -A "$d" | tr '\n' ' ')
+          [ "$top" = "Huginn.exe LICENSE.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt and lib/, not: $top"; exit 1; }
+          # Huginn's own QML is compiled into lib/Huginn.exe: no copy of it loose, and no source text inside.
+          loose=$(grep -rl --include='*.qml' -E '^import Huginn|Huginn\.' "$d" || true)
+          [ -z "$loose" ] || { echo "::error title=Loose QML::$loose"; exit 1; }
+          n=$(grep -c -a "^import QtQuick" "$d/lib/Huginn.exe" || true)
+          [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in lib/Huginn.exe"; exit 1; }
+          echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
+      - name: Zip it, then unpack the zip and test exactly what ships
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
+          $7z = "C:/Program Files/7-Zip/7z.exe"
+          Push-Location dist
+          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
+          Pop-Location
+          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
+          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
+          Remove-Item -Recurse -Force dist/Huginn
+          Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
+          if (-not (Test-Path dist/Huginn/lib/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/lib/Huginn.exe"; exit 1 }
       - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
         run: |
           h=dist/Huginn/Huginn.exe
@@ -355,10 +360,10 @@ jobs:
           run "$h" --ratchet-selftest tests/ratchet-vectors.json
           run "$h" --nostr-selftest tests/nostr-vectors.json
           run "$h" --privacy-selftest
+          # A message from a pretend Muninn over the local HTTPS endpoint, with the raven call and a notification.
+          run timeout 150 "$h" --wifi-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
-          # The Tor test uses the live Tor network, which CI runners sometimes can't reach an onion on; one retry.
-          timeout 330 "$h" --tor-selftest > /dev/null 2>&1 || run timeout 330 "$h" --tor-selftest
           exit $bad
       - name: Screenshot tour (for a look, doesn't fail the job yet)
         continue-on-error: true
@@ -366,24 +371,23 @@ jobs:
           QT_QUICK_BACKEND: software
         run: |
           mkdir -p tour-windows
-          timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")"
+          s=0; timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")" > tour.log 2>&1 || s=$?
+          cat tour.log
+          n=$(ls tour-windows/*.png 2>/dev/null | wc -l)
+          w=$(grep -ciE "warning|qml:" tour.log || true)
+          if [ $s -ne 0 ] || [ "$n" -eq 0 ]; then
+            e=$(tail -n 20 tour.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::warning title=Windows tour (exit $s, $n screenshots)::$e"
+          else
+            echo "::notice title=Windows tour::$n screenshots in the huginn-windows-tour artifact; $w warning lines in its log"
+          fi
+          exit $s
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: huginn-windows-tour
           path: tour-windows
           if-no-files-found: ignore
-      - name: Zip it
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
-          $7z = "C:/Program Files/7-Zip/7z.exe"
-          Push-Location dist
-          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
-          Pop-Location
-          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
-          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
-          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
       - uses: actions/upload-artifact@v4
         with:
           name: Huginn-Windows.zip

@@ -6,7 +6,6 @@
 #include "localsend.h"
 #include "nostr.h"
 #include "photos.h"
-#include "tor.h"
 #include "vault.h"
 
 #include <QBuffer>
@@ -138,16 +137,12 @@ void Chat::start()
                       {QStringLiteral("mailbox"), m_nostr->publicKey()}};
         if (nearbyOn())
             o.insert(QStringLiteral("chatName"), username());
-        if (!onion().isEmpty())
-            o.insert(QStringLiteral("onion"), onion());
         return o;
     };
     m_net->chatReceive = [this](const QByteArray &body, const QString &) { return receive(body, QStringLiteral("wifi")); };
     connect(m_net, &LocalSend::devicesChanged, this, &Chat::changed);
-    connect(m_net, &LocalSend::devicesChanged, this, &Chat::learnOnions);
     connect(m_ble, &Ble::message, this, [this](const QString &, const QByteArray &json) { receive(json, QStringLiteral("bluetooth")); });
     connect(m_ble, &Ble::changed, this, &Chat::changed);
-    connect(m_ble, &Ble::changed, this, &Chat::learnOnions);
     connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changed);
     m_nostr->onEnvelope = [this](const QString &content) {
         const QByteArray body = unwrap(content);
@@ -214,16 +209,13 @@ void Chat::setKeepNearby(bool v)
 
 int Chat::internet() const { return m_nostr->connected(); }
 
-QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires, const QString &onion)
+QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires)
 {
     QJsonObject o{{QStringLiteral("n"), name}, {QStringLiteral("k"), chatKey}, {QStringLiteral("p"), mailbox}};
     if (!invite.isEmpty()) {
         o.insert(QStringLiteral("i"), invite);
         o.insert(QStringLiteral("x"), double(expires / 1000));
     }
-    // 0.6: where this device is reached over Tor. 0.5 apps ignore it.
-    if (!onion.isEmpty())
-        o.insert(QStringLiteral("o"), onion);
     return kPrefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
 
@@ -239,7 +231,7 @@ QString Chat::newLink()
     for (auto it = m_invites.begin(); it != m_invites.end();)
         it = it.value() < now() ? m_invites.erase(it) : std::next(it);
     saveInvites();
-    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires, onion());
+    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires);
     Q_EMIT changed();
     return m_link;
 }
@@ -278,8 +270,11 @@ QByteArray Chat::unwrap(const QString &content) const
     return ok ? plain : QByteArray();
 }
 
-QVariantMap Chat::parseCode(const QString &text) const
+QVariantMap Chat::parseCode(const QString &link) const
 {
+    // A bare code, or the add page's link with the code after "#" (some apps write its ":" as "%3A").
+    QString text = link;
+    text.replace(QStringLiteral("MUNINN1%3A"), kPrefix, Qt::CaseInsensitive);
     const int i = text.indexOf(kPrefix);
     if (i < 0)
         return {};
@@ -298,10 +293,9 @@ QVariantMap Chat::parseCode(const QString &text) const
         name = QStringLiteral("Someone");
     const QString mailbox = o.value(QStringLiteral("p")).toString();
     const qint64 expires = qint64(o.value(QStringLiteral("x")).toDouble()) * 1000;
-    const QString onion = o.value(QStringLiteral("o")).toString();
     return {{QStringLiteral("key"), key}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox.size() == 64 ? mailbox : QString()},
             {QStringLiteral("mine"), key == myKey()}, {QStringLiteral("invite"), o.value(QStringLiteral("i")).toString()},
-            {QStringLiteral("expired"), expires > 0 && expires < now()}, {QStringLiteral("onion"), isOnion(onion) ? onion : QString()}};
+            {QStringLiteral("expired"), expires > 0 && expires < now()}};
 }
 
 void Chat::addContact(const QString &text, const QString &sameAs)
@@ -318,7 +312,6 @@ void Chat::addContact(const QString &text, const QString &sameAs)
     if (!old.isEmpty()) {
         replaceKey(old, key, str(c, "name"), str(c, "mailbox"));
         m_contacts[key].insert(QStringLiteral("invite"), c.value(QStringLiteral("invite")));
-        m_contacts[key].insert(QStringLiteral("onion"), c.value(QStringLiteral("onion")));
         saveContacts();
         return;
     }
@@ -326,7 +319,7 @@ void Chat::addContact(const QString &text, const QString &sameAs)
     const QString nick = nicknameOf(key);
     QVariantMap entry{{QStringLiteral("key"), key}, {QStringLiteral("name"), c.value(QStringLiteral("name"))},
                       {QStringLiteral("mailbox"), c.value(QStringLiteral("mailbox"))}, {QStringLiteral("verified"), true},
-                      {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}, {QStringLiteral("onion"), c.value(QStringLiteral("onion"))}};
+                      {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}};
     if (!nick.isEmpty())
         entry.insert(QStringLiteral("nick"), nick);
     m_contacts.insert(key, entry);
@@ -506,137 +499,17 @@ QString Chat::mailboxOf(const QString &key) const
     return c;
 }
 
-QString Chat::onionOf(const QString &key) const
-{
-    QString o = str(m_contacts.value(key), "onion");
-    if (o.isEmpty())
-        o = str(m_gpeers.value(key), "onion");
-    if (o.isEmpty())
-        for (const QVariantMap &j : m_joining)
-            if (str(j, "admin") == key)
-                o = str(j, "onion");
-    return isOnion(o) ? o : QString();
-}
-
-bool Chat::isOnion(const QString &o)
-{
-    // A v3 onion address: 56 base32 letters, with or without ".onion".
-    const QString h = o.endsWith(QLatin1String(".onion")) ? o.left(o.size() - 6) : o;
-    if (h.size() != 56)
-        return false;
-    for (const QChar c : h)
-        if (!((c >= QLatin1Char('a') && c <= QLatin1Char('z')) || (c >= QLatin1Char('2') && c <= QLatin1Char('7'))))
-            return false;
-    return true;
-}
-
-// Hellos (Bluetooth, Wi-Fi) say where a contact is reached over Tor now. Only for people already
-// known; a wrong one can only delay a message (the relays still get it from the second try on).
-void Chat::learnOnions()
-{
-    if (!m_ready)
-        return;
-    bool any = false;
-    auto learn = [this, &any](const QString &key, const QString &onion) {
-        if (key.isEmpty() || !isOnion(onion))
-            return;
-        if (m_contacts.contains(key) && str(m_contacts.value(key), "onion") != onion) {
-            m_contacts[key].insert(QStringLiteral("onion"), onion);
-            any = true;
-        } else if (m_gpeers.contains(key) && str(m_gpeers.value(key), "onion") != onion) {
-            m_gpeers[key].insert(QStringLiteral("onion"), onion);
-            saveGroups();
-        }
-    };
-    for (const QVariant &p : m_ble->peers())
-        learn(str(p.toMap(), "chatKey"), str(p.toMap(), "onion"));
-    for (const LocalSend::Peer &p : m_net->chatPeers())
-        learn(p.chatKey, p.onion);
-    if (any)
-        saveContacts();
-}
-
-// ------------------------------------------------------------------ Tor
-
-void Chat::setTor(Tor *tor)
-{
-    m_tor = tor;
-    if (!tor)
-        return;
-    // Messages for our onion address: the same as the Wi-Fi endpoint, but from far away.
-    tor->onMessage([this](const QByteArray &body) { return receive(body, QStringLiteral("internet")); });
-    // Its progress and address show on screen and go in our hellos.
-    const QMetaObject *mo = tor->metaObject();
-    const int slot = metaObject()->indexOfMethod("torChanged()");
-    for (int i = mo->propertyOffset(); i < mo->propertyCount(); ++i) {
-        const QMetaProperty p = mo->property(i);
-        if (p.hasNotifySignal() && slot >= 0)
-            QObject::connect(tor, p.notifySignal(), this, metaObject()->method(slot));
-    }
-    Q_EMIT changed();
-}
-
-void Chat::torChanged()
-{
-    const QString o = onion();
-    if (o != m_lastOnion) {
-        m_lastOnion = o;
-        if (m_ready) {
-            m_net->announce();
-            m_ble->sayHello();
-        }
-    }
-    Q_EMIT changed();
-}
-
-QString Chat::onion() const { return m_tor ? m_tor->onion() : QString(); }
-bool Chat::torReady() const { return m_tor && m_tor->property("ready").toBool(); }
-int Chat::torProgress() const { return m_tor ? qBound(0, m_tor->property("progress").toInt(), 100) : 0; }
-
 QString Chat::netStatus() const
 {
-    if (m_tor) {
-        if (torReady())
-            return QStringLiteral("Online privately");
-        return QStringLiteral("Connecting privately %1%").arg(torProgress());
-    }
     return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
 }
 
-bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, bool alsoMailbox, std::function<void()> sent)
+bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent)
 {
-    if (bodies.isEmpty())
+    if (bodies.isEmpty() || mailbox.isEmpty())
         return false;
-    const QString onion = onionOf(key);
-    auto relays = [this, key, bodies, mailbox] {
-        for (const QByteArray &b : bodies)
-            m_nostr->publish(mailbox, wrap(key, b));
-    };
-    if (!onion.isEmpty() && torReady()) {
-        auto left = std::make_shared<int>(int(bodies.size()));
-        auto good = std::make_shared<bool>(true);
-        const bool relaysNow = alsoMailbox && !mailbox.isEmpty();
-        for (const QByteArray &b : bodies)
-            m_tor->post(onion, kPath, b, [left, good, relays, relaysNow, mailbox, sent](int code) {
-                *good = *good && code == 200;
-                if (--*left > 0)
-                    return;
-                if (*good) {
-                    if (sent)
-                        sent();
-                } else if (!relaysNow && !mailbox.isEmpty()) {
-                    relays();   // not there over Tor: their mailbox keeps it for them
-                    if (sent)
-                        sent();
-                }
-            });
-        if (relaysNow)
-            relays();
-        return true;
-    }
-    if (mailbox.isEmpty())
-        return false;
-    relays();
+    for (const QByteArray &b : bodies)
+        m_nostr->publish(mailbox, wrap(key, b));
     if (sent)
         sent();
     return true;
@@ -690,7 +563,7 @@ void Chat::sendCall(const QString &key, const QJsonObject &msg)
     const QString base = m_net->baseFor(key);
     if (!base.isEmpty())
         post(base, json);
-    sendInternet(key, {json}, mailboxOf(key), false);
+    sendInternet(key, {json}, mailboxOf(key));
 }
 
 QByteArray Chat::signWithChatKey(const QByteArray &bytes) const { return CallCrypto::signDer(m_priv, bytes); }
@@ -811,7 +684,7 @@ QString Chat::route(const QString &key) const
             return QStringLiteral("bluetooth");
     if (!m_net->baseFor(key).isEmpty())
         return QStringLiteral("wifi");
-    if (!str(m_contacts.value(key), "mailbox").isEmpty() || !str(m_gpeers.value(key), "mailbox").isEmpty() || !onionOf(key).isEmpty())
+    if (!str(m_contacts.value(key), "mailbox").isEmpty() || !str(m_gpeers.value(key), "mailbox").isEmpty())
         return QStringLiteral("internet");
     return QString();
 }
@@ -992,19 +865,7 @@ int Chat::receive(const QByteArray &body, const QString &via)
     if (code == 200 && !m_openedFrom.isEmpty()) {
         noteCapable(m_openedFrom, m_openedCap);
         noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps);
-        // Muninn and Huginn 0.6 put their onion address in every envelope ("o"): keep it current.
-        const QString key = m_openedFrom, onionNow = m_openedOnion;
-        if (isOnion(onionNow)) {
-            if (m_contacts.contains(key) && str(m_contacts.value(key), "onion") != onionNow) {
-                m_contacts[key].insert(QStringLiteral("onion"), onionNow);
-                saveContacts();
-            } else if (m_gpeers.contains(key) && str(m_gpeers.value(key), "onion") != onionNow) {
-                m_gpeers[key].insert(QStringLiteral("onion"), onionNow);
-                saveGroups();
-            }
-        }
     }
-    m_openedOnion.clear();
     m_openedFrom.clear();
     return code;
 }
@@ -1033,7 +894,6 @@ QByteArray Chat::open(const QJsonObject &o, const QString &fromKey, bool *ok)
         m_openedFrom = fromKey;
         m_openedCap = ChatWire::saysCapable(o);
         m_openedCaps = ChatWire::capsOf(o, &m_openedHasCaps);
-        m_openedOnion = o.value(QStringLiteral("o")).toString();
     }
     return *ok ? plain : QByteArray();
 }
@@ -1128,6 +988,29 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         if (!sentId.isEmpty())
             m_seen.add(fromKey, sentId, now());   // the same signal on another route is dropped
         Q_EMIT callMessage(fromKey, msg);
+        return 200;
+    }
+    // Kids' TV card (0.6, 7.6): a contact invited this person to talk with their kids' TV and sent the
+    // TV's contact code. Taken only from a contact, never as a key change; anything else in the room is
+    // for Muninn (TVs and the parents who run them) and refused.
+    if (room == QLatin1String("tvconfig")) {
+        const QJsonObject msg = QJsonDocument::fromJson(plain).object();
+        if (!isContact(fromKey) || msg.value(QStringLiteral("t")).toString() != QLatin1String("card")) {
+            m_pendingPeer.reset();
+            return 403;
+        }
+        commitPeer();
+        const QString code = msg.value(QStringLiteral("code")).toString().left(2000);
+        const QVariantMap tv = parseCode(code);
+        const QString tvKey = str(tv, "key");
+        if (!tv.isEmpty() && !tv.value(QStringLiteral("mine")).toBool() && !tv.value(QStringLiteral("expired")).toBool()
+            && !isContact(tvKey) && contactWithMailbox(str(tv, "mailbox"), tvKey).isEmpty()) {
+            addContact(code);
+            const QString who = nameOf(fromKey), tvName = str(tv, "name");
+            systemNote(tvKey, QStringLiteral("%1 added you to %2. You can talk with the kids here.").arg(who, tvName));
+            Q_EMIT notice(QStringLiteral("%1 added you to %2").arg(who, tvName));
+            Q_EMIT arrived(who, QStringLiteral("Added you to %1: you can talk with the kids there now").arg(tvName), tvKey);
+        }
         return 200;
     }
     // No more than 5 messages in 10 seconds from anyone, so nobody can flood a room. Counted only
@@ -1559,9 +1442,6 @@ QJsonObject Chat::envelope(const QString &room, const QString &theirKey, const Q
     const QString invite = str(m_contacts.value(theirKey), "invite");
     if (!invite.isEmpty())
         o.insert(QStringLiteral("invite"), invite);
-    // 0.6: where I'm reached over Tor, for contacts and group peers only (never the Nearby room).
-    if (room != QLatin1String("nearby") && (m_contacts.contains(theirKey) || m_gpeers.contains(theirKey)) && !onion().isEmpty())
-        o.insert(QStringLiteral("o"), onion());
     return seal(o, theirKey, plain);
 }
 
@@ -1605,7 +1485,7 @@ QString Chat::deliver(const QString &key, const QJsonObject &body, const QString
         post(base, json);
         return QStringLiteral("wifi");
     }
-    if (sendInternet(key, {json}, mailbox, false))
+    if (sendInternet(key, {json}, mailbox))
         return QStringLiteral("internet");
     return QString();
 }
@@ -1732,10 +1612,8 @@ void Chat::attempt(const QString &key, const QString &id)
     }
     const QString mailbox = backupMailbox(m);
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
-    // Their onion first (Tor); the relays when that fails, and on every try from the second on.
-    const bool reachable = !mailbox.isEmpty() || (isContact(key) && !onionOf(key).isEmpty());
-    if (reachable && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
-        if (sendInternet(key, bodies, mailbox, t.count >= 2, [markSent] { markSent(QStringLiteral("internet")); }))
+    if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
+        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }))
             any = true;
     }
     if (!any && t.count == 1)
@@ -1886,7 +1764,7 @@ void Chat::attemptUnsend(const QString &key, const QString &id)
     const QString base = m_net->baseFor(key);
     if (!base.isEmpty())
         post(base, body);
-    sendInternet(key, {body}, mailboxOf(key), t.count >= 2);
+    sendInternet(key, {body}, mailboxOf(key));
 }
 
 // ------------------------------------------------------------------ sealed envelopes and ratchet state

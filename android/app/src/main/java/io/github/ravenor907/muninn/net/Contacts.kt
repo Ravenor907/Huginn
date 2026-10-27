@@ -11,7 +11,8 @@ import java.io.File
 /**
  * People this phone can message from anywhere. A contact is added by meeting nearby (and checking
  * the 6-digit code) or by sharing a contact code, which carries the name, the chat key and the
- * Nostr mailbox:  MUNINN1:<base64url of {"n":name,"k":chatKey,"p":mailbox,"i":invite,"x":expires,"o":onion}>
+ * Nostr mailbox:  MUNINN1:<base64url of {"n":name,"k":chatKey,"p":mailbox,"i":invite,"x":expires}>
+ * (a 0.6 code may also carry "o", an onion address; it is ignored).
  * The invite is good for an hour: after that a leaked code can't be used to reach someone
  * who isn't already in touch (their phone drops messages without a valid invite).
  */
@@ -36,7 +37,7 @@ class Contacts(context: Context, private val vault: Vault) {
         if (old != null && !old.groupOnly) return
         val mb = mailbox.takeIf { it.length == 64 } ?: old?.mailbox
         val c = Contact(chatKey, name.take(40).ifBlank { old?.name ?: "Someone" }, mb, verified = false, ratchet = true,
-            groupOnly = true, caps = setOf("r1", "g1", "c1"), onion = old?.onion)
+            groupOnly = true, caps = setOf("r1", "g1", "c1"))
         if (old == c) return
         _all.value = _all.value.filterNot { it.chatKey == chatKey } + c
         save()
@@ -96,12 +97,19 @@ class Contacts(context: Context, private val vault: Vault) {
         const val PAGE = "https://ravenor907.github.io/Huginn-Muninn/add/#"
         fun link(code: String) = PAGE + code
 
+        /**
+         * The code in a pasted link or a scanned page address, as well as a bare code. Some apps
+         * write the ":" in a link as "%3A": read that the same.
+         */
+        fun unlink(text: String): String = text.replace(Regex("MUNINN1%3A", RegexOption.IGNORE_CASE), PREFIX)
+
         /** Only ever my own name and keys: a nickname is never in a code. */
-        fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0, onion: String? = null): String =
-            ChatWire.code(name, chatKey, mailbox, invite, expires, onion)
+        fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String =
+            ChatWire.code(name, chatKey, mailbox, invite, expires)
 
         /** When the code's invite runs out (ms), or 0 for older codes without one. */
-        fun expires(text: String): Long {
+        fun expires(link: String): Long {
+            val text = unlink(link)
             val i = text.indexOf(PREFIX)
             if (i < 0) return 0
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
@@ -109,7 +117,8 @@ class Contacts(context: Context, private val vault: Vault) {
         }
 
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
-        fun parse(text: String): Contact? {
+        fun parse(link: String): Contact? {
+            val text = unlink(link)
             val i = text.indexOf(PREFIX)
             if (i < 0) return null
             val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
@@ -119,7 +128,7 @@ class Contacts(context: Context, private val vault: Vault) {
                 ChatCrypto.publicFrom(key)   // must be a real key
                 // Whoever gave you their code is who they say: the code itself carries their key.
                 Contact(key, o.optString("n").take(40).ifBlank { "Someone" }, o.optString("p").takeIf { it.length == 64 }, verified = true,
-                    invite = o.optString("i").ifEmpty { null }, onion = ChatWire.onion(o.optString("o")))
+                    invite = o.optString("i").ifEmpty { null })
             } catch (e: Exception) { null }
         }
     }

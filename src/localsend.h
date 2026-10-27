@@ -11,11 +11,15 @@
 #include <QNetworkRequest>
 #include <QObject>
 #include <QPointer>
+#include <QSslConfiguration>
 #include <QSslServer>
 #include <QTcpServer>
 #include <QTimer>
 #include <QUdpSocket>
 #include <QVariantList>
+
+#include <utility>
+#include <vector>
 
 #include "tls.h"
 
@@ -49,7 +53,10 @@ class LocalSend : public QObject
 public:
     explicit LocalSend(Settings *settings, QObject *parent = nullptr);
 
-    bool running() const { return m_secure ? m_tlsServer.isListening() : m_plainServer.isListening(); }
+    // On (asked to share). It listens only on the home network's own addresses (see lan.h), and
+    // follows them as Wi-Fi comes and goes; listening() says whether any is open right now.
+    bool running() const { return m_on; }
+    bool listening() const { return !m_servers.empty(); }
     QString error() const { return m_error; }
     QString alias() const { return m_alias; }
     QVariantList devices() const;
@@ -80,7 +87,7 @@ Q_SIGNALS:
 private:
     struct Device {
         QString id, alias, model, type, ip, protocol;
-        QString chatKey, chatName, app, onion;   // set by Huginn and Muninn; plain LocalSend apps don't chat
+        QString chatKey, chatName, app;   // set by Huginn and Muninn; plain LocalSend apps don't chat
         int port = 53317;
         QDateTime seen;
     };
@@ -88,7 +95,7 @@ public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
-    struct Peer { QString base, chatKey, chatName, alias, type, onion; };
+    struct Peer { QString base, chatKey, chatName, alias, type; };
     QList<Peer> chatPeers() const;
     QString baseFor(const QString &chatKey) const;
     void announce();
@@ -156,13 +163,16 @@ private:
     void uploadNext();
     void endSend(bool ok, const QString &message);
     QString savePath(const QString &name) const;
-    static QString lanAddress();
+    void bindLan();
 
     Settings *m_settings;
     Tls::Identity m_tls;
     bool m_secure = false;      // false only if no certificate could be made: then plain HTTP as before
-    QSslServer m_tlsServer;
-    QTcpServer m_plainServer;
+    QSslConfiguration m_serverTls;
+    bool m_on = false;
+    std::vector<std::pair<QHostAddress, QTcpServer *>> m_servers;   // one per home-network address
+    QStringList m_joined;                                           // interfaces in the multicast group
+    QTimer m_lanTimer;
     QUdpSocket m_udp;
     QNetworkAccessManager m_net;
     QHash<QTcpSocket *, Conn> m_conns;

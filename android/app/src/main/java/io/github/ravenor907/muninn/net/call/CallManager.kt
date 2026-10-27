@@ -2,7 +2,7 @@ package io.github.ravenor907.muninn.net.call
 
 import android.content.Context
 import io.github.ravenor907.muninn.Muninn
-import io.github.ravenor907.muninn.net.Tor
+import io.github.ravenor907.muninn.net.Net
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,15 +67,29 @@ object CallManager {
     /** Starts a call to [peerKey]. False if a call is already going on or calling isn't set up yet. */
     fun start(peerKey: String): Boolean {
         val a = app ?: return false
-        if (session != null || Opus.loadError != null) return false
+        if (session != null || RoomManager.busy || Opus.loadError != null) return false
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
         session = s
         remember(s.callId)
-        Tor.hold(a, "call")
         publish(s)
         CallService.start(a)
         exec.execute { s.startOutgoing() }
         return true
+    }
+
+    @Volatile private var preparedAt = 0L
+
+    /**
+     * A conversation with [peerKey] is open: fetch the relay login now (it is cached for two hours), so
+     * pressing Call doesn't wait for the relay Worker. At most one try a minute; nothing is fetched when
+     * internet calls are off or the contact can't take calls.
+     */
+    fun prepare(peerKey: String) {
+        val a = app ?: return
+        val now = System.currentTimeMillis()
+        if (now - preparedAt < 60_000 || !internetCalls(a) || !RelayConfig.configured || !canCall(peerKey)) return
+        preparedAt = now
+        work.execute { try { host.relayLogin() } catch (_: Exception) {} }
     }
 
     fun answer() { exec.execute { session?.let { s -> app?.let { Ringer.stop(it) }; s.answer(); app?.let { CallService.start(it) } } } }
@@ -96,7 +110,7 @@ object CallManager {
         exec.execute {
             val a = app ?: return@execute
             val s = try { CallLogic.parse(fromKey, json) } catch (e: CallLogic.Bad) { return@execute }
-            if (s.voiceRoom) return@execute   // voice rooms (section 6) aren't built yet
+            if (s.voiceRoom) return@execute   // voice rooms and group calls: RoomManager
             val cur = session
             if (cur != null && cur.callId == s.call) { if (cur.peerKey == fromKey) cur.onSignal(s); return@execute }
             if (s.t != "offer") return@execute
@@ -106,8 +120,8 @@ object CallManager {
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts, 0, "missed")).also { Ringer.missed(a, nameOf(fromKey), fromKey) }
                 return@execute
             }
-            if (cur != null) {
-                // Already in a call: busy, 3 times over 2 s.
+            if (cur != null || RoomManager.busy) {
+                // Already in a call (or a voice room): busy, 3 times over 2 s.
                 val busy = CallLogic.simple("busy", s.call)
                 send(fromKey, busy); exec.schedule(Runnable { send(fromKey, busy) }, 1, TimeUnit.SECONDS); exec.schedule(Runnable { send(fromKey, busy) }, 2, TimeUnit.SECONDS)
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed"))
@@ -117,7 +131,6 @@ object CallManager {
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
             session = ns
-            Tor.hold(a, "call")
             ns.startIncoming(s)
             publish(ns)
             Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey)
@@ -143,7 +156,7 @@ object CallManager {
 
     // ------------------------------------------------------------------ what a session gets from the app
 
-    private val host = object : CallSession.Host {
+    internal val host = object : CallSession.Host {
         override val chatPrivate get() = app!!.identity.keys.private
         override fun send(peerKey: String, json: JSONObject) = this@CallManager.send(peerKey, json)
         override fun lanAddressOf(peerKey: String): InetAddress? = try {
@@ -151,9 +164,9 @@ object CallManager {
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null
-            return TurnCreds.get(a.identity.keys.public.encoded, { url, body -> postThroughTor(url, body) })
+            return TurnCreds.get(a.identity.keys.public.encoded, { url, body -> post(url, body) })
         }
-        override fun resolve(host: String) = TurnClient.torResolve(Tor.proxy(), host)
+        override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false
         override fun newMedia(s: CallSession) = CallMedia(app!!, s.outgoing, s.callId, s.peerKey, bluetooth, object : CallMedia.Events {
             override fun onFirstMedia() = s.mediaFirst()
@@ -168,7 +181,6 @@ object CallManager {
             publish(s)
             if (a != null) {
                 Ringer.stop(a)
-                Tor.release("call")
                 CallService.stop(a)
                 val result = when (s.endWhy) {
                     "missed" -> "missed"
@@ -187,11 +199,10 @@ object CallManager {
         }
     }
 
-    /** POST through Tor only; never a direct connection. (status, body) or null. */
-    private fun postThroughTor(url: String, body: String): Pair<Int, String>? {
-        if (!Tor.awaitReady(45_000)) return null
+    /** HTTPS POST to the relay Worker. (status, body) or null if it couldn't connect. */
+    private fun post(url: String, body: String): Pair<Int, String>? {
         return try {
-            Tor.client().newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(
+            Net.client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(
                 Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType())).build()
             ).execute().use { r -> r.code to (r.body?.string() ?: "") }
         } catch (e: Exception) { null }

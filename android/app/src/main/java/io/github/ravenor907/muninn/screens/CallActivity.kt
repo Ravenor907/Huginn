@@ -45,7 +45,9 @@ class CallActivity : ComponentActivity() {
         val privateName = { !((application as? Muninn)?.identity?.showPreview ?: false) && isLocked() }
         setContent {
             MuninnTheme {
-                CallScreen(onBack = { finish() }, onMessage = { key ->
+                // Kids' TV: the remote-friendly call screen.
+                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(onAnswer = { withMic { CallManager.answer() } }, onClose = { finish() })
+                else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
                 }, onAnswer = { withMic { CallManager.answer() } }, hideName = Panic.locked.value || privateName())
             }

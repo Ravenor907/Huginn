@@ -88,6 +88,13 @@ object KidTv {
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
         val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); TvRules.parse(c) } catch (e: Exception) { null } }
         _state.value = KidState(parents, cfg)
+        if (KidMode.on(app)) tune(cfg)
+    }
+
+    /** The parent's microphone level and call setting take effect on this TV. */
+    private fun tune(cfg: TvConfig?) {
+        TvMic.active = cfg != null
+        TvMic.level = cfg?.mic ?: TvRules.DEFAULT_MIC
     }
 
     private fun save(app: Muninn, s: KidState) {
@@ -106,13 +113,20 @@ object KidTv {
         return Contacts.PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))
     }
 
-    /** Kids' mode gate (see [TvHandler.allow]). */
+    /** Kids' mode gate (see [TvHandler.allow]). Calls (k2): only with people on the list, unless a parent turned calls off. */
     fun allow(fromKey: String, room: String): Boolean {
         if (wiping.value) return false
         if (room == "tvconfig") return true
         val s = _state.value
-        if (s.parents.isEmpty() || room !in PRIVATE_ROOMS) return false
-        return fromKey in s.parents || s.cfg?.contacts?.any { it.k == fromKey } == true
+        if (s.parents.isEmpty()) return false
+        if (room !in PRIVATE_ROOMS && !(room == "call" && s.cfg?.calls != false)) return false
+        return approved(fromKey)
+    }
+
+    /** On the parent's list (or a parent): the only people this TV talks to, calls included. */
+    fun approved(key: String): Boolean {
+        val s = _state.value
+        return key in s.parents || s.cfg?.contacts?.any { it.k == key } == true
     }
 
     /** Room "tvconfig" on the TV: config and disconnect. */
@@ -141,7 +155,20 @@ object KidTv {
                 val next = KidState(cfg.parents, cfg)
                 save(app, next)
                 _state.value = next
+                tune(cfg)
+                // Someone taken off the list (or calls turned off) mid-call: the call ends.
+                io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { c ->
+                    if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
+                }
                 answer(app, cfg.parents, cfg.v)
+                true
+            }
+            "update" -> {
+                // k2: a parent's "Update TV". Only from a parent; the answer says which Muninn the TV runs now.
+                val cur = s.cfg ?: return false
+                if (fromKey !in s.parents) return false
+                TvUpdate.checkNow(app)
+                answer(app, listOf(fromKey), cur.v)
                 true
             }
             "disconnect" -> {
@@ -177,7 +204,8 @@ object KidTv {
 
     private fun answer(app: Muninn, to: List<String>, v: Long) {
         val b = Tv.bridge(app) ?: return
-        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v)) } catch (_: Exception) {} }
+        val version = try { app.updater.current } catch (e: Exception) { null }
+        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version)) } catch (_: Exception) {} }
     }
 
     /** Disconnect: erase the chats, contacts, config and parent keys, then back to the pairing screen. */
@@ -186,6 +214,7 @@ object KidTv {
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
         _state.value = KidState()
+        tune(null)
     }
 
     /** The vault can't be opened (its key store key is gone): nothing on it is readable, so start the TV over. */
@@ -203,10 +232,23 @@ object Tv : TvHandler {
     fun install(app: Muninn) {
         val b = app.chat as? TvBridge
         if (this.app === app && (b == null || b.tvHandler === this)) return
+        var first = false
         synchronized(this) {
-            if (this.app !== app) { this.app = app; KidTv.load(app); TvParent.load(app) }
+            if (this.app !== app) { this.app = app; first = true; KidTv.load(app); TvParent.load(app) }
             b?.tvHandler = this
         }
+        if (first && KidMode.on(app)) kids(app)
+    }
+
+    /**
+     * A Kids' TV keeps listening with Muninn in the background (the foreground service, as on a phone, also
+     * started after the TV boots), brings an incoming call up over whatever is on, and updates itself.
+     */
+    private fun kids(app: Muninn) {
+        if (!app.identity.stayConnected) app.identity.stayConnected = true
+        io.github.ravenor907.muninn.net.MessageService.start(app)
+        TvRing.watch(app)
+        TvUpdate.start(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

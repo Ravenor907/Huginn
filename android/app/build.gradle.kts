@@ -25,7 +25,7 @@ val opusSrc = File(opusDir, "opus-$opusVersion")
 
 android {
     namespace = "io.github.ravenor907.muninn"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.github.ravenor907.muninn"
@@ -33,7 +33,7 @@ android {
         targetSdk = 36
         versionCode = versionNumber
         versionName = versionText
-        // Tor's native library ships for these. 32-bit x86 (old emulators only) is left out to keep the APK small.
+        // libopus (calls) is built for these. 32-bit x86 (old emulators only) is left out to keep the APK small.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=none") } }
     }
@@ -79,9 +79,6 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        // Compress Tor's native library inside the APK (Android unpacks it at install): the one
-        // universal Muninn.apk stays far smaller to download, which matters because updates come through Tor.
-        jniLibs.useLegacyPackaging = true
     }
 }
 
@@ -123,10 +120,6 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
     implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background
-    // Tor, built in: every internet connection goes through it (Guardian Project, Maven Central).
-    // Its POM asks for a newer Kotlin standard library than this project's compiler; the library
-    // itself is Java, so keep the project's own.
-    implementation("info.guardianproject:tor-android:0.4.9.14") { exclude(group = "org.jetbrains.kotlin") }
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // org.json is a stub in unit tests

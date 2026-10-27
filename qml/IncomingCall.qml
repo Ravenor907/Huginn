@@ -2,17 +2,25 @@ import QtQuick
 import Huginn
 
 // Someone is calling: over whatever is on screen, wherever you are in Huginn. The raven call rings
-// (Calls plays it) until you answer, decline, or they give up. A answers, B declines.
+// (Calls, or Rooms for a group call, plays it) until you answer, decline, or they give up.
+// A answers (joins a group call), B declines.
 Item {
     id: dlg
     anchors.fill: parent
-    visible: Calls.state === "incoming"
+    readonly property bool group: Calls.state !== "incoming" && Rooms.ringing
+    visible: Calls.state === "incoming" || Rooms.ringing
 
-    readonly property var prompts: [{ key: "a", label: "Answer" }, { key: "b", label: "Decline" }]
-    readonly property string status: "Incoming call"
+    readonly property var prompts: [{ key: "a", label: group ? "Join" : "Answer" }, { key: "b", label: "Decline" }]
+    readonly property string status: group ? "Group call" : "Incoming call"
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     // A locked Chat doesn't say who it is on screen.
-    readonly property string who: Vault.screenLocked ? "Someone" : Calls.peerName
+    readonly property string who: Vault.screenLocked ? "Someone" : group ? Rooms.ringName : Calls.peerName
+    function answer() {
+        if (!group) { Calls.answer(); return }
+        const why = Rooms.answerRing()
+        if (why !== "") Ui.say(why, true)
+    }
+    function decline() { if (group) Rooms.declineRing(); else Calls.decline() }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
     MouseArea { anchors.fill: parent }
@@ -31,7 +39,7 @@ Item {
             spacing: Theme.px(16)
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "INCOMING CALL"
+                text: dlg.group ? "GROUP CALL" : "INCOMING CALL"
                 color: Theme.accent
                 font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
             }
@@ -58,22 +66,22 @@ Item {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
-                text: dlg.who + " is calling"
+                text: dlg.who + (dlg.group && !Vault.screenLocked && Rooms.ringGroup ? " is calling " + Rooms.ringGroup : " is calling")
                 color: Theme.text
                 font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold
             }
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Theme.px(16)
-                HButton { text: "Decline"; kind: "danger"; onClicked: Calls.decline() }
-                HButton { text: "Answer"; kind: "accent"; onClicked: Calls.answer() }
+                HButton { text: "Decline"; kind: "danger"; onClicked: dlg.decline() }
+                HButton { text: dlg.group ? "Join" : "Answer"; kind: "accent"; onClicked: dlg.answer() }
             }
         }
     }
 
     function handleButton(b) {
-        if (b === "a") Calls.answer()
-        else if (b === "b") Calls.decline()
+        if (b === "a") answer()
+        else if (b === "b") decline()
         return true
     }
     function handleRelease(b) {}

@@ -74,7 +74,8 @@ import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.Folders
 import io.github.ravenor907.muninn.net.Groups
 import io.github.ravenor907.muninn.net.Proto06
-import io.github.ravenor907.muninn.net.Tor
+import io.github.ravenor907.muninn.net.call.RoomLogic
+import io.github.ravenor907.muninn.net.call.RoomManager
 import io.github.ravenor907.muninn.ui.Section
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.semantics.selected
@@ -151,7 +152,6 @@ object ChatNav {
 private fun routeText(r: String) = when (r) {
     "close" -> "Close by (Bluetooth)"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Over the internet, privately (Tor)"
     "internet" -> "Over the internet"
     else -> "Not reachable right now"
 }
@@ -159,11 +159,10 @@ private fun routeText(r: String) = when (r) {
 private fun routeShort(r: String) = when (r) {
     "close" -> "Bluetooth"
     "wifi" -> "Same Wi-Fi"
-    "onion" -> "Internet (Tor)"
     "internet" -> "Internet"
     else -> "Not reachable"
 }
-private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet", "onion" -> "network"; else -> "user" }
+private fun routeIcon(r: String) = when (r) { "close" -> "phone"; "wifi" -> "wifi"; "internet" -> "network"; else -> "user" }
 
 // The "Quiet" chat look. Every size is dp/sp, so Settings › Accessibility size and text scaling apply.
 private val nameStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.text)
@@ -296,12 +295,12 @@ private fun SearchBox(value: String, onChange: (String) -> Unit) {
     }
 }
 
-/** One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold for folders. */
+/** One chat in the list: avatar, name and time, then the last message and how many are unread. [onLong]: hold to rename or for folders. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
                       onLong: (() -> Unit)? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onLongClickLabel = if (onLong != null) "Folders" else null, onLongClick = onLong, onClick = onClick)
+    Row(Modifier.fillMaxWidth().combinedClickable(role = Role.Button, onLongClickLabel = if (onLong != null) "Options" else null, onLongClick = onLong, onClick = onClick)
         .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         avatar()
@@ -335,7 +334,6 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val wifi by app.net.devices.collectAsState()
     val closeError by app.close.error.collectAsState()
     val nostrUp by app.nostr.connected.collectAsState()
-    val tor by Tor.state.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
     val room by app.chat.nearby.collectAsState()
@@ -424,17 +422,10 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             }
             item {
                 ListLabel(folder?.name ?: "Chats") {
-                    // The internet goes through Tor: "Connecting privately (40%)" until it's ready, then Online or Offline.
-                    // Said in words too, never by the dot's color alone.
-                    val on = tor == Tor.State.Ready && nostrUp > 0
-                    val dot = when {
-                        on -> Palette.online
-                        tor is Tor.State.Starting -> Palette.gold
-                        tor is Tor.State.Failed -> Palette.danger
-                        else -> Palette.textFaint
-                    }
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-                    Text(Tor.label(tor, nostrUp), style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
+                    // Online: the internet relays are connected. Said in words too, never by the dot's color alone.
+                    val on = nostrUp > 0
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
+                    Text(if (on) "Online" else "Offline", style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
                 }
             }
             if (showRoom) item(key = "room") {
@@ -602,6 +593,8 @@ private fun NearbyRoom(app: Muninn) {
 
 @Composable
 private fun Conversation(app: Muninn, key: String) {
+    // Calls start faster when the relay login is already here.
+    LaunchedEffect(key) { io.github.ravenor907.muninn.net.call.CallManager.prepare(key) }
     val convos by app.chat.conversations.collectAsState()
     val c = app.chat.contacts.get(key)
     val met by app.chat.met.collectAsState()
@@ -843,6 +836,10 @@ private fun MyCode(app: Muninn) {
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
+                // Someone without Muninn, right here: hand them the app itself, no internet needed.
+                Text("They don't have Muninn yet? Send it to their phone straight from yours, by Quick Share or Bluetooth. Then they scan your code.",
+                    style = Type.small, modifier = Modifier.padding(top = 16.dp))
+                MButton("Share the app", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "phone") { io.github.ravenor907.muninn.ui.ShareApp.share(context) }
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -854,7 +851,7 @@ private fun AddSomeone(app: Muninn) {
     val context = LocalContext.current
     var text by remember {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-        mutableStateOf(ChatNav.incoming.ifEmpty { if (clip.contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
+        mutableStateOf(ChatNav.incoming.ifEmpty { if (Contacts.unlink(clip).contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
     }
     val found = Contacts.parse(text)
     val groupCode = Proto06.parseCode(text)
@@ -862,7 +859,7 @@ private fun AddSomeone(app: Muninn) {
         PageBar("Add someone")
         // Scrolls, so the Add button stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            Text("Paste the code they sent you (it starts with MUNINN1, or MUNINNG1 for a group). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
+            Text("Paste the code or link they sent you (the code starts with MUNINN1, or MUNINNG1 for a group). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
             Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
             when {
                 text.isBlank() -> {}
@@ -1050,7 +1047,7 @@ private fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, label
 
 /** Rename: a nickname kept on this phone only. Empty goes back to the name they chose. */
 @Composable
-private fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
+internal fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
     var text by remember(c.chatKey) { mutableStateOf(c.nickname ?: "") }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { done(null) },
@@ -1069,7 +1066,6 @@ private fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (Stri
 
 // ------------------------------------------------------------------ groups (protocol 0.6, section 3)
 
-private const val CALLS_SOON = "Calls coming soon. Voice rooms open once calls arrive in Muninn."
 
 /** How a member is shown: "You", a contact's nickname, or the name they have in the group. */
 internal fun memberName(app: Muninn, m: Proto06.Member): String =
@@ -1194,13 +1190,22 @@ private fun NameDialog(title: String, start: String, confirm: String, hint: Stri
 @Composable
 internal fun FolderPicker(app: Muninn, key: String, name: String, done: () -> Unit) {
     val folders by app.chat.folders.all.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()   // the new name shows at once
     var newName by remember { mutableStateOf("") }
+    // Holding a chat or a person: their nickname is here too (a contact only, never a group).
+    val contact = app.chat.contacts.contact(key)
+    var renaming by remember { mutableStateOf(false) }
+    if (renaming && contact != null) {
+        RenameDialog(contact) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
+        return
+    }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
         title = { Text("Folders for $name", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (contact != null) MButton("Rename", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
                 Text("Folders are only on this phone. Nobody else sees them.", style = Type.small, modifier = Modifier.padding(bottom = 6.dp))
                 folders.forEach { f ->
                     val on = key in f.keys
@@ -1253,16 +1258,64 @@ private fun NewGroup(app: Muninn) {
     }
 }
 
-/** Phones: a group's channels as chips under its top bar. Voice rooms open once calls arrive. */
+/** Phones: a group's channels as chips under its top bar; a voice room's chip joins it (and says who's in). */
 @Composable
-private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> Unit) {
+private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> Unit, onVoice: (String) -> Unit) {
+    RoomManager.presence.collectAsState().value   // re-reads who is in which room when it changes
+    val room by RoomManager.room.collectAsState()
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         s.channels.forEach { c ->
             if (c.t == "text") Chip("# ${c.n}", c.id == current) { onText(c.id) }
-            else Chip(c.n, false, icon = "audio") { Ui.say(CALLS_SOON) }
+            else {
+                val n = RoomManager.whoIn(s.g, c.id).size
+                Chip(if (n > 0) "${c.n} · $n" else c.n, room?.let { it.g == s.g && it.ch == c.id } == true, icon = "audio") { onVoice(c.id) }
+            }
+        }
+        RoomManager.groupCalls(s.g).forEach { (id, who) ->
+            Chip("Group call · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
         }
     }
+}
+
+/** Who's in a voice room or group call, under its row: small faces, ringed while they talk. */
+@Composable
+private fun RoomFaces(people: List<RoomManager.Person>) {
+    if (people.isEmpty()) return
+    Row(Modifier.padding(start = 38.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        people.take(8).forEach { p ->
+            Box(Modifier.size(28.dp).clip(CircleShape).then(if (p.speaking) Modifier.border(2.dp, Palette.goldBright, CircleShape) else Modifier)
+                .background(Palette.goldTint).semantics { contentDescription = p.name + if (p.speaking) ", speaking" else "" }, contentAlignment = Alignment.Center) {
+                Text(initial(p.name), style = Type.small.copy(fontSize = 12.sp, color = Palette.goldBright))
+            }
+        }
+    }
+}
+
+/** Ring some members of a group into a group call: tick who, then Call. */
+@Composable
+private fun CallSomeDialog(app: Muninn, s: Proto06.State, done: () -> Unit) {
+    val context = LocalContext.current
+    val me = app.identity.publicKey
+    val people = s.members.filter { it.k != me }.sortedBy { memberName(app, it).lowercase() }
+    var chosen by remember { mutableStateOf(setOf<String>()) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = done,
+        containerColor = Palette.panel,
+        title = { Text("Call some people", style = Type.big) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                item { Text("Up to ${RoomLogic.MAX_PEOPLE} people talk at once.", style = Type.small, modifier = Modifier.padding(bottom = 6.dp)) }
+                items(people, key = { it.k }) { m ->
+                    val old = RoomManager.needsUpdate(m.k)
+                    Line(memberName(app, m), if (old) "Needs an update to join calls" else if (m.k in chosen) "Will be rung" else "Tap to ring",
+                        icon = "user", selected = m.k in chosen) { if (!old) chosen = if (m.k in chosen) chosen - m.k else chosen + m.k }
+                }
+            }
+        },
+        confirmButton = { MButton("Call", kind = Kind.Accent, enabled = chosen.isNotEmpty()) { done(); RoomActivity.call(context, s.g, chosen.toList()) } },
+        dismissButton = { MButton("Cancel") { done() } },
+    )
 }
 
 @Composable
@@ -1314,19 +1367,35 @@ private fun GroupConversation(app: Muninn, g: String) {
         return
     }
     val others = s.members.filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
+    val inRoom by RoomManager.room.collectAsState()
+    var callSome by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
             "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
-            { GroupAvatar(s.name, others, 40.dp) }) { close ->
+            { GroupAvatar(s.name, others, 40.dp) }, actions = {
+                if (!grp.readOnly && s.members.size > 1) IconAction("call", "Call everyone in ${s.name}", Palette.text) {
+                    Ui.sure(Ask("Call everyone in ${s.name}?", "It rings everyone whose app can join. Up to ${RoomLogic.MAX_PEOPLE} people talk at once.", "Call",
+                        onConfirm = { RoomActivity.call(context, g, emptyList()) }))
+                }
+            }) { close ->
             MenuNote("Each message is sealed separately to every member, end to end. Up to ${Proto06.MAX_MEMBERS} people.")
+            if (!grp.readOnly && s.members.size > 2) DropdownMenuItem(text = { Text("Call some people", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
+                onClick = { close(); callSome = true })
             DropdownMenuItem(text = { Text("Group settings", style = bodyStyle) }, leadingIcon = { MIcon("gear", Palette.accent, 20.dp) },
                 onClick = { close(); ChatNav.open = "$key/settings" })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
         }
         if (folderPick) FolderPicker(app, key, s.name) { folderPick = false }
+        if (callSome) CallSomeDialog(app, s) { callSome = false }
         // Tablets list the channels in their own column.
-        if (!ChatNav.wide && s.channels.size > 1) ChannelChips(s, ch) { ChatNav.channel[g] = it }
+        RoomManager.presence.collectAsState().value
+        val calls = RoomManager.groupCalls(g)
+        if (!ChatNav.wide && (s.channels.size > 1 || calls.isNotEmpty())) ChannelChips(s, ch, { ChatNav.channel[g] = it }) { RoomActivity.join(context, g, it) }
+        inRoom?.let { r -> Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = { RoomActivity.show(context) }) {
+            Text("In ${r.title}${if (r.groupName.isNotEmpty()) " · ${r.groupName}" else ""}", style = Type.big)
+            Text(if (r.muted) "You're muted · tap to open" else "Tap to open", style = Type.small)
+        } }
         if (grp.readOnly) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
             Text(if (grp.gone == "removed") "You were removed from ${s.name}" else "You left ${s.name}", style = Type.big)
             Text("You can still read what's here. Nothing new arrives.", style = Type.small)
@@ -1398,19 +1467,26 @@ fun ChannelColumn(app: Muninn, g: String) {
     val current = ChatNav.channel[g] ?: Proto06.MAIN
     val here = ChatNav.groupOf(ChatNav.open) == g && !ChatNav.open.endsWith("/settings")
     val voice = s.channels.filter { it.t == "voice" }
+    val context = LocalContext.current
+    RoomManager.presence.collectAsState().value   // re-reads who is in which room when it changes
+    val room by RoomManager.room.collectAsState()
+    val calls = RoomManager.groupCalls(g)
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 16.dp)) {
             Text("TEXT", style = labelStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(start = 8.dp, bottom = 6.dp).semantics { heading() })
             s.channels.filter { it.t == "text" }.forEach { c ->
                 ChannelRow(c.n, voice = false, on = here && c.id == current) { ChatNav.channel[g] = c.id; ChatNav.open = Folders.groupKey(g) }
             }
-            if (voice.isNotEmpty()) {
+            if (voice.isNotEmpty() || calls.isNotEmpty()) {
                 Text("VOICE", style = labelStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(start = 8.dp, top = 18.dp, bottom = 6.dp).semantics { heading() })
                 voice.forEach { c ->
-                    ChannelRow(c.n, voice = true, on = false) { Ui.say(CALLS_SOON) }
-                    // Who's in a room shows here once calls arrive; for now nobody can be.
-                    Text("Calls coming soon", style = tinyStyle, modifier = Modifier.padding(start = 38.dp, bottom = 6.dp))
+                    ChannelRow(c.n, voice = true, on = room?.let { it.g == g && it.ch == c.id } == true) { RoomActivity.join(context, g, c.id) }
+                    RoomFaces(RoomManager.whoIn(g, c.id))
                 }
+            }
+            calls.forEach { (id, who) ->
+                ChannelRow("Group call", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
+                RoomFaces(who)
             }
             if (grp.readOnly) Text(if (grp.gone == "removed") "You were removed from this group." else "You left this group.",
                 style = Type.small, modifier = Modifier.padding(start = 8.dp, top = 18.dp))
@@ -1419,7 +1495,8 @@ fun ChannelColumn(app: Muninn, g: String) {
             Avatar(app.identity.username, 36.dp, 15.sp)
             Text(app.identity.username, style = nameStyle.copy(fontSize = 16.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(start = 10.dp))
-            if (voice.isNotEmpty() && !grp.readOnly) MButton("Join voice") { Ui.say(CALLS_SOON) }
+            if (room != null) MButton("Open", kind = Kind.Accent) { RoomActivity.show(context) }
+            else if (!grp.readOnly && s.members.size > 1) MButton("Call", icon = "call") { RoomActivity.call(context, g, emptyList()) }
         }
     }
 }
@@ -1480,7 +1557,7 @@ private fun GroupSettings(app: Muninn, g: String) {
             Section("Channels")
             s.channels.forEach { c ->
                 Line(if (c.t == "voice") c.n else "# ${c.n}", when {
-                    c.t == "voice" -> "Voice room · calls coming soon"
+                    c.t == "voice" -> "Voice room · up to ${RoomLogic.MAX_PEOPLE} people"
                     c.id == Proto06.MAIN -> "Text · the main channel"
                     else -> "Text"
                 }, icon = if (c.t == "voice") "audio" else "chat") { if (admin) channel = c }

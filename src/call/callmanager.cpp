@@ -6,6 +6,7 @@
 #include "callsession.h"
 #include "callsignal.h"
 #include "opuscodec.h"
+#include "relayconfig.h"
 #include "turnclient.h"
 #include "../vault.h"
 
@@ -13,7 +14,6 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QSoundEffect>
 #include <QUrl>
 
 #ifdef Q_OS_LINUX
@@ -22,6 +22,7 @@
 #include <QDBusReply>
 #include <QVariantMap>
 #else
+#include "../platform/chime.h"
 #include "../platform/notify.h"
 #endif
 
@@ -50,10 +51,9 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
         Q_EMIT changed();
     });
     // The raven call, every 3 s while someone is calling.
-    m_ringtone = new QSoundEffect(this);
-    m_ringtone->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
+    m_ringtone = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), this);
     m_ringer.setInterval(3000);
-    connect(&m_ringer, &QTimer::timeout, m_ringtone, &QSoundEffect::play);
+    connect(&m_ringer, &QTimer::timeout, m_ringtone, &Chime::play);
     if (m_vault) {
         connect(m_vault, &Vault::opened, this, &CallManager::load);
         // Panic lock: the call ends at once and nothing about it stays on screen.
@@ -166,6 +166,15 @@ int CallManager::missedCount() const
 
 bool CallManager::canCall(const QString &key) const { return available() && !key.isEmpty() && m_signal->canCall(key); }
 
+void CallManager::prepare(const QString &key)
+{
+    const qint64 now = nowMs();
+    if (now - m_preparedAt < 60000 || !canCall(key) || !RelayConfig::configured() || m_signal->myKey().isEmpty())
+        return;
+    m_preparedAt = now;
+    getLogin([](const TurnLogin &, const QString &) {});
+}
+
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {
     m_relay->get(QByteArray::fromBase64(m_signal->myKey().toLatin1()), std::move(done));
@@ -177,6 +186,8 @@ QString CallManager::call(const QString &key)
         return QStringLiteral("Calls aren't available in this build.");
     if (m_session && m_session->state() != CallSession::Ended)
         return QStringLiteral("You're already in a call.");
+    if (busyElsewhere && busyElsewhere())
+        return QStringLiteral("Leave the voice room first.");
     if (!m_signal->canCall(key))
         return QStringLiteral("Needs Muninn or Huginn 0.6");
     auto *s = new CallSession(m_signal, key, [this](auto done) { getLogin(std::move(done)); }, this);
@@ -279,7 +290,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
 {
     const QString t = str(msg, "t"), id = str(msg, "call");
     if (id == QLatin1String("-") || msg.contains(QStringLiteral("g")))
-        return;   // voice rooms (section 6) aren't in Huginn yet
+        return;   // voice rooms and group calls: RoomManager
     if (m_session && m_session->callId() == id && m_session->peerKey() == from) {
         m_session->handle(msg);
         return;
@@ -300,7 +311,7 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         addHistory(from, false, QStringLiteral("missed"), qint64(msg.value(QStringLiteral("ts")).toDouble()), 0);
         return;
     }
-    if (m_session && m_session->state() != CallSession::Ended) {
+    if ((m_session && m_session->state() != CallSession::Ended) || (busyElsewhere && busyElsewhere())) {
         m_handled.insert(id);
         const QJsonObject busy{{QStringLiteral("t"), QStringLiteral("busy")}, {QStringLiteral("call"), id}};
         m_signal->send(from, busy);

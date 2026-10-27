@@ -27,25 +27,13 @@ does otherwise still interoperates.
 All new payloads in this document are UTF-8 JSON plaintext inside `data`, sealed exactly like a private
 message. "Send to X" always means: build an envelope for X, seal it pairwise for X, send it on all routes.
 
-### 0.1 Onion addresses (`o`, `onion`)
+### 0.1 Onion addresses (`o`, `onion`): retired
 
-From 0.6 each app runs a Tor onion service and the internet route tries the peer's onion address first
-(`POST /api/huginn/v1/message` to `http://<onion>.onion`), with the Nostr mailbox as the fallback for when
-they're offline. The address travels as 56 lowercase base32 characters (`a`-`z`, `2`-`7`), without
-`.onion`; receivers also accept it with the suffix and in upper case, and ignore anything else.
-
-| where | field | notes |
-|---|---|---|
-| contact code `MUNINN1:<base64url JSON>` | `"o"` | next to `n` name, `k` chat key, `p` mailbox, `i` invite, `x` expiry (s) |
-| group code `MUNINNG1:<base64url JSON>` (3.5) | `"o"` | the admin's onion address; Huginn sends and reads it, Muninn doesn't yet (its join is answered over the mailbox, and the admin's envelopes then carry `o`) |
-| envelope | `"o"` | the sender's onion address; only to contacts and group peers, never in room `nearby` |
-| Bluetooth LE hello `{"t":"hello", name, chatKey, mailbox, app, ...}` | `"onion"` | both apps send it |
-| Wi-Fi (LocalSend) announcement and `/register` answer | `"onion"` | next to `chatKey`, `chatName`, `chatApp`, `mailbox`; Huginn sends it, Muninn doesn't yet |
-
-All of them are optional: 0.5 apps ignore them, and an app without Tor leaves them out. A receiver keeps the
-`o` of an **authentic** envelope (after it opened) as that contact's or group peer's onion address, so it
-follows a reinstall. Codes give the first value. A hello or announcement isn't authenticated, so it is a
-hint only (an app that learns from it SHOULD let the next authentic envelope correct it).
+The first 0.6 builds ran a Tor onion service and sent its address as `"o"` (contact codes, group codes,
+envelopes) and `"onion"` (Bluetooth LE hellos, Wi-Fi announcements). That is gone: internet messages go
+straight to the Nostr relays again, as in 0.5. Apps MUST NOT send `o` or `onion` any more, and MUST accept
+codes, envelopes and hellos that still carry them (from those early 0.6 builds), ignoring the field. There
+is no caps token for it.
 
 ## 1. Capabilities
 
@@ -58,7 +46,7 @@ contacts to the ratchet.
 0.6 adds a second field to every envelope it sends:
 
 ```
-"caps": "r1 g1 c1 k1"
+"caps": "r1 g1 c1 k1 k2 t1 v1"
 ```
 
 Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignore the field.
@@ -67,8 +55,11 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 |---|---|
 | `r1` | message ratchet (same as `cap:"r1"`) |
 | `g1` | group chats (section 3) |
-| `c1` | 1:1 calls and voice rooms (sections 5, 6) |
+| `c1` | 1:1 calls (section 5) |
+| `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
+| `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
+| `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -89,7 +80,8 @@ opens a contact's chat and the caps are unknown.
 ### 1.3 Fallback for 0.5 peers
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
-  token (`g1` for the group rooms, `c1` for `call`, `k1` for `tvconfig`). 0.5 would answer 400 and drop it.
+  token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
+  and for a config with `calls` or `mic`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work exactly as in 0.5 with everyone.
@@ -128,6 +120,7 @@ Domains:
 | `huginn-muninn call v1` | call offer and answer (5.2) |
 | `huginn-muninn tvconfig v1` | TV config (7.2) |
 | `huginn-muninn tvdisconnect v1` | TV disconnect (7.3) |
+| `huginn-muninn vroom v1` | voice room and group call messages (6.2) |
 
 Signatures may use random k (Java `SHA256withECDSA`, OpenSSL `EVP_DigestSign`); receivers only verify.
 The vectors use RFC 6979 so the file is reproducible.
@@ -167,7 +160,7 @@ signatures apart from each other.
 - No group key. Every group message is sealed separately to each member over that member's pairwise
   session (ratchet). A group of n people costs n-1 envelopes per message; in exchange there is no group key
   to rotate, leak, or resend when someone leaves, and every route and retry rule from 0.5 applies unchanged.
-- Max 50 members, 20 channels, 6 people per voice room.
+- Max 50 members, 20 channels, 8 people per voice room or group call.
 - Group state is a signed snapshot. Every change is a whole new state with a higher version, signed by an
   admin. Members keep the current state and the last 32 accepted states (for `sync`, 3.6).
 
@@ -262,7 +255,7 @@ Two ways in:
 
    ```
    MUNINNG1:<base64url(JSON {"g", "gn": group name, "a": admin chat key, "an": admin name,
-                              "p": admin mailbox, "i": token, "x": expiry seconds, ["o": admin onion]})>
+                              "p": admin mailbox, "i": token, "x": expiry seconds})>
    ```
 
    valid for 1 hour, usable by several people until it expires (the admin can revoke it). The joiner sends
@@ -345,7 +338,7 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
   address through it. So the person you call never learns your IP address, and you never learn theirs.
 - If no path works the call fails with "Can't connect".
 
-Calls are offered only to contacts with `c1`, and to group peers inside a voice room (section 6).
+Calls are offered only to contacts with `c1`, and to group peers inside a voice room or group call (section 6, `v1`).
 
 ### 5.2 Signaling messages (room `call`)
 
@@ -382,7 +375,7 @@ Timing:
 - Callee resends the same `answer` every 2 s until the first authentic media packet, for up to 15 s.
 - `hangup`, `decline`, `busy`: sent 3 times over 2 s, no further retries. Every `call` message expires: it
   is never kept in the day-long Outbox.
-- A device in a call answers any other `offer` with `busy` (voice room offers excepted, section 6).
+- A device in a call answers any other `offer` with `busy` (offers for the room it is in excepted, 6.3).
 
 Candidates (the final 0.6 format, the same in both apps):
 
@@ -400,10 +393,13 @@ Candidates (the final 0.6 format, the same in both apps):
   Muninn sent only `lp`, an early Huginn only the `lan` candidate) and accept either; when both are there
   and differ, `lp` wins.
 - At most 8 entries; a message with more is malformed and refused. Ports are integers 1 to 65535.
-- Receivers take the first `relay` whose `a` is an IP literal (a name would mean a DNS lookup outside Tor,
-  so it is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
-- Send the offer with what is ready (an app may wait up to 4 s for its relay), and anything later in
-  `cands`. Resent offers and answers carry the newest candidates.
+- Receivers take the first `relay` whose `a` is an IP literal (a peer's candidate never makes an app look a
+  name up, so a name is skipped) and ignore every other type, including the `host` and `srflx` of earlier drafts.
+- Send the offer with what is ready (an app may wait up to 1.5 s for its relay), and anything later in
+  `cands`. Resent offers and answers carry the newest candidates, and the caller takes the candidates of
+  a resent answer too (same `eph` as the first), not only of `cands`. A `cands` that would come sooner than
+  2 s after the last one waits, it is not dropped. The callee sends no `cands` before it answers: the
+  answer carries the relay when it is ready.
 
 ### 5.3 Key derivation
 
@@ -465,9 +461,9 @@ duplicate. Vectors: `call.frames`, `call.receive` (order matters; one receiver p
 Opus, application VOIP, mono, **16 kHz (wideband), 16 kbps VBR, 20 ms frames**, in-band FEC on (expected
 loss 10%), DTX on, complexity 5. Decoders may run at 16 or 48 kHz.
 
-Why 16 kHz and 16 kbps over 48 kHz and 24 kbps: each packet is sent on up to 3 paths, and to up to 5 peers
+Why 16 kHz and 16 kbps over 48 kHz and 24 kbps: each packet is sent on up to 3 paths, and to up to 7 peers
 in a voice room. At 16 kbps a packet is about 68 bytes (12 header, ~40 Opus, 16 tag), so one Bluetooth LE
-write per 20 ms carries it, and a full voice room is about 190 kbps up per UDP path instead of about 250.
+write per 20 ms carries it, and a full voice room (8 people) is about 210 kbps up per UDP path instead of about 330.
 Wideband is what phone calls with "HD voice" use; speech gains little above 8 kHz of audio bandwidth.
 
 Jitter buffer: play in seq order, target delay adaptive between 40 and 200 ms (start at 60 ms). A missing
@@ -485,16 +481,26 @@ One UDP socket for the Wi-Fi path per call, bound to a random port on all interf
 call is active. Incoming UDP: first byte 0x81 is media; anything else is dropped. The relay has its own
 socket or TLS connection (below).
 
-**Relay (internet).** On starting or answering a call (the callee may start while it rings), get a TURN
-login from the relay Worker through Tor (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
+**Relay (internet).** On starting a call, and on an offer arriving (the callee allocates while it rings,
+so answering doesn't wait for the relay), get a TURN
+login from the relay Worker over HTTPS (`docs/relay.md`) and allocate on the TURN server (RFC 8656:
 Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
 peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
-any other `turns:` URL. The TURN server's host name is looked up **through Tor only** (SOCKS5 RESOLVE),
-retried a few times; if Tor can't answer, there is no relay for this call ("Can't reach the call relay
-right now") and the system resolver is never asked. Media to the peer goes to the peer's `relay`
-candidate through this side's own allocation; media from it arrives as relayed data from that address,
-and anything relayed from another address is dropped. Both sides need an allocation for the relay path to
-work. The allocation is released when the call ends.
+any other `turns:` URL. The TURN server's host name is looked up with the system resolver,
+retried a few times; if it can't be looked up, there is no relay for this call ("Can't reach the call relay
+right now"). Media to the peer goes to the peer's `relay`
+candidate through this side's own allocation. Media from it arrives as relayed data; the relay only
+lets in addresses this side gave a permission, and every packet must pass the checks of 5.4 (tag, replay
+window, AEAD) before it counts, so the relayed source address is **not** required to match the peer's
+`relay` candidate. A relay with several sites may translate addresses between them (Cloudflare anchors
+each allocation at the nearest data center, so a phone on a carrier and a PC on home Wi-Fi can land on
+different ones): when an authentic packet arrives relayed from an address other than the peer's `relay`
+candidate, that address becomes a second target (permission and ChannelBind for it too) and media goes
+to both from then on; the receiver drops the copies (5.4). Both sides need an allocation for the relay
+path to work. The allocation is released when the call ends. A TURN error answer (for example 438, stale
+nonce) is used even without MESSAGE-INTEGRITY (many servers send it without); only success answers must
+carry a valid one. Cloudflare hands out IPv4 relayed addresses only (it ignores REQUESTED-ADDRESS-FAMILY),
+so both sides always get the same family, whatever network the device is on.
 
 **Wi-Fi.** When Chat reaches the peer on the shared Wi-Fi, send to the peer's Wi-Fi address (from Chat's
 discovery) at the port of its `lan` candidate or `lp`. Packets on this path are accepted only from that
@@ -525,36 +531,140 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 - The person you call never learns your IP address, and you never learn theirs: offers and answers carry
   only the relay's address and, on the same Wi-Fi, a port.
 - The TURN relay (Cloudflare) sees your public address, because the audio goes from your device to it
-  directly (not through Tor). It can't hear the call: media is encrypted end to end (5.3, 5.4).
-- The relay Worker gets its requests through Tor: it sees a hash of your chat key and the time, never your
-  address. The TURN server's name is looked up through Tor too, so your DNS server doesn't see it.
-- Nostr relays and onion routes see nothing new: signaling is sealed like any message.
+  directly. It can't hear the call: media is encrypted end to end (5.3, 5.4).
+- The relay Worker sees your public address (an HTTPS request), a hash of your chat key and the time.
+  Your DNS server sees the TURN server's name being looked up.
+- Nostr relays see nothing new: signaling is sealed like any message.
 - Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
   candidate is sent, and calls work only over Wi-Fi and Bluetooth.
 
-## 6. Voice rooms (group calls)
+## 6. Voice rooms and group calls (cap `v1`)
 
-- A voice room is a `voice` channel of a group. Up to 6 people at once, full mesh: every pair runs its own
-  1:1 call (section 5) with its own call id, keys and paths.
-- Join: send `{"t":"vjoin","g","ch","call":"-"}` in room `call` to every group member. (`call` is the literal
-  `-` for room-wide messages, which carry `g` and `ch` and no `eph`.)
-- Everyone already in that voice room answers the joiner with an `offer` carrying `g` and `ch`. The joiner
-  auto-answers offers for the room it just joined (no ringing, no `busy`). So the joiner finds out who is
-  there from the offers it gets, and nobody keeps a list that can go stale.
-- Full: someone in the room who already has 5 peers there answers `{"t":"full","g","ch","call":"-"}` instead
-  of an offer. A joiner that gets `full` leaves and shows "Voice room is full".
-- Both offering at once (two people joined at the same moment): the side whose chat key text is lower in
-  byte order keeps its offer; the other drops its own and answers.
-- Leave: `{"t":"vleave","g","ch","call":"-"}` to every member, then `hangup` to each peer.
-- For people not in the room: show who's in it from `vjoin`/`vleave`. Those in a room re-send `vjoin` every
-  30 minutes; an entry with nothing for 3 hours is dropped.
-- Mute: `mute` to each peer in the room. Speaking indicator per peer from that peer's audio (5.5).
+### 6.1 Model
+
+- A **room** is named by `(g, ch)`: `g` is a group, `ch` is either the id of a `voice` channel in that group's
+  current state (a **voice room**, always there, Discord style) or 16 random bytes in base64url (22 chars) made
+  up by whoever starts a **group call** (a temporary room that exists while someone is in it). The two kinds
+  can't be mixed up: channel ids are 11 characters, group call ids 22.
+- **At most 8 people** in a room, the one who started it included. The apps say so where you join or call.
+- **Full mesh of 1:1 calls.** Every pair in a room runs its own call from section 5: its own call id, its own
+  signed ephemeral keys, its own per-direction AES-256-GCM keys, epochs and replay window, its own paths. Each
+  device encodes its microphone once and seals and sends that Opus stream separately to every other person.
+  So media is encrypted **per recipient**: there is no room key, and nothing to rotate when someone joins or
+  leaves. Someone who leaves holds no key for anything said after, and someone who joins holds none for
+  anything said before (each pair's keys are fresh when the pair's call starts).
+- **Relay only over the internet**, exactly as 5.6: each pair's call has its own TURN allocation (from the same
+  cached relay login), so a device has one relayed address per peer, the peers see only relay addresses, and
+  nobody in the room learns anyone's IP address. On the same Wi-Fi a pair may also go direct, as in 5.6.
+- **Mixing on receive**: one jitter buffer (5.5) and one Opus decoder per peer; each 20 ms the decoded frames are
+  summed and clipped into the speaker. The speaking indicator is per peer, from that peer's decoded audio, and
+  for yourself from your microphone (same rule, 5.5).
+- Cost: about 68 bytes per 20 ms packet plus UDP and TURN headers, so about 30 kbps per peer each way; a full
+  room of 8 is about 210 kbps up and 210 kbps down per path. Fine on Wi-Fi and LTE; the reason for the cap.
+
+### 6.2 Room messages (room `call`)
+
+```json
+{"t": "vjoin", "call": "-", "g": "<group id>", "ch": "<room id>", "ts": 1761500400000, "sig": "<base64 DER>"}
+```
+
+| t | sent by, to | meaning |
+|---|---|---|
+| `vjoin` | someone joining (and every 10 minutes while in), to every member | I'm in this room |
+| `vleave` | someone leaving, to every member | I left |
+| `vring` | whoever starts a group call, to each person it rings | join my group call |
+| `vdecline` | someone who was rung, to the ringer | not now |
+| `full` | someone in the room, to a joiner | the room already has 8 people |
+
+- Exactly the fields `t`, `call` (the literal `-`), `g`, `ch`, `ts` (sender's clock in ms) and `sig`.
+- `sig`: signature (2.2) with domain `huginn-muninn vroom v1` over the whole object without `sig`, by the
+  sender's chat key, checked against the envelope's `fromKey`. Join, leave and ring are thereby signed
+  statements, not just authentic envelopes; the media keys are signed per pair by the 5.2 offer and answer.
+- 1:1 calls go on using real call ids; `call:"-"` marks a room message and never names a call.
+
+Accepting one (reference `accept_room`), with the receiver's current state of group `g`:
+
+1. Well-formed: the fields above and no others, `t` one of the five, `call` is `-`, `g` is 16 bytes and `ch`
+   8 or 16 bytes of canonical base64url (`main` is never a room).
+2. The signature verifies with the sender's chat key.
+3. The receiver has group `g`, the sender and the receiver are both members of its current state, and the
+   sender isn't the receiver.
+4. An 11-character `ch` is a `voice` channel of that state.
+5. Fresh: `ts` at most 60 s old and at most 120 s ahead by the receiver's clock gives **ok**. Otherwise
+   **stale**: a stale `vjoin` or `vleave` still counts for presence (6.4), a stale `vring` is shown as a missed
+   group call, a stale `full` or `vdecline` does nothing.
+
+Anything else is refused and dropped. Vectors: `room.messages`, `room.accept`.
+
+### 6.3 Joining, the mesh, leaving
+
+1. Joining `(g, ch)`: send `vjoin` to every other member of `g` whose caps include `v1`, or aren't known yet
+   (a group peer that hasn't sent anything since). Members known to lack `v1` get nothing (6.7).
+2. A member M who is in `(g, ch)` and gets a fresh `vjoin` from J, and has no call with J for this room: if M
+   already has 7 peers there it answers `full`; otherwise M calls J (5.2) with an `offer` that also carries
+   `"g"` and `"ch"`. M stays in the room whatever J does.
+3. J, while in `(g, ch)`, answers offers carrying that `g` and `ch` from members of `g` at once: no ringing and
+   never `busy`. An offer naming a room J isn't in is answered `decline`.
+4. Two offers for the same room crossing (both joined at the same moment): the offer from the side whose chat
+   key text is lower in byte order wins (reference `room_offer_wins`). The lower side ignores the other's
+   offer; the higher side drops its own call without a word and answers. Vectors: `room.glare`.
+5. A `vjoin` that got lost: J resends `vjoin` 4 s and 12 s after joining to the members it has no call with
+   yet, and everyone in a room re-sends `vjoin` to every member every 10 minutes, which a member in the room
+   that has no call with them answers as in step 2. So a lost offer or a pair that never connected heals.
+6. A joiner that gets `full` leaves at once and shows "This room is full (8 people)".
+7. A pair's call that ends with `nopath` or `dropped` while both stay in the room: the side with the lower
+   key calls again after 5 s, at most 3 times.
+8. Leaving: `vleave` to every member who got `vjoin`, then `hangup` to every peer (5.2). A `vleave` from a peer
+   ends that pair's call at once.
+
+Mute: `mute` (5.2) on each pair's call; a muted device sends no audio to anyone (pings go on).
+
+### 6.4 Presence: who is in a room
+
+Every member keeps, per `(g, ch, sender)`, the last `vjoin` or `vleave` it accepted (ok or stale): in or out,
+the sender's `ts`, and when it was seen by its own clock (reference `presence_apply`, `presence_in`):
+
+- A message replaces the entry only if its `ts` is higher than the entry's (a late, older copy changes
+  nothing; comparing one sender's clock with itself needs no clock agreement).
+- Someone counts as in while the entry says in and it was seen within the last 25 minutes (two and a half
+  times the 10-minute re-send; a phone that died never sends `vleave`).
+- While you are in a room, everyone you have a live call with there counts as in as well.
+
+Shown to everyone in the group, in or out of the room: "Raven, Moose" under the voice room with **Join**,
+and a group call as "Group call" with **Join** while anyone is in it. Vectors: `room.presence`.
+
+### 6.5 Group calls (ringing people into a room)
+
+1. The caller picks a group and who to ring: everyone (the default) or some of its members, which is how a
+   small ad hoc set is called (people who share no group have no pairwise sessions with each other, so they
+   are put in a group first). The caller makes a new 22-character room id, joins it (6.3 step 1: everyone in
+   the group with `v1` sees the call and can join) and sends `vring` to the people it rings, again 15 s later
+   to those who haven't joined or declined.
+2. A fresh `vring` rings for up to 45 s: "Raven is calling Family" with **Join** and **Decline**. Join joins
+   that room (6.3). Decline sends `vdecline` to the ringer. Ringing stops on join or decline, after 45 s, or
+   once presence shows nobody in that room (the caller gave up).
+3. A `vring` that arrives while already in a call or a room is shown as a missed group call, never `busy`.
+4. After 45 s with nobody else in the room the caller leaves it and shows "No one joined".
+5. A group call has no end message: it is over when the last person leaves.
+6. More people than fit can be rung: the first 7 to join get in, later ones get `full`.
+
+### 6.6 One call at a time
+
+A device is in at most one 1:1 call or one room. In a room, a 1:1 `offer` is answered `busy` (5.2). In a 1:1
+call, joining a room says "Hang up first", and a `vring` is a missed group call.
+
+### 6.7 Peers without `v1`
+
+0.6 apps (caps `r1 g1 c1`) drop every room "call" message that has `call:"-"` or a `g` without answering,
+so nothing breaks; they show voice channels as "coming soon" and can't join. Apps with `v1` send them
+nothing for rooms, and show "Needs an update to join calls" next to members known to lack `v1`. Probing caps
+(1.2) when a group opens finds out for members whose caps aren't known.
 
 ## 7. Kids' TV
 
 The TV is a Muninn install set to Kids' TV mode on first start (for example on an Android TV box). It has a
-chat key like any device and caps `r1 k1`.
+chat key like any device and the same caps as any Muninn (`k1` and `k2` matter here).
 
 ### 7.1 Pairing
 
@@ -587,7 +697,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields; `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`
+(7.5); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -601,8 +712,9 @@ dropped with their chats); the screen shows the quick messages in order; the dic
 with `{"t":"applied","v":<v>}` so their apps can show "TV is up to date".
 
 On the TV: private messages are accepted only from keys in `contacts` (and parents), and sent only to them.
-No Nearby room, no Keep in touch, no groups, no calls in 0.6. A listed person still has to have the TV as a
-contact on their side; the parent's app shares the TV's code with them.
+No Nearby room, no Keep in touch, no groups. Calls (room `call`, section 5) only with those same keys, and
+only while `calls` is not false (7.5). A listed person still has to have the TV as a contact on their side:
+the parent's app sends them a card (7.6), or shares the TV's code.
 
 ### 7.3 Disconnect
 
@@ -618,6 +730,43 @@ The TV has no app lock, panic lock or hidden erase: anyone in the room can read 
 apps say so when pairing. Nothing secret is in the config, and messages on the TV follow the "Delete
 messages after" setting the parent sets on the TV during setup.
 
+### 7.5 Calls, microphone level and updates (`k2`)
+
+A TV whose app says `k2` takes two more config fields. A parent's app puts them in only for such a TV (a
+`k1`-only TV would refuse the config as malformed); until the TV's caps are known it leaves them out, and
+sends a config with them once the TV's `applied` shows `k2`.
+
+| field | type | absent | meaning |
+|---|---|---|---|
+| `calls` | true or false | true | the kids can call people in `contacts` (and parents), and those people can call the TV |
+| `mic` | integer 0 to 100 | 50 | the TV's microphone level: a software gain of `0.3 * mic` dB with a soft limiter (tanh above 0.6 of full scale), applied to voice messages, speech to text and calls |
+
+Anything else that's extra is still malformed. Vectors: `tv.configs.cfg4` (calls off, mic 80), and step 7 of
+`tv.accept`.
+
+The TV adds its Muninn version to every answer: `{"t":"applied","v":<v>,"app":"0.61"}` (text, at most 16
+characters; apps without `k2` ignore it). A parent may send `{"t":"update"}`: the TV, if the sender is one of
+its parents, looks for a new Muninn release at once, installs it, and answers with `applied` for its current
+version. The TV also looks every day by itself.
+
+### 7.6 Inviting someone to talk with the kids (`t1`)
+
+A parent invites a contact (say the other parent, or a grandparent) from their phone, without touching the TV:
+
+1. The parent's app adds the person to `contacts` and sends the TV a new config (7.2). The TV now has their
+   chat key and mailbox and accepts them.
+2. The parent's app sends the person, in room `tvconfig`, a card:
+   `{"t":"card","code":"MUNINN1:..."}`, the TV's contact code (name, chat key, mailbox; no invite token and no
+   `"tv":1`, so it never offers to set the TV up).
+3. The person's app (Muninn or Huginn with `t1`) takes a card only from someone who is already a contact,
+   only if the TV isn't a contact yet and the code isn't a key change of another contact (same mailbox,
+   other key: ignored). It adds the TV as a contact and says who added them.
+
+Now each has the other's key: messages and calls work both ways. A person whose app hasn't said `t1` (caps
+still unknown a minute after a probe, 1.2) gets the TV's link as a private message instead. A card is sent
+once on every route (the relays hold it for an offline phone); the parent can always share the TV's code too.
+To put the person in a family group, the parent's app uses the normal group invite (3.5).
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -631,8 +780,10 @@ messages after" setting the parent sets on the TV during setup.
 | `gphoto` | | 3.9 pieces | yes | as photo | (from, gid, i) | g1 |
 | `greceipt` | | 3.10 | yes | no | Seen | g1 |
 | `call` | `offer` `ring` `answer` `decline` `busy` `cands` `mute` `hangup` | 5.2 | yes | short, 5.2 | call id + t; Seen | c1 |
-| `call` | `vjoin` `vleave` `full` | 6 | yes | no | Seen | c1 |
+| `call` | `vjoin` `vleave` `vring` `vdecline` `full` | 6.2 | yes | short, 6.3 and 6.5 | Seen; then 6.4 | v1 |
 | `tvconfig` | `config` `applied` `disconnect` | 7 | yes | config and disconnect: a day, until `applied` | Seen; then version rule | k1 |
+| `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
+| `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
 
 ## 9. Size limits
 
@@ -643,7 +794,7 @@ messages after" setting the parent sets on the TV during setup.
 | photo piece | 16 KB, as 0.5 |
 | group members | 50 |
 | channels per group | 20 (including `main`) |
-| people per voice room | 6 |
+| people per voice room or group call | 8 |
 | group name, member name, contact name | 40 characters |
 | channel name | 32 characters |
 | group state, canonical | 24 KB |
@@ -655,6 +806,7 @@ messages after" setting the parent sets on the TV during setup.
 | quick messages | 24, each 80 characters |
 | TV contacts | 50 |
 | TV config, canonical | 16 KB |
+| TV microphone level (`mic`) | 0 to 100 |
 | group code / invite token | 1 hour |
 
 Characters means Unicode code points. Anything over a limit is malformed and refused, not cut.
@@ -676,3 +828,6 @@ Each app's unit tests should:
   `frames` entry gives `packet` exactly; running `receive` in order through one receiver per side gives each
   `result`.
 - `tv.disconnect`: accepted at version 3, refused at 4.
+- `room`: every `messages` entry's `signed` matches and its signature verifies with its sender; `accept` gives
+  each `result` (with the named state, receiver and clock); running `presence` in order through one table
+  gives each `in` list (and `changed`); `glare` gives each winner.

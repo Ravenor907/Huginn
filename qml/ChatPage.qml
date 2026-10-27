@@ -90,6 +90,7 @@ Rectangle {
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
         if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
+        if (openKey !== "" && !tour) Calls.prepare(openKey)   // the relay login is ready before Call is pressed
         Chat.openChat = openKey
     }
     // Read only counts when someone is actually looking: not while a game is in front.
@@ -258,7 +259,7 @@ Rectangle {
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
                     name: "shield"; size: Theme.px(15)
-                    color: Chat.torReady || Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
+                    color: Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -585,7 +586,7 @@ Rectangle {
         }
     }
     function addSomeone() {
-        Ui.ask("Add someone", "Paste the code they sent you (it starts with MUNINN1), or a group code (MUNINNG1)", "", "Add", t => {
+        Ui.ask("Add someone", "Paste the code or link they sent you (the code starts with MUNINN1), or a group code (MUNINNG1)", "", "Add", t => {
             if (t.indexOf("MUNINNG1:") >= 0) {
                 const gc = Chat.parseGroupCode(t)
                 const r = Chat.joinWithCode(t)

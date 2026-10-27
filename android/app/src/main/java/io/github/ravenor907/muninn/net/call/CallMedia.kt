@@ -67,7 +67,7 @@ class CallMedia(
     // ------------------------------------------------------------------ transports
 
     @Volatile private var turn: TurnClient? = null
-    @Volatile private var peerRelay: InetSocketAddress? = null
+    private val peerRelay = CallLogic.RelayPeer()
     /** The Wi-Fi socket: open for the whole call, bound to a random port on all interfaces. */
     val lan: DatagramSocket? = try { DatagramSocket(0) } catch (e: Exception) { null }
     val lanPort: Int? get() = lan?.localPort
@@ -75,18 +75,20 @@ class CallMedia(
     /** Allocates on the relay (blocking). The relayed address, or null if no relay could be had. */
     fun startRelay(login: TurnCreds.Login, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
         if (stopped) return null
-        val t = TurnClient(login, resolve) { from, data -> if (from == peerRelay) incoming(data, CallLogic.Kind.RELAY, from) }
+        // Only peers we gave a permission can reach our allocation, and every packet must still open
+        // (tag, AEAD) before it counts, so the source isn't matched here: a relay between sites may
+        // translate the peer's address (see CallLogic.RelayPeer).
+        val t = TurnClient(login, resolve) { from, data -> incoming(data, CallLogic.Kind.RELAY, from) }
         if (!t.start()) { t.close(); return null }
         if (stopped) { t.close(); return null }
         turn = t
-        peerRelay?.let { t.permit(it); addPath(CallLogic.Kind.RELAY, it) }
+        peerRelay.advertised?.let { t.permit(it); addPath(CallLogic.Kind.RELAY, it) }
         return t.relayed
     }
 
     /** The peer's relayed address (from their offer, answer or cands). Never anything but a relay. */
     fun setPeerRelay(a: InetSocketAddress?) {
-        if (a == null || a == peerRelay) return
-        peerRelay = a
+        if (!peerRelay.advertise(a) || a == null) return
         paths.removeAll { it.kind == CallLogic.Kind.RELAY }
         turn?.let { it.permit(a); addPath(CallLogic.Kind.RELAY, a) }
     }
@@ -97,7 +99,11 @@ class CallMedia(
         addPath(CallLogic.Kind.WIFI, a)
     }
 
-    private fun addPath(kind: CallLogic.Kind, a: InetSocketAddress?) { paths += CallLogic.Path(kind, a) }
+    private fun addPath(kind: CallLogic.Kind, a: InetSocketAddress?) {
+        // One relay path: its sends go to every relayed address in peerRelay.targets().
+        if (kind == CallLogic.Kind.RELAY && paths.any { it.kind == kind }) return
+        paths += CallLogic.Path(kind, a)
+    }
 
     /** Both ephemeral keys are known: start sending and receiving. */
     fun begin(k: CallCrypto.Keys) {
@@ -137,6 +143,8 @@ class CallMedia(
             return
         }
         markLive(kind, from)
+        // Authentic, relayed from an address the peer didn't advertise: answer there too.
+        if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it) }
         if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
         when (o.type) {
             CallCrypto.AUDIO -> jitter.put(o.ts, o.payload)
@@ -156,6 +164,8 @@ class CallMedia(
         var p = path(kind, from)
         // A Wi-Fi packet from an address we didn't know (a second interface): it's a path now.
         if (p == null && kind == CallLogic.Kind.WIFI && from != null && paths.count { it.kind == kind } < 3) { p = CallLogic.Path(kind, from); paths += p }
+        // Relayed before their cands reached us: the relay is a path already.
+        if (p == null && kind == CallLogic.Kind.RELAY && from != null) { addPath(kind, from); p = path(kind, from) }
         p?.lastIn = now
     }
 
@@ -194,12 +204,11 @@ class CallMedia(
         val p = try { CallCrypto.seal(k, offerer, tag, type, s, System.currentTimeMillis() - started, payload) } catch (e: Exception) { return }
         val now = System.currentTimeMillis()
         val targets = only?.let { listOf(it) } ?: paths.filter { it.live(now) }.ifEmpty { paths }
-        // Up to 3 UDP paths (Wi-Fi first, then the lowest round trip) plus Bluetooth.
-        val udp = targets.filter { it.kind != CallLogic.Kind.BLUETOOTH }
-            .sortedWith(compareBy({ if (it.kind == CallLogic.Kind.WIFI) 0 else 1 }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs })).take(3)
-        for (t in udp) when (t.kind) {
-            CallLogic.Kind.RELAY -> t.addr?.let { turn?.send(it, p) }
-            CallLogic.Kind.WIFI -> t.addr?.let { a -> try { lan?.send(DatagramPacket(p, p.size, a)) } catch (_: Exception) {} }
+        // Up to 3 UDP paths (Wi-Fi first, then the lowest round trip) plus Bluetooth; each distinct
+        // destination gets the packet once (the relay once per relayed address, not once per relay path).
+        for (d in CallLogic.udpSends(targets, peerRelay.targets())) when (d.kind) {
+            CallLogic.Kind.RELAY -> turn?.send(d.addr, p)
+            CallLogic.Kind.WIFI -> try { lan?.send(DatagramPacket(p, p.size, d.addr)) } catch (_: Exception) {}
             else -> {}
         }
         if (targets.any { it.kind == CallLogic.Kind.BLUETOOTH } && bluetooth?.canCarry(peerKey) == true) bluetooth.send(peerKey, p)
@@ -216,23 +225,29 @@ class CallMedia(
     private var oldMode = AudioManager.MODE_NORMAL
     private var mic: Thread? = null
     private var player: Thread? = null
+    private var tvGain: io.github.ravenor907.muninn.tv.TvMic.Gain? = null
+
+    // ------------------------------------------------------------------ voice rooms (section 6)
+
+    /** In a voice room the room owns the microphone and the speaker for every peer: this media only seals and opens. */
+    @Volatile var externalAudio = false
+    /** One encoded 20 ms frame from the room's microphone (nothing while muted). */
+    fun sendOpus(opus: ByteArray) { if (!muted) send(CallCrypto.AUDIO, opus) }
+    /** What the room's player plays next for this peer. */
+    fun nextPlay(): CallLogic.Play = jitter.next()
 
     /** Starts the microphone and the speaker. False if the microphone couldn't open (no permission?). */
     @SuppressLint("MissingPermission")
     fun startAudio(): Boolean {
+        if (externalAudio) return true
         if (Opus.loadError != null) return false
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
         routeDefault()
         val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val rec = try {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
-        } catch (e: Exception) { null }
-        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return false }
+        // A phone has one source; a Kids' TV falls back to MIC when VOICE_COMMUNICATION won't open or start.
+        val rec = io.github.ravenor907.muninn.tv.TvMic.callSources().asSequence().mapNotNull { openMic(it, minIn) }.firstOrNull() ?: return false
         record = rec
-        if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
-        if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
         val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -248,15 +263,38 @@ class CallMedia(
         return true
     }
 
+    /**
+     * Opens and starts the microphone on [src] with the echo canceller, noise suppressor and (Kids' TV)
+     * gain and AGC where the device has them. Null, with everything released, if it doesn't record.
+     */
+    @SuppressLint("MissingPermission")
+    private fun openMic(src: Int, minIn: Int): AudioRecord? {
+        val rec = try {
+            AudioRecord(src, Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minIn, Opus.FRAME * 2 * 4))
+        } catch (e: Exception) { null }
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
+        tvGain = io.github.ravenor907.muninn.tv.TvMic.forCall(rec.audioSessionId)   // Kids' TV: louder microphone
+        if (AcousticEchoCanceler.isAvailable()) aec = try { AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } } catch (e: Exception) { null }
+        val ok = try { rec.startRecording(); rec.recordingState == AudioRecord.RECORDSTATE_RECORDING } catch (e: Exception) { false }
+        if (ok) return rec
+        try { aec?.release(); ns?.release() } catch (_: Exception) {}
+        aec = null; ns = null
+        if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(); tvGain = null }
+        rec.release()
+        return null
+    }
+
     private fun captureLoop(rec: AudioRecord) {
         val enc = try { Opus.Encoder() } catch (e: Throwable) { return }
         val pcm = ShortArray(Opus.FRAME)
         try {
-            rec.startRecording()
+            // Already recording: openMic started it to know the source works.
             while (!stopped) {
                 var got = 0
                 while (got < Opus.FRAME && !stopped) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }
                 if (got < Opus.FRAME) continue
+                tvGain?.process(pcm, got)
                 if (muted) continue   // pings go on; no audio while muted (5.5)
                 enc.encode(pcm)?.let { send(CallCrypto.AUDIO, it) }
             }
@@ -342,8 +380,9 @@ class CallMedia(
         try { record?.release() } catch (_: Exception) {}
         try { track?.release() } catch (_: Exception) {}
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
+        if (tvGain != null) io.github.ravenor907.muninn.tv.TvMic.release()
         proximityOn(false)
-        try {
+        if (!externalAudio) try {
             if (Build.VERSION.SDK_INT >= 31) audio.clearCommunicationDevice()
             else @Suppress("DEPRECATION") { audio.stopBluetoothSco(); audio.isBluetoothScoOn = false; audio.isSpeakerphoneOn = false }
             audio.mode = oldMode

@@ -10,7 +10,7 @@
 
 class CallSession;
 class CallSignal;
-class QSoundEffect;
+class Chime;
 class RelayCredentials;
 class Vault;
 struct TurnLogin;
@@ -64,6 +64,9 @@ public:
     // "" when the call is starting, otherwise what to tell the person.
     Q_INVOKABLE QString call(const QString &key);
     Q_INVOKABLE bool canCall(const QString &key) const;
+    // A conversation with key is open: fetch the relay login now (cached for two hours), so a call
+    // doesn't wait for the relay Worker. At most one try a minute.
+    Q_INVOKABLE void prepare(const QString &key);
     Q_INVOKABLE void answer();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangup();
@@ -73,6 +76,11 @@ public:
     Q_INVOKABLE void deleteEntry(const QString &id);
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE QString duration(int seconds) const;
+
+    // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
+    std::function<bool()> busyElsewhere;
+    // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
+    void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
 
 Q_SIGNALS:
     void changed();
@@ -91,7 +99,6 @@ private:
     void ring(bool on);
     void notifyIncoming(bool on);
     Q_SLOT void onNotificationAction(uint id, const QString &action);
-    void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
 
     CallSignal *m_signal;
     QPointer<Vault> m_vault;
@@ -99,10 +106,11 @@ private:
     QPointer<CallSession> m_session;
     QString m_lastPeer, m_endText;
     QTimer m_ticker, m_clear, m_ringer;
-    QSoundEffect *m_ringtone = nullptr;
+    Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
     qint64 m_seen = 0;           // missed calls after this (ms) count in the badge
     qint64 m_started = 0;
+    qint64 m_preparedAt = 0;
     uint m_notification = 0;
     QSet<QString> m_handled;     // call ids already answered with busy or logged as missed
     bool m_loaded = false;

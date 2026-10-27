@@ -62,14 +62,21 @@ Rectangle {
         const out = [{ kind: "header", text: "TEXT" }]
         channels.filter(c => c.type === "text").forEach(c => out.push(Object.assign({ kind: "channel" }, c)))
         const voice = channels.filter(c => c.type === "voice")
-        if (voice.length) {
+        // Group calls going on in this group show with the voice rooms, while anyone is in them.
+        const calls = isTour || locked ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
+        if (voice.length || calls.length) {
             out.push({ kind: "header", text: "VOICE" })
             voice.forEach(c => out.push(Object.assign({ kind: "channel" }, c)))
+            calls.forEach(c => out.push({ kind: "channel", type: "voice", id: c.ch, name: "Group call", unread: 0, call: true }))
         }
         return out
     }
-    // Who's in a voice room: only known once calls land (the tour shows how it looks).
-    function roomPeople(id) { return isTour && id === "l" ? ["Bjorn", "Jake", "Sam"] : [] }
+    // Who's in a voice room or group call right now: [{name, speaking}] (the tour shows how it looks).
+    function roomPeople(id) {
+        if (isTour) return id === "l" ? [{ name: "Bjorn" }, { name: "Jake", speaking: true }, { name: "Sam" }] : []
+        if (locked) return []
+        return (Rooms.presence, Rooms.people, Rooms.whoIn(gid, id))
+    }
     readonly property var messages: {
         if (isTour)
             return channelId !== "main" ? [] : [
@@ -130,7 +137,7 @@ Rectangle {
                 readonly property bool header: modelData.kind === "header"
                 readonly property bool voice: modelData.type === "voice"
                 readonly property bool on: page.active && page.zone === "channels" && page.chRow === index
-                readonly property bool here: !header && !voice && modelData.id === page.channelId
+                readonly property bool here: !header && (voice ? Rooms.inRoom && Rooms.group === page.gid && Rooms.room === modelData.id : modelData.id === page.channelId)
                 readonly property var people: header ? [] : page.roomPeople(modelData.id)
                 width: chanList.width
                 height: header ? Theme.px(index === 0 ? 26 : 40) : Theme.px(Theme.desktop ? 40 : 48) + (people.length ? Theme.px(36) : 0)
@@ -193,8 +200,13 @@ Rectangle {
                         model: rowItem.people
                         Rectangle {
                             width: Theme.px(28); height: width; radius: width / 2
-                            color: Theme.avatar(modelData).bg
-                            Text { anchors.centerIn: parent; text: page.initial(modelData); color: Theme.avatar(modelData).fg; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
+                            color: Theme.avatar(modelData.name, !!modelData.me).bg
+                            // A gold ring while they talk.
+                            border.width: modelData.speaking ? Theme.px(2) : 0
+                            border.color: Theme.accent
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: modelData.name + (modelData.speaking ? ", speaking" : "")
+                            Text { anchors.centerIn: parent; text: page.initial(modelData.name); color: Theme.avatar(modelData.name, !!modelData.me).fg; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
                         }
                     }
                 }
@@ -223,7 +235,7 @@ Rectangle {
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(8)
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "shield"; size: Theme.px(15); color: Chat.torReady || Chat.internet > 0 ? Theme.accent : Theme.textMuted }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "shield"; size: Theme.px(15); color: Chat.internet > 0 ? Theme.accent : Theme.textMuted }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceStrip.width - Theme.px(50)
@@ -572,9 +584,46 @@ Rectangle {
     function openRow() {
         const r = rows[chRow]
         if (!r || r.kind !== "channel") return
-        if (r.type === "voice") { Ui.say(r.name + " is a voice room. Calls are coming soon."); return }
+        if (r.type === "voice") { roomAction(r); return }
         channelId = r.id
         zone = "messages"
+    }
+    // A voice room or group call: one tap joins; in it already, its options.
+    function roomAction(r) {
+        if (isTour) { Ui.say(r.name + " is a voice room: choose it to join, up to " + Rooms.maxPeople + " people at once."); return }
+        if (readOnly) { Ui.say("You're no longer in this group.", true); return }
+        if (Rooms.isIn(gid, r.id)) {
+            Ui.pickFrom(r.name, [{ header: Rooms.statusText, items: [
+                { name: Rooms.muted ? "Unmute" : "Mute", url: "mute" },
+                { name: "Output: " + Rooms.outputName, detail: "Choose again for the next one", url: "output" },
+                { name: "Leave " + r.name, detail: "You stop hearing and being heard", url: "leave" }] }], a => {
+                if (a === "mute") Rooms.toggleMute()
+                else if (a === "output") Rooms.nextOutput()
+                else if (a === "leave") Rooms.leave()
+            })
+            return
+        }
+        const why = Rooms.join(gid, r.id)
+        if (why !== "") Ui.say(why, true)
+        else Ui.say("You joined " + r.name + ". Up to " + Rooms.maxPeople + " people at once.")
+    }
+    // Ring some members into a group call: choose people (again to leave them out), then Start.
+    function pickCallees(chosen) {
+        const g = gid
+        const items = [{ name: chosen.length ? "Start the call" : "Choose who to ring",
+                         detail: chosen.length ? chosen.length + (chosen.length === 1 ? " person" : " people") + " will be rung" : "Then come back here", url: "go" }]
+        members.filter(m => !m.me).forEach(m => items.push({ name: m.name, url: m.key,
+            detail: Rooms.needsUpdate(m.key) ? "Needs an update to join calls"
+                  : chosen.indexOf(m.key) >= 0 ? "Will be rung · choose again to leave out" : "Choose to ring" }))
+        Ui.pickFrom("Call some people", [{ header: "Up to " + Rooms.maxPeople + " people talk at once", items: items }], k => {
+            if (k === "go") {
+                if (chosen.length) tell(Rooms.callGroup(g, chosen), "Ringing " + chosen.length + (chosen.length === 1 ? " person." : " people."))
+                else Qt.callLater(() => page.pickCallees(chosen))
+                return
+            }
+            const next = chosen.indexOf(k) >= 0 ? chosen.filter(x => x !== k) : chosen.concat([k])
+            Qt.callLater(() => page.pickCallees(next))
+        })
     }
     function write() {
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
@@ -611,14 +660,18 @@ Rectangle {
             k => tell(Chat.inviteToGroup(g, k), "Invite sent. They join when they say yes."))
     }
     function groupItems() {
-        const people = [], chans = [], group = []
+        const people = [], chans = [], group = [], calls = []
+        if (!readOnly && !isTour && info.count > 1) {
+            calls.push({ name: "Call everyone", detail: "Rings the whole group. Up to " + Rooms.maxPeople + " people talk at once", url: "callall" })
+            if (info.count > 2) calls.push({ name: "Call some people", detail: "Choose who to ring", url: "callsome" })
+        }
         if (!readOnly && info.amAdmin) {
             people.push({ name: "Invite someone", detail: "A contact gets an invite to say yes to", url: "invite" })
             people.push({ name: "Show the group code", detail: "For anyone else: they scan or paste it within the hour", url: "code" })
         }
         if (!Theme.desktop) people.push({ name: "Members", detail: info.count + (info.count === 1 ? " person" : " people"), url: "members" })
         if (!readOnly && info.amAdmin) {
-            chans.push({ name: "Add a text channel", url: "addtext" }, { name: "Add a voice room", detail: "Calls are coming soon", url: "addvoice" })
+            chans.push({ name: "Add a text channel", url: "addtext" }, { name: "Add a voice room", detail: "Up to " + Rooms.maxPeople + " people talk at once", url: "addvoice" })
             const r = rows[chRow]
             const target = zone === "channels" && r && r.kind === "channel" ? r : channel
             chans.push({ name: "Rename " + (target.type === "voice" ? "" : "#") + target.name, url: "rnch:" + target.id })
@@ -628,7 +681,7 @@ Rectangle {
         if (!readOnly) group.push({ name: "Send a picture", detail: "To #" + channel.name, url: "picture" })
         if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
-        return [{ header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
+        return [{ header: "Calls", items: calls }, { header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
     }
     function groupOptions() {
         if (!exists) return
@@ -638,6 +691,8 @@ Rectangle {
         const g = gid
         {
             if (a === "invite") invite()
+            else if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone in " + info.name + ".")
+            else if (a === "callsome") pickCallees([])
             else if (a === "code") showCode()
             else if (a === "members") pickMember()
             else if (a === "picture") pickPicture()

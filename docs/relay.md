@@ -23,7 +23,7 @@ protection is the Worker's daily caps.
 
 ## Request
 
-`POST {WORKER_URL}/turn`, `Content-Type: application/json`, sent over Tor like other network requests.
+`POST {WORKER_URL}/turn`, `Content-Type: application/json`, over HTTPS.
 
 ```json
 {"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
@@ -79,18 +79,19 @@ call fails with "Can't connect".
 
 - Store `{urls, username, credential, expires}` with `expires = time the response arrived + ttl`.
 - Reuse the cached login until 5 minutes before `expires` (`now < expires - 300`). After that, fetch a new one.
-- Fetch lazily: only when a call needs a relay, not at app start.
+- Fetch when a call is near, not at app start: when a conversation with a contact that can take calls
+  (`c1`) is opened (at most one try a minute), when a call starts, and when an offer arrives. The login is
+  then usually cached by the time Call is pressed, so starting a call doesn't wait for the Worker.
+  (Huginn `Calls.prepare`, Muninn `CallManager.prepare`.)
 - Keep the cache in memory (or app private storage). Never log the credential.
 - After a 429, don't ask again until the next UTC day. After a 5xx, wait at least 60 s before asking again.
 - A call already using a login keeps it; refreshing only affects new allocations.
 
 ## Reaching the TURN server
 
-The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up through Tor only (SOCKS5
-RESOLVE on Tor's port), a few tries a second apart, and never fall back to the system resolver: that would
-tell the local network and its DNS server when this device makes a call. If Tor can't answer, the call has
-no relay and says "Can't reach the call relay right now". The audio itself then goes from the device to the
-TURN server's address directly (UDP, or TLS on 443), not through Tor.
+The TURN URLs carry a host name (`turn.cloudflare.com`). The apps look it up with the system resolver,
+a few tries a second apart. If it can't be looked up, the call has no relay and says "Can't reach the call
+relay right now". The audio goes from the device to the TURN server's address directly (UDP, or TLS on 443).
 
 ## Health
 

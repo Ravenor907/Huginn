@@ -1,4 +1,5 @@
 #include "transfer.h"
+#include "lan.h"
 #include "settings.h"
 #include "system.h"
 
@@ -44,6 +45,8 @@ TransferServer::TransferServer(Settings *settings, QObject *parent)
     , m_settings(settings)
 {
     connect(&m_server, &QTcpServer::newConnection, this, &TransferServer::onConnection);
+    m_lanTimer.setInterval(5000);
+    connect(&m_lanTimer, &QTimer::timeout, this, &TransferServer::followLan);
     newPin();
 }
 
@@ -52,45 +55,50 @@ QString TransferServer::saveName() const
     return System::displayPath(QUrl::fromLocalFile(m_settings->transferFolder()));
 }
 
-QString TransferServer::lanAddress()
-{
-    for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces()) {
-        if (!(iface.flags() & QNetworkInterface::IsUp) || (iface.flags() & QNetworkInterface::IsLoopBack))
-            continue;
-        for (const QNetworkAddressEntry &e : iface.addressEntries()) {
-            const QHostAddress a = e.ip();
-            if (a.protocol() == QAbstractSocket::IPv4Protocol && a.isPrivateUse())
-                return a.toString();
-        }
-    }
-    return {};
-}
-
 void TransferServer::start()
 {
     if (running())
         return;
     m_error.clear();
-    const QString ip = lanAddress();
+    const QString ip = Lan::firstIPv4();
     if (ip.isEmpty()) {
         m_error = QStringLiteral("Not connected to a home network");
         Q_EMIT stateChanged();
         return;
     }
+    // Only on the home network's address, never on a VPN or anything else this computer is on.
     for (quint16 port = kFirstPort; port < kFirstPort + 10; ++port) {
-        if (m_server.listen(QHostAddress::AnyIPv4, port)) {
+        if (m_server.listen(QHostAddress(ip), port)) {
             m_address = QStringLiteral("http://%1:%2").arg(ip).arg(port);
+            m_ip = ip;
             break;
         }
     }
     if (!running())
         m_error = QStringLiteral("Couldn't open a port for the phone page");
+    else
+        m_lanTimer.start();
     Q_EMIT stateChanged();
+}
+
+void TransferServer::followLan()
+{
+    // The home network changed (another Wi-Fi, or it went away): move the page to the new address.
+    if (!running() || Lan::firstIPv4() == m_ip)
+        return;
+    m_server.close();
+    m_ip.clear();
+    m_address.clear();
+    start();
+    if (!running())
+        Q_EMIT stateChanged();
 }
 
 void TransferServer::stop()
 {
+    m_lanTimer.stop();
     m_server.close();
+    m_ip.clear();
     for (auto it = m_conns.begin(); it != m_conns.end(); ++it) {
         if (it->file) {
             it->file->close();
@@ -149,6 +157,11 @@ QVariantList TransferServer::items() const
 void TransferServer::onConnection()
 {
     while (QTcpSocket *s = m_server.nextPendingConnection()) {
+        if (!Lan::isNeighbour(s->peerAddress())) {
+            s->abort();   // only phones on the same home network
+            s->deleteLater();
+            continue;
+        }
         m_conns.insert(s, Conn{});
         connect(s, &QTcpSocket::readyRead, this, [this, s] { onData(s); });
         connect(s, &QTcpSocket::disconnected, this, [this, s] {

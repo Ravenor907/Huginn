@@ -25,6 +25,7 @@ QString assetName()
 #ifndef Q_OS_WIN
 
 bool supported() { return false; }
+void tidyOldLayout() {}
 QString folderProblem() { return {}; }
 void install(const QString &, QObject *, std::function<void(bool, const QString &)> done)
 {
@@ -36,7 +37,15 @@ void install(const QString &, QObject *, std::function<void(bool, const QString 
 
 namespace
 {
-QString appDir() { return QCoreApplication::applicationDirPath(); }
+// The portable folder people unzipped: the one with the launcher Huginn.exe. Huginn itself runs
+// from its lib\ folder; an older zip had everything at the top.
+QString appDir()
+{
+    const QDir d(QCoreApplication::applicationDirPath());
+    if (d.dirName().compare(QLatin1String("lib"), Qt::CaseInsensitive) == 0 && QFileInfo::exists(d.absoluteFilePath(QStringLiteral("../Huginn.exe"))))
+        return QDir::cleanPath(d.absoluteFilePath(QStringLiteral("..")));
+    return d.absolutePath();
+}
 QString stagingDir() { return appDir() + QStringLiteral("/update-staging"); }
 
 // PowerShell single-quoted literal: only ' needs doubling.
@@ -67,11 +76,8 @@ bool writeScript(const QString &path, const QString &from)
         "$stage = %3\r\n"
         "$log = %4\r\n"
         "$huginn = %5\r\n"
-        "# Wait for Huginn to close, then for its tor.exe (it exits by itself once Huginn is gone).\r\n"
+        "# Wait for Huginn to close.\r\n"
         "Wait-Process -Id $huginn -Timeout 60\r\n"
-        "$tor = Join-Path $dst 'tor.exe'\r\n"
-        "$left = Get-Process -Name tor | Where-Object { $_.Path -eq $tor }\r\n"
-        "if ($left) { $left | Wait-Process -Timeout 15; $left | Stop-Process -Force }\r\n"
         "& robocopy $src $dst /E /IS /IT /R:20 /W:1 /NP /NFL /NDL /LOG:$log | Out-Null\r\n"
         "$ok = $LASTEXITCODE -lt 8\r\n"
         "if ($ok) { Remove-Item -LiteralPath $stage -Recurse -Force }\r\n"
@@ -119,6 +125,51 @@ QString folderProblem()
     probe.close();
     probe.remove();
     return {};
+}
+
+void tidyOldLayout()
+{
+#ifdef HUGINN_WINDOWS_PORTABLE
+    // Updating from the 0.6 zip, which had everything at the top, leaves its files beside the new lib\.
+    // Remove only names that zip had at the top (or that lib\ now has a copy of), so anything the
+    // owner put in the folder stays. Huginn.exe and LICENSE.txt are the new zip's own.
+    const QString root = appDir(), lib = QCoreApplication::applicationDirPath();
+    if (QDir(root) == QDir(lib))
+        return;
+    static const QStringList keep{QStringLiteral("Huginn.exe"), QStringLiteral("LICENSE.txt"), QStringLiteral("lib"), QStringLiteral("update-staging")};
+    // Everything else at the top of Huginn-Windows.zip 0.6: Qt, FFmpeg, OpenSSL, Opus, SDL2,
+    // libqrencode and the Visual C++ runtime DLLs, Qt's plugin and QML folders, and Tor.
+    static const QStringList old06Files{
+        QStringLiteral("tor.exe"), QStringLiteral("Qt6Bluetooth.dll"), QStringLiteral("Qt6Core.dll"), QStringLiteral("Qt6Gui.dll"),
+        QStringLiteral("Qt6Multimedia.dll"), QStringLiteral("Qt6Network.dll"), QStringLiteral("Qt6OpenGL.dll"), QStringLiteral("Qt6Qml.dll"),
+        QStringLiteral("Qt6QmlMeta.dll"), QStringLiteral("Qt6QmlModels.dll"), QStringLiteral("Qt6QmlWorkerScript.dll"), QStringLiteral("Qt6Quick.dll"),
+        QStringLiteral("Qt6QuickControls2.dll"), QStringLiteral("Qt6QuickControls2Basic.dll"), QStringLiteral("Qt6QuickControls2BasicStyleImpl.dll"),
+        QStringLiteral("Qt6QuickControls2Impl.dll"), QStringLiteral("Qt6QuickShapes.dll"), QStringLiteral("Qt6QuickTemplates2.dll"),
+        QStringLiteral("Qt6Svg.dll"), QStringLiteral("Qt6WebSockets.dll"), QStringLiteral("Qt6Widgets.dll"), QStringLiteral("SDL2.dll"),
+        QStringLiteral("avcodec-61.dll"), QStringLiteral("avformat-61.dll"), QStringLiteral("avutil-59.dll"), QStringLiteral("swresample-5.dll"),
+        QStringLiteral("swscale-8.dll"), QStringLiteral("concrt140.dll"), QStringLiteral("dxcompiler.dll"), QStringLiteral("dxil.dll"),
+        QStringLiteral("icuuc.dll"), QStringLiteral("legacy.dll"), QStringLiteral("libcrypto-3-x64.dll"), QStringLiteral("libssl-3-x64.dll"),
+        QStringLiteral("msvcp140.dll"), QStringLiteral("msvcp140_1.dll"), QStringLiteral("msvcp140_2.dll"), QStringLiteral("msvcp140_atomic_wait.dll"),
+        QStringLiteral("msvcp140_codecvt_ids.dll"), QStringLiteral("opus.dll"), QStringLiteral("qrencode.dll"), QStringLiteral("vccorlib140.dll"),
+        QStringLiteral("vcruntime140.dll"), QStringLiteral("vcruntime140_1.dll"), QStringLiteral("vcruntime140_threads.dll")};
+    static const QStringList old06Dirs{QStringLiteral("generic"), QStringLiteral("iconengines"), QStringLiteral("imageformats"),
+                                       QStringLiteral("multimedia"), QStringLiteral("networkinformation"), QStringLiteral("platforms"),
+                                       QStringLiteral("qml"), QStringLiteral("qmltooling"), QStringLiteral("styles"), QStringLiteral("tls")};
+    for (const QFileInfo &fi : QDir(root).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
+        const QString n = fi.fileName();
+        if (keep.contains(n, Qt::CaseInsensitive))
+            continue;
+        const QFileInfo twin(lib + QLatin1Char('/') + n);
+        const bool sameInLib = twin.exists() && twin.isDir() == fi.isDir();
+        if (fi.isDir() && (sameInLib || old06Dirs.contains(n, Qt::CaseInsensitive)))
+            QDir(fi.absoluteFilePath()).removeRecursively();
+        else if (!fi.isDir() && (sameInLib || old06Files.contains(n, Qt::CaseInsensitive)))
+            QFile::remove(fi.absoluteFilePath());
+    }
+    // 0.6 kept Tor's licences in licenses\tor\; take the licenses folder too once nothing else is in it.
+    QDir(root + QStringLiteral("/licenses/tor")).removeRecursively();
+    QDir(root).rmdir(QStringLiteral("licenses"));
+#endif
 }
 
 void install(const QString &zipPath, QObject *context, std::function<void(bool, const QString &)> done)

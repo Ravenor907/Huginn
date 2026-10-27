@@ -114,7 +114,7 @@ object CallLogic {
         return null
     }
 
-    /** An IPv4 or IPv6 literal, or null for anything else (a name would mean a DNS lookup outside Tor). */
+    /** An IPv4 or IPv6 literal, or null for anything else (a peer's candidate never makes this phone look a name up). */
     fun literal(s: String): InetAddress? {
         val v4 = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""").find(s)
         if (v4 != null) {
@@ -218,6 +218,36 @@ object CallLogic {
 
     // ------------------------------------------------------------------ paths (5.6)
 
+    /**
+     * Where the peer is on the relay (5.6). [advertised] is the relayed address from its offer, answer or
+     * cands. Some relays translate addresses between their sites (Cloudflare anchors each allocation at
+     * the nearest data center), so the peer's packets can arrive from a different port, or even a
+     * different address, than the one it advertised. Media is authenticated end to end, so the first
+     * authentic packet from such an address makes it [seen], and media goes to both from then on.
+     */
+    class RelayPeer {
+        @Volatile var advertised: InetSocketAddress? = null; private set
+        @Volatile var seen: InetSocketAddress? = null; private set
+
+        /** A new advertised address (from signaling). True when it changed. */
+        fun advertise(a: InetSocketAddress?): Boolean {
+            if (a == null || a == advertised) return false
+            advertised = a
+            if (seen == a) seen = null
+            return true
+        }
+
+        /** An authentic packet came relayed from [from]. True when it is a new address to permit and send to. */
+        fun heard(from: InetSocketAddress?): Boolean {
+            if (from == null || from == advertised || from == seen) return false
+            seen = from
+            return true
+        }
+
+        /** Every relayed address to send to: the advertised one, then the one its packets come from. */
+        fun targets(): List<InetSocketAddress> = listOfNotNull(advertised, seen?.takeIf { it != advertised })
+    }
+
     enum class Kind { RELAY, WIFI, BLUETOOTH }
 
     /** One way to reach the peer. Live while an authentic packet came on it within 4 s. */
@@ -227,6 +257,28 @@ object CallLogic {
         @Volatile var rttMs = -1L
         val added = System.currentTimeMillis()
         fun live(now: Long) = lastIn > 0 && now - lastIn < PATH_DEAD_MS
+    }
+
+    /** Where one sealed packet goes: [kind] says which socket (the TURN allocation or the Wi-Fi one). */
+    data class Dest(val kind: Kind, val addr: InetSocketAddress)
+
+    /**
+     * The UDP sends for one packet over [targets] (paths, best first): up to [max] paths, Wi-Fi first then
+     * the lowest round trip. The relay counts as one path however many relay paths are known, and each
+     * distinct relayed address in [relayTargets] gets the packet once; each Wi-Fi address once too.
+     */
+    fun udpSends(targets: List<Path>, relayTargets: List<InetSocketAddress>, max: Int = 3): List<Dest> {
+        val chosen = targets.filter { it.kind != Kind.BLUETOOTH }
+            .sortedWith(compareBy({ if (it.kind == Kind.WIFI) 0 else 1 }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs }))
+            .distinctBy { if (it.kind == Kind.RELAY) "relay" else "${it.kind}|${it.addr}" }
+            .take(max)
+        val out = LinkedHashSet<Dest>()
+        for (p in chosen) when (p.kind) {
+            Kind.RELAY -> for (a in relayTargets) out += Dest(Kind.RELAY, a)
+            Kind.WIFI -> p.addr?.let { out += Dest(Kind.WIFI, it) }
+            else -> {}
+        }
+        return out.toList()
     }
 
     /**

@@ -30,6 +30,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- Updating itself: Android asks the person to confirm each install. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Kids' TV: once Muninn is the installer of record (after the first update a parent confirms),
+         Android 12 and newer let its later self-updates go in without asking (TvUpdate). -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -46,6 +49,9 @@
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Kids' TV: a parent can let Muninn show over other apps, so a call comes up over a show or a game
+         (Android only lets an app start its call screen from the background with this). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".Muninn"
@@ -77,6 +83,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="muninn" android:host="add" />
+            </intent-filter>
+            <!-- The add page's address itself (the contact QR scanned with the camera, or a shared link):
+                 the code is after "#". Android offers Muninn for it, or opens the page, which has an open button. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ravenor907.github.io" android:pathPrefix="/Huginn-Muninn/add" />
             </intent-filter>
             <!-- "Share" from any app sends with Muninn. -->
             <intent-filter>
@@ -129,10 +143,6 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <!-- Tor runs in Muninn's own process; only Muninn can reach it. -->
-        <service
-            android:name="org.torproject.jni.TorService"
-            android:exported="false" />
         <service
             android:name=".net.NearbyService"
             android:exported="false"
@@ -156,6 +166,29 @@
             android:foregroundServiceType="phoneCall|microphone" />
         <receiver
             android:name=".net.call.CallActions"
+            android:exported="false" />
+        <!-- Voice rooms and group calls: their screen (over the lock screen for a group call's ring),
+             service and notification buttons, the same way as a 1:1 call's. -->
+        <activity
+            android:name=".screens.RoomActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity="io.github.ravenor907.muninn.room"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.Muninn" />
+        <service
+            android:name=".net.call.RoomService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+        <receiver
+            android:name=".net.call.RoomActions"
+            android:exported="false" />
+        <!-- Kids' TV: the answer from Android's installer when Muninn updates itself. -->
+        <receiver
+            android:name=".tv.TvInstallResult"
             android:exported="false" />
 
         <provider
