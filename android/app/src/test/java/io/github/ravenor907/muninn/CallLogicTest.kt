@@ -64,11 +64,11 @@ class CallLogicTest {
         // Exactly what Huginn's callselftest (crossApp) reads as "Muninn 0.6".
         val muninn = JSONObject("""{"t":"cands","call":"$id","cands":[{"t":"relay","a":"104.30.1.2","p":61000},{"t":"lan","p":40000}],"lp":40000}""")
         val ours = CallLogic.candsMsg(id, relay, 40000)
-        assertEquals(muninn.toMap(), ours.toMap())
+        assertEquals(plain(muninn), plain(ours))
         // An offer says it the same way.
         val eph = ChatCrypto.b64(CallCrypto.newEphemeral().public.encoded)
         val o = CallLogic.offer(id, eph, CallCrypto.sign(me.private, "offer", id, eph), 1234, relay, 40000, false)
-        assertEquals(muninn.getJSONArray("cands").toList(), o.getJSONArray("cands").toList()); assertEquals(40000, o.getInt("lp"))
+        assertEquals(plain(muninn.getJSONArray("cands")), plain(o.getJSONArray("cands"))); assertEquals(40000, o.getInt("lp"))
         // Huginn 0.6 as Qt writes it (keys sorted): relay, lan and lp.
         val huginn = """{"call":"$id","cands":[{"a":"104.30.1.2","p":61000,"t":"relay"},{"p":40003,"t":"lan"}],"lp":40003,"t":"cands"}"""
         CallLogic.parse(myKey, huginn).let { assertEquals(relay, it.relay); assertEquals(40003, it.lanPort) }
@@ -158,5 +158,13 @@ class CallLogicTest {
         p.lastIn = t0 + 3_300; p.lastPing = t0 + 3_300
         assertTrue(p.live(t0 + 7_299)); assertFalse(p.live(t0 + 7_300))
         assertFalse(CallLogic.pingDue(p, t0 + 4_000)); assertTrue(CallLogic.pingDue(p, t0 + 4_300))
+    }
+
+    /** JSON as plain maps and lists, so two objects compare by content whatever their key order (Android's org.json has no toMap). */
+    private fun plain(v: Any?): Any? = when (v) {
+        is JSONObject -> v.keys().asSequence().associateWith { plain(v.get(it)) }
+        is org.json.JSONArray -> (0 until v.length()).map { plain(v.get(it)) }
+        is Number -> v.toLong()
+        else -> v
     }
 }
