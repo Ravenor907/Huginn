@@ -343,6 +343,8 @@ object Tv : TvHandler {
      * started after the TV boots), brings an incoming call up over whatever is on, and updates itself.
      */
     private fun kids(app: Muninn) {
+        // A Kids' TV is always reachable at once, whatever "Check for messages" said before it became one.
+        if (app.power.check != io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE) app.power.check = io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE
         if (!app.identity.stayConnected) app.identity.stayConnected = true
         io.github.ravenor907.muninn.net.MessageService.start(app)
         TvRing.watch(app)

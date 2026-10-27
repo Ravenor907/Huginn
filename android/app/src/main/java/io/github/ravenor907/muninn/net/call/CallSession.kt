@@ -177,7 +177,7 @@ class CallSession(
             CallLogic.ANSWER_EVERY_MS, CallLogic.ANSWER_EVERY_MS, TimeUnit.MILLISECONDS)
         timers += resend
         set(Phase.CONNECTING)
-        if (!m.startAudio()) note = "The microphone isn't available"
+        if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
         startRelay()
         every(500) { watch() }
     }
@@ -229,7 +229,7 @@ class CallSession(
         applyPeer()
         answeredAt = System.currentTimeMillis()
         set(Phase.CONNECTING)
-        if (!m.startAudio()) note = "The microphone isn't available"
+        if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
     }
 
     /** Tells media where the peer is: its relayed address, and its Wi-Fi address when close by. */

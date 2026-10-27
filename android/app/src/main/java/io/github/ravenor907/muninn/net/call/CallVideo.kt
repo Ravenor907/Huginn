@@ -380,6 +380,7 @@ object CallVideo {
         if (on && !_state.value.possible) return
         update { it.copy(cameraOn = on) }
         s.mediaNow?.setVideoSending(VideoWire.CAMERA, on)
+        if (on) s.mediaNow?.videoStarted()
         if (on) rebind() else stopCamera()
     }
 

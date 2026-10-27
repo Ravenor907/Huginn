@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.PowerLogic.Check
 import io.github.ravenor907.muninn.ui.Bar
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
@@ -79,13 +80,23 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         if (folder == "notify") {
         Panel {
             val ctx = androidx.compose.ui.platform.LocalContext.current
-            var stay by remember { mutableStateOf(id.stayConnected) }
+            var check by remember { mutableStateOf(app.power.check) }
+            val stay = check == Check.LIVE
             var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
             androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
-            ToggleRow("Get messages right away", "Stays connected while Muninn is closed (a small silent “Listening” notification you can hide). Off: checks about every 15 minutes", stay) {
-                stay = it; id.stayConnected = it
-                if (it) io.github.ravenor907.muninn.net.MessageService.start(ctx) else io.github.ravenor907.muninn.net.MessageService.stop(ctx)
+            // How Muninn checks while it's closed: the biggest choice for the battery.
+            Text("Check for messages", style = Type.normal.copy(color = Palette.text))
+            Check.entries.chunked(2).forEach { row ->
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { c -> MButton(c.title, Modifier.weight(1f), if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c } }
+                }
             }
+            Text(when (check) {
+                Check.LIVE -> "Messages and calls arrive within seconds. Uses the most battery (a small silent “Listening” notification you can hide)."
+                Check.QUARTER -> "Saves battery. Messages arrive within about 15 minutes. Calls don't ring and show as missed. Fully connected while charging."
+                Check.HOUR -> "Saves more battery. Messages arrive within about an hour. Calls don't ring and show as missed. Fully connected while charging."
+                Check.OPEN -> "No notifications, messages or calls until you open Muninn, even while charging. Messages wait for you."
+            }, style = Type.small, modifier = Modifier.padding(top = 6.dp))
             if (stay && !free) {
                 Text("Android's battery saver can still pause Muninn while the phone sleeps, so messages arrive late.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                 MButton("Let Muninn run in the background", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
@@ -101,13 +112,18 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             var saver by remember { mutableStateOf(app.power.saver) }
             val away by app.power.away.collectAsState()
-            ToggleRow("Battery saver",
+            // Only "Right away" stays connected, so only it has a speed to trade.
+            if (stay) ToggleRow("Battery saver",
                 if (saver) "Saves battery while the screen is off. Messages and calls still arrive, sometimes a few seconds later."
                 else "Maximum speed: always fully connected. Uses more battery.", saver) {
                 saver = it; app.power.saver = it
             }
-            androidx.compose.runtime.LaunchedEffect(Unit) { app.power.refresh() }
+            androidx.compose.runtime.LaunchedEffect(check) { app.power.refresh() }
             Text(away.label, style = Type.small, modifier = Modifier.padding(top = 2.dp))
+            var low by remember { mutableStateOf(app.power.lowBatterySave) }
+            ToggleRow("Save more when the battery is low", "Below 30%: checks every 15 minutes. Below 15%: every hour. " +
+                "Calls show as missed until it's charging or above 30% again", low) { low = it; app.power.lowBatterySave = it }
+            QuietHours(app)
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
                     ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -115,6 +131,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 } catch (_: Exception) {}
             }
         }
+        Section("Battery report")
+        BatteryReport(app)
         }
         if (folder == "privacy") {
         Panel {
@@ -213,6 +231,10 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                     }
                 }
             }
+            var closeBy by remember { mutableStateOf(app.power.closeBy) }
+            ToggleRow("Find phones close by in the background", if (closeBy)
+                "Bluetooth and Nearby keep looking while Muninn is closed, for chatting without the internet. Uses more battery"
+                else "Off: they look only while Muninn is open. Saves battery", closeBy) { closeBy = it; app.power.closeBy = it }
             ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
 
         }
@@ -245,6 +267,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("High contrast", "White text on black, stronger outlines", A.contrast) { A.contrast = it; id.highContrast = it }
             ToggleRow("Color-blind friendly", "Warnings in amber instead of red; status always says it in words", A.colorBlind) { A.colorBlind = it; id.colorBlind = it }
             ToggleRow("Reduce motion", "No sliding or fading", A.reduceMotion) { A.reduceMotion = it; id.reduceMotion = it }
+            ToggleRow("True black", "A pure black background. On phones with OLED screens it saves a little battery", A.trueBlack) { A.trueBlack = it; id.trueBlack = it }
         }
         }
         if (folder == "about") {
@@ -264,16 +287,64 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     }
 }
 
+/** Today's battery report: what Muninn kept running, how often it checked, and the data it used. */
+@Composable
+private fun BatteryReport(app: Muninn) {
+    var r by remember { mutableStateOf(app.power.report()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(30_000); r = app.power.report() } }
+    fun time(ms: Long): String { val m = ms / 60_000; return if (m < 60) "$m min" else "${m / 60} h ${m % 60} min" }
+    Panel {
+        Text("Today so far", style = Type.normal.copy(color = Palette.text))
+        Text("Fully connected: ${time(r.connectedMs)}", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        Text("Saving battery (connected lightly): ${time(r.savingMs)}", style = Type.small)
+        Text("Resting (nothing running): ${time(r.restingMs)}", style = Type.small)
+        Text("Background checks for messages: ${r.checks}", style = Type.small)
+        r.dataBytes?.let { Text("Data used since the phone started: ${io.github.ravenor907.muninn.net.LocalSend.size(it)}", style = Type.small) }
+        Text("Fully connected costs the most. Android's own Settings › Battery shows Muninn's share of the battery.",
+            style = Type.small, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** Quiet hours: from and to on the hour, and how Muninn checks while they last (it saves the most then). */
+@Composable
+private fun QuietHours(app: Muninn) {
+    var on by remember { mutableStateOf(app.power.quietOn) }
+    var from by remember { mutableStateOf(app.power.quietFrom) }
+    var to by remember { mutableStateOf(app.power.quietTo) }
+    var mode by remember { mutableStateOf(app.power.quietMode) }
+    fun hour(h: Int) = when (h) { 0 -> "12 AM"; 12 -> "12 PM"; in 1..11 -> "$h AM"; else -> "${h - 12} PM" }
+    ToggleRow("Quiet hours", if (on) "From ${hour(from)} to ${hour(to)}: ${mode.title.lowercase()}" else "Check less overnight, then go back to your choice", on) {
+        on = it; app.power.quietOn = it
+    }
+    if (!on) return
+    @Composable fun Stepper(label: String, h: Int, set: (Int) -> Unit) {
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(label, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+            MButton("−") { set(Math.floorMod(h - 1, 24)) }
+            Text(hour(h), style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(horizontal = 12.dp))
+            MButton("+") { set(Math.floorMod(h + 1, 24)) }
+        }
+    }
+    Stepper("From", from) { from = it; app.power.quietFrom = it }
+    Stepper("To", to) { to = it; app.power.quietTo = it }
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(Check.HOUR, Check.OPEN).forEach { c ->
+            MButton(c.title, Modifier.weight(1f), if (mode == c) Kind.Accent else Kind.Normal) { mode = c; app.power.quietMode = c }
+        }
+    }
+    Text("While quiet hours last, Muninn checks this way unless your own choice saves more.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+}
+
 /** One folder of Settings: what it's called, what's in it, and its icon. The same folders as Huginn's. */
 private class Folder(val id: String, val title: String, val detail: String, val icon: String)
 
 private val FOLDERS = listOf(
-    Folder("notify", "Notifications", "Messages right away, battery saver, sounds", "chat"),
+    Folder("notify", "Notifications", "Check for messages, quiet hours, battery saving, sounds, battery report", "chat"),
     Folder("privacy", "Privacy", "Delete messages after, read receipts, active status, screenshots", "shield"),
     Folder("lock", "Lock", "Password or pattern, panic lock", "lock"),
     Folder("calls", "Calls", "Noise removal", "call"),
     Folder("nearby", "Nearby and sharing", "Visible to people nearby, Nearby chat, your names, received files", "wifi"),
-    Folder("display", "Display and accessibility", "Size, text size, contrast, color-blind, reduce motion", "image"),
+    Folder("display", "Display and accessibility", "Size, text size, contrast, color-blind, reduce motion, true black", "image"),
     Folder("data", "Backup and erase", "Back up, restore, delete all messages, erase everything", "download"),
     Folder("about", "About and updates", "Muninn's version, check for updates", "info"),
 )

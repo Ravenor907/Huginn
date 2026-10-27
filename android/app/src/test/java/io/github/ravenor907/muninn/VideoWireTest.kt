@@ -110,4 +110,14 @@ class VideoWireTest {
         assertEquals(listOf(0, 2, 1, 2, 0, 1, 9), e.map { it.toInt() and 0xFF })
         assertEquals(listOf(0, 0x12, 0x34, 2, 0, 5), VideoWire.encodeNack(VideoWire.Nack(0, 0x1234, listOf(0, 5))).map { it.toInt() and 0xFF })
     }
+
+    @Test
+    fun aLowBatteryMakesTheCameraLighter() {
+        for (free in listOf(false, true)) {
+            val p = VideoWire.lowPower(VideoWire.cameraProfile(free))
+            assertTrue(p.height <= 360 && p.width <= 480)
+            assertTrue(p.fps <= 15)
+            assertTrue(p.capKbps <= 400)
+        }
+    }
 }
