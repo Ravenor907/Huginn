@@ -332,8 +332,8 @@ jobs:
             s=0; "$@" > t.log 2>&1 || s=$?
             cat t.log
             if [ $s -ne 0 ]; then
-              e=$(tail -n 30 t.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-              echo "::error title=Windows self-test failed: ${2} (exit $s)::$e"
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Windows self-test failed: $* (exit $s)::$e"
               bad=1
             fi
           }
