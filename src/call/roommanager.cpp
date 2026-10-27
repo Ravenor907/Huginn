@@ -7,12 +7,12 @@
 #include "callsignal.h"
 #include "opuscodec.h"
 #include "../groupwire.h"
+#include "../platform/chime.h"
 #include "../platform/notify.h"
 
 #include <QDateTime>
 #include <QGuiApplication>
 #include <QJsonArray>
-#include <QSoundEffect>
 #include <QUrl>
 #include <algorithm>
 
@@ -57,8 +57,7 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
         m_endText.clear();
         Q_EMIT changed();
     });
-    m_ringtone = new QSoundEffect(this);
-    m_ringtone->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
+    m_ringtone = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), this);
     m_ringer.setInterval(3000);
     connect(&m_ringer, &QTimer::timeout, this, [this] {
         if (ringing() && now() - m_ringSince > RoomWire::kRingMs) {

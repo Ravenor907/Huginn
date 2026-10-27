@@ -250,8 +250,12 @@ jobs:
           v=$("$QT_ROOT_DIR/bin/qtpaths.exe" --qt-version 2>/dev/null || "$QT_ROOT_DIR/bin/qmake.exe" -query QT_VERSION)
           v=$(echo "$v" | tr -d '\r')
           echo "Qt $v"
-          p=$(echo "$v" | cut -d. -f3)
-          case "$v" in 6.10.*) [ "${p:-0}" -ge 2 ] || { echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1; } ;; esac
+          # Any Qt older than 6.10.2 (6.8.3 to 6.10.1 can crash in QSoundEffect, QTBUG-142694), or one that can't be read.
+          IFS=. read -r ma mi pa <<< "$v"
+          case "$ma.$mi.$pa" in *[!0-9.]*|.*|*..*|*.) echo "::error title=Qt version::Can't read the Qt version (\"$v\")"; exit 1 ;; esac
+          if [ $(( ma * 10000 + mi * 100 + pa )) -lt 61002 ]; then
+            echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1
+          fi
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64

@@ -87,6 +87,7 @@ target_sources(huginn PRIVATE
     src/platform/chime.h
     src/platform/qrcode.h
     src/platform/keepawake.h
+    src/platform/powerwatch.h
     src/platform/singleinstance.cpp src/platform/singleinstance.h
     src/platform/winupdate.cpp src/platform/winupdate.h
 )
@@ -96,6 +97,7 @@ if(WIN32)
         src/platform/chime_windows.cpp
         src/platform/qrcode_qrencode.cpp
         src/platform/keepawake_windows.cpp
+        src/platform/powerwatch_windows.cpp
         src/platform/direct_windows.cpp
     )
     # Huginn.exe: a windowed app (no console), with the raven icon and version details.

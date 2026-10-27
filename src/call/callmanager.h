@@ -10,7 +10,7 @@
 
 class CallSession;
 class CallSignal;
-class QSoundEffect;
+class Chime;
 class RelayCredentials;
 class Vault;
 struct TurnLogin;
@@ -106,7 +106,7 @@ private:
     QPointer<CallSession> m_session;
     QString m_lastPeer, m_endText;
     QTimer m_ticker, m_clear, m_ringer;
-    QSoundEffect *m_ringtone = nullptr;
+    Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
     qint64 m_seen = 0;           // missed calls after this (ms) count in the badge
     qint64 m_started = 0;

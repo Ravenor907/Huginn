@@ -14,7 +14,6 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QSoundEffect>
 #include <QUrl>
 
 #ifdef Q_OS_LINUX
@@ -23,6 +22,7 @@
 #include <QDBusReply>
 #include <QVariantMap>
 #else
+#include "../platform/chime.h"
 #include "../platform/notify.h"
 #endif
 
@@ -51,10 +51,9 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
         Q_EMIT changed();
     });
     // The raven call, every 3 s while someone is calling.
-    m_ringtone = new QSoundEffect(this);
-    m_ringtone->setSource(QUrl(QStringLiteral("qrc:/qt/qml/Huginn/assets/raven_message.wav")));
+    m_ringtone = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), this);
     m_ringer.setInterval(3000);
-    connect(&m_ringer, &QTimer::timeout, m_ringtone, &QSoundEffect::play);
+    connect(&m_ringer, &QTimer::timeout, m_ringtone, &Chime::play);
     if (m_vault) {
         connect(m_vault, &Vault::opened, this, &CallManager::load);
         // Panic lock: the call ends at once and nothing about it stays on screen.

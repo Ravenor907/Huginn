@@ -1,4 +1,5 @@
 #include "vault.h"
+#include "platform/powerwatch.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
 
@@ -77,13 +78,73 @@ Vault::Vault(QObject *parent)
         connect(pad, &Gamepad::connectedChanged, this, [this] { m_l3 = m_r3 = false; m_combo.stop(); });
     }
     // "Lock when I leave Huginn": Steam's menu, another app, or the handheld going to sleep.
+    // Otherwise the privacy cover goes up at once and the away clock is checked right away.
     if (qGuiApp)
         connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
-            if (state != Qt::ApplicationActive && lockOnLeave() && exists() && !locked() && !m_screenLocked) {
+            if (state == Qt::ApplicationActive) {
+                returning();
+                return;
+            }
+            if (lockOnLeave() && exists() && !locked() && !m_screenLocked) {
                 lockScreen();
                 Q_EMIT panicked();
             }
+            leaving();
         });
+    // Windows can sleep and wake with the window still in front, so Qt's state never changes.
+    Platform::watchPower(this, [this] { sleeping(); }, [this] { woke(); });
+}
+
+void Vault::leaving()
+{
+    checkAway();
+    if (!m_covered && exists() && !locked()) {
+        m_covered = true;
+        Q_EMIT changed();
+    }
+}
+
+void Vault::returning()
+{
+    checkAway();   // past the relock time: the lock is up before the cover comes off
+    if (m_covered) {
+        m_covered = false;
+        Q_EMIT changed();
+    }
+}
+
+void Vault::sleeping()
+{
+    if (m_asleep)
+        return;
+    m_asleep = true;
+    // Covered before Windows takes the picture it shows on wake. The away clock runs while asleep
+    // even with Chat on screen; what it was before comes back on wake.
+    m_awayBeforeSleep = m_awaySince;
+    if (!locked() && !m_awaySince) {
+        m_awaySince = QDateTime::currentMSecsSinceEpoch();
+        m_awayTimer.start();
+    }
+    leaving();
+}
+
+void Vault::woke()
+{
+    if (!m_asleep)
+        return;
+    m_asleep = false;
+    checkAway();
+    if (!m_screenLocked) {
+        m_awaySince = m_awayBeforeSleep;
+        if (m_awaySince)
+            m_awayTimer.start();
+        else
+            m_awayTimer.stop();
+    }
+    m_awayBeforeSleep = 0;
+    // Still in front: uncover. In the background: the cover stays until Huginn is back in front.
+    if (!qGuiApp || QGuiApplication::applicationState() == Qt::ApplicationActive)
+        returning();
 }
 
 QString Vault::keyFile() const { return dataDir() + QStringLiteral("/vault.key"); }
