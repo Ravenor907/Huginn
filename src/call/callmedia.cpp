@@ -527,6 +527,13 @@ bool CallMedia::sendVideo(int stream, bool key, int rotation, const QByteArray &
     return true;
 }
 
+void CallMedia::requestKeyframe(int stream)
+{
+    if (!m_c2 || !m_running)
+        return;
+    sendMedia(m_tx.seal(CallCrypto::KeyRequest, quint32(now() - m_started), QByteArray(1, char(stream & 1))), false);
+}
+
 void CallMedia::onVideo(const QByteArray &payload)
 {
     VideoWire::Fragment f;

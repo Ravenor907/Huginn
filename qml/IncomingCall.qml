@@ -10,8 +10,11 @@ Item {
     readonly property bool group: Calls.state !== "incoming" && Rooms.ringing
     visible: Calls.state === "incoming" || Rooms.ringing
 
-    readonly property var prompts: [{ key: "a", label: group ? "Join" : "Answer" }, { key: "b", label: "Decline" }]
-    readonly property string status: group ? "Group call" : "Incoming call"
+    // A video call (docs/protocol-0.6.md 5.8.5): X answers with the camera on, A as a voice call.
+    readonly property bool video: !group && Calls.incomingVideo
+    readonly property var prompts: video ? [{ key: "x", label: "Answer with video" }, { key: "a", label: "Voice only" }, { key: "b", label: "Decline" }]
+                                         : [{ key: "a", label: group ? "Join" : "Answer" }, { key: "b", label: "Decline" }]
+    readonly property string status: group ? "Group call" : video ? "Incoming video call" : "Incoming call"
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     // A locked Chat doesn't say who it is on screen.
     readonly property string who: Vault.screenLocked ? "Someone" : group ? Rooms.ringName : Calls.peerName
@@ -39,7 +42,7 @@ Item {
             spacing: Theme.px(16)
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: dlg.group ? "GROUP CALL" : "INCOMING CALL"
+                text: dlg.group ? "GROUP CALL" : dlg.video ? "VIDEO CALL" : "INCOMING CALL"
                 color: Theme.accent
                 font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
             }
@@ -74,13 +77,15 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Theme.px(16)
                 HButton { text: "Decline"; kind: "danger"; onClicked: dlg.decline() }
-                HButton { text: dlg.group ? "Join" : "Answer"; kind: "accent"; onClicked: dlg.answer() }
+                HButton { text: dlg.group ? "Join" : dlg.video ? "Voice only" : "Answer"; kind: dlg.video ? "normal" : "accent"; onClicked: dlg.answer() }
+                HButton { visible: dlg.video; text: "Answer with video"; kind: "accent"; onClicked: Calls.answerVideo() }
             }
         }
     }
 
     function handleButton(b) {
         if (b === "a") answer()
+        else if (b === "x" && video) Calls.answerVideo()
         else if (b === "b") decline()
         return true
     }

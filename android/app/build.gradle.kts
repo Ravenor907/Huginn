@@ -120,6 +120,12 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
     implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background
+    // Video calls: the camera (encoded with Android's own VP8 encoder, see net/call/CallVideo.kt)
+    val camerax = "1.4.1"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // org.json is a stub in unit tests

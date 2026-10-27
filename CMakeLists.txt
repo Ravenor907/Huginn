@@ -22,6 +22,13 @@ if(WIN32)
     find_path(QRENCODE_INCLUDE_DIR qrencode.h REQUIRED)
     find_library(QRENCODE_LIBRARY NAMES qrencode qrencoded REQUIRED)
     find_package(Opus CONFIG QUIET)
+    # libvpx (VP8 video calls and screen share), from vcpkg: its config package when there is one,
+    # otherwise the header and the library found by name.
+    find_package(unofficial-libvpx CONFIG QUIET)
+    if(NOT TARGET unofficial::libvpx::libvpx)
+        find_path(VPX_INCLUDE_DIR vpx/vpx_encoder.h)
+        find_library(VPX_LIBRARY NAMES vpx vpxmd libvpx)
+    endif()
     option(HUGINN_WINDOWS_PORTABLE "The CI build for Huginn-Windows.zip (updates itself from GitHub releases)" OFF)
 else()
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
@@ -30,6 +37,7 @@ else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
     pkg_check_modules(OPUS QUIET IMPORTED_TARGET opus)
+    pkg_check_modules(VPX QUIET IMPORTED_TARGET vpx)
 endif()
 
 qt_standard_project_setup(REQUIRES 6.6)
@@ -72,6 +80,8 @@ qt_add_executable(huginn
     src/call/audioio.cpp src/call/audioio.h
     src/call/directpath.cpp src/call/directpath.h
     src/call/videowire.cpp src/call/videowire.h
+    src/call/vpxcodec.cpp src/call/vpxcodec.h
+    src/call/videoengine.cpp src/call/videoengine.h
     src/call/callmedia.cpp src/call/callmedia.h
     src/call/callsession.cpp src/call/callsession.h
     src/call/callmanager.cpp src/call/callmanager.h
@@ -235,6 +245,24 @@ elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
 elseif(NOT WIN32)
     # The Flatpak's runtime ships libopus (freedesktop base); without it calls would build but never sound.
     message(FATAL_ERROR "Opus wasn't found (pkg-config opus): needed for voice calls.")
+endif()
+
+# libvpx (video calls and screen share, 5.8.5): HUGINN_HAVE_VPX when it's there. Without it calls are
+# sound only and the apps say video needs another build.
+if(TARGET unofficial::libvpx::libvpx)
+    target_link_libraries(huginn PRIVATE unofficial::libvpx::libvpx)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(VPX_INCLUDE_DIR AND VPX_LIBRARY)
+    target_include_directories(huginn PRIVATE ${VPX_INCLUDE_DIR})
+    target_link_libraries(huginn PRIVATE ${VPX_LIBRARY})
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(TARGET PkgConfig::VPX)
+    target_link_libraries(huginn PRIVATE PkgConfig::VPX)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_VPX)
+elseif(WIN32 AND HUGINN_WINDOWS_PORTABLE)
+    message(FATAL_ERROR "libvpx wasn't found: the Windows build installs it with vcpkg (libvpx:x64-windows).")
+else()
+    message(STATUS "libvpx not found: video calls are left out of this build")
 endif()
 
 include(GNUInstallDirs)

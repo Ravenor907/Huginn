@@ -444,6 +444,9 @@ class CallMedia(
         if (c2 && gotFirst && !stopped) timer.execute { sendReport() }
     }
 
+    /** Asks the peer for a keyframe now (the screen came back, or the decoder lost its place). */
+    fun requestKeyframe(stream: Int) { if (c2 && !stopped) timer.execute { send(CallCrypto.KEY_REQUEST, byteArrayOf((stream and 1).toByte())) } }
+
     /** One encoded VP8 frame: cut into packets and sent. False when video can't go now. */
     fun sendVideo(stream: Int, key: Boolean, rotation: Int, vp8: ByteArray): Boolean {
         val s = stream and 1

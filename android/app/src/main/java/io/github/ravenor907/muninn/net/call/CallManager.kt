@@ -28,6 +28,8 @@ object CallManager {
         val relay: Boolean, val wifi: Boolean, val bluetooth: Boolean, val endWhy: String, val note: String,
         /** The direct internet path (both trust each other, 5.8.2): tried, and carrying the call now. */
         val directTried: Boolean = false, val direct: Boolean = false,
+        /** Video can go both ways (5.8.5); the caller started it as a video call (shown while it rings). */
+        val video: Boolean = false, val videoCall: Boolean = false,
     )
 
     /** One line of the Calls tab. [result]: "answered", "missed", "declined", "noanswer", "busy", "failed". */
@@ -109,11 +111,16 @@ object CallManager {
 
     // ------------------------------------------------------------------ actions (from the screens)
 
-    /** Starts a call to [peerKey]. False if a call is already going on or calling isn't set up yet. */
-    fun start(peerKey: String): Boolean {
+    /** Can [peerKey] get video calls? Their app speaks c2 (5.8) and this phone has VP8. */
+    fun canVideo(peerKey: String): Boolean = Vp8.available && app?.let { a -> try { "c2" in (a.contacts.get(peerKey)?.caps ?: emptySet()) } catch (e: Exception) { false } } == true
+
+    /** Starts a call to [peerKey] ([video]: with the camera on). False if a call is already going on or calling isn't set up yet. */
+    fun start(peerKey: String, video: Boolean = false): Boolean {
         val a = app ?: return false
         if (session != null || RoomManager.busy || Opus.loadError != null) return false
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
+        s.wantVideo = video && Vp8.available
+        CallVideo.attach(a, s, s.wantVideo)
         session = s
         remember(s.callId)
         publish(s)
@@ -137,7 +144,15 @@ object CallManager {
         work.execute { try { host.relayLogin() } catch (_: Exception) {} }
     }
 
-    fun answer() { exec.execute { session?.let { s -> app?.let { Ringer.stop(it) }; s.answer(); app?.let { CallService.start(it) } } } }
+    /** Answers the ring; [video]: with the camera on (only when they started a video call and the camera may be used). */
+    fun answer(video: Boolean = false) { exec.execute { session?.let { s ->
+        app?.let { Ringer.stop(it) }
+        s.wantVideo = video && Vp8.available
+        CallVideo.want(s, s.wantVideo)
+        s.answer(); app?.let { CallService.start(it) }
+    } } }
+    fun setCamera(on: Boolean) = CallVideo.setCamera(on)
+    fun switchCamera() = CallVideo.switchCamera()
     fun decline() { exec.execute { session?.decline() } }
     fun hangup() { exec.execute { session?.hangup() } }
     fun setMuted(on: Boolean) { exec.execute { session?.setMuted(on) } }
@@ -175,6 +190,7 @@ object CallManager {
             if (!remember(s.call)) return@execute   // an old call's late retry
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
+            CallVideo.attach(a, ns, false)
             session = ns
             ns.startIncoming(s)
             publish(ns)
@@ -195,7 +211,7 @@ object CallManager {
 
     private fun publish(s: CallSession) {
         _call.value = Ui(s.callId, s.peerKey, nameOf(s.peerKey), s.outgoing, s.phase, s.connectedAt, s.muted, s.speaker, s.peerMuted,
-            s.peerSpeaking, s.relay, s.wifi, s.bluetooth, s.endWhy, s.note, s.directOn, s.direct)
+            s.peerSpeaking, s.relay, s.wifi, s.bluetooth, s.endWhy, s.note, s.directOn, s.direct, s.videoBoth && s.answered, s.peerVideo)
         app?.let { CallService.update(it) }
     }
 
@@ -214,16 +230,26 @@ object CallManager {
         override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false
         override fun trusted(peerKey: String) = this@CallManager.trusted(peerKey)
+        override fun videoCodec() = Vp8.available
         override fun newMedia(s: CallSession) = CallMedia(app!!, s.outgoing, s.callId, s.peerKey, bluetooth, object : CallMedia.Events {
             override fun onFirstMedia() = s.mediaFirst()
             override fun onPaths(relay: Boolean, wifi: Boolean, bluetooth: Boolean) = s.mediaPaths(relay, wifi, bluetooth)
             override fun onSpeaking(peer: Boolean) = s.mediaSpeaking(peer)
             override fun onDirect(live: Boolean) = s.mediaDirect(live)
+            override fun onVideoFrame(stream: Int, data: ByteArray, key: Boolean, rotation: Int) = CallVideo.onFrame(s, stream, data, key, rotation)
+            override fun onKeyframeWanted(stream: Int) = CallVideo.onKeyWanted(s, stream)
+            override fun onPeerVideo(camera: Boolean, screen: Boolean) = CallVideo.onPeerVideo(s, camera)
+            override fun onProfile() = CallVideo.onProfile(s)
         })
-        override fun changed(s: CallSession) { if (session === s) publish(s) }
+        override fun changed(s: CallSession) {
+            if (session !== s) return
+            if (s.answered && (s.phase == CallSession.Phase.CONNECTING || s.phase == CallSession.Phase.LIVE)) CallVideo.ready(s)
+            publish(s)
+        }
         override fun ended(s: CallSession) {
             if (session !== s) return
             session = null
+            CallVideo.detach()
             val a = app
             publish(s)
             if (a != null) {

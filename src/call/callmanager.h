@@ -10,6 +10,9 @@
 
 class CallSession;
 class CallSignal;
+class QVideoSink;
+class VideoReceiver;
+class VideoSender;
 class Chime;
 class RelayCredentials;
 class Vault;
@@ -39,6 +42,16 @@ class CallManager : public QObject
     Q_PROPERTY(bool directLive READ directLive NOTIFY changed)
     Q_PROPERTY(bool directTried READ directTried NOTIFY changed)
     Q_PROPERTY(QString outputName READ outputName NOTIFY changed)
+    // Video (docs/protocol-0.6.md 5.8.5): this build can do it; this call can (both c2 with VP8, answered);
+    // the camera is on; the other person's camera is on; the turn that shows their picture upright;
+    // an incoming call that started with video.
+    Q_PROPERTY(bool videoAvailable READ videoAvailable CONSTANT)
+    Q_PROPERTY(bool videoPossible READ videoPossible NOTIFY changed)
+    Q_PROPERTY(bool cameraOn READ cameraOn NOTIFY changed)
+    Q_PROPERTY(bool peerCamera READ peerCamera NOTIFY changed)
+    Q_PROPERTY(int peerRotation READ peerRotation NOTIFY changed)
+    Q_PROPERTY(bool incomingVideo READ incomingVideo NOTIFY changed)
+    Q_PROPERTY(QString cameraName READ cameraName NOTIFY changed)
     Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
     Q_PROPERTY(int missedCount READ missedCount NOTIFY historyChanged)
     Q_PROPERTY(bool available READ available CONSTANT)
@@ -62,12 +75,28 @@ public:
     bool directLive() const;
     bool directTried() const;
     QString outputName() const;
+    bool videoAvailable() const;
+    bool videoPossible() const;
+    bool cameraOn() const { return m_cameraOn; }
+    bool peerCamera() const;
+    int peerRotation() const;
+    bool incomingVideo() const;
+    QString cameraName() const;
     QVariantList history() const { return m_history; }
     int missedCount() const;
     bool available() const;
 
     // "" when the call is starting, otherwise what to tell the person.
     Q_INVOKABLE QString call(const QString &key);
+    // A video call: the camera is on from the start (asks nothing first: Windows has no camera prompt).
+    Q_INVOKABLE QString callVideo(const QString &key);
+    Q_INVOKABLE bool canVideo(const QString &key) const;
+    Q_INVOKABLE void answerVideo();
+    Q_INVOKABLE void toggleCamera();
+    Q_INVOKABLE void nextCamera();
+    // The VideoOutputs of the call page: their picture, and the small self view.
+    Q_INVOKABLE void setRemoteSink(QObject *videoSink);
+    Q_INVOKABLE void setLocalSink(QObject *videoSink);
     Q_INVOKABLE bool canCall(const QString &key) const;
     // A conversation with key is open: fetch the relay login now (cached for two hours), so a call
     // doesn't wait for the relay Worker. At most one try a minute.
@@ -130,4 +159,13 @@ private:
     void loadTrust();
     void saveTrust();
     void prime(CallSession *s);  // trust and codecs for a new session
+    QString startCall(const QString &key, bool video);
+    void startVideo();           // the session's media is up: show their picture, send ours if the camera is on
+    void setCamera(bool on);
+    void stopVideo();
+    bool m_cameraOn = false;
+    VideoSender *m_camera = nullptr;
+    VideoReceiver *m_remote = nullptr;
+    QPointer<QVideoSink> m_remoteSink, m_localSink;
+    QTimer m_videoRate;
 };

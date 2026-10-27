@@ -7,13 +7,19 @@
 #include "callsignal.h"
 #include "directpath.h"
 #include "videowire.h"
+#include "videoengine.h"
+#include "vpxcodec.h"
 #include "jitterbuffer.h"
 #include "opuscodec.h"
 #include "roomwire.h"
 #include "stun.h"
 #include "turnclient.h"
 
+#include <QColor>
 #include <QCoreApplication>
+#include <QImage>
+#include <QVideoFrame>
+#include <cstdlib>
 #include <QFile>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -435,6 +441,98 @@ void c2Vectors(const QString &path)
     check(count == 6 && all, "video, report, NACK and keyframe request packets seal and open like the reference");
 }
 
+// Real VP8 through two c2 medias on one computer: libvpx encodes a moving picture at 640 x 480, the
+// fragments go over the Wi-Fi path with a packet lost now and then, and the other side's decoder
+// (on its worker thread, as in a call) shows every frame at the right size and close to the original.
+void vp8Loopback()
+{
+    std::printf("VP8 video loopback (libvpx, 640 x 480)\n");
+    if (!vpxAvailable()) {
+        std::printf("  --   built without libvpx: video calls are left out of this build\n");
+        return;
+    }
+    QByteArray root(32, 0);
+    for (int i = 0; i < 32; ++i)
+        root[i] = char(i * 11 + 1);
+    const QByteArray tag = CallCrypto::tag(QByteArray(16, 'w'));
+    CallMedia a(root, tag, true), b(root, tag, false);
+    QUdpSocket *sa = CallMedia::bindLan(nullptr), *sb = CallMedia::bindLan(nullptr);
+    if (!sa || !sb) {
+        check(false, "two UDP sockets");
+        return;
+    }
+    const quint16 pa = sa->localPort(), pb = sb->localPort();
+    a.adoptLan(sa);
+    b.adoptLan(sb);
+    a.setLanPeer(QHostAddress(QHostAddress::LocalHost), pb);
+    b.setLanPeer(QHostAddress(QHostAddress::LocalHost), pa);
+    a.setC2(true, false);
+    b.setC2(true, false);
+    a.start(false);
+    b.start(false);
+    waitFor([&] { return a.live(CallMedia::Wifi) && b.live(CallMedia::Wifi); }, 3000);
+    Vp8Encoder enc(640, 480, 24, 700);
+    check(enc.ok(), "the VP8 encoder starts");
+    VideoReceiver rx;
+    QObject::connect(&b, &CallMedia::videoFrame, &rx, [&rx](int stream, const QByteArray &vp8, bool key, int rotation) {
+        if (stream == VideoWire::Camera)
+            rx.frame(vp8, key, rotation);
+    });
+    bool wantKey = true;
+    QObject::connect(&a, &CallMedia::keyframeWanted, [&](int) { wantKey = true; });
+    QObject::connect(&rx, &VideoReceiver::needKey, [&] { b.requestKeyframe(VideoWire::Camera); });
+    a.setVideoSending(VideoWire::Camera, true);
+    a.dropVideoEvery = 13;
+    int sent = 0, keys = 0;
+    qint64 bytes = 0;
+    for (int i = 0; i < 72; ++i) {
+        bool isKey = false;
+        const QByteArray f = enc.encode(VideoFrames::testPattern(640, 480, i), wantKey, &isKey);
+        if (!f.isEmpty()) {
+            if (isKey) {
+                wantKey = false;
+                ++keys;
+            }
+            a.sendVideo(VideoWire::Camera, isKey, 0, f);
+            ++sent;
+            bytes += f.size();
+        }
+        waitFor([] { return false; }, 40);
+    }
+    int width = 0, height = 0;
+    check(keys >= 1 && sent >= 60, "72 pictures make at least 60 VP8 frames, the first a keyframe");
+    waitFor([&] { return rx.frames() >= sent - 2; }, 4000);
+    std::printf("       %d frames sent (%d keyframes, %lld kbps at 24 fps), %d shown, %d packets resent\n", sent, keys,
+                (long long)(bytes * 8 * 24 / qMax(1, sent) / 1000), rx.frames(), a.stats().resent);
+    check(rx.frames() >= sent - 2 && rx.size() == QSize(640, 480), "the other side shows the frames at 640 x 480");
+    check(a.stats().resent > 0, "lost packets were resent (NACK)");
+    bool forced = false;
+    check(vp8KeyframeSize(enc.encode(VideoFrames::testPattern(640, 480, 99), true, &forced), &width, &height) && forced && width == 640 && height == 480,
+          "a keyframe says its size");
+    // The last picture is close to what was sent (a broken decode would be far off).
+    QVideoFrame last = rx.lastFrame();
+    bool close = false;
+    if (last.isValid() && last.map(QtVideo::MapMode::ReadOnly)) {
+        const I420 want = VideoFrames::testPattern(640, 480, 71);
+        qint64 diff = 0;
+        const uchar *y = last.bits(0);
+        for (int r = 0; r < 480; r += 8)
+            for (int c = 0; c < 640; c += 8)
+                diff += std::abs(int(y[r * last.bytesPerLine(0) + c]) - int(want.y()[r * 640 + c]));
+        last.unmap();
+        close = diff / (60 * 80) < 24;
+    }
+    check(close, "and looks like the picture that was sent");
+    // A picture from the camera path (QImage to I420) at the profile's size.
+    QImage img(1280, 720, QImage::Format_RGB32);
+    img.fill(QColor(200, 30, 30));
+    const I420 small = VideoFrames::toI420(img, QSize(640, 480));
+    check(small.width == 640 && small.height == 360 && small.valid() && small.y()[0] > 60 && small.y()[0] < 90 && small.v()[0] > 200,
+          "camera pictures are scaled to fit 640 x 480 (16:9 stays 16:9) and turned into I420");
+    a.stop();
+    b.stop();
+}
+
 // The fake STUN server of the direct test: answers every Binding with the address it came from.
 class FakeStun
 {
@@ -836,6 +934,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     c2Vectors(vectorsPath);
     mediaLoopback();
     c2Media();
+    vp8Loopback();
     signalingLoopback();
     directCall();
     relayCall();

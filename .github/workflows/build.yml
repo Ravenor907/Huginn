@@ -220,7 +220,7 @@ jobs:
       run:
         shell: bash
     env:
-      VCPKG_PACKAGES: openssl opus sdl2 libqrencode
+      VCPKG_PACKAGES: openssl opus sdl2 libqrencode libvpx
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
       - uses: actions/checkout@v4
@@ -269,7 +269,7 @@ jobs:
           path: vcpkg-bincache
           key: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-${{ github.sha }}
           restore-keys: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-
-      - name: OpenSSL, Opus, SDL2 and libqrencode (vcpkg)
+      - name: OpenSSL, Opus, SDL2, libqrencode and libvpx (vcpkg)
         run: |
           vcpkg="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/vcpkg.exe"
           "$vcpkg" install $VCPKG_PACKAGES --triplet x64-windows 2>&1 | tee vcpkg.log; status=${PIPESTATUS[0]}
@@ -301,7 +301,7 @@ jobs:
           Copy-Item build/Huginn.exe $out
           windeployqt --release --qmldir qml --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw "$out/Huginn.exe"
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::windeployqt failed"; exit 1 }
-          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), SDL2 (controllers), libqrencode (QR codes)
+          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), libvpx (video), SDL2 (controllers), libqrencode (QR codes)
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
           # The Visual C++ runtime, so nothing has to be installed first
           $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1

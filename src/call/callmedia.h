@@ -104,6 +104,8 @@ public:
     // video can't go now (no c2, no path, or too big).
     bool sendVideo(int stream, bool key, int rotation, const QByteArray &vp8);
     bool peerSending(int stream) const { return m_peerSending[stream & 1]; }
+    // Asks the peer for a keyframe now (the decoder lost its place, or the picture came back on screen).
+    void requestKeyframe(int stream);
     // The size, frame rate and bitrate cap for a stream right now (480p over the relay), and the
     // bitrate the reports allow (kbps).
     VideoWire::Profile profile(int stream) const;

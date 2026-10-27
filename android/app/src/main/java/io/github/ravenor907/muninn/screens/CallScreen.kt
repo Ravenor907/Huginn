@@ -50,7 +50,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.SurfaceTexture
+import android.view.Surface
+import android.view.TextureView
+import androidx.camera.view.PreviewView
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.viewinterop.AndroidView
 import io.github.ravenor907.muninn.net.call.CallManager
+import io.github.ravenor907.muninn.net.call.CallVideo
+import io.github.ravenor907.muninn.net.call.Vp8
 import io.github.ravenor907.muninn.net.call.CallSession.Phase
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Palette
@@ -76,6 +85,9 @@ private object CallIcons {
     const val message = "M4 5h16v11H9l-5 4z"
     const val hangup = "M3 15c5-5 13-5 18 0l-2.5 2.5-3.5-1.5v-2.5a10 10 0 0 0-6 0V16l-3.5 1.5z"
     const val answer = "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"
+    const val camera = "M3 7h12v10H3z M15 10l6-3v10l-6-3"
+    const val cameraOff = "M3 7h12v10H3z M15 10l6-3v10l-6-3 M3 3l18 18"
+    const val flip = "M4 12a8 8 0 0 1 14-5l2-2v6h-6l2.5-2.5A5.5 5.5 0 0 0 6.5 12 M20 12a8 8 0 0 1-14 5l-2 2v-6h6l-2.5 2.5A5.5 5.5 0 0 0 17.5 12"
 }
 
 @Composable
@@ -92,11 +104,22 @@ private fun Glyph(path: String, color: Color, size: Dp, weight: Float = 1.8f) {
  * Incoming, it offers Decline and Answer instead. Never shows an address of any kind.
  * [hideName]: panic-locked or previews off on the lock screen: "Muninn call" instead of the name.
  */
+/**
+ * [onAnswerVideo]: answer a video call with the camera on (asks for the camera first). [onCamera]: turn the camera on
+ * or off during the call (on asks for the camera first).
+ */
 @Composable
-fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> Unit, hideName: Boolean = false) {
+fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> Unit, hideName: Boolean = false,
+               onAnswerVideo: () -> Unit = onAnswer, onCamera: (Boolean) -> Unit = { CallManager.setCamera(it) }) {
     val ui by CallManager.call.collectAsState()
+    val video by CallVideo.state.collectAsState()
     val c = ui
-    Column(Modifier.fillMaxSize().background(Palette.ground).systemBarsPadding().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp),
+    val showRemote = c != null && c.video && video.peerCamera && c.phase != Phase.ENDED
+    Box(Modifier.fillMaxSize().background(Palette.ground)) {
+    if (showRemote) RemoteVideo(video, Modifier.fillMaxSize())
+    if (c != null && c.video && video.cameraOn && c.phase != Phase.ENDED)
+        SelfView(Modifier.align(Alignment.TopEnd).systemBarsPadding().padding(top = 64.dp, end = 16.dp).size(width = 108.dp, height = 144.dp))
+    Column(Modifier.fillMaxSize().systemBarsPadding().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
@@ -116,9 +139,11 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             val name = if (hideName) "Muninn call" else c.name
-            Spacer(Modifier.height(56.dp))
-            Avatar(name, c.peerSpeaking && c.phase == Phase.LIVE)
-            Spacer(Modifier.height(36.dp))
+            if (showRemote) Spacer(Modifier.height(8.dp)) else {
+                Spacer(Modifier.height(56.dp))
+                Avatar(name, c.peerSpeaking && c.phase == Phase.LIVE)
+                Spacer(Modifier.height(36.dp))
+            }
             Text(name, style = Type.title.copy(fontSize = 30.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 340.dp))
             Spacer(Modifier.height(6.dp))
@@ -142,7 +167,9 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
         when (c.phase) {
             Phase.INCOMING -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Round(CallIcons.hangup, "Decline", CallColors.end, Color.White, 76.dp) { CallManager.decline() }
-                Round(CallIcons.answer, "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
+                // A video call can be taken with the camera, or as a voice call.
+                if (c.videoCall && Vp8.available) Round(CallIcons.camera, "Video", CallColors.answer, Color.White, 76.dp, onClick = onAnswerVideo)
+                Round(CallIcons.answer, if (c.videoCall) "Voice only" else "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
             }
             Phase.ENDED -> Spacer(Modifier.height(106.dp))
             else -> {
@@ -151,13 +178,51 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
                         if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
                     Round(CallIcons.speaker, "Speaker", if (c.speaker) Palette.accent else Palette.coolTint, if (c.speaker) Palette.ground else Palette.text, 68.dp,
                         on = c.speaker) { CallManager.setSpeaker(!c.speaker) }
-                    Round(CallIcons.message, "Message", Palette.coolTint, Palette.text, 68.dp) { onMessage(c.peerKey) }
+                    if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",
+                        if (video.cameraOn) Palette.accent else Palette.coolTint, if (video.cameraOn) Palette.ground else Palette.text, 68.dp, on = video.cameraOn) {
+                        onCamera(!video.cameraOn)
+                    }
+                    if (c.video && video.cameraOn) Round(CallIcons.flip, "Flip", Palette.coolTint, Palette.text, 68.dp) { CallManager.switchCamera() }
+                    else Round(CallIcons.message, "Message", Palette.coolTint, Palette.text, 68.dp) { onMessage(c.peerKey) }
                 }
                 Spacer(Modifier.height(30.dp))
                 Round(CallIcons.hangup, "End call", CallColors.end, Color.White, 76.dp, label = false) { CallManager.hangup() }
             }
         }
     }
+    }
+}
+
+/** The other person's camera, fitted whole into the screen and turned upright. */
+@Composable
+private fun RemoteVideo(v: CallVideo.State, modifier: Modifier) {
+    AndroidView(factory = { ctx ->
+        TextureView(ctx).apply {
+            surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                private var surface: Surface? = null
+                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { surface = Surface(st); CallVideo.remoteSurface(surface) }
+                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { CallVideo.remoteSurface(null); surface?.release(); surface = null; return true }
+                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+            }
+        }
+    }, update = { tv ->
+        tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), v.width, v.height, v.rotation))
+    }, modifier = modifier.semantics { contentDescription = "Their camera" })
+}
+
+/** Your own camera, small in the corner (picture in picture), mirrored like a mirror. */
+@Composable
+private fun SelfView(modifier: Modifier) {
+    val owner = LocalLifecycleOwner.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val view = remember { PreviewView(ctx).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE; scaleType = PreviewView.ScaleType.FILL_CENTER } }
+    DisposableEffect(owner) {
+        CallVideo.bindCamera(owner, view.surfaceProvider)
+        onDispose { CallVideo.unbindCamera(owner) }
+    }
+    AndroidView(factory = { view }, modifier = modifier.clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.lineMuted, RoundedCornerShape(14.dp))
+        .semantics { contentDescription = "Your camera" })
 }
 
 @Composable
@@ -167,7 +232,7 @@ private fun status(c: CallManager.Ui): String {
     return when (c.phase) {
         Phase.CALLING -> "Calling"
         Phase.RINGING -> "Ringing"
-        Phase.INCOMING -> "Incoming call"
+        Phase.INCOMING -> if (c.videoCall) "Incoming video call" else "Incoming call"
         Phase.CONNECTING -> "Connecting"
         Phase.RECONNECTING -> "Reconnecting"
         Phase.LIVE -> "Connected · " + clock(((now - c.connectedAt) / 1000).coerceAtLeast(0))

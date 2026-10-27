@@ -659,6 +659,9 @@ private fun Conversation(app: Muninn, key: String) {
                     if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
                     else Ui.say("$name needs Muninn or Huginn 0.6 to take calls.")
                 }
+                // Video calls: both apps must speak c2 (docs/protocol-0.6.md 5.8.5).
+                if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
+                    IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
             }
         }) { close ->
             MenuNote("${routeText(route)} · end-to-end encrypted · ${if (verified) "verified" else "not verified"}")
