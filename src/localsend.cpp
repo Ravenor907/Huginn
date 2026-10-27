@@ -1,4 +1,5 @@
 #include "localsend.h"
+#include "lan.h"
 #include "settings.h"
 #include "system.h"
 
@@ -56,11 +57,11 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
         // and it's self-signed anyway): when one is shown, the fingerprint it claims must match it.
         cfg.setPeerVerifyMode(QSslSocket::QueryPeer);
         cfg.setCaCertificates({});
-        m_tlsServer.setSslConfiguration(cfg);
-        // QSslServer hands over a socket only once its handshake is done.
-        connect(&m_tlsServer, &QTcpServer::pendingConnectionAvailable, this, [this] { onConnection(&m_tlsServer); });
+        m_serverTls = cfg;
     }
-    connect(&m_plainServer, &QTcpServer::newConnection, this, [this] { onConnection(&m_plainServer); });
+    // Wi-Fi comes and goes (and a VPN may come up): follow the home network's addresses.
+    m_lanTimer.setInterval(5000);
+    connect(&m_lanTimer, &QTimer::timeout, this, &LocalSend::bindLan);
     connect(&m_udp, &QUdpSocket::readyRead, this, &LocalSend::onDatagrams);
     // Peers' certificates are self-signed, so the usual checks can't apply; makeRequest() turns them
     // off and checkPeer() checks the fingerprint instead. This stays for any error that still comes up.
@@ -96,20 +97,6 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
         if (m_session.active && m_session.touched.secsTo(QDateTime::currentDateTime()) > 120)
             endSession(false, QStringLiteral("%1 stopped sending.").arg(m_session.from));
     });
-}
-
-QString LocalSend::lanAddress()
-{
-    for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces()) {
-        if (!(iface.flags() & QNetworkInterface::IsUp) || (iface.flags() & QNetworkInterface::IsLoopBack))
-            continue;
-        for (const QNetworkAddressEntry &e : iface.addressEntries()) {
-            const QHostAddress a = e.ip();
-            if (a.protocol() == QAbstractSocket::IPv4Protocol && a.isPrivateUse())
-                return a.toString();
-        }
-    }
-    return {};
 }
 
 QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
@@ -222,42 +209,109 @@ void LocalSend::start()
     if (running())
         return;
     m_error.clear();
-    QTcpServer &server = m_secure ? static_cast<QTcpServer &>(m_tlsServer) : m_plainServer;
-    if (!server.listen(QHostAddress::AnyIPv4, kPort)) {
-        m_error = QStringLiteral("Nearby sharing couldn't start. Is the LocalSend app already running on this handheld?");
-        Q_EMIT stateChanged();
-        return;
-    }
+    m_on = true;
+    // UDP has to take the whole port to hear multicast (Linux delivers it only to a wildcard
+    // socket); what it hears is checked in onDatagrams(), and it joins the group only on the home network.
     m_udp.bind(QHostAddress::AnyIPv4, kPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
-    for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces()) {
-        if ((iface.flags() & QNetworkInterface::IsUp) && (iface.flags() & QNetworkInterface::CanMulticast)
-            && !(iface.flags() & QNetworkInterface::IsLoopBack))
-            m_udp.joinMulticastGroup(kGroup, iface);
-    }
+    bindLan();
+    m_lanTimer.start();
     m_announceTimer.start();
     m_sessionTimer.start();
-    announce();
     Q_EMIT stateChanged();
+}
+
+void LocalSend::bindLan()
+{
+    if (!m_on)
+        return;
+    const QList<QHostAddress> want = Lan::addresses();
+    bool changed = false;
+    // Addresses that went away (Wi-Fi off, another network): stop listening there.
+    for (auto it = m_servers.begin(); it != m_servers.end();) {
+        if (!want.contains(it->first)) {
+            it->second->close();
+            it->second->deleteLater();
+            it = m_servers.erase(it);
+            changed = true;
+        } else {
+            ++it;
+        }
+    }
+    QString failed;
+    for (const QHostAddress &a : want) {
+        bool have = false;
+        for (const auto &s : m_servers)
+            have = have || s.first == a;
+        if (have)
+            continue;
+        QTcpServer *server = nullptr;
+        if (m_secure) {
+            auto *tls = new QSslServer(this);
+            tls->setSslConfiguration(m_serverTls);
+            // QSslServer hands over a socket only once its handshake is done.
+            connect(tls, &QTcpServer::pendingConnectionAvailable, this, [this, tls] { onConnection(tls); });
+            server = tls;
+        } else {
+            server = new QTcpServer(this);
+            connect(server, &QTcpServer::newConnection, this, [this, server] { onConnection(server); });
+        }
+        if (!server->listen(a, kPort)) {
+            if (a.protocol() == QAbstractSocket::IPv4Protocol)
+                failed = a.toString();
+            delete server;
+            continue;
+        }
+        m_servers.emplace_back(a, server);
+        changed = true;
+    }
+    // Multicast: join on the home network's interfaces only, and again whenever they change.
+    QStringList joined;
+    for (const QNetworkInterface &iface : Lan::interfaces()) {
+        if (!(iface.flags() & QNetworkInterface::CanMulticast))
+            continue;
+        joined << iface.name();
+        if (!m_joined.contains(iface.name()))
+            m_udp.joinMulticastGroup(kGroup, iface);
+    }
+    m_joined = joined;
+
+    const QString error = !failed.isEmpty() && m_servers.empty()
+                              ? QStringLiteral("Nearby sharing couldn't start. Is the LocalSend app already running on this handheld?")
+                              : want.isEmpty() ? QStringLiteral("Waiting for Wi-Fi: nearby sharing works on a home network only.") : QString();
+    if (error != m_error) {
+        m_error = error;
+        changed = true;
+    }
+    if (changed) {
+        announce();
+        Q_EMIT stateChanged();
+    }
 }
 
 void LocalSend::stop()
 {
+    m_on = false;
+    m_lanTimer.stop();
     m_announceTimer.stop();
     m_sessionTimer.stop();
     m_udp.close();
-    m_tlsServer.close();
-    m_plainServer.close();
+    m_joined.clear();
+    for (auto &s : m_servers) {
+        s.second->close();
+        s.second->deleteLater();
+    }
+    m_servers.clear();
+    m_error.clear();
     Q_EMIT stateChanged();
 }
 
 void LocalSend::announce()
 {
-    if (!running())
+    if (!running() || !listening())
         return;
     const QByteArray msg = QJsonDocument(info(true, true)).toJson(QJsonDocument::Compact);
-    for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces()) {
-        if (!(iface.flags() & QNetworkInterface::IsUp) || !(iface.flags() & QNetworkInterface::CanMulticast)
-            || (iface.flags() & QNetworkInterface::IsLoopBack))
+    for (const QNetworkInterface &iface : Lan::interfaces()) {
+        if (!(iface.flags() & QNetworkInterface::CanMulticast))
             continue;
         m_udp.setMulticastInterface(iface);
         m_udp.writeDatagram(msg, kGroup, kPort);
@@ -270,7 +324,7 @@ void LocalSend::refresh()
         return;
     announce();
     // Some routers drop multicast, so also ask every address on the home network directly.
-    const QString me = lanAddress();
+    const QString me = Lan::firstIPv4();
     if (me.isEmpty() || m_scanLeft > 0)
         return;
     const QString prefix = me.section(QLatin1Char('.'), 0, 2) + QLatin1Char('.');
@@ -334,6 +388,8 @@ void LocalSend::onDatagrams()
         QHostAddress from;
         QByteArray data(int(m_udp.pendingDatagramSize()), Qt::Uninitialized);
         m_udp.readDatagram(data.data(), data.size(), &from);
+        if (!Lan::isNeighbour(from))
+            continue;   // only devices on the same home network (not a VPN or anything farther away)
         const QJsonObject o = QJsonDocument::fromJson(data).object();
         const QString fp = o.value(QStringLiteral("fingerprint")).toString();
         if (o.isEmpty() || Tls::sameFingerprint(fp, m_fingerprint))   // our own announcement
@@ -397,6 +453,12 @@ QVariantList LocalSend::devices() const
 void LocalSend::onConnection(QTcpServer *server)
 {
     while (QTcpSocket *s = server->nextPendingConnection()) {
+        if (!Lan::isNeighbour(s->peerAddress())) {
+            // Reached our home-network address from somewhere else (routed in over a VPN, say): no.
+            s->abort();
+            s->deleteLater();
+            continue;
+        }
         Conn conn;
         if (auto *ssl = qobject_cast<QSslSocket *>(s))
             conn.peerFp = Tls::fingerprintOf(ssl->peerCertificate());

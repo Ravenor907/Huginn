@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QQuickImageProvider>
 #include <QTcpServer>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 
@@ -77,7 +78,7 @@ private:
     void finishUpload(QTcpSocket *s, Conn &c, bool ok);
     QByteArray page() const;
     QByteArray pinPage(bool wrong) const;
-    static QString lanAddress();
+    void followLan();
 
     Settings *m_settings;
     QTcpServer m_server;
@@ -87,6 +88,8 @@ private:
     QHash<QString, int> m_failures;   // per phone address, to slow down PIN guessing
     QString m_pin;
     QString m_address;
+    QString m_ip;   // the home-network address the page listens on
+    QTimer m_lanTimer;
     QString m_error;
 };
 
