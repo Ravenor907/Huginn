@@ -73,7 +73,13 @@ Both apps ship together, in the same release, with the same version number, and 
 
 **Huginn on Windows:** download [Huginn-Windows.zip](https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip), unzip it anywhere and run `Huginn.exe`.
 
-**Huginn on Linux and SteamOS:** the Linux build is paused while the Windows and Android apps come first. The 0.6 Flatpak is still on the [0.6 release](https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.6).
+**Huginn on Linux and SteamOS** (in a terminal; on SteamOS, Konsole in Desktop Mode):
+
+```
+cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
+```
+
+On SteamOS, add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
 
 **Muninn on Android and Google TV:** open this link on the device and install it:
 
@@ -96,11 +102,11 @@ A mouse and keyboard work too.
 
 ## What's next
 
-The Linux and SteamOS build returns, then 1.0 once everything has been tested on every device.
+1.0 once everything has been tested on every device.
 
 ## Versions
 
-One dot only, read as a decimal: 0.5, 0.6, 0.7, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Windows and Muninn, tests both, and publishes them together.
+One dot only, read as a decimal: 0.5, 0.6, 0.7, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
 
 ## Building
 
