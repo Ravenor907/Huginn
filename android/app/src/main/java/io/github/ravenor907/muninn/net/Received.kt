@@ -29,7 +29,8 @@ object Received {
         val out: OutputStream,
         private val context: Context,
         private val uri: Uri?,
-        private val file: File?,
+        /** Where it's written, when that's a plain file (not MediaStore). */
+        val file: File?,
     ) {
         fun finish() {
             try { out.close() } catch (_: Exception) {}
@@ -69,6 +70,14 @@ object Received {
         val ext = if (name.contains('.') && !name.startsWith(".")) "." + name.substringAfterLast('.') else ""
         while (t.exists()) { t = File(dir, "$base ($n)$ext"); n++ }
         return t
+    }
+
+    /** Starts saving a file in Muninn's own [dir] (an app waiting to be installed on a TV), under the last part of [path]. */
+    fun inside(context: Context, dir: File, path: String): Target {
+        val name = path.split('/', '\\').lastOrNull { it.isNotBlank() && it != "." && it != ".." }?.trim() ?: "app.apk"
+        dir.mkdirs()
+        val f = free(dir, name)
+        return Target(f.name, f.outputStream(), context, null, f)
     }
 
     /**

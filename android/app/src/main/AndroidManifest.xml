@@ -58,6 +58,18 @@
          (Android only lets an app start its call screen from the background with this). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- "Send an app": the apps on the phone that open from a launcher (phone or TV), to list them by name. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".Muninn"
         android:allowBackup="false"
@@ -198,6 +210,10 @@
             android:foregroundServiceType="phoneCall|microphone" />
         <receiver
             android:name=".net.call.RoomActions"
+            android:exported="false" />
+        <!-- A TV: the answer from Android's installer for an app someone sent. -->
+        <receiver
+            android:name=".update.ApkInstallResult"
             android:exported="false" />
         <!-- Kids' TV: the answer from Android's installer when Muninn updates itself. -->
         <receiver

@@ -408,6 +408,16 @@ object TvParent {
         Ui.say("${app.chat.nameOf(k)} accepted, so they can talk with the kids on the TV now.")
     }
 
+    /** The TV's app said "k4": it takes apps a parent sends (TvApps). */
+    fun k4(app: Muninn, key: String): Boolean = "k4" in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** Tells the TV which files of [name] are on their way (7.9). False if the TV's app is too old to take them. */
+    fun announceApp(app: Muninn, key: String, name: String, parts: List<TvApps.Part>): Boolean {
+        if (!k4(app, key)) return false
+        send(app, key, listOf(TvApps.message(name, parts)))
+        return true
+    }
+
     /** A parent's "Update TV": the TV looks for a new Muninn now and installs it. False if the TV's app is too old to be asked. */
     fun updateTv(app: Muninn, key: String): Boolean {
         if (!k2(app, key)) return false

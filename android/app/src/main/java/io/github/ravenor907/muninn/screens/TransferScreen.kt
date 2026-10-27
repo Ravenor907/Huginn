@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.AppFiles
 import io.github.ravenor907.muninn.net.Close
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Received
@@ -129,6 +130,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     val closePeers by app.close.list.collectAsState()
     var showDirect by remember { mutableStateOf(false) }
     var copying by remember { mutableStateOf(false) }
+    var pickingApp by remember { mutableStateOf(false) }
     /** Tapped a device before picking anything: send to it as soon as files are picked. */
     var after by remember { mutableStateOf<Target?>(null) }
 
@@ -161,6 +163,17 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
         Target(d.id, d.alias, icon, d.app?.replaceFirstChar { it.uppercase() } ?: "LocalSend") { files -> app.net.send(d.id, files) }
     }
 
+    // An app on this phone goes out as its APK (and its parts), to a TV with Muninn or any LocalSend device.
+    if (pickingApp) AppPicker(onCancel = { pickingApp = false }) { a ->
+        pickingApp = false
+        copying = true
+        scope.launch {
+            val files = withContext(Dispatchers.IO) { AppFiles.copyOut(context, a.pkg) }
+            copying = false
+            if (files.isEmpty()) Ui.say("${a.label} couldn't be read.", true) else Share.pending.addAll(files)
+        }
+    }
+
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
             // The one big action, in gold like the chat list's new chat button.
@@ -173,6 +186,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                 Text(when { copying -> "Getting files ready…"; Share.pending.isEmpty() -> "Send files"; else -> "Add more files" },
                     style = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.onGold))
             }
+            MButton("Send an app", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !copying) { pickingApp = true }
             if (Share.pending.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${if (Share.pending.size == 1) Share.pending[0].name else "${Share.pending.size} files"} · ${LocalSend.size(Share.pending.sumOf { it.length() })}. Tap who gets ${if (Share.pending.size == 1) "it" else "them"}.",
                     style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))

@@ -185,7 +185,7 @@ class Proto06Test {
 
     @Test
     fun caps() {
-        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "t1", "v1", "m1"), Proto06.caps(Proto06.CAPS))
+        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "t1", "v1", "m1"), Proto06.caps(Proto06.CAPS))
         assertEquals(setOf("r1", "zz"), Proto06.caps(" r1  zz "))
         assertTrue(Proto06.isLogicalId(Proto06.newLogicalId()))
         assertEquals(22, Proto06.newGroupId().length)
