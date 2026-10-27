@@ -6,6 +6,13 @@
 
 class QSoundEffect;
 
+namespace Platform
+{
+// The path of a bundled file (raven_message.wav, raven-gold.png) in the app's resources: the usual
+// :/qt/qml/Huginn/assets/<name>, or wherever the build put it. Empty if it isn't there.
+QString resource(const QString &name);
+}
+
 // The raven call for a new message. Linux plays it with QSoundEffect. Windows plays it with the
 // system's own PlaySound from memory: Qt's QSoundEffect can crash there when it is played
 // (QTBUG-142694, Qt 6.8.3 to 6.10.1), and a notification chime needs nothing more.

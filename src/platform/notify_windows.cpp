@@ -1,4 +1,5 @@
 #include "notify.h"
+#include "chime.h"
 #include "singleinstance.h"
 
 #include <QApplication>
@@ -14,7 +15,7 @@ void notify(const QString &title, const QString &body, int timeoutMs)
     if (!tray) {
         if (!QSystemTrayIcon::isSystemTrayAvailable())
             return;
-        tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/qt/qml/Huginn/assets/raven-gold.png")), qApp);
+        tray = new QSystemTrayIcon(QIcon(Platform::resource(QStringLiteral("raven-gold.png"))), qApp);
         tray->setToolTip(QStringLiteral("Huginn"));
         QObject::connect(tray, &QSystemTrayIcon::messageClicked, qApp, [] { SingleInstance::bringToFront(); });
         QObject::connect(tray, &QSystemTrayIcon::activated, qApp, [](QSystemTrayIcon::ActivationReason r) {
