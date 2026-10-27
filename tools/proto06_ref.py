@@ -271,9 +271,14 @@ def room_full(peers):
 
 # ------------------------------------------------------------------ kids' TV
 
+MAX_MIC = 100
+
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    if set(c) != need: raise ValueError("fields")
+    optional = {"calls", "mic"}   # k2 (7.5): only sent to a TV whose app said k2
+    if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
+    if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
+    if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
     if not isinstance(c["v"], int) or c["v"] < 1: raise ValueError("version")
     if c["parents"] != sorted(set(c["parents"])) or not c["parents"] or c["by"] not in c["parents"]: raise ValueError("parents")
     if not isinstance(c["dictation"], bool): raise ValueError("dictation")
@@ -531,11 +536,17 @@ def main():
                                     quick=[cfg1["quick"][2], cfg1["quick"][0], cfg1["quick"][1]]))
     cfg3c = sign(C, D_TVCONFIG, dict(unsigned(cfg2), v=3, by=kC, parents=sorted([kA, kB, kC]), ts=1761500200000))
     cfg3b = sign(B, D_TVCONFIG, dict(unsigned(cfg2), v=3, by=kB, dictation=False, ts=1761500200000))
-    for c in (cfg1, cfg2, cfg3b): check_tvconfig(c)
+    # v4 (k2): calls off, microphone level 80.
+    cfg4 = sign(B, D_TVCONFIG, dict(unsigned(cfg3b), v=4, calls=False, mic=80, ts=1761500250000))
+    for c in (cfg1, cfg2, cfg3b, cfg4): check_tvconfig(c)
+    for bad in (dict(cfg4, mic=101), dict(cfg4, mic=True), dict(cfg4, calls=1), dict(cfg4, x=1)):
+        try: check_tvconfig(bad); expect(False, "malformed k2 config refused")
+        except ValueError: expect(True, "malformed k2 config refused")
     tv_cases = [([kA], None, cfg1, True), ([kA], cfg1, cfg2, True), ([kA, kB], cfg2, cfg1, False),
-                ([kA, kB], cfg2, cfg3c, False), ([kA, kB], cfg2, cfg3b, True), ([kA], cfg1, dict(cfg2, dictation=False), False)]
+                ([kA, kB], cfg2, cfg3c, False), ([kA, kB], cfg2, cfg3b, True), ([kA], cfg1, dict(cfg2, dictation=False), False),
+                ([kA, kB], cfg3b, cfg4, True)]
     tv_acc = []
-    names = {id(cfg1): "cfg1", id(cfg2): "cfg2", id(cfg3c): "cfg3c", id(cfg3b): "cfg3b"}
+    names = {id(cfg1): "cfg1", id(cfg2): "cfg2", id(cfg3c): "cfg3c", id(cfg3b): "cfg3b", id(cfg4): "cfg4"}
     for parents, cur, new, want in tv_cases:
         got, why = accept_tvconfig(kTV, parents, cur, new)
         expect(got == want, "tv accept: " + why)
@@ -547,7 +558,7 @@ def main():
     expect(not accept_disconnect(kTV, [kA], 3, disc)[0], "disconnect from a non-parent refused")
     tv_vec = {
         "configs": {k: {"config": c, "signed": signed_bytes(D_TVCONFIG, c).decode(), "hash": obj_hash(c)}
-                    for k, c in (("cfg1", cfg1), ("cfg2", cfg2), ("cfg3c", cfg3c), ("cfg3b", cfg3b))},
+                    for k, c in (("cfg1", cfg1), ("cfg2", cfg2), ("cfg3c", cfg3c), ("cfg3b", cfg3b), ("cfg4", cfg4))},
         "accept": tv_acc,
         "disconnect": {"msg": disc, "signed": signed_bytes(D_TVDISCONNECT, disc).decode(),
                        "acceptWhenCurrentV": 3, "refuseWhenCurrentV": 4},

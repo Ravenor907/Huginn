@@ -114,7 +114,7 @@ object Proto06 {
      * What this app says it speaks, next to the old cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    const val CAPS = "r1 g1 c1 v1 k1"
+    const val CAPS = "r1 g1 c1 k1 k2 t1 v1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
 
     // ------------------------------------------------------------------ group state (3.2, 3.3)

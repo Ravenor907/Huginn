@@ -17,5 +17,8 @@ bool supported();
 QString assetName();   // "Huginn-Windows.zip", the release asset to look for
 // Empty when Huginn's folder can be written to, else a sentence for the person.
 QString folderProblem();
+// The zip keeps everything but Huginn.exe in lib\. After an update from an older zip (everything at
+// the top), removes the old top-level copies of what lib\ now holds. Does nothing elsewhere.
+void tidyOldLayout();
 void install(const QString &zipPath, QObject *context, std::function<void(bool ok, const QString &message)> done);
 }

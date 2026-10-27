@@ -1413,6 +1413,50 @@
         },
         "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500200000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":3}",
         "hash": "a06fdfeb35d5a08d7122d6dfbe4cc46d4bb842fc7f1576f9ef5e789967d5689e"
+      },
+      "cfg4": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 4,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500250000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "calls": false,
+          "mic": 80,
+          "sig": "MEUCIGIKNv2uxGd02eQXoyvLrfEseZI7nmVlGis1ff/g9r/fAiEA1A9k7mDRCd+0C+PrAfJHORbZ9Y+ZmiXT2h717Dl+c4g="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500250000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":4}",
+        "hash": "ddceb0637f8837de99a05bd26c5b0b29a200024822c91142fee83b4c6163d2ea"
       }
     },
     "accept": [
@@ -1472,6 +1516,16 @@
         "new": "cfg2 with dictation changed after signing",
         "accept": false,
         "why": "bad signature"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg3b",
+        "new": "cfg4",
+        "accept": true,
+        "why": "newer"
       }
     ],
     "disconnect": {

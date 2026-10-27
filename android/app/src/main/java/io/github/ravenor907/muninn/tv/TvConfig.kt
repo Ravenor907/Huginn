@@ -101,7 +101,12 @@ data class TvPerson(val k: String, val n: String, val p: String)
 data class TvConfig(
     val tv: String, val v: Long, val by: String, val parents: List<String>, val quick: List<Quick>,
     val contacts: List<TvPerson>, val dictation: Boolean, val ts: Long, val raw: JSONObject,
+    /** k2 (7.5): calls with the people on the list (absent: on), and the microphone level 0..100 (absent: 50). */
+    val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC,
 )
+
+/** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
+data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC)
 
 /**
  * The kids' TV rules (protocol 0.6, section 7): what a well-formed config is, when a TV takes a new
@@ -116,15 +121,22 @@ object TvRules {
     const val MAX_CONTACTS = 50
     const val MAX_NAME = 40
     const val MAX_BYTES = 16 * 1024
+    const val DEFAULT_MIC = 50
+    const val MAX_MIC = 100
     val DEFAULT_QUICK = listOf("I need you", "Please come here", "I'm hungry", "I love you")
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
+    /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
+    private val OPTIONAL = setOf("calls", "mic")
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
     /** Throws IllegalArgumentException with the reference's reason if [c] isn't a well-formed config. */
     fun check(c: JSONObject) {
-        require(Canon.keys(c) == FIELDS) { "fields" }
+        val ks0 = Canon.keys(c)
+        require(ks0.containsAll(FIELDS) && (ks0 - FIELDS).all { it in OPTIONAL }) { "fields" }
+        if (c.has("calls")) require(c.get("calls") is Boolean) { "calls" }
+        if (c.has("mic")) { val m = c.get("mic"); require(Canon.isInt(m) && (m as Number).toLong() in 0..MAX_MIC.toLong()) { "mic" } }
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -195,17 +207,19 @@ object TvRules {
             (0 until q.length()).map { q.getJSONObject(it).let { o -> Quick(o.getString("id"), o.getString("text")) } },
             (0 until p.length()).map { p.getJSONObject(it).let { o -> TvPerson(o.getString("k"), o.getString("n"), o.getString("p")) } },
             c.getBoolean("dictation"), c.getLong("ts"), c,
+            c.optBoolean("calls", true), if (c.has("mic")) c.getInt("mic") else DEFAULT_MIC,
         )
     }
 
     /** A signed config from a parent's app. Sorts [parents] and [contacts] the way [check] wants them. */
     fun config(priv: PrivateKey, tv: String, v: Long, by: String, parents: Collection<String>, quick: List<Quick>,
-               contacts: List<TvPerson>, dictation: Boolean, ts: Long): JSONObject {
+               contacts: List<TvPerson>, dictation: Boolean, ts: Long, extras: TvExtras? = null): JSONObject {
         val o = JSONObject().put("tv", tv).put("v", v).put("by", by)
             .put("parents", JSONArray().apply { (parents + by).distinct().sorted().forEach { put(it) } })
             .put("quick", JSONArray().apply { quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
             .put("contacts", JSONArray().apply { contacts.distinctBy { it.k }.sortedBy { it.k }.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("dictation", dictation).put("ts", ts)
+        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)) }
         return Canon.sign(priv, CONFIG, o)
     }
 
@@ -222,6 +236,12 @@ object TvRules {
 
     // ---- the plaintexts in room "tvconfig"
     fun configMessage(cfg: JSONObject): String = JSONObject().put("t", "config").put("cfg", cfg).toString()
-    fun appliedMessage(v: Long): String = JSONObject().put("t", "applied").put("v", v).toString()
+    /** [app]: the TV's Muninn version (k2, so a parent's phone can show it and offer Update TV). */
+    fun appliedMessage(v: Long, app: String? = null): String =
+        JSONObject().put("t", "applied").put("v", v).apply { if (!app.isNullOrEmpty()) put("app", app) }.toString()
+    /** k2: a parent asks the TV to look for a new Muninn now and install it. */
+    fun updateMessage(): String = JSONObject().put("t", "update").toString()
+    /** t1 (7.6): a parent hands someone they invited the TV's contact code, so their app adds the TV. */
+    fun cardMessage(code: String): String = JSONObject().put("t", "card").put("code", code).toString()
     fun disconnectMessage(d: JSONObject): String = JSONObject().put("t", "disconnect").put("d", d).toString()
 }
