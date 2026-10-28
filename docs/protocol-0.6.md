@@ -64,6 +64,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k4` | kids' TV `apps` (7.9): a parent sends an app to the TV. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
+| `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -1073,6 +1074,9 @@ send one there, with no `apps` needed.
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
 | `group` | `react` `edit` | 11.5 | yes | a day, until greceipt | Seen | m1 |
+| `mx` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
+| `group` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
+| `photo`, `gphoto` | | pieces with `kind:"video"` (12.2) | yes | as photo | as photo | m2 |
 
 ## 9. Size limits
 
@@ -1227,3 +1231,59 @@ for them.)
 
 Pinned messages, the "New messages" line, the emoji picker, search inside a chat and a chat's photos and voice
 page are local: nothing about them goes on the wire, and the two apps don't need to agree on them.
+
+## 12. Messenger additions (cap `m2`)
+
+Photo albums, video messages, polls and link previews. As in section 11 nothing here is new cryptography; the reference
+`tools/m2_ref.py` writes `tests/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
+refused; running each `votes` case in order gives `result`; `fallback` gives the text; `video` gives `ok`). Muninn checks it in
+`MoreTest`. Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
+only spaces) are those of 11.1; the m2 fields may not contain control characters other than a newline, and one-line fields
+(a question, an option, a title) none at all.
+
+### 12.1 Albums
+
+Photos sent together carry three more clear fields in every piece: `al` (an album id, like a 1:1 message id), `ai` (this
+photo's place, 0 to 9) and `an` (how many, 1 to 10, `ai < an`). Each photo is still its own message with its own id,
+receipts and retries. An app with `m2` shows the photos of one album from one sender side by side, in `ai` order, as they
+arrive; an app without it ignores the fields and shows them one by one. So albums may go to anyone.
+
+### 12.2 Video messages
+
+A piece with `"kind": "video"` and `ms` (1 to 60000) is part of a video message: the joined bytes are an MP4 whose first box
+is `ftyp`, at most 2 MB over the internet (as photos, `INTERNET_PIECES`) and 3.2 MB close by. A video is never in an album.
+Only to someone whose caps include `m2`: an older app would try to read it as a photo and refuse it. The receiver keeps it
+encrypted like a photo and decrypts it only to play it.
+
+### 12.3 Polls
+
+A poll is a `rich` (11.2) or `gmsg` (3.8) message with one more field:
+
+```json
+{"text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos", "poll": {"q": "Pizza or tacos?", "o": ["Pizza", "Tacos"], "m": false}}
+```
+
+- `q`: 1 to 200 characters, one line. `o`: 2 to 10 options, each 1 to 100 characters, one line, no two the same (ignoring
+  case and spaces at the ends). `m`: several options may be chosen (default false).
+- `text` is what an app without `m2` shows: `"Poll: " + q`, then one line per option, `"1. Pizza"` (vectors: `fallback`).
+- A vote: room `mx` `{"t": "vote", "msg": "<poll id>", "v": [0], "ts": ...}` in a 1:1 chat, room `group`
+  `{"t": "vote", "g", "id", "msg", "v", "ts"}` in a group. `v` is the options chosen, sorted, no repeats, `[]` takes the vote
+  back; a single choice poll uses at most one. Each person has one vote per poll: the highest `ts` wins, as reactions do
+  (vectors: `votes`). A vote naming an option the poll doesn't have is ignored. Retried and confirmed like a reaction.
+- Everyone in the chat or group sees the counts and who voted for what. Only to `m2`.
+
+### 12.4 Link previews
+
+A `rich` or `gmsg` message whose text has a web link may carry what it links to:
+
+```json
+{"text": "Look https://example.com", "lp": {"u": "https://example.com", "t": "Example Domain", "d": "...", "i": "<base64 JPEG>"}}
+```
+
+- `u`: the `http://` or `https://` link, at most 2000 characters, no spaces. `t`: the page's title, 1 to 200 characters, one
+  line. `d`: its description, at most 300. `i`: a small JPEG, at most 24000 base64 characters. `d` and `i` may be left out.
+- The sender's phone fetches the page (only when its own Settings › Privacy › Link previews is on) and shrinks the picture.
+  The receiver never fetches anything: no website learns who got the link or when they read it. Tapping the preview asks
+  "Open example.com?" before the browser does.
+- Apps without `m2` ignore `lp` and show the text, so a preview may go to anyone with `m1`.
+
