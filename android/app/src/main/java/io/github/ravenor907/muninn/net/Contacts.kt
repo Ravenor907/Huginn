@@ -318,3 +318,80 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
         fun daysLeft(since: Long, now: Long): Int = ((KEEP_MS - (now - since) + 86_399_999L) / 86_400_000L).toInt().coerceAtLeast(1)
     }
 }
+
+/**
+ * Per-chat choices kept on this phone only (never on the wire): muted until a time, archived, and marked unread
+ * by hand. A key is a contact's chat key or "g:" + group id, like [Folders]. Stored through [write] (the vault).
+ * An archived chat comes back to the list when a message arrives, unless it's muted (Messenger does the same).
+ */
+class ChatFlags(private val read: () -> String?, private val write: (String) -> Unit) {
+    data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet())
+
+    private val _all = MutableStateFlow(load())
+    val all: StateFlow<State> = _all.asStateFlow()
+
+    private fun load(): State = try {
+        val o = JSONObject(read() ?: return State())
+        val m = o.optJSONObject("muted")
+        fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
+        State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"))
+    } catch (e: Exception) { State() }
+
+    private fun set(s: State) {
+        _all.value = s
+        try {
+            write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
+                .put("unread", JSONArray(s.unread.toList())).toString())
+        } catch (_: Exception) {}
+    }
+
+    /** No notifications from [key] until [until] (ms; [FOREVER] until turned back on). 0 turns it back on. */
+    @Synchronized
+    fun mute(key: String, until: Long) = set(_all.value.let { it.copy(muted = if (until <= 0) it.muted - key else it.muted + (key to until)) })
+
+    fun muted(key: String, now: Long = System.currentTimeMillis()): Boolean = (_all.value.muted[key] ?: 0L) > now
+
+    @Synchronized
+    fun archive(key: String, on: Boolean) = set(_all.value.let { it.copy(archived = if (on) it.archived + key else it.archived - key) })
+
+    fun archived(key: String) = key in _all.value.archived
+
+    /** Mark as unread: the chat keeps its dot until it's opened. */
+    @Synchronized
+    fun markUnread(key: String, on: Boolean) {
+        val s = _all.value
+        if ((key in s.unread) != on) set(s.copy(unread = if (on) s.unread + key else s.unread - key))
+    }
+
+    /** The chat was opened. */
+    fun read(key: String) = markUnread(key, false)
+
+    /** A message from [key] arrived: an archived chat comes back unless it's muted. Returns whether to notify. */
+    @Synchronized
+    fun arrived(key: String, now: Long = System.currentTimeMillis()): Boolean {
+        val quiet = muted(key, now)
+        if (!quiet && key in _all.value.archived) archive(key, false)
+        return !quiet
+    }
+
+    /** A chat that's gone (deleted contact, left group) loses its flags. */
+    @Synchronized
+    fun forget(key: String) {
+        val s = _all.value
+        if (key in s.muted || key in s.archived || key in s.unread) set(State(s.muted - key, s.archived - key, s.unread - key))
+    }
+
+    companion object {
+        const val FOREVER = Long.MAX_VALUE
+        const val HOUR = 3_600_000L
+
+        /** "Muted for 3 hours", "Muted until tomorrow 7:00", "Muted": what the chat says while muted. */
+        fun mutedText(until: Long, now: Long): String {
+            if (until == FOREVER) return "Muted"
+            val left = until - now
+            if (left <= 0) return ""
+            val h = (left + HOUR - 1) / HOUR
+            return if (h <= 1) "Muted for less than an hour" else if (h < 48) "Muted for $h more hours" else "Muted for ${(h + 23) / 24} more days"
+        }
+    }
+}

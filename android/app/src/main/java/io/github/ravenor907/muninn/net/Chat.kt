@@ -137,6 +137,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val groups: Groups = Groups(id.keys, id.publicKey, GroupHost(), { vault.read(File(groupDir, it)) }, { f, t -> groupDir.mkdirs(); vault.write(File(groupDir, f), t) })
     /** Contact folders: local only. */
     val folders = Folders({ vault.read(File(context.filesDir, "folders.json")) }, { vault.write(File(context.filesDir, "folders.json"), it) })
+    /** Muted, archived and marked unread: on this phone only. */
+    val flags = ChatFlags({ vault.read(File(context.filesDir, "chatflags.json")) }, { vault.write(File(context.filesDir, "chatflags.json"), it) })
     /** Contacts removed from the list, kept 30 days so they can come back: local only. */
     val trash = Trash({ vault.read(File(context.filesDir, "trash.json")) }, { vault.write(File(context.filesDir, "trash.json"), it) })
     private val groupTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
@@ -322,6 +324,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun deleteForGood(peerKey: String) {
         deleteConversation(peerKey)
         removeContact(peerKey)
+        flags.forget(peerKey)
     }
 
     fun emptyTrash() = trash.all.value.keys.toList().forEach { deleteForGood(it) }
@@ -803,6 +806,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** The chat is on screen: clear the dot and, if allowed, tell them what was read. */
     fun markRead(peerKey: String) {
         _unread.update { it - peerKey }
+        flags.read(peerKey)
         if (!id.readReceipts) return
         var fresh = emptyList<Msg>()
         edit { map ->

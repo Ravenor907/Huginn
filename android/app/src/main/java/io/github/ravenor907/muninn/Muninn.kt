@@ -105,7 +105,11 @@ class Muninn : Application() {
         io.github.ravenor907.muninn.net.call.RoomManager.init(this)
         closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
-        scope.launch { chat.arrivals.collect { (name, text, key) -> if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key) } }
+        scope.launch { chat.arrivals.collect { (name, text, key) ->
+            // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
+            if (!chat.flags.arrived(key)) return@collect
+            if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key)
+        } }
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true

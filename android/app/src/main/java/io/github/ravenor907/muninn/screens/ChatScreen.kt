@@ -391,7 +391,7 @@ private suspend fun PointerInputScope.holdToDrag(press: MutableInteractionSource
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
-                      onLong: (() -> Unit)? = null, picked: Boolean = false, longLabel: String = "Options", modifier: Modifier = Modifier,
+                      muted: Boolean = false, onLong: (() -> Unit)? = null, picked: Boolean = false, longLabel: String = "Options", modifier: Modifier = Modifier,
                       onDrag: ((Float) -> Unit)? = null, onDrop: ((Boolean) -> Unit)? = null, onClick: () -> Unit) {
     val press = remember { MutableInteractionSource() }
     val haptic = LocalHapticFeedback.current
@@ -418,7 +418,9 @@ private fun PersonRow(name: String, preview: String, time: String, unread: Int, 
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(name, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(name, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (muted) MIcon("mute", Palette.textMuted, 14.dp, modifier = Modifier.padding(start = 6.dp).semantics { contentDescription = "Muted" })
+                Spacer(Modifier.weight(1f))
                 if (time.isNotEmpty()) Text(time, style = metaStyle.copy(color = if (unread > 0) Palette.gold else Palette.textMuted),
                     maxLines = 1, modifier = Modifier.padding(start = 8.dp))
             }
@@ -455,6 +457,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val folders by app.chat.folders.all.collectAsState()
     val topOrder by app.chat.folders.top.collectAsState()
     val trashed by app.chat.trash.all.collectAsState()
+    val flagState by app.chat.flags.all.collectAsState()
+    var showArchived by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var foldersFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Rename straight from the list: hold a person, then the pencil.
@@ -488,13 +492,16 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     fun lastTime(r: ChatRow): Long = if (r.group != null) gmsgs[r.group]?.lastOrNull()?.time ?: groups[r.group]?.state?.ts ?: 0L
         else convos[r.key]?.lastOrNull()?.time ?: 0L
     // Contacts (never group peers), anyone else there's a conversation with, and groups, newest first.
-    val chatRows = (contacts.filter { !it.groupOnly }.map { ChatRow(it.chatKey, it.shown, it.name) } +
+    val everyRow = (contacts.filter { !it.groupOnly }.map { ChatRow(it.chatKey, it.shown, it.name) } +
         convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> ChatRow(k, met[k]?.name ?: app.chat.nameOf(k)) } +
         groups.values.map { ChatRow(Folders.groupKey(it.g), it.state.name, group = it.g) })
         .filter { it.key !in blocked && it.key !in trashed }
         .sortedByDescending { lastTime(it) }
     // Search: a chat's nickname, the name they chose, or its last message.
     val q = query.trim()
+    // Archived chats sit in their own section at the bottom (search still finds them).
+    val chatRows = if (q.isEmpty()) everyRow.filter { it.key !in flagState.archived } else everyRow
+    val archivedRows = everyRow.filter { it.key in flagState.archived }
     fun lastText(r: ChatRow): String? = if (r.group != null) gmsgs[r.group]?.lastOrNull()?.let { groupPreview(app, it) } else convos[r.key]?.lastOrNull()?.let { preview(it) }
     val shownRows = if (q.isEmpty()) chatRows else chatRows.filter { c ->
         c.name.contains(q, ignoreCase = true) || c.alt.contains(q, ignoreCase = true) || lastText(c)?.contains(q, ignoreCase = true) == true
@@ -582,7 +589,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     others.isEmpty() -> "Just you so far: invite people"
                     else -> "${others.size + 1} people"
                 }, last?.let { when_(it.time) } ?: "",
-                if (c.group in gunread) groupUnread(msgs) else 0, false, { GroupAvatar(c.name, others, 48.dp) },
+                if (c.group in gunread) groupUnread(msgs) else if (c.key in flagState.unread) 1 else 0, false, { GroupAvatar(c.name, others, 48.dp) },
+                muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
                 onLong = { heldIn = sec; foldersFor = c.key to c.name }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
                 if (selected.isNotEmpty()) Ui.say("Pick people for a new group. Groups open once you're done.") else ChatNav.openGroup(c.group)
             }
@@ -591,7 +599,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             val last = msgs.lastOrNull()
             val pickable = app.chat.isContact(c.key)
             PersonRow(c.name, last?.let { preview(it) } ?: routeText(app.chat.route(c.key)), last?.let { when_(it.time) } ?: "",
-                if (c.key in unread) unreadCount(msgs) else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.name, 48.dp, 18.sp, online = c.key in activeMap) },
+                if (c.key in unread) unreadCount(msgs) else if (c.key in flagState.unread) 1 else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.name, 48.dp, 18.sp, online = c.key in activeMap) },
+                muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
                 onLong = { heldIn = sec; if (pickable) selected = selected + c.key else foldersFor = c.key to c.name }, picked = c.key in selected,
                 longLabel = if (pickable) "Pick for a group" else "Options", modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
                 when {
@@ -685,7 +694,18 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             } else if (shownRows.isEmpty() && q.isNotEmpty()) item {
                 Text("No chats match “$q”.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // Removed contacts wait here for 30 days.
+            // Archived chats: a section that opens on tap, above the trash.
+            if (archivedRows.isNotEmpty() && q.isEmpty()) {
+                item(key = "archived") {
+                    PersonRow("Archived", "${archivedRows.size} ${if (archivedRows.size == 1) "chat" else "chats"} · ${if (showArchived) "tap to hide" else "tap to show"}",
+                        "", archivedRows.count { it.key in unread || it.group in gunread }, false,
+                        { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("download", Palette.accent, 22.dp) } }) {
+                        showArchived = !showArchived
+                    }
+                }
+                if (showArchived) items(archivedRows, key = { "a" + it.key }) { c -> chatRow(c, null, "a" + c.key) }
+            }
+                        // Removed contacts wait here for 30 days.
             if (trashed.isNotEmpty() && q.isEmpty()) item(key = "trash") {
                 PersonRow("Trash", "${trashed.size} ${if (trashed.size == 1) "contact" else "contacts"} · deleted for good after ${io.github.ravenor907.muninn.net.Trash.DAYS} days",
                     "", 0, false, { TrashAvatar(48.dp) }) { ChatNav.open = "trash" }
@@ -850,6 +870,7 @@ private fun Conversation(app: Muninn, key: String) {
     val name = c?.shown ?: m?.name ?: app.chat.nameOf(key)
     var renaming by remember { mutableStateOf(false) }
     var folderPick by remember { mutableStateOf(false) }
+    var muting by remember { mutableStateOf(false) }
     var tvSettings by remember { mutableStateOf(false) }
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val isTv = tvs[key]?.disconnecting == false
@@ -964,6 +985,7 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
+            ChatFlagItems(app, key, name, close, { muting = true }) { ChatNav.open = "" }
             // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off means relay only.
             if (c != null) {
                 val trustText = io.github.ravenor907.muninn.net.call.CallManager.trustText(key)
@@ -982,6 +1004,7 @@ private fun Conversation(app: Muninn, key: String) {
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
         if (folderPick) FolderPicker(app, key, name) { folderPick = false }
+        if (muting) MuteDialog(app, key, name) { muting = false }
         if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1418,6 +1441,49 @@ internal fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, labe
     }
 }
 
+/** Mute notifications from a chat: for a while, or until turned back on. Only on this phone. */
+@Composable
+internal fun MuteDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
+    val flags = io.github.ravenor907.muninn.net.ChatFlags
+    fun mute(ms: Long, said: String) {
+        app.chat.flags.mute(key, if (ms == flags.FOREVER) flags.FOREVER else System.currentTimeMillis() + ms)
+        Ui.say(said); done()
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = done,
+        containerColor = Palette.panel,
+        title = { Text("Mute $name", style = Type.big) },
+        text = {
+            Column {
+                Text("No notifications or sounds from this chat. Messages still arrive, and calls still ring.", style = Type.small,
+                    modifier = Modifier.padding(bottom = 8.dp))
+                Line("For 1 hour", "", icon = "clock") { mute(flags.HOUR, "$name is muted for an hour.") }
+                Line("For 8 hours", "", icon = "clock") { mute(8 * flags.HOUR, "$name is muted for 8 hours.") }
+                Line("For a week", "", icon = "clock") { mute(7 * 24 * flags.HOUR, "$name is muted for a week.") }
+                Line("Until I turn it back on", "", icon = "mute") { mute(flags.FOREVER, "$name is muted.") }
+            }
+        },
+        confirmButton = { MButton("Cancel") { done() } },
+    )
+}
+
+/** Mute, Archive and Mark as unread, for a chat's menu ([close] shuts the menu first). */
+@Composable
+private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> Unit, onMute: () -> Unit, leave: () -> Unit) {
+    val st by app.chat.flags.all.collectAsState()
+    val muted = app.chat.flags.muted(key)
+    DropdownMenuItem(text = { Text(if (muted) "Unmute" else "Mute", style = bodyStyle) }, leadingIcon = { MIcon("mute", Palette.accent, 20.dp) },
+        onClick = { close(); if (muted) { app.chat.flags.mute(key, 0); Ui.say("$name isn't muted any more.") } else onMute() })
+    val archived = key in st.archived
+    DropdownMenuItem(text = { Text(if (archived) "Unarchive" else "Archive", style = bodyStyle) }, leadingIcon = { MIcon("download", Palette.accent, 20.dp) },
+        onClick = {
+            close(); app.chat.flags.archive(key, !archived)
+            if (archived) Ui.say("$name is back on the chat list.") else { Ui.say("$name is archived. It comes back when a message arrives."); leave() }
+        })
+    DropdownMenuItem(text = { Text("Mark as unread", style = bodyStyle) }, leadingIcon = { MIcon("chat", Palette.accent, 20.dp) },
+        onClick = { close(); app.chat.flags.markUnread(key, true); leave() })
+}
+
 /** Rename: a nickname kept on this phone only. Empty goes back to the name they chose. */
 @Composable
 internal fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (String?) -> Unit) {
@@ -1591,6 +1657,9 @@ internal fun FolderPicker(app: Muninn, key: String, name: String, moves: ListMov
     val contact = app.chat.contacts.contact(key)
     var renaming by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
+    var muting by remember { mutableStateOf(false) }
+    val flagState by app.chat.flags.all.collectAsState()
+    if (muting) { MuteDialog(app, key, name) { muting = false; done() }; return }
     if (renaming && contact != null) {
         RenameDialog(contact) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         return
@@ -1619,10 +1688,23 @@ internal fun FolderPicker(app: Muninn, key: String, name: String, moves: ListMov
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
-        title = { Text("Folders for $name", style = Type.big) },
+        title = { Text(name, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (contact != null) MButton("Rename", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
+                // Mute, archive, mark as unread: on this phone only.
+                val muted = (flagState.muted[key] ?: 0L) > System.currentTimeMillis()
+                val archived = key in flagState.archived
+                Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton(if (muted) "Unmute" else "Mute", Modifier.weight(1f), icon = "mute") {
+                        if (muted) { app.chat.flags.mute(key, 0); Ui.say("$name isn't muted any more.") } else muting = true
+                    }
+                    MButton(if (archived) "Unarchive" else "Archive", Modifier.weight(1f), icon = "download") {
+                        app.chat.flags.archive(key, !archived); done()
+                        Ui.say(if (archived) "$name is back on the chat list." else "$name is archived. It comes back when a message arrives.")
+                    }
+                }
+                MButton("Mark as unread", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "chat") { app.chat.flags.markUnread(key, true); done() }
                 if (moves != null) {
                     Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MButton("Move up", Modifier.weight(1f), enabled = moves.up != null) { moves.up?.invoke() }
@@ -1763,6 +1845,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     val msgs = chats[g].orEmpty().filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") }
     var text by remember(ch) { mutableStateOf("") }
     var folderPick by remember { mutableStateOf(false) }
+    var muting by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
@@ -1848,7 +1931,9 @@ private fun GroupConversation(app: Muninn, g: String) {
                 onClick = { close(); ChatNav.open = "$key/settings" })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
+            ChatFlagItems(app, key, s.name, close, { muting = true }) { ChatNav.open = ""; ChatNav.space = "" }
         }
+        if (muting) MuteDialog(app, key, s.name) { muting = false }
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
