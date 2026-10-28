@@ -608,7 +608,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     onFolders = if (selected.size == 1) ({ val k = selected.first(); foldersFor = k to app.chat.nameOf(k); selected = emptySet() }) else null) { selected = emptySet() }
                 else SearchBox(query) { query = it }
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    if (closeError != null) Text(closeError!!, style = Type.small.copy(color = Palette.danger),
+                    if (closeError != null) Text(closeError!!, style = Type.small.copy(color = if (closeError == io.github.ravenor907.muninn.net.Close.OFFER_TEXT) Palette.accent else Palette.danger),
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(bottom = 8.dp))
                     // Permissions still missing (microphone, camera, notifications, running in the background).
                     SetupCard(app, Modifier.padding(bottom = 8.dp))

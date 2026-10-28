@@ -239,7 +239,9 @@ class MainActivity : ComponentActivity() {
         netStarted = true
         app.listen()
         io.github.ravenor907.muninn.net.MessageService.start(this)
-        askClose()
+        // Android 12 and older only allow looking for nearby phones with Location: never asked for at setup,
+        // only once the person taps "find phones close by" (Nearby on Chats).
+        if (Build.VERSION.SDK_INT >= 33 || closePerms().distinct().all { granted(it) }) askClose() else app.close.offer()
     }
 
     /** "Block screenshots": also hides Muninn's screen in recent apps. */
