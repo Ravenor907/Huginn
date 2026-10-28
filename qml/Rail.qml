@@ -194,8 +194,18 @@ Rectangle {
                     }
                 }
             }
+            // Settings: the valknut, black and grey.
+            Image {
+                visible: rb.entry.id === "settings"
+                anchors.centerIn: parent
+                source: "assets/valknut.png"
+                width: Theme.px(26); height: width
+                sourceSize.width: 128; sourceSize.height: 128
+                smooth: true; mipmap: true
+                opacity: rb.here || rb.on ? 1 : 0.85
+            }
             Icon {
-                visible: rb.entry.kind === "icon" || rb.entry.kind === "add"
+                visible: (rb.entry.kind === "icon" && rb.entry.id !== "settings") || rb.entry.kind === "add"
                 anchors.centerIn: parent
                 name: rb.entry.kind === "add" ? "plus" : (rb.entry.icon || "file")
                 size: Theme.px(rb.entry.kind === "add" ? 20 : 22)

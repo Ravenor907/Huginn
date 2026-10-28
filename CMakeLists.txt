@@ -215,6 +215,7 @@ qt_add_qml_module(huginn
         qml/StickPointer.qml
     RESOURCES
         qml/assets/raven-gold.png
+        qml/assets/valknut.png
         qml/assets/raven_message.wav
         ${HUGINN_FONTS}
 )
@@ -227,6 +228,7 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
+set_source_files_properties(qml/assets/valknut.png PROPERTIES QT_RESOURCE_ALIAS assets/valknut.png)
 set_source_files_properties(qml/assets/raven_message.wav PROPERTIES QT_RESOURCE_ALIAS assets/raven_message.wav)
 foreach(font IN LISTS HUGINN_FONTS)
     get_filename_component(name ${font} NAME)

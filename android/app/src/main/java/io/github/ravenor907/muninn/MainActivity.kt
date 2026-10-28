@@ -453,7 +453,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val header: @Composable () -> Unit = { Brand(title = title(tab).uppercase()) {
                 if (tab == "chat" && app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
-                IconAction("gear", if (tab == "settings") "Close settings" else "Settings", if (tab == "settings") Palette.accent else Palette.text) { toggleSettings() }
+                SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
             if (!full) UpdateBanner()
@@ -464,6 +464,18 @@ class MainActivity : ComponentActivity() {
             if (!full) BottomTabs()
         }
     }
+
+    /** The main Settings button: the valknut, black and grey. A soft ring shows while Settings is open. */
+    @Composable
+    private fun SettingsButton(label: String, open: Boolean, onClick: () -> Unit) {
+        Box(Modifier.size(44.dp).clip(CircleShape).background(if (open) Palette.field else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .semantics { contentDescription = label }, contentAlignment = Alignment.Center) { Valknut(28.dp) }
+    }
+
+    @Composable
+    private fun Valknut(size: androidx.compose.ui.unit.Dp) =
+        Image(painterResource(R.drawable.settings_valknut), contentDescription = null, modifier = Modifier.size(size))
 
     @Composable
     private fun BottomTabs() {
@@ -539,7 +551,7 @@ class MainActivity : ComponentActivity() {
                     val on = tab == id
                     RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
                         onClick = { if (id == "settings") toggleSettings() else show(id) }) {
-                        MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
+                        if (id == "settings") Valknut(26.dp) else MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
                     }
                 }
             }
