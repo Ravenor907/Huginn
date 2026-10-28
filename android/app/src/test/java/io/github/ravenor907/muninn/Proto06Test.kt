@@ -178,14 +178,14 @@ class Proto06Test {
         val e = ChatWire.base("private", chat.getString("pubA"), "Raven", "fp", "a1".repeat(32), "m1")
         assertEquals("r1", e.getString("cap"))
         assertEquals(Proto06.CAPS, e.getString("caps"))
-        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "t1", "v1", "m1"), ChatWire.capsOf(e))
+        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "t1", "v1", "m1", "m2"), ChatWire.capsOf(e))
         assertEquals(setOf("r1"), ChatWire.capsOf(JSONObject().put("cap", "r1")))
         assertTrue("group" in ChatWire.RATCHET_ROOMS && "gmsg" in ChatWire.RATCHET_ROOMS && "greceipt" in ChatWire.RATCHET_ROOMS)
     }
 
     @Test
     fun caps() {
-        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "t1", "v1", "m1"), Proto06.caps(Proto06.CAPS))
+        assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "t1", "v1", "m1", "m2"), Proto06.caps(Proto06.CAPS))
         assertEquals(setOf("r1", "zz"), Proto06.caps(" r1  zz "))
         assertTrue(Proto06.isLogicalId(Proto06.newLogicalId()))
         assertEquals(22, Proto06.newGroupId().length)

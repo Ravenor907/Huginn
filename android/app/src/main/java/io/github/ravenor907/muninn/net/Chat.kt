@@ -68,7 +68,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** Reactions (cap m1): who to their latest one; an empty one is a removed reaction. */
                    val reactions: Map<String, Rich.Reaction> = emptyMap(),
                    /** Edited (cap m1): when the text shown was written (the editor's clock), 0 if never edited. */
-                   val edited: Long = 0)
+                   val edited: Long = 0,
+                   /** A video message (cap m2): its length in ms (stored like a photo, under [photo]). */
+                   val video: Int = 0,
+                   /** Part of an album (cap m2): its id, this photo's place and how many there are. */
+                   val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
+                   /** A poll (cap m2), and who voted for what. */
+                   val poll: More.Poll? = null, val votes: Map<String, More.Vote> = emptyMap(),
+                   /** A link preview the sender's phone made (cap m2). */
+                   val preview: More.Preview? = null)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false)
@@ -494,10 +502,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Cap m1: a reply ("rich") is a private message with the id it quotes; everything else is the same.
         var opened = plain
         var re = ""
+        var poll: More.Poll? = null
+        var lp: More.Preview? = null
         if (envRoom == "rich") {
             val p = try { JSONObject(plain) } catch (e: Exception) { return 400 to "{}" }
             if (!Rich.ok("rich", p)) return 400 to "{}"
             opened = p.getString("text"); re = p.optString("re")
+            // Cap m2: a poll or a link preview. A malformed one is left out; the text still shows.
+            if (More.ok("rich", p)) { poll = More.pollOf(p); lp = More.previewOf(p) }
         }
         val room = if (envRoom == "rich") "private" else envRoom
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room. Counted only once
@@ -512,15 +524,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         val text = if (room == "receipt" || room == "mx" || room == "live") opened else opened.take(MAX)
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
-        val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re)
+        val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp)
         // A message from them ends their "typing".
         if (room == "private" && fromKey in _typing.value) _typing.update { it - fromKey }
         when (room) {
             "mx" -> {
                 if (contacts.contact(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
                 val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
-                if (!Rich.ok("mx", p)) return 400 to "{}"
-                takeMx(fromKey, name, p)
+                // Cap m2: a vote on a poll; everything else is m1.
+                if (p.opt("t") == "vote") { if (!More.ok("mx", p)) return 400 to "{}"; takeVote(fromKey, p) }
+                else if (!Rich.ok("mx", p)) return 400 to "{}"
+                else takeMx(fromKey, name, p)
                 // Confirmed by its envelope id, so the sender stops resending it.
                 receipt(fromKey, listOf(sentId), "delivered", mailbox)
             }
@@ -666,16 +680,37 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun sendPhoto(peerKey: String, jpeg: ByteArray) = sendBlob(peerKey, jpeg, 0)
 
+    /** Several photos at once: an album (cap m2; an older app shows them one by one). */
+    fun sendPhotos(peerKey: String, jpegs: List<ByteArray>) {
+        if (jpegs.size == 1) { sendPhoto(peerKey, jpegs[0]); return }
+        jpegs.chunked(More.ALBUM_MAX).forEach { part ->
+            val album = UUID.randomUUID().toString()
+            part.forEachIndexed { i, j -> sendBlob(peerKey, j, 0, album = Triple(album, i, part.size)) }
+        }
+    }
+
     /** A recorded voice message (AAC, no container, so nothing but sound). */
     fun sendVoice(peerKey: String, aac: ByteArray, ms: Int) = sendBlob(peerKey, aac, ms.coerceAtLeast(1))
 
-    private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int) {
+    /** Their app plays video messages, polls and albums (cap m2). */
+    fun hasM2(peerKey: String) = contacts.get(peerKey)?.caps?.contains(More.CAP) == true
+
+    /** A video message (cap m2): an MP4 of at most a minute. Null when sent, else what to say. */
+    fun sendVideo(peerKey: String, mp4: ByteArray, ms: Int): String? {
+        if (!hasM2(peerKey)) { probeCaps(peerKey); return "${nameOf(peerKey)} needs a newer Muninn to get video messages." }
+        if (!More.isVideo(mp4) || mp4.size > Photos.MAX_PIECES * Photos.PIECE) return "That video is too big to send."
+        sendBlob(peerKey, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))
+        return null
+    }
+
+    private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null) {
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
         val msgId = UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, msgId), jpeg)
-        val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId, voice = voiceMs)
+        val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId, voice = voiceMs,
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0)
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
@@ -692,7 +727,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val parts = Photos.split(bytes)
         seal("photo", m.peerKey, parts.mapIndexed { i, part ->
             ChatWire.base("photo", id.publicKey, id.username, id.fingerprint, nostr.publicKey, m.id).put("i", i).put("n", parts.size)
-                .apply { if (m.voice > 0) put("kind", "voice").put("ms", m.voice) } to part
+                .apply {
+                    if (m.voice > 0) put("kind", "voice").put("ms", m.voice)
+                    if (m.video > 0) put("kind", "video").put("ms", m.video)
+                    if (m.album.isNotEmpty()) put("al", m.album).put("ai", m.albumAt).put("an", m.albumOf)
+                } to part
         }).map { it.toString() }
     }
 
@@ -702,6 +741,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val msgId = o.optString("id")
         val n = o.optInt("n"); val i = o.optInt("i", -1)
         if (msgId.isEmpty() || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
+        // Cap m2: album fields and video messages must be well-formed.
+        if (!More.ok("piece", o)) return 400 to "{}"
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         // Already have it (a copy from another route, or a resend): confirm again, or just drop a piece already here.
         val dup = {
@@ -732,16 +773,23 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             incoming.remove(msgId)
         }
         val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
+        val videoMs = if (o.optString("kind") == "video") o.optInt("ms").coerceIn(1, More.VIDEO_MAX_MS) else 0
         val joined = inc.parts.map { it!! }
-        val jpeg = (if (voiceMs > 0) Voice.check(joined) else Photos.join(joined)) ?: return 400 to "{}"
+        val jpeg = (when {
+            voiceMs > 0 -> Voice.check(joined)
+            videoMs > 0 -> Videos.join(joined)
+            else -> Photos.join(joined)
+        }) ?: return 400 to "{}"
         vault.writeBytes(File(photosDir, msgId), jpeg)
         if (contact == null) {
             val m = _met.value[fromKey]
             putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
         } else if (mailbox != null && contact.mailbox != mailbox) contacts.put(contact.copy(mailbox = mailbox))
-        if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId, voice = voiceMs))) {
+        val album = o.optString("al")
+        if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId, voice = voiceMs,
+                video = videoMs, album = album, albumAt = if (album.isEmpty()) 0 else o.optInt("ai"), albumOf = if (album.isEmpty()) 0 else o.optInt("an")))) {
             _unread.update { it + fromKey }
-            arrivals.tryEmit(Triple(contact?.shown ?: name, if (voiceMs > 0) "Voice message" else "Photo", fromKey))
+            arrivals.tryEmit(Triple(contact?.shown ?: name, when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; album.isNotEmpty() -> "Photos"; else -> "Photo" }, fromKey))
         }
         receipt(fromKey, listOf(msgId), "delivered", mailbox)
         return 200 to "{}"
@@ -873,6 +921,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         typingSent.remove(peerKey)
         val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending",
             re = re.takeIf { Rich.isMsgId(it) } ?: "")
+        send(peerKey, name, r, mine)
+    }
+
+    /** Adds [mine] to the chat and sends it; a link in a message to an m1 app gets its preview first (cap m2). */
+    private fun send(peerKey: String, name: String, r: String, mine: Msg) {
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         if (r.isEmpty() && backupMailbox(mine) == null) {
@@ -881,7 +934,65 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 else "$name is out of range. Say yes to Keep in touch to message from anywhere.")
             return
         }
-        bg { attempt(mine) }
+        val link = if (id.linkPreviews && mine.poll == null && hasM1(peerKey)) More.firstLink(mine.text) else null
+        if (link == null) { bg { attempt(mine) }; return }
+        tries[mine.id] = Tries(0, System.currentTimeMillis() + 30_000)   // the retry loop waits for the preview
+        bg {
+            // Looked up once, before it's sealed: every try and route then sends the same bytes.
+            LinkPreview.fetch(link)?.let { lp -> update(peerKey, mine.id) { it.copy(preview = lp) } }
+            attempt(_private.value[peerKey]?.firstOrNull { it.id == mine.id } ?: mine)
+        }
+    }
+
+    /** A poll (cap m2): a question and 2 to 10 answers. Null when sent, else what to say. */
+    fun sendPoll(peerKey: String, question: String, options: List<String>, multi: Boolean): String? {
+        if (!hasM2(peerKey)) { probeCaps(peerKey); return "${nameOf(peerKey)} needs a newer Muninn to answer polls." }
+        val poll = More.Poll(question.trim(), options.map { it.trim() }.filter { it.isNotEmpty() }, multi)
+        if (!More.ok("rich", JSONObject().put("text", More.fallback(poll.q, poll.options)).put("poll", More.pollJson(poll))))
+            return "A poll needs a question and 2 to ${More.OPTIONS_MAX} different answers."
+        val name = nameOf(peerKey)
+        val r = route(peerKey)
+        val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, More.fallback(poll.q, poll.options), true, System.currentTimeMillis(),
+            via = r, state = "sending", poll = poll)
+        send(peerKey, name, r, mine)
+        return null
+    }
+
+    /** My vote on a poll in the chat with [peerKey] ([] takes it back). Null when done, else what to say. */
+    fun vote(peerKey: String, msgId: String, choices: List<Int>): String? {
+        val ts = System.currentTimeMillis()
+        val v = choices.distinct().sorted()
+        var done = false
+        edit { map ->
+            val list = map[peerKey] ?: return@edit false
+            val m = list.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@edit false
+            val poll = m.poll ?: return@edit false
+            val vv = if (poll.multi) v else v.take(1)
+            val all = More.vote(m.votes, poll.options.size, id.publicKey, vv, ts) ?: return@edit false
+            map[peerKey] = list.map { if (it.id == msgId) it.copy(votes = all) else it }
+            done = true
+            true
+        }
+        if (!done) return null
+        val sent = _private.value[peerKey]?.firstOrNull { it.id == msgId }?.votes?.get(id.publicKey)?.v ?: v
+        queueMx(peerKey, More.voteMsg(msgId, sent, ts))
+        return null
+    }
+
+    /** A vote from them, already checked (More.check). */
+    private fun takeVote(fromKey: String, p: JSONObject) {
+        val msgId = p.getString("msg")
+        val ts = Rich.ts(p)
+        val a = p.getJSONArray("v")
+        val v = (0 until a.length()).map { a.getInt(it) }
+        edit { map ->
+            val list = map[fromKey] ?: return@edit false
+            val m = list.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@edit false
+            val poll = m.poll ?: return@edit false
+            val all = More.vote(m.votes, poll.options.size, fromKey, if (poll.multi) v else v.take(1), ts) ?: return@edit false
+            map[fromKey] = list.map { if (it.id == msgId) it.copy(votes = all) else it }
+            true
+        }
     }
 
     // ------------------------------------------------------------------ cap m1: reactions, edits, typing, active status
@@ -956,7 +1067,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    private fun preview(m: Msg) = when { m.voice > 0 -> "Voice message"; m.photo.isNotEmpty() -> "Photo"; else -> m.text.take(60) }
+    private fun preview(m: Msg) = when { m.voice > 0 -> "Voice message"; m.video > 0 -> "Video message"; m.photo.isNotEmpty() -> "Photo"
+        m.poll != null -> "Poll: ${m.poll.q}"; else -> m.text.take(60) }
 
     /** Seals one reaction or edit once and keeps it until their receipt names its envelope id (a day at most). */
     private fun queueMx(peerKey: String, plain: String) {
@@ -1059,9 +1171,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (m.photo.isNotEmpty()) { attemptPhoto(m, t); return }
         // Sealed once; every try and every route sends these same bytes.
         val body = outbox.getOrMake(m.id) {
-            // A reply goes as "rich" to an app that has m1; the same text without the quote to any other.
-            val rich = m.re.isNotEmpty() && hasM1(m.peerKey)
-            listOf(envelope(if (rich) "rich" else "private", m.peerKey, if (rich) Rich.richText(m.text, m.re) else m.text, m.id).toString())
+            // A reply, poll or link preview goes as "rich" to an app that has m1; the same text without them to any other.
+            val rich = (m.re.isNotEmpty() || m.poll != null || m.preview != null) && hasM1(m.peerKey)
+            listOf(envelope(if (rich) "rich" else "private", m.peerKey, if (rich) richPayload(m) else m.text, m.id).toString())
         }?.firstOrNull() ?: return
         var any = false
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")); any = true; markSent(m, "close") }
@@ -1097,6 +1209,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
+
+    private fun richPayload(m: Msg): String = JSONObject(Rich.richText(m.text, m.re)).apply {
+        m.poll?.let { put("poll", More.pollJson(it)) }
+        m.preview?.let { put("lp", More.previewJson(it)) }
+    }.toString()
 
     private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
 
@@ -1490,12 +1607,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)
             .put("time", it.time).put("failed", it.failed).put("via", it.via).put("state", it.state).put("photo", it.photo).put("unsent", it.unsent).put("voice", it.voice)
-            .apply { if (it.re.isNotEmpty()) put("re", it.re); if (it.reactions.isNotEmpty()) put("rx", Rich.reactionsToJson(it.reactions)); if (it.edited > 0) put("ed", it.edited) }) }
+            .apply { if (it.re.isNotEmpty()) put("re", it.re); if (it.reactions.isNotEmpty()) put("rx", Rich.reactionsToJson(it.reactions)); if (it.edited > 0) put("ed", it.edited) }
+            .apply { m2Json(this, it) }) }
     }
     private fun fromJson(a: JSONArray) = (0 until a.length()).map { a.getJSONObject(it) }.map {
         Msg(it.getString("id"), it.getString("peer"), it.getString("name"), it.getString("text"), it.getBoolean("mine"), it.getLong("time"),
             it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"),
-            re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"))
+            re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"),
+            video = it.optInt("vid"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"),
+            poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it))
+    }
+
+    /** Cap m2 parts of a stored message (only the ones it has). */
+    private fun m2Json(o: JSONObject, m: Msg) {
+        if (m.video > 0) o.put("vid", m.video)
+        if (m.album.isNotEmpty()) o.put("al", m.album).put("ai", m.albumAt).put("an", m.albumOf)
+        m.poll?.let { o.put("poll", More.pollJson(it)) }
+        if (m.votes.isNotEmpty()) o.put("vt", More.votesToJson(m.votes))
+        m.preview?.let { o.put("lp", More.previewJson(it)) }
     }
 
     private fun save() = synchronized(lock) {
