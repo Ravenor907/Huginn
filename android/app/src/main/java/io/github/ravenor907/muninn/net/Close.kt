@@ -114,7 +114,17 @@ class Close(private val context: Context, private val identity: Identity) {
         }
     }
 
-    /** Stops looking and being seen; phones already connected stay connected. */
+    /** The refresh button: start looking over from scratch, so phones that came close since are found now. */
+    fun lookAgain() {
+        main.post {
+            if (!running) return@post
+            if (looking) quiet()
+            dutyOn = true
+            look()
+        }
+    }
+
+        /** Stops looking and being seen; phones already connected stay connected. */
     private fun quiet() {
         looking = false
         try { client.stopAdvertising(); client.stopDiscovery() } catch (_: Exception) {}

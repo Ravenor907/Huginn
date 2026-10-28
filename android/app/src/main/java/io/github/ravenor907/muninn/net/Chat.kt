@@ -1131,7 +1131,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    /** Tap a message that didn't send: try again now. */
+    /** The refresh button: everything still waiting goes again on the next round, not when its timer says. */
+    fun retryAllNow() { for (t in tries.values) t.next = 0L }
+
+        /** Tap a message that didn't send: try again now. */
     fun retry(peerKey: String, msgId: String) {
         val m = _private.value[peerKey]?.firstOrNull { it.id == msgId } ?: return
         tries.remove(m.id)

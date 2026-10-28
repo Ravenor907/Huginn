@@ -318,14 +318,15 @@ private fun SearchBox(value: String, onChange: (String) -> Unit) {
     }
 }
 
-/** Picking people from the chat list: how many, Group text, Group call, and (one picked) folders and rename. */
+/** Picking people from the chat list: how many, Group text, Group call, and (one picked) rename and folders. */
 @Composable
-private fun SelectBar(n: Int, onText: () -> Unit, onCall: () -> Unit, onFolders: (() -> Unit)?, onCancel: () -> Unit) {
+private fun SelectBar(n: Int, onText: () -> Unit, onCall: () -> Unit, onFolders: (() -> Unit)?, onRename: (() -> Unit)?, onCancel: () -> Unit) {
     Column(Modifier.padding(start = 8.dp, end = 16.dp, top = 2.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconAction("close", "Stop picking", Palette.text, size = 20.dp) { onCancel() }
             Text("$n picked", style = nameStyle, modifier = Modifier.weight(1f).padding(start = 4.dp))
-            if (onFolders != null) IconAction("folder", "Folders and rename", Palette.text, size = 20.dp) { onFolders() }
+            if (onRename != null) IconAction("edit", "Rename", Palette.text, size = 20.dp) { onRename() }
+            if (onFolders != null) IconAction("folder", "Folders and moving", Palette.text, size = 20.dp) { onFolders() }
         }
         Row(Modifier.padding(start = 8.dp, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Group text", Modifier.weight(1f), Kind.Accent, icon = "chat") { onText() }
@@ -456,6 +457,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val trashed by app.chat.trash.all.collectAsState()
     var query by remember { mutableStateOf("") }
     var foldersFor by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Rename straight from the list: hold a person, then the pencil.
+    var renamingKey by remember { mutableStateOf<String?>(null) }
     // The section the chat in [foldersFor] was held in ("" no folder), for Move up, Move down and Move to folder.
     var heldIn by remember { mutableStateOf<String?>(null) }
     var addingFolder by remember { mutableStateOf(false) }
@@ -605,7 +608,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
             item {
                 if (selected.isNotEmpty()) SelectBar(selected.size, { startGroup(false) }, { startGroup(true) },
-                    onFolders = if (selected.size == 1) ({ val k = selected.first(); foldersFor = k to app.chat.nameOf(k); selected = emptySet() }) else null) { selected = emptySet() }
+                    onFolders = if (selected.size == 1) ({ val k = selected.first(); foldersFor = k to app.chat.nameOf(k); selected = emptySet() }) else null,
+                    onRename = if (selected.size == 1) ({ renamingKey = selected.first(); selected = emptySet() }) else null) { selected = emptySet() }
                 else SearchBox(query) { query = it }
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     if (closeError != null) Text(closeError!!, style = Type.small.copy(color = if (closeError == io.github.ravenor907.muninn.net.Close.OFFER_TEXT) Palette.accent else Palette.danger),
@@ -649,6 +653,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     val on = nostrUp > 0
                     Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
                     Text(if (on) "Online" else "Offline", style = metaStyle, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
+                    IconAction("refresh", "Check for new messages", Palette.textMuted, size = 18.dp) {
+                        app.refreshChats(); Ui.say("Checking for new messages…")
+                    }
                     IconAction("folder", "New folder", Palette.textMuted, size = 18.dp) { addingFolder = true }
                 }
             }
@@ -686,7 +693,11 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             // Nearby is always last, in a section of its own.
             if (showRoom || shownStrangers.isNotEmpty()) item(key = "nearby") {
                 Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp).height(1.dp).background(Palette.hairline))
-                ListLabel("Nearby")
+                ListLabel("Nearby") {
+                    IconAction("refresh", "Look for people nearby again", Palette.textMuted, size = 18.dp) {
+                        app.refreshNearby(); Ui.say("Looking for people nearby…")
+                    }
+                }
             }
             if (showRoom) item(key = "room") {
                 PersonRow("Nearby room", roomPreview, room.lastOrNull()?.let { when_(it.time) } ?: "", 0, false, { RoomAvatar(48.dp) }) { ChatNav.open = "nearby" }
@@ -729,6 +740,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         }
     }
     foldersFor?.let { (key, name) -> FolderPicker(app, key, name, movesFor(heldIn, key)) { foldersFor = null } }
+    renamingKey?.let { key -> app.chat.contacts.contact(key)?.let { c -> RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renamingKey = null } } ?: run { renamingKey = null } }
     FolderDialogs(app, addingFolder, editingFolder) { addingFolder = false; editingFolder = null }
 }
 
