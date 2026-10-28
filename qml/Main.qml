@@ -29,7 +29,7 @@ Window {
     // ------------------------------------------------------------- the rail
     // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
     readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
-                                       { id: "tour-kindred", name: "Kindred", unread: 0 }]
+                                       { id: "tour-folk", name: "Folk", unread: 0 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
         { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
@@ -75,7 +75,7 @@ Window {
     }
     function newGroup() {
         if (Vault.screenLocked || !Vault.exists) { Ui.say("Open Direct messages and unlock Chat first.", true); openPage("dms", {}); return }
-        Ui.ask("New group", "A name everyone in it sees, like Family or Kindred. You can change it later.", "", "Make it", t => {
+        Ui.ask("New group", "A name everyone in it sees, like Family or Folk. You can change it later.", "", "Make it", t => {
             const g = Chat.createGroup(t)
             if (g === "") { Ui.say("Give the group a name.", true); return }
             openPage("g:" + g, {})

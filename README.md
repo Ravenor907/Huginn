@@ -135,7 +135,7 @@ Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phone
 | | |
 |---|---|
 | **Group chats and channels** | Groups with their own channels, a member list and admins. Every message is encrypted to each member separately. |
-| **Contact folders** | Sort people into Family, Work, Kindred or any folder you name. |
+| **Contact folders** | Sort people into Family, Work, Folk or any folder you name. |
 | **Encrypted calls** | One-to-one voice calls on both apps, with a call history. |
 | **Kids' TV** | Muninn on a Google TV becomes a simple screen for children to reach Mom and Dad: big buttons, quick messages, voice clips and dictation. No sign-in. A parent pairs it once from their phone, edits its quick messages, and is the only one who can unlock it. |
 | **Windows** | Huginn as a portable zip: unzip anywhere and run, nothing to install. |

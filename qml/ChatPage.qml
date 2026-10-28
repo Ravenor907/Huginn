@@ -1063,7 +1063,7 @@ Rectangle {
     function folderNames(k) {
         const ids = Chat.foldersOf(k)
         const names = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
-        return names.length ? "In " + names.join(", ") : "Sort them into Family, Work, Kindred or your own"
+        return names.length ? "In " + names.join(", ") : "Sort them into Family, Work, Folk or your own"
     }
     function pickFolders(k) {
         const ids = Chat.foldersOf(k)
@@ -1094,7 +1094,7 @@ Rectangle {
         Qt.callLater(() => { const i = page.entries.findIndex(test); if (i >= 0) page.row = i })
     }
     function newFolder(key, from) {
-        Ui.ask("New folder", "A name only you see, like Family, Work or Kindred", "", "Make it", t => {
+        Ui.ask("New folder", "A name only you see, like Family, Work or Folk", "", "Make it", t => {
             const f = Chat.addFolder(t)
             if (f === "") { Ui.say("Give the folder a name.", true); return }
             if (key) Chat.placeIn(key, from || "", f, [key])

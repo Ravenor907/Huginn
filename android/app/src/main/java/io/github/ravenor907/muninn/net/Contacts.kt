@@ -136,7 +136,7 @@ class Contacts(context: Context, private val vault: Vault) {
 
 /**
  * Contact folders (protocol 0.6, section 4): local only, never on the wire. A folder is a name and the
- * chat keys (or "g:" + group id) in it. Family, Work and Kindred are there to start with; all of them can be
+ * chat keys (or "g:" + group id) in it. Family, Work and Folk are there to start with; all of them can be
  * renamed or deleted, and new ones added. Stored through [write] (the vault), so it goes in the backup too.
  * The chat list shows each folder as a section that folds away; a folder's keys are in the order shown there,
  * and [top] is the order of the chats in no folder (the ones never moved go first, newest first).
@@ -155,11 +155,14 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
         if (text == null) return DEFAULTS.map { Folder(newId(), it) }.also { save(it, emptyList()) }
         return try {
             val a = JSONObject(text).getJSONArray("folders")
-            (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
+            val l = (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
                 val k = o.optJSONArray("k")
                 Folder(o.getString("id"), o.getString("n"), if (k == null) emptyList() else (0 until k.length()).map { k.getString(it) },
                     o.optBoolean("c"))
             }
+            // The third starting folder was called Kindred before 0.93: it's Folk now.
+            if (l.none { it.name == OLD_NAME }) l
+            else l.map { if (it.name == OLD_NAME) it.copy(name = "Folk") else it }.also { save(it, loadTop()) }
         } catch (e: Exception) { emptyList() }
     }
 
@@ -239,7 +242,8 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
     }
 
     companion object {
-        val DEFAULTS = listOf("Family", "Work", "Kindred")
+        val DEFAULTS = listOf("Family", "Work", "Folk")
+        private const val OLD_NAME = "Kindred"
         const val MAX_NAME = 24
         /** The section of chats in no folder. */
         const val NONE = ""

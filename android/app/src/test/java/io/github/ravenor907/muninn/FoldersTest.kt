@@ -31,11 +31,11 @@ class FoldersTest {
         assertTrue(f.all.value.isEmpty())
         assertTrue(Folders({ stored }, { stored = it }).all.value.isEmpty())
         // Kept across a restart.
-        val id = f.add("Kindred")!!
+        val id = f.add("Raiders")!!
         f.put(id, "keyB", true)
         val again = Folders({ stored }, { stored = it })
         assertEquals(listOf("keyB"), again.all.value.single().keys)
-        assertEquals("Kindred", again.all.value.single().name)
+        assertEquals("Raiders", again.all.value.single().name)
     }
 
     @Test
