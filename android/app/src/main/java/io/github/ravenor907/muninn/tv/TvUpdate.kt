@@ -33,13 +33,24 @@ object TvUpdate {
     @Volatile private var waiting: File? = null
     private const val ACTION = "io.github.ravenor907.muninn.tv.INSTALLED"
     private const val DAY = 24 * 60 * 60_000L
+    private const val HOUR = 60 * 60_000L
 
     /** Kids' mode only, once: hooks the installer, checks a minute after start, then every day. */
     fun start(app: Muninn) {
         if (started) return
         started = true
         app.updater.installer = { apk -> install(app, apk); true }
-        timer.scheduleWithFixedDelay({ try { checkNow(app) } catch (_: Exception) {} }, 60_000, DAY, TimeUnit.MILLISECONDS)
+        // Once a day, and only while it's plugged in (a TV always is; a tablet in kids' mode waits for its charger).
+        timer.scheduleWithFixedDelay({
+            try {
+                val now = System.currentTimeMillis()
+                val p = prefs(app)
+                if (now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
+                    p.edit().putLong("lastDailyCheck", now).apply()
+                    checkNow(app)
+                }
+            } catch (_: Exception) {}
+        }, 60_000, HOUR, TimeUnit.MILLISECONDS)
     }
 
     /** A parent asked (room tvconfig "update"), or the daily check. */

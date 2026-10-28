@@ -123,6 +123,13 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             var low by remember { mutableStateOf(app.power.lowBatterySave) }
             ToggleRow("Save more when the battery is low", "Below 30%: checks every 15 minutes. Below 15%: every hour. " +
                 "Calls show as missed until it's charging or above 30% again", low) { low = it; app.power.lowBatterySave = it }
+            var adaptive by remember { mutableStateOf(app.power.adaptive) }
+            ToggleRow("Check less when it's quiet", "After 3 hours with nothing new and Muninn closed, it checks less often until a message comes " +
+                "or you open it. Calls still ring with Right away", adaptive) { adaptive = it; app.power.adaptive = it }
+            var data by remember { mutableStateOf(app.power.dataSaver) }
+            ToggleRow("Data saver", "On mobile data, big files and videos wait until you tap them, and updates wait for Wi-Fi", data) {
+                data = it; app.power.dataSaver = it
+            }
             QuietHours(app)
             MButton("Sound and vibration settings", Modifier.fillMaxWidth().padding(top = 6.dp)) {
                 try {
@@ -313,10 +320,16 @@ private fun QuietHours(app: Muninn) {
     var to by remember { mutableStateOf(app.power.quietTo) }
     var mode by remember { mutableStateOf(app.power.quietMode) }
     fun hour(h: Int) = when (h) { 0 -> "12 AM"; 12 -> "12 PM"; in 1..11 -> "$h AM"; else -> "${h - 12} PM" }
+    var dnd by remember { mutableStateOf(app.power.followDnd) }
     ToggleRow("Quiet hours", if (on) "From ${hour(from)} to ${hour(to)}: ${mode.title.lowercase()}" else "Check less overnight, then go back to your choice", on) {
         on = it; app.power.quietOn = it
     }
-    if (!on) return
+    ToggleRow("Also during Do Not Disturb", if (dnd) "While Do Not Disturb or Bedtime mode is on: ${mode.title.lowercase()}"
+        else "Do Not Disturb doesn't change how Muninn checks", dnd) { dnd = it; app.power.followDnd = it }
+    if (!on) {
+        if (dnd) QuietMode(mode) { mode = it; app.power.quietMode = it }
+        return
+    }
     @Composable fun Stepper(label: String, h: Int, set: (Int) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(label, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
@@ -327,19 +340,25 @@ private fun QuietHours(app: Muninn) {
     }
     Stepper("From", from) { from = it; app.power.quietFrom = it }
     Stepper("To", to) { to = it; app.power.quietTo = it }
+    QuietMode(mode) { mode = it; app.power.quietMode = it }
+}
+
+/** How Muninn checks during quiet hours and Do Not Disturb. */
+@Composable
+private fun QuietMode(mode: Check, set: (Check) -> Unit) {
     Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(Check.HOUR, Check.OPEN).forEach { c ->
-            MButton(c.title, Modifier.weight(1f), if (mode == c) Kind.Accent else Kind.Normal) { mode = c; app.power.quietMode = c }
+            MButton(c.title, Modifier.weight(1f), if (mode == c) Kind.Accent else Kind.Normal) { set(c) }
         }
     }
-    Text("While quiet hours last, Muninn checks this way unless your own choice saves more.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+    Text("While quiet hours or Do Not Disturb last, Muninn checks this way unless your own choice saves more.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
 }
 
 /** One folder of Settings: what it's called, what's in it, and its icon. The same folders as Huginn's. */
 private class Folder(val id: String, val title: String, val detail: String, val icon: String)
 
 private val FOLDERS = listOf(
-    Folder("notify", "Notifications", "Check for messages, quiet hours, battery saving, sounds, battery report", "chat"),
+    Folder("notify", "Notifications", "Check for messages, quiet hours, battery and data saving, sounds, battery report", "chat"),
     Folder("privacy", "Privacy", "Delete messages after, read receipts, active status, screenshots", "shield"),
     Folder("lock", "Lock", "Password or pattern, panic lock", "lock"),
     Folder("calls", "Calls", "Noise removal", "call"),
