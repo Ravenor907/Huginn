@@ -325,7 +325,9 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
  * An archived chat comes back to the list when a message arrives, unless it's muted (Messenger does the same).
  */
 class ChatFlags(private val read: () -> String?, private val write: (String) -> Unit) {
-    data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet())
+    data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet(),
+                     /** A color for my bubbles in that chat ([COLORS] names; none is the usual grey). */
+                     val colors: Map<String, String> = emptyMap())
 
     private val _all = MutableStateFlow(load())
     val all: StateFlow<State> = _all.asStateFlow()
@@ -334,14 +336,16 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         val o = JSONObject(read() ?: return State())
         val m = o.optJSONObject("muted")
         fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
-        State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"))
+        val c = o.optJSONObject("colors")
+        State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"),
+            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { it in COLORS }.orEmpty())
     } catch (e: Exception) { State() }
 
     private fun set(s: State) {
         _all.value = s
         try {
             write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
-                .put("unread", JSONArray(s.unread.toList())).toString())
+                .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>)).toString())
         } catch (_: Exception) {}
     }
 
@@ -366,6 +370,10 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     /** The chat was opened. */
     fun read(key: String) = markUnread(key, false)
 
+    /** My bubbles' color in [key]'s chat: one of [COLORS], or "" for the usual. Only I see it. */
+    @Synchronized
+    fun color(key: String, name: String) = set(_all.value.let { it.copy(colors = if (name in COLORS) it.colors + (key to name) else it.colors - key) })
+
     /** A message from [key] arrived: an archived chat comes back unless it's muted. Returns whether to notify. */
     @Synchronized
     fun arrived(key: String, now: Long = System.currentTimeMillis()): Boolean {
@@ -378,12 +386,16 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     @Synchronized
     fun forget(key: String) {
         val s = _all.value
-        if (key in s.muted || key in s.archived || key in s.unread) set(State(s.muted - key, s.archived - key, s.unread - key))
+        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors) set(State(s.muted - key, s.archived - key, s.unread - key, s.colors - key))
     }
 
     companion object {
         const val FOREVER = Long.MAX_VALUE
         const val HOUR = 3_600_000L
+        /** Bubble colors to pick from: name to (bubble, dot shown in the picker), as ARGB. */
+        val COLORS = linkedMapOf(
+            "gold" to (0xFF3A3220L to 0xFFE0C27FL), "green" to (0xFF2C3A2CL to 0xFFB6D6B6L), "blue" to (0xFF2D3340L to 0xFFB9C6E0L),
+            "red" to (0xFF3A2724L to 0xFFE6A596L), "purple" to (0xFF33293AL to 0xFFD2BCE0L), "teal" to (0xFF24363AL to 0xFFAED4D8L))
 
         /** "Muted for 3 hours", "Muted until tomorrow 7:00", "Muted": what the chat says while muted. */
         fun mutedText(until: Long, now: Long): String {

@@ -57,4 +57,15 @@ class ChatFlagsTest {
         assertEquals("Muted for 8 more hours", ChatFlags.mutedText(8 * ChatFlags.HOUR, 0))
         assertEquals("", ChatFlags.mutedText(10, 20))
     }
+
+    @Test
+    fun chatColorsAreKeptAndUnknownOnesRefused() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.color("k", "green")
+        f.color("j", "neon")
+        assertEquals(mapOf("k" to "green"), ChatFlags({ stored }, { stored = it }).all.value.colors)
+        f.color("k", "")
+        assertTrue(f.all.value.colors.isEmpty())
+    }
 }

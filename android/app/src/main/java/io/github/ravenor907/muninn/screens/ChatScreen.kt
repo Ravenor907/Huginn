@@ -16,6 +16,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -871,6 +872,7 @@ private fun Conversation(app: Muninn, key: String) {
     var renaming by remember { mutableStateOf(false) }
     var folderPick by remember { mutableStateOf(false) }
     var muting by remember { mutableStateOf(false) }
+    var coloring by remember { mutableStateOf(false) }
     var tvSettings by remember { mutableStateOf(false) }
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val isTv = tvs[key]?.disconnecting == false
@@ -956,6 +958,7 @@ private fun Conversation(app: Muninn, key: String) {
         activeNow -> "Active now · ${routeShort(route)}"
         else -> "Encrypted · ${routeShort(route)}"
     }
+    androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(name, 40.dp, 16.sp, online = activeNow) }, actions = {
             if (c != null) {
@@ -985,7 +988,7 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
-            ChatFlagItems(app, key, name, close, { muting = true }) { ChatNav.open = "" }
+            ChatFlagItems(app, key, name, close, { muting = true }, { coloring = true }) { ChatNav.open = "" }
             // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off means relay only.
             if (c != null) {
                 val trustText = io.github.ravenor907.muninn.net.call.CallManager.trustText(key)
@@ -1005,6 +1008,7 @@ private fun Conversation(app: Muninn, key: String) {
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
         if (folderPick) FolderPicker(app, key, name) { folderPick = false }
         if (muting) MuteDialog(app, key, name) { muting = false }
+        if (coloring) ColorDialog(app, key) { coloring = false }
         if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1072,6 +1076,7 @@ private fun Conversation(app: Muninn, key: String) {
             else { app.chat.sendPrivate(key, text, replyTo?.id ?: ""); replyTo = null }
             text = ""
         }
+    }
     }
     sheetFor?.let { s ->
         val actions = buildList {
@@ -1270,6 +1275,16 @@ private fun AddSomeone(app: Muninn) {
  * and that number in a circle), -1 otherwise. [onReply]: swipe right to reply. [highlight]: a search match
  * or an @mention of me.
  */
+/** The bubble color picked for [key]'s chat, or Unspecified for the usual grey. */
+@Composable
+internal fun mineTint(app: Muninn, key: String): Color {
+    val st by app.chat.flags.all.collectAsState()
+    return st.colors[key]?.let { io.github.ravenor907.muninn.net.ChatFlags.COLORS[it] }?.let { Color(it.first) } ?: Color.Unspecified
+}
+
+/** My bubbles' color in the chat on screen (Unspecified: the usual). Set per chat with Chat color. */
+internal val LocalMineBubble = androidx.compose.runtime.compositionLocalOf { Color.Unspecified }
+
 @Composable
 private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, photo: (() -> ByteArray?)? = null, statusText: String? = null,
                    quote: Pair<String, String>? = null, onQuote: () -> Unit = {}, me: String = "", groupRead: Int = -1, highlight: Boolean = false,
@@ -1318,7 +1333,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
             if (dragX > 40f) MIcon("reply", if (dragX > 140f) Palette.gold else Palette.textMuted, 20.dp, Modifier.align(Alignment.CenterStart).offset(x = (-28).dp))
             Box(Modifier.fillMaxWidth(0.8f), contentAlignment = align) {
                 Column(
-                    Modifier.clip(shape).background(if (highlight) Palette.goldTint else if (m.mine) Palette.bubbleMine else Palette.field).hcBorder(shape)
+                    Modifier.clip(shape).background(if (highlight) Palette.goldTint else if (m.mine) LocalMineBubble.current.takeOrElse { Palette.bubbleMine } else Palette.field).hcBorder(shape)
                         .then(if (highlight) Modifier.border(1.dp, Palette.gold, shape) else Modifier)
                         .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null && m.voice == 0) tapNow() }, onLongPress = { longNow() }) },
                 ) {
@@ -1469,7 +1484,7 @@ internal fun MuteDialog(app: Muninn, key: String, name: String, done: () -> Unit
 
 /** Mute, Archive and Mark as unread, for a chat's menu ([close] shuts the menu first). */
 @Composable
-private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> Unit, onMute: () -> Unit, leave: () -> Unit) {
+private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> Unit, onMute: () -> Unit, onColor: () -> Unit, leave: () -> Unit) {
     val st by app.chat.flags.all.collectAsState()
     val muted = app.chat.flags.muted(key)
     DropdownMenuItem(text = { Text(if (muted) "Unmute" else "Mute", style = bodyStyle) }, leadingIcon = { MIcon("mute", Palette.accent, 20.dp) },
@@ -1482,6 +1497,39 @@ private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> U
         })
     DropdownMenuItem(text = { Text("Mark as unread", style = bodyStyle) }, leadingIcon = { MIcon("chat", Palette.accent, 20.dp) },
         onClick = { close(); app.chat.flags.markUnread(key, true); leave() })
+    DropdownMenuItem(text = { Text("Chat color", style = bodyStyle) }, leadingIcon = { MIcon("smile", Palette.accent, 20.dp) },
+        onClick = { close(); onColor() })
+}
+
+/** Chat color: the color of my bubbles in this chat. Only on this phone; the other person never sees it. */
+@Composable
+internal fun ColorDialog(app: Muninn, key: String, done: () -> Unit) {
+    val st by app.chat.flags.all.collectAsState()
+    val now = st.colors[key] ?: ""
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = done,
+        containerColor = Palette.panel,
+        title = { Text("Chat color", style = Type.big) },
+        text = {
+            Column {
+                Text("Your messages in this chat take this color. Only you see it.", style = Type.small, modifier = Modifier.padding(bottom = 12.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val choices = listOf("" to (0xFF2B2E33L to 0xFFC8CDD3L)) + io.github.ravenor907.muninn.net.ChatFlags.COLORS.toList()
+                    choices.forEach { (n, c) ->
+                        val on = n == now
+                        Box(Modifier.size(44.dp).clip(CircleShape).background(Color(c.first))
+                            .border(if (on) 3.dp else 1.dp, if (on) Palette.goldBright else Palette.line, CircleShape)
+                            .clickable(role = Role.RadioButton, onClickLabel = if (n.isEmpty()) "Usual" else n) { app.chat.flags.color(key, n) }
+                            .semantics { selected = on; contentDescription = if (n.isEmpty()) "Usual grey" else n.replaceFirstChar { it.uppercase() } },
+                            contentAlignment = Alignment.Center) {
+                            Box(Modifier.size(12.dp).clip(CircleShape).background(Color(c.second)))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { MButton("Done", kind = Kind.Accent) { done() } },
+    )
 }
 
 /** Rename: a nickname kept on this phone only. Empty goes back to the name they chose. */
@@ -1846,8 +1894,9 @@ private fun GroupConversation(app: Muninn, g: String) {
     var text by remember(ch) { mutableStateOf("") }
     var folderPick by remember { mutableStateOf(false) }
     var muting by remember { mutableStateOf(false) }
+    var coloring by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
-    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); app.chat.flags.read(Folders.groupKey(g)); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
     // While it's on screen, new messages here just buzz; its old notification goes.
     DisposableEffect(key) {
@@ -1911,6 +1960,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     val others = s.members.filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
     val inRoom by RoomManager.room.collectAsState()
     var callSome by remember { mutableStateOf(false) }
+    androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
             "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
@@ -1931,9 +1981,10 @@ private fun GroupConversation(app: Muninn, g: String) {
                 onClick = { close(); ChatNav.open = "$key/settings" })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
-            ChatFlagItems(app, key, s.name, close, { muting = true }) { ChatNav.open = ""; ChatNav.space = "" }
+            ChatFlagItems(app, key, s.name, close, { muting = true }, { coloring = true }) { ChatNav.open = ""; ChatNav.space = "" }
         }
         if (muting) MuteDialog(app, key, s.name) { muting = false }
+        if (coloring) ColorDialog(app, key) { coloring = false }
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
@@ -2009,6 +2060,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             else replyTo = null
             text = ""
         }
+    }
     }
     sheetFor?.let { gm ->
         val actions = buildList {
