@@ -61,6 +61,7 @@ qt_add_executable(huginn
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
     src/chatlimits.cpp
+    src/chatpeople.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
     src/morewire.cpp src/morewire.h

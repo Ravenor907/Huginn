@@ -1594,8 +1594,14 @@ void Chat::refreshGroupPeers()
         for (const QJsonValue &v : members) {
             const QJsonObject m = v.toObject();
             const QString k = m.value(QStringLiteral("k")).toString();
-            if (k == me || k.isEmpty() || isContact(k))
+            if (k == me || k.isEmpty())
                 continue;
+            // A contact in a group's state runs an app with groups and calls (3.7): what it speaks is known from that too.
+            if (isContact(k)) {
+                if (!m_caps.value(k).contains(QStringLiteral("g1")))
+                    noteCaps(k, true, {QStringLiteral("r1"), QStringLiteral("g1"), QStringLiteral("c1")});
+                continue;
+            }
             keep.insert(k);
             QVariantMap pe = m_gpeers.value(k);
             const QVariantMap was = pe;

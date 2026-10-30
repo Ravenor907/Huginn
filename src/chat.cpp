@@ -368,7 +368,14 @@ void Chat::addContact(const QString &text, const QString &sameAs)
     const QString note = noteOf(key);
     if (!note.isEmpty())
         entry.insert(QStringLiteral("note"), note);
+    const bool fresh = !m_contacts.contains(key);
+    // What they may do stays as chosen when they're added again.
+    for (const char *k : {"noCalls", "noFiles", "hideActive"})
+        if (m_contacts.value(key).value(QLatin1String(k)).toBool())
+            entry.insert(QLatin1String(k), true);
     m_contacts.insert(key, entry);
+    if (fresh)
+        sayHello(key);
     m_met.remove(key);
     m_trash.remove(key);   // adding someone from the trash again takes them out of it
     saveContacts();
@@ -461,6 +468,7 @@ void Chat::replaceKey(const QString &oldKey, const QString &newKey, const QStrin
     saveContacts();
     saveMet();
     const QString text = QStringLiteral("%1's security key changed. Check the code with them before trusting new messages.").arg(nameOf(newKey));
+    sayHello(newKey);
     systemNote(newKey, text);
     Q_EMIT notice(text);
     Q_EMIT changed();
@@ -647,10 +655,16 @@ bool Chat::canCall(const QString &key) const
 {
     if (key.isEmpty() || isBlocked(key) || isTrashed(key))
         return false;
-    if (m_caps.value(key).contains(QStringLiteral("c1")))
-        return isContact(key) || isGroupPeer(key);
-    // A group peer whose caps aren't known yet counts as "r1 g1 c1" (docs/protocol-0.6.md 3.7, as Muninn does).
-    return isGroupPeer(key) && !isContact(key) && !capsKnown(key);
+    // Unknown caps count as a current app (an old one just doesn't answer); a group peer is "r1 g1 c1" (3.7).
+    const bool c1 = !capsKnown(key) || capIn(m_caps.value(key), QStringLiteral("c1"));
+    if (isContact(key) || isGroupPeer(key))
+        return c1;
+    // Someone met close by: only while on the same Wi-Fi or close by.
+    if (m_met.contains(key)) {
+        const QString r = route(key);
+        return c1 && (r == QLatin1String("wifi") || r == QLatin1String("close"));
+    }
+    return false;
 }
 
 QString Chat::lanHost(const QString &key) const
@@ -916,7 +930,10 @@ void Chat::becomeContacts(const QString &key)
     m_contacts.insert(key, c);
     saveContacts();
     saveMet();
-    Q_EMIT notice(QStringLiteral("You and %1 are in touch. Message each other from anywhere.").arg(nameOf(key)));
+    sayHello(key);
+    Q_EMIT notice(c.value(QStringLiteral("verified")).toBool()
+                      ? QStringLiteral("You and %1 are in touch. Message each other from anywhere.").arg(nameOf(key))
+                      : QStringLiteral("You and %1 are in touch. Check the 4 pictures with them to be sure.").arg(nameOf(key)));
     Q_EMIT changed();
 }
 
@@ -940,6 +957,7 @@ void Chat::acceptRequest(const QString &key)
         m_contacts.insert(key, {{QStringLiteral("key"), key}, {QStringLiteral("name"), r.value(QStringLiteral("name"))},
                                 {QStringLiteral("mailbox"), r.value(QStringLiteral("mailbox"))}, {QStringLiteral("verified"), false}});
         saveContacts();
+        sayHello(key);
     }
     QStringList ids;
     for (const QVariant &v : held) {
@@ -1066,6 +1084,7 @@ void Chat::emptyTrash()
 // ratchet. Someone you share a group with stays reachable there.
 void Chat::forgetPerson(const QString &key)
 {
+    forgetFlags(key);
     m_contacts.remove(key);
     m_met.remove(key);
     m_unsentKeeps.remove(key);
@@ -1229,7 +1248,8 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         return keyWith(fromKey).isEmpty() ? 400 : 403;
     // Calls (0.6): only from contacts and group peers, at most 30 signals in 10 seconds each.
     if (room == QLatin1String("call")) {
-        if (!isContact(fromKey) && !isGroupPeer(fromKey)) {
+        // Contacts and group peers; someone met only while close by or on the same Wi-Fi.
+        if (!isContact(fromKey) && !isGroupPeer(fromKey) && !(via != QLatin1String("internet") && m_met.contains(fromKey))) {
             m_pendingPeer.reset();
             return 403;
         }
@@ -1251,6 +1271,9 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         commitPeer();
         if (!sentId.isEmpty())
             m_seen.add(fromKey, sentId, now());   // the same signal on another route is dropped
+        // Calls turned off for them (the press-and-hold sheet): their ring never reaches this computer.
+        if (!callsAllowed(fromKey) && isRing(msg))
+            return 200;
         Q_EMIT callMessage(fromKey, msg);
         return 200;
     }
@@ -1387,6 +1410,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             m_met.remove(fromKey);
             saveContacts();
             saveMet();
+            sayHello(fromKey);
             if (addPrivate(fromKey, incoming)) {
                 m_unread.insert(fromKey);
                 Q_EMIT arrived(nameOf(fromKey), text, fromKey);
@@ -1504,6 +1528,13 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         if (isContact(fromKey)) {
             commitPeer();
             m_seen.add(fromKey, sentId, now());
+            // Already a contact here, so my own yes went missing (or they were added another way) and they wait
+            // forever: say yes back, once, and they become a contact too.
+            if (text == QLatin1String("yes") && !m_keptBack.contains(fromKey)) {
+                m_keptBack.insert(fromKey);
+                deliver(fromKey, envelope(QStringLiteral("keep"), fromKey, QByteArrayLiteral("yes"), QUuid::createUuid().toString(QUuid::WithoutBraces)),
+                        mailbox.isEmpty() ? mailboxOf(fromKey) : mailbox);
+            }
             return 200;
         }
         if (!m_met.contains(fromKey) && (via == QLatin1String("internet") || !visibleNearby() || !contactWithMailbox(mailbox, fromKey).isEmpty()))
@@ -1692,6 +1723,9 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     const int n = o.value(QStringLiteral("n")).toInt(), i = o.value(QStringLiteral("i")).toInt(-1);
     if (id.isEmpty() || n < 1 || n > Photos::kMaxPieces || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
         return 400;
+    // Files turned off for them: a file's pieces are dropped quietly.
+    if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && !filesAllowed(fromKey))
+        return 200;
     QString mailbox = o.value(QStringLiteral("mailbox")).toString();
     if (mailbox.size() != 64)
         mailbox.clear();
@@ -2481,6 +2515,7 @@ void Chat::load()
         m_nearby = QJsonDocument::fromJson(m_vault->read(QStringLiteral("nearby.json"))).array().toVariantList();
     loadFolders();
     loadGroups();
+    loadFlags();
     loadRatchet();
     noteLimitsOnce();
     prune();
@@ -2844,7 +2879,7 @@ void Chat::sendActive(bool on)
         m_activeSent = t;
     QList<QPair<qint64, QString>> who;
     for (auto it = m_contacts.cbegin(); it != m_contacts.cend(); ++it)
-        if (hasM1(it.key()) && !isBlocked(it.key())) {
+        if (hasM1(it.key()) && !isBlocked(it.key()) && showsActive(it.key())) {
             const QVariantList l = m_private.value(it.key());
             who << qMakePair(l.isEmpty() ? qint64(0) : l.last().toMap().value(QStringLiteral("time")).toLongLong(), it.key());
         }

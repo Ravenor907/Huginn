@@ -252,6 +252,7 @@ void Trust::finish(const Intro &i)
         m_chat->saveContacts();
         m_chat->saveMet();
         m_chat->refreshGroupPeers();
+        m_chat->sayHello(i.k);
         Q_EMIT m_chat->notice(QStringLiteral("You and %1 are in touch now. Check the 4 pictures with them to be sure.").arg(i.n));
         Q_EMIT m_chat->changed();
     }
@@ -506,6 +507,9 @@ int Chat::receiveExtra(const QString &room, const QString &fromKey, const QStrin
             return 403;
         if (!m_files || !FileLink::ok(p))
             return 400;
+        // Files turned off for them: their offers are dropped quietly.
+        if (!filesAllowed(fromKey))
+            return 200;
         if (!rateOk(m_recentCall, QStringLiteral("file|") + fromKey, 30))
             return 429;
         m_files->onSignal(fromKey, p);

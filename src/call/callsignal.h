@@ -36,6 +36,8 @@ public:
     virtual QString lanHost(const QString &) const { return QString(); }
     virtual bool inFamily(const QString &) const { return false; }
     virtual bool hasCap(const QString &, const QString &) const { return false; }
+    // For the screens: unknown caps count as a current app (the Video button shows).
+    virtual bool mayHave(const QString &k, const QString &c) { return hasCap(k, c); }
     virtual bool bleReady(const QString &) const { return false; }
     virtual bool sendMedia(const QString &, const QByteArray &) { return false; }
 
@@ -59,6 +61,7 @@ public:
     std::function<QString(const QString &)> onLanHost;
     std::function<bool(const QString &)> onInFamily;
     std::function<bool(const QString &, const QString &)> onHasCap;
+    std::function<bool(const QString &, const QString &)> onMayHave;
     std::function<bool(const QString &)> onBleReady;
     std::function<bool(const QString &, const QByteArray &)> onSendMedia;
 
@@ -70,6 +73,7 @@ public:
     QString lanHost(const QString &k) const override { return onLanHost ? onLanHost(k) : QString(); }
     bool inFamily(const QString &k) const override { return onInFamily && onInFamily(k); }
     bool hasCap(const QString &k, const QString &c) const override { return onHasCap && onHasCap(k, c); }
+    bool mayHave(const QString &k, const QString &c) override { return onMayHave ? onMayHave(k, c) : hasCap(k, c); }
     bool bleReady(const QString &k) const override { return onBleReady && onBleReady(k); }
     bool sendMedia(const QString &k, const QByteArray &p) override { return onSendMedia && onSendMedia(k, p); }
 

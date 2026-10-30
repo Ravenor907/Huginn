@@ -235,6 +235,7 @@ int main(int argc, char *argv[])
         return false;
     };
     cs->onHasCap = [chat](const QString &k, const QString &c) { return chat->hasCap(k, c); };
+    cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.
@@ -282,7 +283,8 @@ int main(int argc, char *argv[])
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
-        if (looking)
+        // A muted chat makes no sound; an archived one comes back to the list.
+        if (!chat->notifyFor(key) || looking)
             return;
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {

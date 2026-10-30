@@ -217,6 +217,38 @@ public:
     bool hasCap(const QString &key, const QString &cap) const { return m_caps.value(key).contains(cap); }
     Q_INVOKABLE bool canGroup(const QString &key) const;
     Q_INVOKABLE void probeCaps(const QString &key);
+    // For the screens (chatpeople.cpp): unknown caps count as a current app and a probe asks; the wire
+    // still only sends what their caps list. Call (canCall), Video and video messages use these.
+    Q_INVOKABLE bool mayHave(const QString &key, const QString &cap);
+    Q_INVOKABLE bool mayVideo(const QString &key);
+    Q_INVOKABLE bool mayVideoMessage(const QString &key);
+    static bool capIn(const QStringList &caps, const QString &cap);
+    static bool isRing(const QJsonObject &msg);
+
+    // Per person, set on the press-and-hold sheet, local only (in the encrypted contacts): they may call
+    // me (voice and video), send me files, and see when I'm active. Default yes.
+    Q_INVOKABLE bool callsAllowed(const QString &key) const;
+    Q_INVOKABLE bool filesAllowed(const QString &key) const;
+    Q_INVOKABLE bool showsActive(const QString &key) const;
+    Q_INVOKABLE void setCallsAllowed(const QString &key, bool on);
+    Q_INVOKABLE void setFilesAllowed(const QString &key, bool on);
+    Q_INVOKABLE void setShowsActive(const QString &key, bool on);
+
+    // Where a chat sits (key: a contact, or "g:" + group id), only on this computer: pinned to the top
+    // (newest pin first), archived, muted until a time (ms; 0 unmutes, a huge value is for good), marked unread.
+    Q_INVOKABLE void pinChat(const QString &key, bool on);
+    Q_INVOKABLE bool isPinnedChat(const QString &key) const { return m_pinnedChats.contains(key); }
+    Q_INVOKABLE QStringList pinnedChats() const { return m_pinnedChats; }
+    Q_INVOKABLE void orderPinned(const QStringList &keys);
+    Q_INVOKABLE void archiveChat(const QString &key, bool on);
+    Q_INVOKABLE bool isArchived(const QString &key) const { return m_archived.contains(key); }
+    Q_INVOKABLE void muteChat(const QString &key, qint64 until);
+    Q_INVOKABLE bool isMuted(const QString &key) const;
+    Q_INVOKABLE qint64 mutedUntil(const QString &key) const { return m_mutedUntil.value(key, 0); }
+    Q_INVOKABLE void markUnread(const QString &key, bool on);
+    Q_INVOKABLE bool isMarkedUnread(const QString &key) const { return m_markedUnread.contains(key); }
+    // A message arrived for key: false while that chat is muted; an archived one comes back.
+    bool notifyFor(const QString &key);
 
     // Calls (docs/protocol-0.6.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
     // room "call" and sends it on every route at once, never through the Outbox.
@@ -381,6 +413,12 @@ private:
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
                       std::function<void()> sent = nullptr);
     void noteCaps(const QString &key, bool present, const QStringList &caps);
+    // chatpeople.cpp
+    void sayHello(const QString &key);
+    void setAllowed(const QString &key, const QString &what, bool on);
+    void loadFlags();
+    void saveFlags();
+    void forgetFlags(const QString &key);
     void loadFolders();
     void saveFolders();
     // cap m1
@@ -521,6 +559,10 @@ private:
     QHash<QString, QVariantMap> m_mxOut;                // reactions and edits on their way: envelope id -> {key, time}
     QHash<QString, qint64> m_typing, m_active, m_typingSent;
     QHash<QString, QStringList> m_pins;                 // where -> pinned message ids (only on this computer)
+    QStringList m_pinnedChats;                          // chats pinned to the top, in order
+    QSet<QString> m_archived, m_markedUnread;
+    QHash<QString, qint64> m_mutedUntil;
+    QSet<QString> m_keptBack;                           // contacts whose "keep" got my yes back (once each)
     bool m_front = false;
     qint64 m_activeSent = 0;
     struct Tries { int count = 0; qint64 next = 0; };
