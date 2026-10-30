@@ -1348,3 +1348,28 @@ A file of at most 2 MB that can't go straight (no trust, or no direct path) goes
 `"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`; the receiver keeps it encrypted like a
 photo and saves it to Downloads when the person taps Save.
 
+
+## 15. Linked devices, companion style (room `link`)
+
+A tablet or second phone (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
+online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn only; Huginn ignores the
+room. Envelopes in room `link` are sealed like private messages and go on every route (LAN, Direct, Nostr); they are
+exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the
+check below.
+
+**Pairing.** The companion shows a link code: `MUNINNL1:` then base64url (no padding) of
+`{"k": chat key, "p": Nostr mailbox, "n": device name, "i": token}`. The token is 128 random bits, good for 10 minutes and
+once. The phone takes the code, keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
+mailbox}`. The companion accepts a `hello` only with its current token, in time; from then on the phone is its phone.
+
+**From the phone:**
+- `{"t": "chat", "peer", "n", "msgs": [{"id", "x", "me", "t"}]}`: a chat's latest 25 messages (each `x` at most 600
+  characters), on pairing and when asked.
+- `{"t": "msg", "peer", "n", "m": {"id", "x", "me", "t"}}`: one message in or out (`x` at most 2000 characters).
+  Photos, voice, video and files go as words ("Photo", "File: name"); the media stays on the phone.
+- `{"t": "unlink"}`.
+
+**From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
+message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "unlink"}`.
+
+Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.

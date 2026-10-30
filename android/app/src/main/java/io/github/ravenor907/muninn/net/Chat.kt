@@ -181,6 +181,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
         }
+        Link.host = object : Link.Host {
+            override fun myKey() = id.publicKey
+            override fun myMailbox() = nostr.publicKey
+            override fun myName() = id.deviceName.ifBlank { id.username }
+            override fun send(d: Link.Device, json: String) {
+                bg {
+                    val body = envelope("link", d.key, json, UUID.randomUUID().toString()).toString()
+                    spread(d.key, listOf(body), false, 1, d.mailbox.takeIf { it.length == 64 })
+                }
+            }
+            override fun chats(): Map<String, Pair<String, List<Msg>>> =
+                _private.value.filter { (k, v) -> v.isNotEmpty() && isContact(k) && !trash.has(k) }.mapValues { (k, v) -> nameOf(k) to v }
+            override fun sendAsMe(peer: String, text: String): Boolean { if (!isContact(peer)) return false; sendPrivate(peer, text); return true }
+            override fun read(name: String) = vault.read(File(context.filesDir, name))
+            override fun write(name: String, text: String) { try { vault.write(File(context.filesDir, name), text) } catch (_: Exception) {} }
+            override fun notice(text: String) { notices.tryEmit(text) }
+        }
+        Link.load()
         // Devices trusted before contacts existed become contacts.
         // Never one that would stand in for a contact already here (that would be a key change, not an old friend).
         id.trusted().forEach { (k, n) ->
@@ -688,12 +706,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (recent.size > 500) recent.clear()
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
         if (room == "tvconfig" || room == "call" || room == "mx" || room == "live" || room == "intro" || room == "file") { if (!groupRate(room, fromKey)) return 429 to "{}" }
-        else if (room != "receipt") synchronized(q) {
+        // Linked devices: only a paired device (or one answering my link code) gets past Link.receive, and a sync sends many at once.
+        else if (room != "receipt" && room != "link") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
             if (q.size >= 5) return 429 to "{}"
             q.addLast(now)
         }
-        val text = if (room == "receipt" || room == "mx" || room == "live") opened else opened.take(MAX)
+        val text = if (room == "receipt" || room == "mx" || room == "live" || room == "link" || room == "intro" || room == "file") opened else opened.take(MAX)
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
         val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp)
         // A message from them ends their "typing".
@@ -822,6 +841,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (!found) { forget(listOf(gone)); held[fromKey]?.remove(gone) }
                 recalls.tryEmit(fromKey)
                 receipt(fromKey, listOf(gone), "unsent", mailbox)
+            }
+            "link" -> {
+                // Linked devices (companion style): only from a device paired with this one, or answering my link code.
+                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                if (!Link.receive(fromKey, p)) return 403 to "{}"
             }
             "file" -> {
                 if (contacts.contact(fromKey) == null) return 403 to "{}"
@@ -1865,7 +1889,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (deleted.containsKey(m.id) || list.any { it.id == m.id }) return@edit false
         map[peer] = (list + m).takeLast(1000)
         true
-    }
+    }.also { added -> if (added && isContact(peer)) bg { Link.onMessage(peer, nameOf(peer), m) } }
 
     private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
 

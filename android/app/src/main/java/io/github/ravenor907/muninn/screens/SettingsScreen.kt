@@ -157,6 +157,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
             ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
             ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
+            var previews by remember { mutableStateOf(id.linkPreviews) }
+            ToggleRow("Link previews", "Shows a link's title and picture. This phone fetches the page, so that site sees your address. Off: links stay plain", previews) { previews = it; id.linkPreviews = it }
         }
         }
         if (folder == "calls") {
@@ -277,6 +279,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             ToggleRow("True black", "A pure black background. On phones with OLED screens it saves a little battery", A.trueBlack) { A.trueBlack = it; id.trueBlack = it }
         }
         }
+        if (folder == "link") LinkedDevices(app)
         if (folder == "about") {
         Section("Updates")
         Panel {
@@ -364,6 +367,7 @@ private val FOLDERS = listOf(
     Folder("calls", "Calls", "Noise removal", "call"),
     Folder("nearby", "Nearby and sharing", "Visible to people nearby, Nearby chat, your names, received files", "wifi"),
     Folder("display", "Display and accessibility", "Size, text size, contrast, color-blind, reduce motion, true black", "image"),
+    Folder("link", "Linked devices", "Your chats on a tablet or second phone, through this phone", "phone"),
     Folder("data", "Backup and erase", "Back up, restore, delete all messages, erase everything", "download"),
     Folder("about", "About and updates", "Muninn's version, check for updates", "info"),
 )
@@ -397,5 +401,73 @@ private fun FolderHeader(title: String, onBack: () -> Unit) {
             MIcon("back", Palette.text, 24.dp)
         }
         Text(title, style = Type.big, modifier = Modifier.padding(start = 4.dp))
+    }
+}
+
+/**
+ * Linked devices, companion style: a tablet or second phone shows this phone's chats and sends through it while this
+ * phone is online. Contacts see nothing new. One device shows a code, the other takes it.
+ */
+@Composable
+private fun LinkedDevices(app: Muninn) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
+    val phone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
+    var code by remember { mutableStateOf<String?>(null) }
+    var pasted by remember { mutableStateOf("") }
+    Panel {
+        Text("A tablet or second phone can show this phone's chats and send through it. It works while this phone is on and online. " +
+            "Everything between the two is end-to-end encrypted, and your contacts see nothing new.", style = Type.small)
+    }
+    phone?.let { p ->
+        Section("This device mirrors")
+        Panel {
+            Text(p.name, style = Type.big)
+            Text("Its chats are at the top of your chat list.", style = Type.small)
+            MButton("Unlink", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) { io.github.ravenor907.muninn.net.Link.unlink(p.key) }
+        }
+    }
+    if (companions.isNotEmpty()) {
+        Section("Linked to this phone")
+        Panel {
+            companions.forEach { d ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(d.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+                    MButton("Unlink", kind = Kind.Danger) { io.github.ravenor907.muninn.net.Link.unlink(d.key) }
+                }
+            }
+        }
+    }
+    Section("Link a device to this phone")
+    Panel {
+        Text("On the other device: Settings › Linked devices › Use as a companion. Then copy its code here.", style = Type.small)
+        io.github.ravenor907.muninn.ui.Field(pasted, { pasted = it }, "Paste the link code", Modifier.padding(top = 8.dp), single = false)
+        MButton("Link", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) {
+            val err = io.github.ravenor907.muninn.net.Link.link(pasted)
+            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Linked. Your chats are on their way to it.", err != null)
+            if (err == null) pasted = ""
+        }
+    }
+    if (phone == null) {
+        Section("Use this device as a companion")
+        Panel {
+            Text("Show your phone this code (it works for 10 minutes). This device then shows your phone's chats.", style = Type.small)
+            val c = code
+            if (c == null) MButton("Show the link code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { code = io.github.ravenor907.muninn.net.Link.myLinkCode() }
+            else {
+                androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    io.github.ravenor907.muninn.screens.Qr(c, 220.dp)
+                }
+                MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
+                    (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("Muninn link code", c))
+                    io.github.ravenor907.muninn.ui.Ui.say("Code copied. Paste it on your phone.")
+                }
+                MButton("Share", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "send") {
+                    ctx.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(android.content.Intent.EXTRA_TEXT, c), "Send the link code to your phone"))
+                }
+            }
+        }
     }
 }

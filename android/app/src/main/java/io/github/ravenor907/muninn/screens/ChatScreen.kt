@@ -259,7 +259,9 @@ fun ChatMain(app: Muninn) {
             "trash" -> TrashScreen(app) { ChatNav.open = "" }
             "requests" -> RequestsScreen(app) { ChatNav.open = "" }
             "tap" -> TapScreen(app) { ChatNav.open = "" }
-            else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
+            "mirror" -> MirrorList { ChatNav.open = "" }
+            else -> if (open.startsWith("mirror/")) androidx.compose.runtime.key(open) { MirrorChatScreen(open.removePrefix("mirror/")) { ChatNav.open = "mirror" } }
+                else androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
     }
 }
@@ -461,6 +463,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val topOrder by app.chat.folders.top.collectAsState()
     val trashed by app.chat.trash.all.collectAsState()
     val intros by app.chat.intros.collectAsState()
+    val linkedPhone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
     val flagState by app.chat.flags.all.collectAsState()
     var showArchived by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -640,6 +643,12 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     "", n, false, { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
                         MIcon("people", Palette.goldBright, 22.dp) } }) { ChatNav.open = "requests" }
             }
+            // A companion (linked devices): the phone's chats, on their own page.
+            linkedPhone?.let { ph -> item(key = "mirror") {
+                PersonRow("${ph.name}'s chats", "Your phone's chats, while it's online", "", 0, false, {
+                    Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                        MIcon("phone", Palette.goldBright, 22.dp) } }) { ChatNav.open = "mirror" }
+            } }
             item(key = "h") {
                 ListLabel("Chats", modifier = if (hover == "h") Modifier.background(Palette.focusFill) else Modifier) {
                     // Online: the internet relays are connected. Said in words too, never by the dot's color alone.
@@ -2590,4 +2599,59 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
             }
         },
     )
+}
+
+/** On a companion (linked devices): the phone's chats. */
+@Composable
+private fun MirrorList(back: () -> Unit) {
+    BackHandler { back() }
+    val chats by io.github.ravenor907.muninn.net.Link.mirror.collectAsState()
+    val list = chats.values.sortedByDescending { c -> c.msgs.lastOrNull()?.time ?: 0L }
+    Column(Modifier.fillMaxSize()) {
+        PageBar("Your phone's chats") { back() }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("These come from your phone while it's on and online. What you send goes through it.", style = Type.small, modifier = Modifier.weight(1f))
+            IconAction("refresh", "Ask the phone again", Palette.textMuted, size = 20.dp) {
+                io.github.ravenor907.muninn.net.Link.askSync(); Ui.say("Asking your phone…")
+            }
+        }
+        LazyColumn(Modifier.weight(1f)) {
+            if (list.isEmpty()) item { Text("Nothing yet. Make sure your phone is on and online.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            items(list, key = { it.peer }) { c ->
+                PersonRow(c.name, c.msgs.lastOrNull()?.let { (if (it.mine) "You: " else "") + it.text } ?: "", "", 0, false, {
+                    Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                        Text(c.name.take(1).uppercase(), style = Type.big) } }) { ChatNav.open = "mirror/" + c.peer }
+            }
+        }
+    }
+}
+
+/** On a companion: one of the phone's chats. Text only; photos and the rest show as words and stay on the phone. */
+@Composable
+private fun MirrorChatScreen(peer: String, back: () -> Unit) {
+    BackHandler { back() }
+    val chats by io.github.ravenor907.muninn.net.Link.mirror.collectAsState()
+    val c = chats[peer]
+    var text by remember { mutableStateOf("") }
+    val state = rememberLazyListState()
+    val msgs = c?.msgs.orEmpty()
+    LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) state.scrollToItem(msgs.size - 1) }
+    Column(Modifier.fillMaxSize()) {
+        PageBar(c?.name ?: "Chat", "Back to your phone's chats") { back() }
+        LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), state = state) {
+            items(msgs, key = { it.id }) { m ->
+                Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
+                    Text(m.text, style = Type.normal.copy(color = Palette.text),
+                        modifier = Modifier.widthIn(max = 520.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (m.mine) Palette.goldTint else Palette.focusFill).padding(horizontal = 12.dp, vertical = 8.dp))
+                }
+            }
+        }
+        Composer(text, { text = it.take(Chat.MAX) }, "Message through your phone") {
+            val t = text.trim()
+            if (t.isNotEmpty()) {
+                if (io.github.ravenor907.muninn.net.Link.sendFromCompanion(peer, t)) text = "" else Ui.say("No phone is linked.", true)
+            }
+        }
+    }
 }
