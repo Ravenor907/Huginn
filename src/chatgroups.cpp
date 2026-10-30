@@ -63,6 +63,24 @@ QStringList without(QStringList l, const QString &k)
 
 // ------------------------------------------------------------------ lists for the screen
 
+namespace
+{
+// How many of a channel's unread messages @mention me: the newest `unread` from others.
+int unreadMentions(const QVariantList &messages, const QString &ch, int unread, const QString &me)
+{
+    int seen = 0, mentions = 0;
+    for (auto it = messages.crbegin(); it != messages.crend() && seen < unread; ++it) {
+        const QVariantMap m = it->toMap();
+        if (m.value(QStringLiteral("ch")).toString() != ch || m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool())
+            continue;
+        ++seen;
+        if (RichWire::mentions(m.value(QStringLiteral("text")).toString(), me))
+            ++mentions;
+    }
+    return mentions;
+}
+}
+
 QVariantList Chat::groups() const
 {
     QList<QPair<qint64, QVariantMap>> rows;
@@ -70,14 +88,18 @@ QVariantList Chat::groups() const
         const Group &gr = it.value();
         if (gr.state.isEmpty())
             continue;
-        int unread = 0;
-        for (int n : gr.unread)
-            unread += n;
+        int unread = 0, mentions = 0;
+        for (auto u = gr.unread.cbegin(); u != gr.unread.cend(); ++u) {
+            unread += u.value();
+            if (u.value() > 0)
+                mentions += unreadMentions(gr.messages, u.key(), u.value(), username());
+        }
         const QString name = gr.state.value(QStringLiteral("name")).toString();
         rows << qMakePair(gr.since, QVariantMap{{QStringLiteral("id"), it.key()},
                                                 {QStringLiteral("name"), name},
                                                 {QStringLiteral("letter"), initialOf(name)},
                                                 {QStringLiteral("unread"), unread},
+                                                {QStringLiteral("mentions"), mentions},
                                                 {QStringLiteral("readOnly"), gr.removed || gr.left},
                                                 {QStringLiteral("count"), int(GroupWire::keysOf(gr.state).size())}});
     }
@@ -149,7 +171,8 @@ QVariantMap Chat::groupInfo(const QString &g) const
         const QJsonObject c = v.toObject();
         const QString id = c.value(QStringLiteral("id")).toString();
         channels << QVariantMap{{QStringLiteral("id"), id}, {QStringLiteral("name"), c.value(QStringLiteral("n")).toString()},
-                                {QStringLiteral("type"), c.value(QStringLiteral("t")).toString()}, {QStringLiteral("unread"), it->unread.value(id)}};
+                                {QStringLiteral("type"), c.value(QStringLiteral("t")).toString()}, {QStringLiteral("unread"), it->unread.value(id)},
+                                {QStringLiteral("mentions"), it->unread.value(id) > 0 ? unreadMentions(it->messages, id, it->unread.value(id), username()) : 0}};
     }
     return {{QStringLiteral("g"), g},
             {QStringLiteral("name"), s.value(QStringLiteral("name")).toString()},

@@ -2,6 +2,16 @@
 
 Newest first. Huginn and Muninn are released together, with the same version number.
 
+## 0.94 (not released yet)
+
+| | |
+|---|---|
+| **Huginn looks and feels like Discord on a PC** | Drag the edges between panels to resize them, hide the list or the member list, compact or cozy messages with their own text size, and Dark, True black or Light themes with any accent color (Settings › Appearance). |
+| **Who's around** | A group's member list shows who's online, idle or in a voice room. Click a name for their profile card: Message, Call, Video, a nickname, a note only you see, and their folders. |
+| **Voice panel** | In a voice room on a PC, who you're with, Mute, Deafen and Leave sit at the foot of the list. Push to talk: hold a key you choose (Settings › Calls). |
+| **Unread and mentions** | Groups and channels show a dot for anything new and a number for @mentions of you. Fold a group's Text or Voice category away. |
+| **Keyboard shortcuts** | Ctrl+/ lists them all. |
+
 ## 0.93
 
 | | |

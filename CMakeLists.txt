@@ -47,6 +47,7 @@ qt_standard_project_setup(REQUIRES 6.6)
 qt_add_executable(huginn
     src/main.cpp
     src/settings.cpp src/settings.h
+    src/talkkey.cpp src/talkkey.h
     src/system.cpp src/system.h
     src/gamepad.cpp src/gamepad.h
     src/transfer.cpp src/transfer.h
@@ -194,6 +195,12 @@ qt_add_qml_module(huginn
         qml/Toast.qml
         qml/ListPicker.qml
         qml/Rail.qml
+        qml/Splitter.qml
+        qml/PaneToggle.qml
+        qml/MemberList.qml
+        qml/VoicePanel.qml
+        qml/ProfileCard.qml
+        qml/ShortcutsPanel.qml
         qml/ChatPage.qml
         qml/GroupPage.qml
         qml/FilesPage.qml
@@ -225,6 +232,10 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer)
+    set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
+endforeach()
+# The desktop panels (0.94).
+foreach(f IN ITEMS Splitter PaneToggle MemberList VoicePanel ProfileCard ShortcutsPanel)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

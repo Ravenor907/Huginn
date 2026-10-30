@@ -18,6 +18,18 @@ class Settings : public QObject
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
     Q_PROPERTY(QString transferFolder READ transferFolder WRITE setTransferFolder NOTIFY changed)
     Q_PROPERTY(bool noiseRemoval READ noiseRemoval WRITE setNoiseRemoval NOTIFY changed)
+    // Settings › Appearance (the desktop layout): theme, message density and size, and the panels.
+    // Their own signal, so a resize or a theme change doesn't wake everything that follows changed().
+    Q_PROPERTY(QString theme READ theme WRITE setTheme NOTIFY appearanceChanged)
+    Q_PROPERTY(QString density READ density WRITE setDensity NOTIFY appearanceChanged)
+    Q_PROPERTY(QString messageSize READ messageSize WRITE setMessageSize NOTIFY appearanceChanged)
+    Q_PROPERTY(int railWidth READ railWidth WRITE setRailWidth NOTIFY appearanceChanged)
+    Q_PROPERTY(int listWidth READ listWidth WRITE setListWidth NOTIFY appearanceChanged)
+    Q_PROPERTY(int memberWidth READ memberWidth WRITE setMemberWidth NOTIFY appearanceChanged)
+    Q_PROPERTY(bool showList READ showList WRITE setShowList NOTIFY appearanceChanged)
+    Q_PROPERTY(bool showMembers READ showMembers WRITE setShowMembers NOTIFY appearanceChanged)
+    // Settings › Calls › Push to talk: in a voice room the microphone only sends while the key is held.
+    Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -44,6 +56,19 @@ public:
     // Settings › Calls › Noise removal (on unless switched off). Off: calls keep the echo canceller and level
     // control but leave background noise in, for a voice the noise suppressor turns down too far.
     bool noiseRemoval() const { return saved("noiseRemoval", true).toBool(); }
+    // "dark", "black" (true black, for OLED screens) or "light".
+    QString theme() const { return value("theme", "dark").toString(); }
+    // "cozy" (avatars, room between messages) or "compact" (more messages on screen).
+    QString density() const { return value("density", "cozy").toString(); }
+    // Message text, on top of Size and Text size (85 to 150).
+    QString messageSize() const { return value("messageSize", "100").toString(); }
+    // Panel widths in Normal-size pixels (the screen scales them).
+    int railWidth() const { return value("railWidth", 83).toInt(); }
+    int listWidth() const { return value("listWidth", 270).toInt(); }
+    int memberWidth() const { return value("memberWidth", 230).toInt(); }
+    bool showList() const { return value("showList", true).toBool(); }
+    bool showMembers() const { return value("showMembers", true).toBool(); }
+    bool pushToTalk() const { return value("pushToTalk", false).toBool(); }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
     static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(key, fallback); }
 
@@ -58,12 +83,23 @@ public:
     void setNearbySharing(bool v) { set("nearbySharing", v); }
     void setTransferFolder(const QString &v) { set("transferFolder", v); }
     void setNoiseRemoval(bool v) { set("noiseRemoval", v); }
+    void setTheme(const QString &v) { setLook("theme", v); }
+    void setDensity(const QString &v) { setLook("density", v); }
+    void setMessageSize(const QString &v) { setLook("messageSize", v); }
+    void setRailWidth(int v) { setLook("railWidth", v); }
+    void setListWidth(int v) { setLook("listWidth", v); }
+    void setMemberWidth(int v) { setLook("memberWidth", v); }
+    void setShowList(bool v) { setLook("showList", v); }
+    void setShowMembers(bool v) { setLook("showMembers", v); }
+    void setPushToTalk(bool v) { set("pushToTalk", v); }
 
 Q_SIGNALS:
     void changed();
+    void appearanceChanged();
 
 private:
     QVariant value(const QString &key, const QVariant &fallback) const { return m_settings.value(key, fallback); }
     void set(const QString &key, const QVariant &v);
+    void setLook(const QString &key, const QVariant &v);
     QSettings m_settings;
 };

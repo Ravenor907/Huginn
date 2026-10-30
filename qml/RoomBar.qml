@@ -9,14 +9,19 @@ import Huginn
 // shows above the bar (docs/protocol-0.6.md 5.8.7), encrypted to each person like the sound.
 Rectangle {
     id: bar
+    // Docked: the desktop's voice panel (VoicePanel.qml) has the controls, so only a shared screen shows.
+    property bool docked: false
     visible: Rooms.inRoom
-    height: visible ? Theme.px(Theme.desktop ? 64 : 76) : 0
-    color: Theme.column
-    border.width: 1
+    height: visible && !docked ? Theme.px(Theme.desktop ? 64 : 76) : 0
+    color: docked ? "transparent" : Theme.column
+    border.width: docked ? 0 : 1
     border.color: Theme.line
 
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     property bool screenShown: true
+    // Someone new starts sharing: show it again.
+    readonly property string sharer: Rooms.sharerName
+    onSharerChanged: screenShown = true
 
     // Someone else's shared screen, above the bar.
     Rectangle {
@@ -36,6 +41,12 @@ Rectangle {
             Accessible.role: Accessible.Graphic
             Accessible.name: Rooms.sharerName + "'s screen"
         }
+        HButton {
+            visible: bar.docked
+            anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Theme.px(10)
+            text: "Hide screen"; fontSize: 13; implicitHeight: Theme.px(32)
+            onClicked: bar.screenShown = false
+        }
         Text {
             anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(10)
             text: Rooms.sharerName + " is sharing their screen"
@@ -47,6 +58,7 @@ Rectangle {
 
     Row {
         id: who
+        visible: !bar.docked
         anchors.left: parent.left; anchors.leftMargin: Theme.px(16)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(12)
@@ -73,6 +85,7 @@ Rectangle {
 
     // Everyone in the room, you first.
     Row {
+        visible: !bar.docked
         anchors.left: who.right; anchors.leftMargin: Theme.px(16)
         anchors.right: buttons.left; anchors.rightMargin: Theme.px(12)
         anchors.verticalCenter: parent.verticalCenter
@@ -120,10 +133,12 @@ Rectangle {
 
     Row {
         id: buttons
+        visible: !bar.docked
         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(8)
         HButton { text: Rooms.muted ? "Unmute" : "Mute"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleMute() }
+        HButton { text: Rooms.deafened ? "Undeafen" : "Deafen"; kind: Rooms.deafened ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleDeafen() }
         HButton { visible: Rooms.canShare; text: Rooms.sharing ? "Stop sharing" : "Share screen"; kind: Rooms.sharing ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleShare() }
         HButton { visible: Rooms.sharerName !== ""; text: bar.screenShown ? "Hide screen" : "Show screen"; implicitHeight: Theme.px(44); onClicked: bar.screenShown = !bar.screenShown }
         HButton { visible: bar.width > Theme.px(900); text: "Output: " + Rooms.outputName; implicitHeight: Theme.px(44); onClicked: Rooms.nextOutput() }

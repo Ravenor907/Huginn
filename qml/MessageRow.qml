@@ -19,7 +19,9 @@ Rectangle {
     signal options()
     signal chosen()          // clicked: the page picks it (its tools show)
     property string who: m.name || "Someone"
-    height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.height, col.implicitHeight) + Theme.px(14)
+    // Settings › Appearance: compact drops the avatar and the room around each message.
+    readonly property int pad: Theme.px(Theme.compact ? 3 : 7)
+    height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
     radius: Theme.px(8)
     color: picked ? Theme.focusFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : "transparent"
     border.width: picked ? Theme.focusWidth : 0
@@ -59,37 +61,44 @@ Rectangle {
     }
     Rectangle {
         id: face
-        visible: !msg.m.system
-        x: Theme.px(8); y: msg.lineH + Theme.px(7)
-        width: Theme.px(40); height: width; radius: width / 2
+        visible: !msg.m.system && !Theme.compact
+        x: Theme.px(8); y: msg.lineH + msg.pad
+        width: visible ? Theme.px(40) : 0; height: width; radius: width / 2
         color: Theme.avatar(msg.who, msg.m.mine).bg
         Text {
             anchors.centerIn: parent
             text: host.initial(msg.who)
             color: Theme.avatar(msg.who, msg.m.mine).fg
-            font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
+            font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.DemiBold
         }
     }
     Column {
         id: col
         visible: !msg.m.system
-        anchors.left: face.right; anchors.leftMargin: Theme.px(12)
+        anchors.left: face.right; anchors.leftMargin: Theme.px(Theme.compact ? 4 : 12)
         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-        y: msg.lineH + Theme.px(7)
-        spacing: Theme.px(3)
+        y: msg.lineH + msg.pad
+        spacing: Theme.px(Theme.compact ? 1 : 3)
         Row {
             spacing: Theme.px(8)
             Text {
                 id: whoText
                 text: msg.who
                 color: Theme.avatar(msg.who, msg.m.mine).fg
-                font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
+                font.family: Theme.body; font.pixelSize: Theme.ms(Theme.compact ? 15 : 16); font.weight: Font.DemiBold
+                // A click on the name opens their profile card.
+                readonly property string key: msg.m.mine ? "me" : (msg.m.from || (msg.host && msg.host.openKey) || "")
+                HoverHandler { cursorShape: whoText.key !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: if (whoText.key !== "" && !(msg.host && msg.host.isTour)) Ui.showProfile(whoText.key, msg.who, {})
+                }
             }
             Text {
                 anchors.baseline: whoText.baseline
                 text: host.clock(msg.m.time) + (msg.m.isEdited ? " · (edited)" : "") + host.stateLabel(msg.m)
                 color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? Theme.accent : Theme.textMuted
-                font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                font.family: Theme.body; font.pixelSize: Theme.ms(13)
             }
             // Mine and read: a check mark and how many have read it, in a circle.
             Row {
@@ -139,7 +148,7 @@ Rectangle {
             textFormat: Text.PlainText
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
             font.italic: !!msg.m.unsent
-            color: msg.m.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
+            color: msg.m.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.ms(17)
         }
         Reactions {
             width: parent.width

@@ -360,6 +360,9 @@ void Chat::addContact(const QString &text, const QString &sameAs)
                       {QStringLiteral("invite"), c.value(QStringLiteral("invite"))}};
     if (!nick.isEmpty())
         entry.insert(QStringLiteral("nick"), nick);
+    const QString note = noteOf(key);
+    if (!note.isEmpty())
+        entry.insert(QStringLiteral("note"), note);
     m_contacts.insert(key, entry);
     m_met.remove(key);
     m_trash.remove(key);   // adding someone from the trash again takes them out of it
@@ -504,6 +507,34 @@ void Chat::setNickname(const QString &key, const QString &nick)
             m.remove(QStringLiteral("nick"));
         else
             m.insert(QStringLiteral("nick"), t);
+        putMet(key, m);
+    }
+    Q_EMIT changed();
+}
+
+QString Chat::noteOf(const QString &key) const
+{
+    const QString n = str(m_contacts.value(key), "note");
+    return n.isEmpty() ? str(m_met.value(key), "note") : n;
+}
+
+void Chat::setNote(const QString &key, const QString &note)
+{
+    if (key.isEmpty() || !m_ready)
+        return;
+    const QString t = note.trimmed().left(500);
+    if (m_contacts.contains(key)) {
+        if (t.isEmpty())
+            m_contacts[key].remove(QStringLiteral("note"));
+        else
+            m_contacts[key].insert(QStringLiteral("note"), t);
+        saveContacts();
+    } else {
+        QVariantMap m = m_met.value(key, {{QStringLiteral("name"), realNameOf(key)}, {QStringLiteral("dismissed"), true}});
+        if (t.isEmpty())
+            m.remove(QStringLiteral("note"));
+        else
+            m.insert(QStringLiteral("note"), t);
         putMet(key, m);
     }
     Q_EMIT changed();

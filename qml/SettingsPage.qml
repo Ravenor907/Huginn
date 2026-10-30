@@ -18,8 +18,9 @@ Rectangle {
         section = i; inSection = true; row = a.row || 0
     }
 
-    // The same folders as Muninn's Settings (Notifications is Muninn's only: Huginn has nothing for it).
-    readonly property var sections: ["Privacy", "Lock", "Calls", "Nearby and sharing", "Display and accessibility", "Backup and erase", "About and updates"]
+    // The same folders as Muninn's Settings (Notifications is Muninn's only: Huginn has nothing for it),
+    // and Appearance for Huginn's look and panels.
+    readonly property var sections: ["Privacy", "Lock", "Calls", "Nearby and sharing", "Appearance", "Display and accessibility", "Backup and erase", "About and updates"]
     // The folders, then Exit Huginn at the bottom of the list (A on it closes Huginn).
     readonly property var navItems: sections.concat(["Exit Huginn"])
     readonly property bool onExit: section === sections.length
@@ -46,7 +47,10 @@ Rectangle {
         case "Calls": return [
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal", note: Settings.noiseRemoval
                 ? "Background noise is taken out of your voice. Turn it off if people say you sound quiet. Changes start with your next call"
-                : "Off: background sound comes through with your voice. Echo is still removed. Changes start with your next call" }
+                : "Off: background sound comes through with your voice. Echo is still removed. Changes start with your next call" },
+            { kind: "toggle", key: "pushToTalk", title: "Push to talk", note: "In a voice room your microphone only sends while you hold the push to talk key. It works while Huginn is in front" },
+            { kind: "button", key: "talkKey", title: "Push to talk key: " + TalkKey.keyName, note: TalkKey.capturing ? "Press the key you want to use. Esc keeps " + TalkKey.keyName
+                : "Hold it to talk. While push to talk is on it doesn't type in a voice room", label: TalkKey.capturing ? "Press a key" : "Change" }
         ]
         case "Nearby and sharing": return [
             { kind: "button", key: "chatName", title: "Your name: " + Chat.username, note: "What people see instead of your real name", label: "Change" },
@@ -55,6 +59,19 @@ Rectangle {
             { kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes. Encrypted when kept" },
             { kind: "toggle", key: "nearbySharing", title: "Nearby sharing (LocalSend)", note: "Muninn and the free LocalSend app on phones and PCs can find this device. You accept every transfer on screen" }
         ].filter(r => !r.hide)
+        case "Appearance": return [
+            { kind: "segmented", key: "theme", title: "Theme", note: "True black saves power on OLED screens. High contrast (Display and accessibility) wins over all three",
+              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }] },
+            { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items. The last one picks any color" },
+            { kind: "segmented", key: "density", title: "Messages", note: "Compact fits more on screen: no pictures of people and less room between messages",
+              options: [{ value: "cozy", label: "Cozy" }, { value: "compact", label: "Compact" }] },
+            { kind: "segmented", key: "messageSize", title: "Message text", note: "Just the messages, on top of Size and Text size. Ctrl+= and Ctrl+- change it too",
+              options: [{ value: "85", label: "Small" }, { value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
+            { kind: "toggle", key: "showList", title: "Show the list beside the rail", note: "Conversations, or a group's channels. Ctrl+Shift+L. The desktop layout only" },
+            { kind: "toggle", key: "showMembers", title: "Show a group's member list", note: "Who's online, idle or in a voice room. Ctrl+Shift+U. The desktop layout only" },
+            { kind: "button", key: "resetPanels", title: "Panel sizes", note: "Drag the edge between two panels to resize them; Huginn keeps the sizes. This puts them back as they were", label: "Reset" },
+            { kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Every one of them in a list. Ctrl+/ shows it anywhere", label: "Show" }
+        ]
         case "Display and accessibility": return [
             { kind: "segmented", key: "layout", title: "Layout", note: "Desktop is smaller, for a mouse and keyboard. Automatic uses it in a wide window when no controller is in use",
               options: [{ value: "handheld", label: "Handheld" }, { value: "desktop", label: "Desktop" }, { value: "auto", label: "Automatic" }] },
@@ -64,8 +81,7 @@ Rectangle {
               options: [{ value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
             { kind: "toggle", key: "highContrast", title: "High contrast", note: "White text on black, stronger outlines and focus" },
             { kind: "toggle", key: "colorBlind", title: "Color-blind friendly", note: "Warnings in amber instead of red; status always says it in words" },
-            { kind: "toggle", key: "reduceMotion", title: "Reduce motion", note: "No sliding or fading" },
-            { kind: "accent", key: "accent", title: "Accent", note: "Highlight color for focus and selected items" }
+            { kind: "toggle", key: "reduceMotion", title: "Reduce motion", note: "No sliding or fading" }
         ]
         case "Backup and erase": return [
             { kind: "button", key: "backup", title: "Back up chats", note: "An encrypted copy in Documents, opened with a backup password. Use the backup on one device at a time.", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
@@ -90,7 +106,8 @@ Rectangle {
         id: middle
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(270)
+        anchors.bottomMargin: Ui.dock
+        width: Theme.listWidth
         color: Theme.column
         PageHeader { id: header; width: parent.width; title: "Settings" }
         Column {
@@ -216,14 +233,31 @@ Rectangle {
                             visible: modelData.kind === "accent"
                             spacing: Theme.px(10)
                             Repeater {
-                                model: [{ v: "gold", n: "Gold" }, { v: "iron", n: "Iron" }, { v: "copper", n: "Copper" }]
+                                model: Theme.accentNames
                                 Rectangle {
-                                    width: Theme.px(44); height: width; radius: Theme.radius
-                                    color: Theme.accents[modelData.v]
-                                    border.width: Settings.accent === modelData.v ? 2 : 1
-                                    border.color: Settings.accent === modelData.v ? Theme.text : Theme.lineMuted
-                                    TapHandler { onTapped: Settings.accent = modelData.v }
+                                    width: Theme.px(36); height: width; radius: width / 2
+                                    color: Theme.light ? Qt.darker(Theme.accents[modelData], 1.7) : Theme.accents[modelData]
+                                    border.width: Settings.accent === modelData ? Theme.px(3) : 1
+                                    border.color: Settings.accent === modelData ? Theme.text : Theme.lineMuted
+                                    Accessible.role: Accessible.RadioButton
+                                    Accessible.name: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                                    Accessible.checked: Settings.accent === modelData
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { onTapped: Settings.accent = modelData }
                                 }
+                            }
+                            // Any color: a code like #6E9CC8.
+                            Rectangle {
+                                readonly property bool custom: Theme.accentNames.indexOf(Settings.accent) < 0
+                                width: Theme.px(36); height: width; radius: width / 2
+                                color: custom ? Theme.accent : Theme.raised
+                                border.width: custom ? Theme.px(3) : 1
+                                border.color: custom ? Theme.text : Theme.lineMuted
+                                Accessible.role: Accessible.Button
+                                Accessible.name: "Any color"
+                                Icon { visible: !parent.custom; anchors.centerIn: parent; name: "plus"; size: Theme.px(18); color: Theme.textMuted }
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: page.pickColor() }
                             }
                         }
                         HButton {
@@ -257,6 +291,15 @@ Rectangle {
     function running() {
         if (LocalSend.busy) return LocalSend.status + " Closing now stops it partway."
         return ""
+    }
+    // Any accent color, as a code like #6E9CC8.
+    function pickColor() {
+        const now = Theme.validColor(Settings.accent) ? Settings.accent : String(Theme.accentBase).toUpperCase()
+        Ui.ask("Accent color", "A color code like #6E9CC8", now, "Use it", t => {
+            const v = t.trim().startsWith("#") ? t.trim() : "#" + t.trim()
+            if (Theme.validColor(v)) Settings.accent = v.toUpperCase()
+            else Ui.say("That isn't a color code. Use # and six digits or letters A to F, like #6E9CC8.", true)
+        })
     }
     // Where a toggle's value lives.
     function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
@@ -304,6 +347,9 @@ Rectangle {
         if (key === "exit") Ui.main.requestExit()
         else if (key === "chatName") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (key === "contacts") Ui.openPage("contacts", {})
+        else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
+        else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels are back to their first sizes.") }
+        else if (key === "shortcuts") Ui.main.showShortcuts()
         else if (key === "backup") startBackup()
         else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
@@ -328,10 +374,13 @@ Rectangle {
             i = dir === 0 ? (i + 1) % opts.length : Math.max(0, Math.min(opts.length - 1, i + dir))
             if (r.chat) Chat[r.key] = Number(opts[i].value); else Settings[r.key] = opts[i].value
         } else if (r.kind === "accent") {
-            const order = ["gold", "iron", "copper"]
-            let i = order.indexOf(Settings.accent)
-            i = dir === 0 ? (i + 1) % 3 : Math.max(0, Math.min(2, i + dir))
-            Settings.accent = order[i]
+            // The named colors, then Any color (A on it asks for a code).
+            const order = Theme.accentNames.concat(["custom"])
+            const at = Theme.accentNames.indexOf(Settings.accent) < 0 ? order.length - 1 : Theme.accentNames.indexOf(Settings.accent)
+            const i = dir === 0 ? (at + 1) % order.length : Math.max(0, Math.min(order.length - 1, at + dir))
+            if (i === at && dir !== 0) return
+            if (order[i] === "custom") pickColor()
+            else Settings.accent = order[i]
         } else if (r.kind === "button" && dir === 0 && r.enabled !== false) press(r.key)
     }
 

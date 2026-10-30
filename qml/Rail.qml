@@ -3,9 +3,10 @@ import QtQuick.Shapes
 import Huginn
 
 // The rail down the left edge, built from a list:
-// items = [{ id, kind: "raven" | "group" | "add" | "icon", label, icon, letter, badge, bottom }].
+// items = [{ id, kind: "raven" | "group" | "add" | "icon", label, icon, letter, badge, unread, bottom }].
 // Direct messages (the raven) sits on top, then the groups (round initials; the one on screen is a
-// gold rounded square with a gold pill beside it) and + for a new group. Calls, Files, Settings and
+// gold rounded square with a gold pill beside it, one with something unread a short pill, and its
+// @mentions of me a number) and + for a new group. Calls, Files, Settings and
 // Exit sit at the foot. LB steps through them (Main.qml); the D-pad moves the rail focus.
 Rectangle {
     id: rail
@@ -20,7 +21,7 @@ Rectangle {
     readonly property var groupItems: withIndex.filter(e => !e.bottom && e.kind !== "raven")
     readonly property var bottomItems: withIndex.filter(e => !!e.bottom)
 
-    implicitWidth: Theme.px(83)
+    implicitWidth: Theme.railWidth
     color: Theme.rail
     Accessible.role: Accessible.PageTabList
     Accessible.name: "Sections"
@@ -131,24 +132,29 @@ Rectangle {
         width: rail.width
         height: Theme.px(big ? 54 : 46)
         Accessible.role: Accessible.PageTab
-        Accessible.name: (entry.label || "") + (entry.badge > 0 ? ", " + entry.badge + " new" : "")
+        Accessible.name: (entry.label || "") + (entry.kind === "group" ? (entry.badge > 0 ? ", " + entry.badge + (entry.badge === 1 ? " mention" : " mentions") : "")
+                                                                         + (unread ? ", " + entry.unread + " unread" : "")
+                                                 : entry.badge > 0 ? ", " + entry.badge + " new" : "")
         Accessible.selected: here
         Accessible.onPressAction: rail.activated(entry.idx)
 
-        // The section on screen: a gold pill on the left edge.
+        // The section on screen: a gold pill on the left edge. A group with something unread gets a
+        // short one, and pointing at a group a middling one.
+        readonly property bool unread: (entry.unread || 0) > 0
         Rectangle {
-            visible: rb.here
+            visible: rb.here || (rb.entry.kind === "group" && (rb.unread || hover.hovered))
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             width: Theme.px(4)
-            height: Theme.px(rb.big ? 32 : 24)
+            height: rb.here ? Theme.px(rb.big ? 32 : 24) : hover.hovered ? Theme.px(18) : Theme.px(8)
             radius: width
-            color: Theme.accent
+            color: rb.here || rb.unread ? Theme.accent : Theme.textMuted
+            Behavior on height { enabled: Theme.motion; NumberAnimation { duration: 120 } }
         }
         Rectangle {
             id: face
             anchors.centerIn: parent
-            width: parent.height
+            width: Math.min(parent.height, rail.width - Theme.px(16))
             height: width
             // Groups are round; the one on screen becomes a rounded square, like the raven.
             radius: rb.entry.kind === "raven" || (rb.entry.kind === "group" && rb.here) ? Theme.px(16) : width / 2
@@ -220,7 +226,8 @@ Rectangle {
                 height: Theme.px(18)
                 width: Math.max(height, badgeText.implicitWidth + Theme.px(8))
                 radius: height / 2
-                color: Theme.accent
+                // A group's number is @mentions of me: the warning color, like Discord's red.
+                color: rb.entry.kind === "group" ? Theme.danger : Theme.accent
                 border.width: 2
                 border.color: Theme.rail
                 Text {

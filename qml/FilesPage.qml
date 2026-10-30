@@ -40,7 +40,8 @@ Rectangle {
         id: middle
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(270)
+        anchors.bottomMargin: Ui.dock
+        width: Theme.listWidth
         color: Theme.column
 
         PageHeader { id: head; width: parent.width; title: "Files" }

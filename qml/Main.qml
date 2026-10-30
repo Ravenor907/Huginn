@@ -28,12 +28,14 @@ Window {
 
     // ------------------------------------------------------------- the rail
     // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
-    readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
-                                       { id: "tour-folk", name: "Folk", unread: 0 }]
+    readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2, mentions: 1 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
+                                       { id: "tour-folk", name: "Folk", unread: 3 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
         { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
-    ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?", badge: g.unread || 0 })))
+    // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
+    ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
+                                   badge: g.mentions || 0, unread: g.unread || 0 })))
      .concat([
         { id: "newgroup", kind: "add", label: "New group", action: true },
         { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
@@ -110,7 +112,7 @@ Window {
         id: rail
         opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.top: parent.top
-        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.bottom: voicePanel.visible ? voicePanel.top : hints.visible ? hints.top : parent.bottom
         anchors.left: parent.left
         items: app.railItems
         current: app.section
@@ -145,8 +147,84 @@ Window {
         id: roomBar
         opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.bottom: hints.visible ? hints.top : parent.bottom
-        anchors.left: rail.right
+        anchors.left: voicePanel.visible ? voicePanel.right : rail.right
         anchors.right: parent.right
+        // On the desktop the voice panel has the controls; a shared screen still shows above here.
+        docked: voicePanel.visible
+    }
+
+    // ------------------------------------------------------------- the desktop panels
+    // The page's own list column shows (ChatPage and GroupPage can hide theirs), and a group's member list.
+    readonly property bool pageList: { const p = pageLoader.item; return !(p && p.listHidden === true) }
+    readonly property bool pageMembers: { const p = pageLoader.item; return !!(p && p.membersVisible === true) }
+    property bool tourVoice: false
+    // In a voice room on the desktop: the voice panel at the foot of the rail and the list column.
+    VoicePanel {
+        id: voicePanel
+        tour: app.tourVoice
+        roomBar: roomBar
+        visible: shown && Theme.desktop && app.pageList && !app.privacyCovered
+        anchors.left: parent.left
+        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        width: rail.width + Theme.listWidth
+        z: 2
+    }
+    Binding { target: Ui; property: "dock"; value: voicePanel.visible ? voicePanel.height : 0 }
+    // Drag the edges between the rail, the list, the conversation and the member list.
+    Splitter {
+        anchors.top: parent.top; anchors.bottom: rail.bottom
+        x: rail.width - width / 2
+        z: 3
+        visible: Theme.desktop && !app.privacyCovered
+        label: "rail"
+        value: Ui.railW; minimum: 64; maximum: 120; fallback: 83
+        onMoved: v => Ui.railW = v
+        onDone: v => Settings.railWidth = v
+    }
+    Splitter {
+        anchors.top: parent.top; anchors.bottom: pageLoader.bottom
+        anchors.bottomMargin: Ui.dock
+        x: rail.width + Theme.listWidth - width / 2
+        z: 3
+        visible: Theme.desktop && app.pageList && !app.privacyCovered
+        label: "list"
+        value: Ui.listW; minimum: 200; maximum: 480; fallback: 270
+        onMoved: v => Ui.listW = v
+        onDone: v => Settings.listWidth = v
+    }
+    Splitter {
+        anchors.top: parent.top; anchors.bottom: pageLoader.bottom
+        x: app.width - Theme.memberWidth - width / 2
+        z: 3
+        visible: Theme.desktop && app.pageMembers && !app.privacyCovered
+        label: "member list"
+        direction: -1
+        value: Ui.memberW; minimum: 180; maximum: 400; fallback: 230
+        onMoved: v => Ui.memberW = v
+        onDone: v => Settings.memberWidth = v
+    }
+    // Show or hide the list beside the rail ("list") or a group's member list ("members"). The
+    // controller's focus leaves a panel that's hidden.
+    function togglePane(which) {
+        if (which === "list") Settings.showList = !Settings.showList
+        else Settings.showMembers = !Settings.showMembers
+        const p = page()
+        if (!p || p.zone === undefined) return
+        if (which === "list" && !Settings.showList && (p.zone === "channels" || p.zone === "list")) p.zone = "messages"
+        if (which === "members" && !Settings.showMembers && p.zone === "members") p.zone = "messages"
+    }
+
+    // ------------------------------------------------------------- who's online (member list, profile cards)
+    // Active status (cap m1) says who has Huginn or Muninn open now; idle is someone seen in the last
+    // half hour who isn't any more.
+    property var lastActive: ({})
+    property real clock: Date.now()
+    Timer { interval: 60000; running: true; repeat: true; onTriggered: app.clock = Date.now() }
+    function presenceOf(key) {
+        if (!key || Vault.screenLocked) return "offline"
+        if (Chat.active[key] !== undefined) return "online"
+        const t = lastActive[key]
+        return t !== undefined && clock - t < 1800000 ? "idle" : "offline"
     }
 
     // Handheld: the buttons and what they do, along the bottom like the mockups.
@@ -181,6 +259,32 @@ Window {
         enabled: !app.touring && !updating.visible
         onActivated: switcher.visible ? switcher.close() : switcher.open()
     }
+    // The rest of the keyboard shortcuts (all listed in ShortcutsPanel.qml).
+    readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
+    Shortcut { sequence: "Ctrl+/"; context: Qt.ApplicationShortcut; enabled: app.keysOn
+               onActivated: shortcutsPanel.visible ? shortcutsPanel.close() : shortcutsPanel.open() }
+    Shortcut { sequence: "Ctrl+Shift+L"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Theme.desktop; onActivated: app.togglePane("list") }
+    Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Theme.desktop; onActivated: app.togglePane("members") }
+    Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn && (Rooms.inRoom || Calls.inCall)
+               onActivated: Rooms.inRoom ? Rooms.toggleMute() : Calls.toggleMute() }
+    Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.toggleDeafen() }
+    Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
+    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(1) }
+    Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(-1) }
+    Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(0) }
+    Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", { section: "Appearance", row: 0 }) }
+    function showShortcuts() { shortcutsPanel.open() }
+    readonly property var messageSizes: ["85", "100", "115", "130", "150"]
+    function messageSize(dir) {
+        if (dir === 0) { Settings.messageSize = "100"; return }
+        const i = Math.max(0, messageSizes.indexOf(Settings.messageSize))
+        Settings.messageSize = messageSizes[Math.max(0, Math.min(messageSizes.length - 1, i + dir))]
+        Ui.say("Message text: " + Settings.messageSize + "%")
+    }
+    // A click on a name: their profile card (under the lists it can open).
+    ProfileCard { id: profileCard; z: 24 }
+    // Ctrl+/: every keyboard shortcut.
+    ShortcutsPanel { id: shortcutsPanel; z: 27 }
     TextPrompt { id: prompt; z: 30 }
     CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
@@ -256,6 +360,7 @@ Window {
         Ui.confirm = confirm
         Ui.toast = toast
         Ui.picker = picker
+        Ui.profile = profileCard
         if (touring) tour.start()
     }
 
@@ -281,6 +386,12 @@ Window {
     Connections {
         target: Chat
         function onNotice(text) { Ui.say(text) }
+        function onLiveChanged() {
+            const a = Chat.active, t = Date.now(), seen = Object.assign({}, app.lastActive)
+            for (const k in a) seen[k] = t
+            app.lastActive = seen
+            app.clock = t
+        }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // An @mention always says so (without the text unless previews are on).
@@ -304,6 +415,8 @@ Window {
             if (prompt.visible) prompt.cancel()
             if (picker.visible) picker.close()
             if (switcher.visible) switcher.close()
+            if (profileCard.visible) profileCard.close()
+            if (shortcutsPanel.visible) shortcutsPanel.close()
             Ui.say("Chat locked.")
         }
     }
@@ -330,6 +443,8 @@ Window {
         if (prompt.visible) return prompt
         if (picker.visible) return picker
         if (switcher.visible) return switcher
+        if (shortcutsPanel.visible) return shortcutsPanel
+        if (profileCard.visible) return profileCard
         return null
     }
     function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }
@@ -486,6 +601,8 @@ Window {
     Timer {
         id: tour
         property int step: 0
+        property string savedTheme: "dark"
+        property string savedDensity: "cozy"
         readonly property var steps: [
             { page: "dms", file: "00-direct-messages" },
             { page: "dms", zone: "messages", file: "01-conversation" },
@@ -505,15 +622,28 @@ Window {
             { page: "g:tour-crew", zone: "channels", groupOptions: true, file: "15-group-options" },
             { page: "g:tour-crew", zone: "channels", voice: true, file: "16-voice-room" },
             { page: "dms", folders: true, file: "17-folders" },
-            { page: "dms", rail: true, desktop: true, file: "18-desktop-rail" }
+            { page: "dms", rail: true, desktop: true, file: "18-desktop-rail" },
+            // The desktop panels (0.94): the voice panel and member statuses, a profile card, the
+            // shortcuts, Settings › Appearance, and the light theme with compact messages.
+            { page: "g:tour-crew", zone: "messages", desktop: true, voicePanel: true, file: "19-desktop-voice-members" },
+            { page: "g:tour-crew", zone: "members", desktop: true, profile: true, file: "20-profile-card" },
+            { page: "dms", zone: "messages", desktop: true, shortcuts: true, file: "21-shortcuts" },
+            { page: "settings", section: "Appearance", desktop: true, file: "22-appearance" },
+            { page: "g:tour-crew", zone: "messages", desktop: true, theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
+            { page: "dms", zone: "messages", desktop: true, theme: "black", file: "24-true-black" }
         ]
         interval: 1500
         repeat: true
         onTriggered: {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
-            if (step >= steps.length) { stop(); System.tourFinished(); return }
+            profileCard.visible = false; shortcutsPanel.visible = false
+            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density }
+            if (step >= steps.length) { Settings.theme = savedTheme; Settings.density = savedDensity; stop(); System.tourFinished(); return }
             const s = steps[step]
+            Settings.theme = s.theme || savedTheme
+            Settings.density = s.density || savedDensity
+            app.tourVoice = !!s.voicePanel
             const args = { tour: true }
             if (s.section) args.section = s.section
             if (s.zone) args.zone = s.zone
@@ -526,6 +656,8 @@ Window {
             if (s.picker) picker.openList("Message", [{ header: "", items: [{ name: "Unsend", detail: "Removes it from both sides", url: "unsend" }, { name: "Delete for me", detail: "Only on this computer", url: "delete" }] },
                                                      { header: "Conversation", items: [{ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" }] }], null)
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Chat.username, "", "Send", null, false, true)
+            if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
+            if (s.shortcuts) shortcutsPanel.open()
             if (s.hold) confirm.open("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }
