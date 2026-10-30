@@ -5,11 +5,12 @@ import Huginn
 // (Expire after, Max uses) to make another. "list": Group options › Invites, every link with who made
 // it, how many used it and the time left, Revoke, and the "Members can invite" switch (admins only).
 //
-// HOOKS (n95-trust builds the links). Each goes through hook() below, so nothing breaks before it lands:
-//   Chat.createInvite(g, seconds, maxUses) -> the link, or "" (seconds 0: never expires; maxUses 0: no limit)
-//   Chat.invites(g) -> [{ id, link, creator, uses, maxUses, expires }] (expires: ms since 1970, 0 for never)
-//   Chat.revokeInvite(g, id) -> "" when done, or what to tell the person
-//   Chat.membersCanInvite(g) -> bool, Chat.setMembersCanInvite(g, on) -> "" or what to tell the person
+// HOOKS (n95-trust, cap j1, grouplinks.cpp), each checked with has() so this still works without them:
+//   Chat.createGroupLink(g, ttlMs, maxUses) -> { link, id } or { error } (ttlMs 0: never; maxUses 0: no limit)
+//   Chat.groupLinks(g) -> [{ id, byName, x (ms, 0 never), max, uses, link (only my own), mine }]
+//   Chat.revokeGroupLink(g, id) -> "" when done, or what to tell the person
+//   Chat.membersInvite(g) -> bool, Chat.setMembersInvite(g, on) -> "" or what to tell the person
+// Joining by a link is Chat.joinWithCode (ChatPage's Add someone).
 Item {
     id: panel
     property string gid: ""
@@ -29,13 +30,15 @@ Item {
                                        { label: "25 uses", n: 25 }, { label: "50 uses", n: 50 }, { label: "100 uses", n: 100 }]
 
     function has(fn) { return typeof Chat[fn] === "function" }
-    readonly property bool ready: has("createInvite")
-    readonly property bool membersCanInvite: gid !== "" && (revision, Chat.groups, has("membersCanInvite") ? !!Chat.membersCanInvite(gid) : false)
-    readonly property var links: mode === "list" && has("invites") ? (revision, Chat.groups, Chat.invites(gid)) || [] : []
+    readonly property bool ready: has("createGroupLink")
+    readonly property bool membersCanInvite: gid !== "" && (revision, Chat.groups, has("membersInvite") ? !!Chat.membersInvite(gid) : false)
+    readonly property var links: mode === "list" && has("groupLinks") ? (revision, Chat.groups, Chat.groupLinks(gid)) || [] : []
 
     function make() {
         if (!ready) { link = ""; return }
-        link = Chat.createInvite(gid, expireChoices[expireAt].s, useChoices[usesAt].n) || ""
+        const r = Chat.createGroupLink(gid, expireChoices[expireAt].s * 1000, useChoices[usesAt].n) || {}
+        if (r.error) { link = ""; Ui.say(r.error, true) }
+        else link = r.link || ""
         revision++
     }
     function openCreate() { mode = "create"; editing = false; make() }
@@ -79,6 +82,7 @@ Item {
                 Text {
                     width: parent.width; wrapMode: Text.WordWrap
                     text: !panel.ready ? "Invite links come with the next update. For now, use Invite someone or Show the group code."
+                        : !panel.has("groupLinks") ? ""
                         : panel.mode === "list" ? "Every invite link for " + panel.groupName + ". Revoke one and it stops working at once."
                         : "Anyone with this link can join " + panel.groupName + ". Send it in a message, or let them scan the code."
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
@@ -142,7 +146,7 @@ Item {
 
                 // ------------------------------------------------- list
                 Row {
-                    visible: panel.mode === "list" && panel.amAdmin && panel.has("setMembersCanInvite")
+                    visible: panel.mode === "list" && panel.amAdmin && panel.has("setMembersInvite")
                     width: parent.width
                     spacing: Theme.px(10)
                     Column {
@@ -154,7 +158,7 @@ Item {
                         id: canSw
                         anchors.verticalCenter: parent.verticalCenter
                         checked: panel.membersCanInvite
-                        onToggled: { const r = Chat.setMembersCanInvite(panel.gid, !panel.membersCanInvite); if (r) Ui.say(r, true); panel.revision++ }
+                        onToggled: { const r = Chat.setMembersInvite(panel.gid, !panel.membersCanInvite); if (r) Ui.say(r, true); panel.revision++ }
                     }
                 }
                 Column {
@@ -176,16 +180,16 @@ Item {
                             color: index % 2 ? "transparent" : Theme.panelLow
                             Row {
                                 anchors.fill: parent
-                                Cell { w: 0.34; text: String(modelData.link || "").replace(/^.*[\\/#?=]/, "") || String(modelData.id || "") }
-                                Cell { w: 0.24; text: modelData.creator || "" }
-                                Cell { w: 0.12; text: (modelData.uses || 0) + (modelData.maxUses ? " / " + modelData.maxUses : "") }
-                                Cell { w: 0.16; text: panel.timeLeft(modelData.expires || 0) }
+                                Cell { w: 0.34; text: modelData.link ? String(modelData.link).slice(-12) : String(modelData.id || "").slice(0, 8) }
+                                Cell { w: 0.24; text: modelData.mine ? "You" : modelData.byName || "" }
+                                Cell { w: 0.12; text: (modelData.uses || 0) + (modelData.max ? " / " + modelData.max : "") }
+                                Cell { w: 0.16; text: panel.timeLeft(modelData.x || 0) }
                                 Item {
                                     width: parent.width * 0.14; height: parent.height
                                     HButton {
                                         anchors.centerIn: parent
                                         kind: "danger"; text: "Revoke"; fontSize: 12; implicitHeight: Theme.px(28)
-                                        onClicked: { const r = Chat.revokeInvite(panel.gid, modelData.id); if (r) Ui.say(r, true); else Ui.say("Revoked."); panel.revision++ }
+                                        onClicked: { const r = Chat.revokeGroupLink(panel.gid, modelData.id); if (r) Ui.say(r, true); else Ui.say("Revoked."); panel.revision++ }
                                     }
                                 }
                             }

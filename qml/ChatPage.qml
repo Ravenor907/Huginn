@@ -1099,12 +1099,12 @@ Rectangle {
     }
     function addSomeone() {
         Ui.ask("Add someone", "Paste the code or link they sent you, or a group's code or invite link.", "", "Add", t => {
-            // A group invite link (HOOK, n95-trust): Chat.inviteInfo(text) -> { name, count } or {},
-            // Chat.joinInvite(text) -> "" when asked, or what to tell the person.
-            const inv = typeof Chat.inviteInfo === "function" ? Chat.inviteInfo(t) : null
-            if (inv && inv.name) {
-                Ui.sure("Join " + inv.name + "?", inv.count + (inv.count === 1 ? " member" : " members") + ". Everyone in a group sees your name and can message the group. You can leave any time.",
-                        "Join", () => { const r = Chat.joinInvite(t); Ui.say(r === "" ? "Joining " + inv.name + "…" : r, r !== "") }, false, false)
+            // A group's code or invite link (cap j1 links work the same way): its name and size, then Join or Not now.
+            const gc = Chat.parseGroupCode(t)
+            if (gc && gc.name && !gc.mine && !gc.member && !gc.expired) {
+                const n = gc.count || gc.members || 0
+                Ui.sure("Join " + gc.name + "?", (n ? n + (n === 1 ? " member. " : " members. ") : "") + "Everyone in a group sees your name and can message the group. You can leave any time.",
+                        "Join", () => { const r = Chat.joinWithCode(t); Ui.say(r === "" ? "Asked to join " + gc.name + ". It opens once they let you in." : r, r !== "") }, false, false)
                 Ui.confirm.cancelText = "Not now"
                 return
             }

@@ -6,13 +6,12 @@ import Huginn
 // their chat sits, and nickname, note, chat color, introduce, the 4-emoji check and block, in one
 // place, the same everywhere. The D-pad moves along the choices, A picks, B closes.
 //
-// HOOKS (n95-trust): "what they can do" and the chat flags (mute, archive, mark unread, chat color)
-// call Chat functions that land with the trust work. Each goes through hook() below, which does
-// nothing harmful when the function isn't there yet:
-//   Chat.permissionsOf(key) -> { always, calls, files, active }    (what they can do now)
-//   Chat.setPermission(key, name, on)                                (name: "always", "calls", "files", "active")
-//   Chat.chatFlags(key) -> { muted, archived, unread, color }
-//   Chat.setMuted(key, on), Chat.setArchived(key, on), Chat.markUnread(key), Chat.setChatColor(key, color)
+// HOOKS (n95-trust, chatpeople.cpp): what they can do and where the chat sits call these, each
+// through has() so this screen still works on a build without them:
+//   Chat.callsAllowed / setCallsAllowed, Chat.filesAllowed / setFilesAllowed, Chat.showsActive / setShowsActive
+//   Chat.pinChat, isPinnedChat, archiveChat, isArchived, muteChat (until, ms), isMuted, markUnread, isMarkedUnread
+// Not on Huginn yet (shown, and say so when used): Always right away (Chat.alwaysRightAway /
+// setAlwaysRightAway) and the chat color (Chat.chatColor / setChatColor).
 Item {
     id: panel
     property string key: ""
@@ -38,10 +37,13 @@ Item {
         if (!has(fn)) return fallback
         return Chat[fn].apply(Chat, args || [])
     }
-    readonly property var perms: tour ? { always: true, calls: true, files: true, active: true }
-                                      : (revision, Chat.chats, hook("permissionsOf", [key], null))
-    readonly property var flags: tour ? { muted: false, archived: false, unread: false, color: "" }
-                                      : (revision, Chat.chats, hook("chatFlags", [key], null)) || ({})
+    readonly property var perms: tour ? { always: true, calls: true, files: true, active: true } : (revision, Chat.chats, {
+        always: hook("alwaysRightAway", [key], false), calls: hook("callsAllowed", [key], true),
+        files: hook("filesAllowed", [key], true), active: hook("showsActive", [key], true) })
+    readonly property var flags: tour ? { muted: false, archived: false, unread: false, pinned: false, color: "" } : (revision, Chat.chats, {
+        muted: hook("isMuted", [key], false), archived: hook("isArchived", [key], false), unread: hook("isMarkedUnread", [key], false),
+        pinned: hook("isPinnedChat", [key], false), color: hook("chatColor", [key], "") })
+    readonly property var setters: ({ always: "setAlwaysRightAway", calls: "setCallsAllowed", files: "setFilesAllowed", active: "setShowsActive" })
 
     // ------------------------------------------------------------- role: the three starting folders
     readonly property var roles: ["Family", "Work", "Folk", "None"]
@@ -71,22 +73,25 @@ Item {
         { id: "files", label: "Send me files", note: "Files straight from them over the internet" },
         { id: "active", label: "See when I'm active", note: "They see the green dot while Huginn is open" }
     ]
-    function permOn(id) { return !!perms && perms[id] !== undefined ? !!perms[id] : true }
+    function permOn(id) { return !!perms[id] }
     function togglePerm(id) {
         if (tour) return
-        if (!has("setPermission")) { Ui.say("This comes with the next update.", true); return }
-        Chat.setPermission(key, id, !permOn(id))
+        if (!has(setters[id])) { Ui.say("This comes with the next update.", true); return }
+        Chat[setters[id]](key, !permOn(id))
         revision++
     }
 
     // ------------------------------------------------------------- where the chat sits
     readonly property var keys: extra.keys || []
     readonly property int at: keys.indexOf(key)
-    readonly property bool pinned: at === 0 && (extra.section || "") === "" && keys.length > 1
+    readonly property bool pinned: !!flags.pinned
     function place(how) {
         if (tour) return
         const section = extra.section || ""
-        if (how === "pin" || how === "up" || how === "down") {
+        if (how === "pin" && has("pinChat")) {
+            Chat.pinChat(key, !pinned)
+            Ui.say(pinned ? "Unpinned." : shownName + " is pinned to the top.")
+        } else if (how === "pin" || how === "up" || how === "down") {
             if (at < 0) return
             const next = keys.slice()
             const to = how === "pin" ? 0 : how === "up" ? Math.max(0, at - 1) : Math.min(keys.length - 1, at + 1)
@@ -96,24 +101,25 @@ Item {
             const k = Object.assign({}, extra); k.keys = next; extra = k
             Ui.say(how === "pin" ? shownName + " is at the top." : "Moved.")
         } else if (how === "mute") {
-            if (!has("setMuted")) { Ui.say("This comes with the next update.", true); return }
-            Chat.setMuted(key, !flags.muted)
+            if (!has("muteChat")) { Ui.say("This comes with the next update.", true); return }
+            // For good until unmuted (a huge time, as the trust work expects).
+            Chat.muteChat(key, flags.muted ? 0 : 8640000000000000)
         } else if (how === "archive") {
-            if (!has("setArchived")) { Ui.say("This comes with the next update.", true); return }
-            Chat.setArchived(key, !flags.archived)
+            if (!has("archiveChat")) { Ui.say("This comes with the next update.", true); return }
+            Chat.archiveChat(key, !flags.archived)
         } else if (how === "unread") {
             if (!has("markUnread")) { Ui.say("This comes with the next update.", true); return }
-            Chat.markUnread(key)
+            Chat.markUnread(key, !flags.unread)
         }
         revision++
     }
     readonly property var placeRows: [
-        { id: "pin", label: pinned ? "At the top" : "Pin to the top", lit: pinned, on: at > 0 },
+        { id: "pin", label: pinned ? "Unpin" : "Pin to the top", lit: pinned, on: has("pinChat") || at > 0 },
         { id: "up", label: "Move up", on: at > 0 },
         { id: "down", label: "Move down", on: at >= 0 && at < keys.length - 1 },
         { id: "mute", label: flags.muted ? "Unmute" : "Mute", lit: !!flags.muted, on: true },
         { id: "archive", label: flags.archived ? "Take out of archive" : "Archive", lit: !!flags.archived, on: true },
-        { id: "unread", label: "Mark unread", on: true }
+        { id: "unread", label: flags.unread ? "Mark read" : "Mark unread", lit: !!flags.unread, on: true }
     ]
     readonly property var colors: ["", "#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6"]
     function setColor(c) {
