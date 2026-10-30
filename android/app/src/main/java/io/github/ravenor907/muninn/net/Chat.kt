@@ -1020,7 +1020,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** The photo's sealed pieces: made (and encrypted) once, then the same bytes on every try and route. */
     private fun pieces(m: Msg): List<String>? = outbox.fresh(m.id, stale(m.peerKey)) {
-        val bytes = photo(m.photo) ?: return@getOrMake null
+        val bytes = photo(m.photo) ?: return@fresh null
         val parts = Photos.split(bytes)
         seal("photo", m.peerKey, parts.mapIndexed { i, part ->
             ChatWire.base("photo", id.publicKey, id.username, id.fingerprint, nostr.publicKey, m.id).put("i", i).put("n", parts.size)
