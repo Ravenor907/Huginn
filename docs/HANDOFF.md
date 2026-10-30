@@ -84,41 +84,26 @@ not in the repo).
   `net/Chat.kt` (1:1) and `net/Groups.kt` (groups), plus `net/LinkPreview.kt` and `net/Videos.kt`. Muninn now
   advertises `m2`. Huginn doesn't yet; it shows the poll fallback text and ignores the other fields.
 
-Check that PR #4's latest CI run is green before building on it. The two newest commits (m2 in 1:1 chats and in groups)
-had not finished building at handoff.
+- **Chat screens (batch C):** `screens/CameraScreen.kt` (CameraX photo and video, front/back flip, 60 s clips with
+  Send/Discard review, never auto-sent), `screens/ChatMore.kt` (attach menu, poll dialog and card, preview card, video
+  player, album grid, Shared photos/videos/links page), multi-photo picker, Requests as its own list row and page, and a
+  Settings › Privacy "Link previews" switch.
+- **Adding people you trust (batch D), protocol section 13 (cap `i1`), `net/Trust.kt`:** one-time invite links,
+  introductions, offering to add the people in your Family group, matching 4 emoji to check a contact, and NFC
+  "Tap phones together" (`net/Tap.kt`, a HostApduService that only answers while that screen is open).
+- **Big jobs (batch E):**
+  - Files over the internet, protocol section 14 (cap `f1`), `net/FileLink.kt`: straight between phones (punched UDP,
+    sealed per window); 2 MB or less falls back to Nostr relay pieces. Never Cloudflare.
+  - Group video in voice rooms, `net/call/RoomVideo.kt`: up to 4 people, only to peers on a direct path
+    (`CallMedia.videoNoRelay`), VP8 640x480 at 15 fps.
+  - Linked devices, companion style, protocol section 15, `net/Link.kt`: a tablet or second phone mirrors the phone's
+    1:1 chats and sends through it while the phone is online. Settings › Linked devices; the companion's chat list gets
+    a "<phone>'s chats" row.
 
-## 0.93: still to do (all approved by the owner)
+## 0.93: release
 
-**Chat features, finishing batch C. The data layer is done; these are mostly screens:**
-- Show albums as a grid of photos from one sender with the same album id. Add multi-select in the photo picker
-  (`sendPhotos` / `sendGroupPhotos`).
-- **In-app camera:** CameraX is already a dependency. A viewfinder inside the app, a front/back flip button, then send.
-- **Video messages:** record up to 60 s with CameraX `camera-video`. Add that dependency, at about 220 kbps video and
-  32 kbps audio, a 480 px side, so it stays under 2 MB (`Videos`). **After recording, show a preview with Send and
-  Discard. Never send automatically when the button is released** (the owner asked for this). Play the video with the
-  decrypted file in the cache, deleted after playing. `sendVideo` / `sendGroupVideo` only go to `m2` peers.
-- **Poll screen:** a question, 2 to 10 answers, and a "several answers" switch. Show results with counts and who voted.
-  Code: `sendPoll`, `vote`, `sendGroupPoll`, `groupVote`.
-- **Link preview card** under a bubble. Tapping it asks "Open example.com?". Add a Settings › Privacy switch
-  "Link previews" (`Identity.linkPreviews`, on by default).
-- **Message requests:** they already exist ("Wants to chat" panels). Move them into their own "Requests" list row.
-- **Shared media tab** in each chat: photos, videos, files and links. A gallery for photos and voice already exists.
-- Update the Data saver text if needed. Photos and videos are pushed in pieces, so only internet *files* (batch E) can
-  really wait for a tap.
-
-**Adding people you trust (batch D):** one-time expiring invite links; introductions ("Mom introduces you to Grandma",
-both accept); offering to add as a contact when someone joins your Family group; tap phones together over NFC; checking a
-contact by matching 4 emojis. These need a new caps token and protocol section, with a reference script and vectors, like `m2`.
-
-**Big jobs (batch E):**
-- Files over the internet, directly device to device (reuse the call direct-path code). Small files may fall back to Nostr
-  relay pieces; large files wait and retry. **Never through Cloudflare.**
-- Group video calls, peer to peer only: up to 4 trusted contacts, never through Cloudflare. Anyone who can't connect
-  directly stays on voice.
-- Same you on every device (linked devices, chats synced). First check how much exists today.
-
-**Then release 0.93:** the owner said to release it once this list is done. Before releasing, raise the save-for-later
-item below. Update the README, bump `VERSION` to 0.93, and do it all in one push.
+The owner approved releasing 0.93 once the list was done. Before releasing, raise the save-for-later item below. Merge
+PR #4, update the README "What's new", bump `VERSION` to 0.93, all in one push to main.
 
 ## Saved for later (raise at the next release)
 
