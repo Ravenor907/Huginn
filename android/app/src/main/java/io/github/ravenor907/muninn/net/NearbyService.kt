@@ -18,7 +18,6 @@ import io.github.ravenor907.muninn.R
 
 /** Keeps a transfer going when the screen turns off or Muninn goes to the background. */
 class NearbyService : Service() {
-    private var wake: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -34,18 +33,35 @@ class NearbyService : Service() {
             .setContentText("Transferring files").setOngoing(true).setContentIntent(open).build()
         if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, 7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(7, n)
-        if (wake == null) wake = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Muninn:transfer").apply { acquire(6 * 60 * 60 * 1000L) }
+        // Awake for about 10 minutes at a time, renewed while the transfer moves: a stalled one lets the phone sleep.
+        if (wake == null) wake = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Muninn:transfer")
+            .apply { setReferenceCounted(false) }
+        renewed = 0L
+        progress()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         wake?.let { if (it.isHeld) it.release() }
+        wake = null
         super.onDestroy()
     }
 
     companion object {
         private const val CHANNEL = "transfers"
         private const val EXTRA_ON = "on"
+        private const val AWAKE_MS = 10 * 60_000L
+        @Volatile private var wake: PowerManager.WakeLock? = null
+        @Volatile private var renewed = 0L
+
+        /** The transfer moved: keep the phone awake another 10 minutes (renewed at most once a minute). */
+        fun progress() {
+            val w = wake ?: return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (renewed != 0L && now - renewed < 60_000L) return
+            renewed = now
+            try { w.acquire(AWAKE_MS) } catch (_: Exception) {}
+        }
 
         fun hold(context: Context, on: Boolean) {
             try {

@@ -112,7 +112,8 @@ class Muninn : Application() {
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) ->
             power.activity()   // Check less when it's quiet starts over
-            power.talk()       // and the conversation window opens, so the next message comes at once too
+            // A 1:1 message opens the conversation window, so the next one comes at once too. Group messages don't.
+            if (io.github.ravenor907.muninn.net.NetLogic.opensTalk(key)) power.talk()
             // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
             if (!chat.flags.arrived(key)) return@collect
             if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { buzz(); return@collect }
@@ -160,16 +161,18 @@ class Muninn : Application() {
     }
 
     private var listening = false
+    /** The one sweep of the Wi-Fi network for devices (done once Muninn is on screen). */
+    private var swept = false
 
     /** Stay reachable: the relays always (even locked, to say "New message"), and the Wi-Fi side once open. */
     @Synchronized
     fun listen() {
         nostr.keepAlive = true
         nostr.connect()
-        if (!ready.value || listening) return
-        listening = true
-        net.start()
-        net.refresh()
+        if (!ready.value) return
+        if (!listening) { listening = true; net.start() }
+        // Asking every address on the Wi-Fi only once Muninn is on screen, never from the background.
+        if (visible && !swept) { swept = true; net.refresh() }
     }
 
     /** The refresh button on Chats: every relay checked again now, and anything not yet delivered sent again. */

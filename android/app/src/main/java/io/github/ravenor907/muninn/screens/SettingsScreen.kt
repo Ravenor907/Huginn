@@ -83,7 +83,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             var check by remember { mutableStateOf(app.power.check) }
             val stay = check == Check.LIVE
             var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
-            androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) } }
+            io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) }
             // How Muninn checks while it's closed: the biggest choice for the battery.
             Text("Check for messages", style = Type.normal.copy(color = Palette.text))
             Check.entries.chunked(2).forEach { row ->
@@ -360,7 +360,7 @@ private fun RightAwayRow(app: Muninn) {
 @Composable
 private fun BatteryReport(app: Muninn) {
     var r by remember { mutableStateOf(app.power.report()) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(30_000); r = app.power.report() } }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(30_000) { r = app.power.report() }
     fun time(ms: Long): String { val m = ms / 60_000; return if (m < 60) "$m min" else "${m / 60} h ${m % 60} min" }
     Panel {
         Text("Today so far", style = Type.normal.copy(color = Palette.text))
@@ -370,6 +370,7 @@ private fun BatteryReport(app: Muninn) {
         Text("Resting (nothing running): ${time(r.restingMs)}", style = Type.small)
         Text("Connection checks: ${r.pings} (${r.wakeups} woke the phone)", style = Type.small)
         Text("Reconnects: ${r.reconnects}", style = Type.small)
+        Text("Checks the message servers made on their own: ${r.serverPings} (each wakes the phone's radio for a moment)", style = Type.small)
         Text("Background checks for messages: ${r.checks}", style = Type.small)
         Text("Staying connected cost about ${"%.1f".format(java.util.Locale.US, r.costPercent)}% of the battery (a rough guess)", style = Type.small)
         r.dataBytes?.let { Text("Data used since the phone started: ${io.github.ravenor907.muninn.net.LocalSend.size(it)}", style = Type.small) }

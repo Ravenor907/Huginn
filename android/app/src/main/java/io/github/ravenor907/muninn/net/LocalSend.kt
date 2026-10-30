@@ -193,6 +193,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
             while (running) {
                 Thread.sleep(60_000)
                 if (!running) break
+                // A sender that went quiet ends its session, whatever the Wi-Fi discovery is doing.
+                val s = session
+                if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
                 // Saving battery: off Wi-Fi nothing is announced; with the screen off only every 5 minutes.
                 val w = wifiLevel
                 if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
@@ -201,8 +204,6 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 val cutoff = System.currentTimeMillis() - 10 * 60_000
                 found.entries.removeIf { it.value.seen < cutoff }
                 publish()
-                val s = session
-                if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
             }
         }
     }
@@ -564,6 +565,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val total = s.files.values.sumOf { it.size }
         val got = s.files.values.sumOf { if (it.done) it.size else it.received }
         _transfer.update { it.copy(done = got, total = total) }
+        NearbyService.progress()
         _items.value = s.files.values.map { it.toItem() } + history
     }
 
@@ -648,6 +650,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                                         val r = ins.read(buf); if (r < 0) break
                                         os.write(buf, 0, r); sent += r
                                         _transfer.update { it.copy(done = sent) }
+                                        NearbyService.progress()
                                     }
                                 }
                             }
@@ -687,7 +690,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         _transfer.value = if (active) Transfer(true, sending, status, 0, total) else Transfer()
         NearbyService.hold(context, active)
     }
-    fun closeProgress(done: Long, total: Long) = _transfer.update { it.copy(done = done, total = total) }
+    fun closeProgress(done: Long, total: Long) { _transfer.update { it.copy(done = done, total = total) }; NearbyService.progress() }
     fun closeItem(name: String, ok: Boolean, from: String = "") {
         val what = if (ok) "saved to ${Received.place(context)}" else "didn't arrive"
         history.add(0, Item(name, if (from.isEmpty()) what.replaceFirstChar { it.uppercase() } else "From $from · $what", if (ok) 1f else 0f, !ok))

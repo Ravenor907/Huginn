@@ -54,8 +54,9 @@ android {
         targetSdk = 36
         versionCode = versionNumber
         versionName = versionText
-        // libopus (calls) is built for these. 32-bit x86 (old emulators only) is left out to keep the APK small.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+        // libopus (calls) is built for phones, tablets and TVs (ARM). x86 and x86_64 are only for emulators: the
+        // debug build adds x86_64 for CI's emulator, the release APK leaves both out to stay small.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=c++_static",
             "-DWEBRTC_APM_SRC=${webrtcSrc.absolutePath}", "-DABSEIL_SRC=${abseilSrc.absolutePath}", "-DRNNOISE_SRC=${rnnoiseSrc.absolutePath}") } }
     }
@@ -100,6 +101,7 @@ android {
         }
         debug {
             signingConfig = signingConfigs.getByName("muninn")
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         }
     }
 
@@ -114,6 +116,8 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // Native libraries stored compressed: a smaller download (Android unpacks them once, at install).
+        jniLibs.useLegacyPackaging = true
     }
 }
 

@@ -301,12 +301,16 @@ object PowerLogic {
     /** True when [to] keeps less going than [from]: applied after [GRACE_MS]; anything more is applied at once. */
     fun saves(from: Plan, to: Plan): Boolean = rank(to) < rank(from)
 
-    /** What Muninn knows about a relay: failed tries in a row, how long it took to connect, open right now. */
-    data class Health(val failures: Int = 0, val connectMs: Long? = null, val live: Boolean = false)
+    /**
+     * What Muninn knows about a relay: failed tries in a row, how long it took to connect, open right now, and how
+     * often it checks on the phone by itself (pings an hour, each waking the radio).
+     */
+    data class Health(val failures: Int = 0, val connectMs: Long? = null, val live: Boolean = false, val pingsPerHour: Int = 0)
 
     /**
      * The [n] relays to keep open (null: all), in the order they are listed. Fewest failures first,
-     * then ones already open (no churn), then the quickest to connect, then list order.
+     * then ones already open (no churn), then the fewest pings of their own, then the quickest to connect, then
+     * list order.
      */
     fun pick(relays: List<String>, health: Map<String, Health>, n: Int?): List<String> {
         if (n == null || n >= relays.size) return relays
@@ -314,6 +318,7 @@ object PowerLogic {
         val chosen = relays.withIndex().sortedWith(compareBy(
             { health[it.value]?.failures ?: 0 },
             { if (health[it.value]?.live == true) 0 else 1 },
+            { health[it.value]?.pingsPerHour ?: 0 },
             { health[it.value]?.connectMs ?: UNKNOWN_CONNECT_MS },
             { it.index },
         )).take(n).map { it.value }.toSet()

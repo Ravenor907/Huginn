@@ -59,7 +59,8 @@ jobs:
       - name: Download size (Huginn.flatpak)
         shell: bash
         run: |
-          # The trimmed 0.95 size plus 5%. Growing past it needs the owner's OK.
+          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (4,048,728 bytes) plus 5%. Growing
+          # past it needs the owner's OK.
           limit=4251165
           size=$(stat -c %s Huginn.flatpak)
           echo "::notice title=Huginn.flatpak::$size bytes (limit $limit)"
@@ -228,6 +229,25 @@ jobs:
             if [ "$got" != "$want" ]; then echo "$certs"; echo "::error title=Wrong signing key::Muninn.apk is signed by ${got:-an unreadable certificate}, not $want."; exit 1; fi
             echo "Muninn.apk is signed with the release key ($got)."
           fi
+      - name: Download size (Muninn.apk at most 8 MB)
+        run: |
+          python3 - Muninn.apk <<'PY'
+          import os, sys, zipfile
+          f = sys.argv[1]
+          size = os.path.getsize(f)
+          limit = 8 * 1024 * 1024
+          libs = [i for i in zipfile.ZipFile(f).infolist() if i.filename.startswith("lib/")]
+          abis = sorted({i.filename.split("/")[1] for i in libs})
+          saved = sum(i.file_size - i.compress_size for i in libs)
+          print(f"::notice title=Muninn.apk::{size} bytes ({size / 1048576:.2f} MB, limit 8 MB). Native code for {', '.join(abis)}; "
+                f"stored compressed it is {saved} bytes smaller than stored plain.")
+          if any(a in ("x86", "x86_64") for a in abis):
+              print("::error title=Muninn.apk::The release APK carries emulator code (x86 or x86_64).")
+              sys.exit(1)
+          if size > limit:
+              print(f"::error title=Muninn.apk too big::{size} bytes, over the {limit} byte (8 MB) limit. Growing past it needs the owner's OK.")
+              sys.exit(1)
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: muninn-apk
@@ -423,10 +443,10 @@ jobs:
           $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
           $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
-          # The trimmed 0.95 size plus 5%. Growing past it needs the owner's OK.
+          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (45,245,253 bytes) plus 5%. Growing
+          # past it needs the owner's OK.
           $limit = 47507516
           $size = (Get-Item Huginn-Windows.zip).Length
-          Write-Output "::notice title=Huginn-Windows.zip bytes::$size bytes (limit $limit)"
           if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip too big::$size bytes, over the $limit byte limit."; exit 1 }
           Remove-Item -Recurse -Force dist/Huginn
           Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist

@@ -46,6 +46,8 @@ class Power(private val app: Muninn) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var started = 0
+    /** The battery's last step ([NetLogic.batteryStep]); -2 until the first report. */
+    private var batteryStep = -2
     @Volatile private var inCall = false
     @Volatile private var onWifi = false
     private var applied: PowerLogic.Plan? = null
@@ -228,6 +230,7 @@ class Power(private val app: Muninn) {
         // The battery report counts the connection's checks, wake-ups and reconnects. An alarm that woke the
         // phone also looks whether the conversation window has ended (a timer alone stops while it sleeps).
         app.nostr.counted = { kind -> countNet(kind); if (kind == Nostr.WAKE) main.post { refresh() } }
+        app.nostr.countedPings = { n -> countNet(Nostr.SERVER_PING, n) }
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(a: Activity) { started++; activity(); catchUp(opened = true) }
             override fun onActivityStopped(a: Activity) { started = (started - 1).coerceAtLeast(0); refresh() }
@@ -252,6 +255,16 @@ class Power(private val app: Muninn) {
             ContextCompat.registerReceiver(app, object : BroadcastReceiver() {
                 override fun onReceive(c: Context?, i: Intent?) {
                     if (i?.action == Intent.ACTION_USER_PRESENT) catchUp()
+                    if (i?.action == Intent.ACTION_SCREEN_ON) saveCounts()
+                    // Android says the battery level often: only crossing 15% or 30%, or the plug, changes anything.
+                    if (i?.action == Intent.ACTION_BATTERY_CHANGED) {
+                        val level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                        val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100
+                        val step = NetLogic.batteryStep(percent, i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0)
+                        if (step == batteryStep) return
+                        batteryStep = step
+                    }
                     refresh()
                 }
             }, f, ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -259,7 +272,10 @@ class Power(private val app: Muninn) {
         // Network changes: reconnect to the relays at once, and know whether this is Wi-Fi.
         try {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) { app.nostr.reconnectNow(); caughtUpAt = 0L; catchUp() }
+                // Back on a network: connect again once (catching up does it, or only that with "Only when open").
+                override fun onAvailable(network: Network) {
+                    main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN) app.nostr.reconnectNow() else catchUp() }
+                }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     val w = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
                     if (w != onWifi) { onWifi = w; main.post { refresh() } }
@@ -328,10 +344,22 @@ class Power(private val app: Muninn) {
         main.removeCallbacks(onTheHour)
         main.postDelayed(onTheHour, 3_600_000L - System.currentTimeMillis() % 3_600_000L + 1_000L)
         val now = applied
-        if (now == null || !PowerLogic.saves(now, next)) { main.removeCallbacks(later); waiting = null; use(next); return }
-        // Saving more: wait a moment, in case the screen comes straight back on.
-        if (waiting != next) { waiting = next; main.removeCallbacks(later); main.postDelayed(later, PowerLogic.GRACE_MS) }
+        if (now == null || !PowerLogic.saves(now, next)) {
+            main.removeCallbacks(later); waiting = null
+            if (next != now) use(next) else app.nostr.plan(next.relays, next.pingMs)   // unchanged: only undo an early check
+            return
+        }
+        // Saving more: wait a moment before closing anything, in case the screen comes straight back on. The slower
+        // check is set at once though, on an alarm, so it runs even if the phone falls asleep meanwhile.
+        val t = android.os.SystemClock.elapsedRealtime()
+        if (waiting != next) {
+            waiting = next; waitingSince = t
+            main.removeCallbacks(later); main.postDelayed(later, PowerLogic.GRACE_MS)
+            app.nostr.pingEarly(next.pingMs)
+        } else if (t - waitingSince >= PowerLogic.GRACE_MS) use(next)   // the phone slept through the timer
     }
+
+    private var waitingSince = 0L
 
     // ------------------------------------------------------------------ battery report (Settings)
 
@@ -342,7 +370,9 @@ class Power(private val app: Muninn) {
      * background inbox checks; a rough share of the battery; data Muninn has used since the phone started.
      */
     data class Report(val openMs: Long, val connectedMs: Long, val savingMs: Long, val restingMs: Long, val checks: Int,
-                      val pings: Int, val wakeups: Int, val reconnects: Int, val costPercent: Double, val dataBytes: Long?)
+                      val pings: Int, val wakeups: Int, val reconnects: Int, val costPercent: Double, val dataBytes: Long?,
+                      /** Checks the message servers sent this phone on their own (each wakes the radio for a moment). */
+                      val serverPings: Int = 0)
 
     private var countedSince = System.currentTimeMillis()
     private var countedKind = -1
@@ -355,23 +385,38 @@ class Power(private val app: Muninn) {
         else -> 0
     }
 
+    /**
+     * Today's counts, kept in memory and saved when the screen comes on and on the hour (not on every check, which
+     * would write to storage each time the connection is checked).
+     */
+    private var reportDay = prefs.getString("reportDay", "") ?: ""
+    private var connectedMs = prefs.getLong("reportConnected", 0)
+    private var savingMs = prefs.getLong("reportSaving", 0)
+    private var openMs = prefs.getLong("reportOpen", 0)
+    private var checks = prefs.getInt("reportChecks", 0)
+    private val netCounts = IntArray(NET_KEYS.size) { prefs.getInt(NET_KEYS[it], 0) }
+
     /** Adds the time since the last count to its kind, starting over each day. */
     @Synchronized private fun count(now: Long, next: Int) {
         val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(now))
-        val e = prefs.edit()
-        val newDay = prefs.getString("reportDay", "") != today
-        if (newDay) {
-            e.putString("reportDay", today).putInt("reportChecks", 0)
-            for (k in NET_KEYS) e.putInt(k, 0)
+        if (reportDay != today) {
+            reportDay = today
+            connectedMs = 0; savingMs = 0; openMs = 0; checks = 0
+            netCounts.fill(0)
             countedSince = maxOf(countedSince, midnight(now))
         }
-        var connected = if (newDay) 0L else prefs.getLong("reportConnected", 0)
-        var saving = if (newDay) 0L else prefs.getLong("reportSaving", 0)
-        var open = if (newDay) 0L else prefs.getLong("reportOpen", 0)
         val spent = (now - countedSince).coerceAtLeast(0)
-        when (countedKind) { 0 -> connected += spent; 1 -> saving += spent; 3 -> open += spent }
-        e.putLong("reportConnected", connected).putLong("reportSaving", saving).putLong("reportOpen", open).apply()
+        when (countedKind) { 0 -> connectedMs += spent; 1 -> savingMs += spent; 3 -> openMs += spent }
         countedSince = now; countedKind = next
+    }
+
+    /** Saves today's counts (screen on, on the hour). */
+    @Synchronized private fun saveCounts() {
+        count(System.currentTimeMillis(), countedKind)
+        val e = prefs.edit().putString("reportDay", reportDay).putInt("reportChecks", checks)
+            .putLong("reportConnected", connectedMs).putLong("reportSaving", savingMs).putLong("reportOpen", openMs)
+        for (i in NET_KEYS.indices) e.putInt(NET_KEYS[i], netCounts[i])
+        e.apply()
     }
 
     private fun midnight(now: Long): Long = java.util.Calendar.getInstance().apply {
@@ -379,35 +424,33 @@ class Power(private val app: Muninn) {
     }.timeInMillis
 
     /** A background inbox check ran (InboxWorker). */
-    fun countCheck() {
+    @Synchronized fun countCheck() {
         count(System.currentTimeMillis(), countedKind)
-        prefs.edit().putInt("reportChecks", prefs.getInt("reportChecks", 0) + 1).apply()
+        checks++
     }
 
     /** The connection checked its relays, an alarm woke the phone for it, or it connected again ([Nostr.counted]). */
-    @Synchronized private fun countNet(kind: String) {
-        val key = when (kind) { Nostr.PING -> NET_KEYS[0]; Nostr.WAKE -> NET_KEYS[1]; else -> NET_KEYS[2] }
+    @Synchronized private fun countNet(kind: String, n: Int = 1) {
+        val i = when (kind) { Nostr.PING -> 0; Nostr.WAKE -> 1; Nostr.SERVER_PING -> 3; else -> 2 }
         count(System.currentTimeMillis(), countedKind)   // a new day starts the counts over
-        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).apply()
+        netCounts[i] += n
     }
 
     fun report(): Report {
+        try { app.nostr.countServerPings() } catch (_: Exception) {}
         val now = System.currentTimeMillis()
-        count(now, countedKind)
-        val connected = prefs.getLong("reportConnected", 0)
-        val saving = prefs.getLong("reportSaving", 0)
-        val open = prefs.getLong("reportOpen", 0)
-        val wakeups = prefs.getInt(NET_KEYS[1], 0)
-        val reconnects = prefs.getInt(NET_KEYS[2], 0)
-        val uid = android.os.Process.myUid()
-        val rx = android.net.TrafficStats.getUidRxBytes(uid)
-        val tx = android.net.TrafficStats.getUidTxBytes(uid)
-        val data = if (rx < 0 || tx < 0) null else rx + tx
-        return Report(open, connected, saving, (now - midnight(now) - open - connected - saving).coerceAtLeast(0), prefs.getInt("reportChecks", 0),
-            prefs.getInt(NET_KEYS[0], 0), wakeups, reconnects, PowerLogic.costPercent(connected, saving, wakeups, reconnects), data)
+        return synchronized(this) {
+            count(now, countedKind)
+            val uid = android.os.Process.myUid()
+            val rx = android.net.TrafficStats.getUidRxBytes(uid)
+            val tx = android.net.TrafficStats.getUidTxBytes(uid)
+            val data = if (rx < 0 || tx < 0) null else rx + tx
+            Report(openMs, connectedMs, savingMs, (now - midnight(now) - openMs - connectedMs - savingMs).coerceAtLeast(0), checks,
+                netCounts[0], netCounts[1], netCounts[2], PowerLogic.costPercent(connectedMs, savingMs, netCounts[1], netCounts[2]), data, netCounts[3])
+        }
     }
 
-    private val onTheHour = Runnable { refresh() }
+    private val onTheHour = Runnable { saveCounts(); refresh() }
     private var followed: PowerLogic.Check? = null
     private var followedEvery = -1L
 
@@ -448,7 +491,7 @@ class Power(private val app: Muninn) {
         private const val RIGHT_AWAY_ANY = "rightAwayAny"
         /** Unlocking over and over doesn't catch up each time. */
         private const val CATCH_UP_GAP_MS = 20_000L
-        private val NET_KEYS = listOf("reportPings", "reportWakeups", "reportReconnects")
+        private val NET_KEYS = listOf("reportPings", "reportWakeups", "reportReconnects", "reportServerPings")
     }
 
     private fun radios(p: PowerLogic.Plan) {
