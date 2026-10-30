@@ -8,10 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
 import java.net.Inet4Address
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
 
 /**
  * Moving to another device ("Move here", cap x1, docs/protocol-0.6.md section 18). The new device shows a code
@@ -297,19 +294,6 @@ object Move {
     /** Leave "Moved to [name]" and use this device as a new one. */
     fun startFresh(c: Context) { put(c, "out", null); _outgoing.value = null }
 
-    /** A JSON POST to [addr] ("ip:port") on the move path: HTTPS first (any certificate; everything inside is sealed), then HTTP. */
-    private fun post(addr: String, json: String): Pair<Int, String>? {
-        for (scheme in listOf("https", "http")) try {
-            val c = URL("$scheme://$addr${MoveWire.PATH}").openConnection() as HttpURLConnection
-            if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true } }
-            c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json")
-            c.outputStream.use { it.write(json.toByteArray()) }
-            val code = c.responseCode
-            val text = (if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readBytes()) } ?: ""
-            c.disconnect()
-            return code to text
-        } catch (e: Exception) {}
-        return null
-    }
+    /** A JSON POST to [addr] ("ip:port") on the move path, on the same network only. */
+    private fun post(addr: String, json: String): Pair<Int, String>? = LocalSend.postTo(addr, MoveWire.PATH, json)
 }
