@@ -551,7 +551,6 @@ jobs:
           run wine "$h" --privacy-selftest
           run wine "$h" --backup-selftest
           run wine "$h" --call-selftest tests/proto06-vectors.json
-          run wine "$h" --release-sig-selftest tests/release-sig-vectors.json
           exit $bad
       - name: Start under Wine (offscreen, then a virtual X screen)
         run: |
@@ -577,6 +576,18 @@ jobs:
           start env QT_QPA_PLATFORM=offscreen wine "$h" -platform offscreen
           start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
           exit $bad
+      - name: Update signature self-test under Wine
+        # After the start test: run just before it, this quick self-test left the Wine prefix in a state that
+        # made the next start on the virtual X screen crash inside Wine's GDI font code.
+        run: |
+          wineserver -k 2>/dev/null || true
+          timeout 300 wine dist/Huginn/Huginn.exe --release-sig-selftest tests/release-sig-vectors.json > t.log 2>&1 || s=$?
+          cat t.log
+          wineserver -k 2>/dev/null || true
+          if [ "${s:-0}" -ne 0 ]; then
+            echo "::error title=Wine self-test failed: --release-sig-selftest (exit $s)::$(tail -n 10 t.log | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
       - name: Publish the Wine logs to the ci-wine branch
         # Only a convenience for reading logs: a failed push must not fail the Wine job or block a release.
         continue-on-error: true
