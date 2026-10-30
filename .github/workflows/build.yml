@@ -59,9 +59,8 @@ jobs:
       - name: Download size (Huginn.flatpak)
         shell: bash
         run: |
-          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (4,048,728 bytes) plus 5%. Growing
-          # past it needs the owner's OK.
-          limit=4251165
+          # The 0.95 size (4,199,464 bytes) plus 5%. Growing past it needs the owner's OK.
+          limit=4409437
           size=$(stat -c %s Huginn.flatpak)
           echo "::notice title=Huginn.flatpak::$size bytes (limit $limit)"
           if [ "$size" -gt "$limit" ]; then echo "::error title=Huginn.flatpak too big::$size bytes, over the $limit byte limit."; exit 1; fi
@@ -443,9 +442,8 @@ jobs:
           $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
           $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
-          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (45,245,253 bytes) plus 5%. Growing
-          # past it needs the owner's OK.
-          $limit = 47507516
+          # The trimmed 0.95 size (37,989,814 bytes) plus 5%. Growing past it needs the owner's OK.
+          $limit = 39889305
           $size = (Get-Item Huginn-Windows.zip).Length
           if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip too big::$size bytes, over the $limit byte limit."; exit 1 }
           Remove-Item -Recurse -Force dist/Huginn
