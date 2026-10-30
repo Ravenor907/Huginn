@@ -97,6 +97,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** A private message arrived (name, text, key): for notifications while Muninn is in the background. */
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
+    /** I sent a message (chat key, or "g:" and a group id): the conversation window opens (Power). */
+    val sends = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Someone unsent a message in this chat (key): clear its notification. */
     val recalls = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Cap m1: who is typing to me, until when (ms). */
@@ -950,6 +952,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, file = fileName)
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
+        sends.tryEmit(peerKey)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
             notices.tryEmit("$name is out of range. Say yes to Keep in touch to send from anywhere.")
@@ -1170,6 +1173,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun send(peerKey: String, name: String, r: String, mine: Msg) {
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
+        sends.tryEmit(peerKey)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
             notices.tryEmit(if (isContact(peerKey)) "$name can't be reached: they're not nearby and have no internet mailbox yet."
@@ -1597,6 +1601,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A link gets its preview first (cap m2), made on this phone only when Settings › Privacy allows it. */
     fun sendGroupText(g: String, ch: String, text: String, re: String = ""): Boolean {
         val t = text.trim().take(MAX)
+        sends.tryEmit(Folders.groupKey(g))
         val link = if (id.linkPreviews) More.firstLink(t) else null
         if (link == null) return groups.sendText(g, ch, t, re)
         if (t.isEmpty()) return false
@@ -1666,7 +1671,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), bytes)
         val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album)
-        if (!ok) File(photosDir, blob).delete()
+        if (!ok) File(photosDir, blob).delete() else sends.tryEmit(Folders.groupKey(g))
         return ok
     }
 

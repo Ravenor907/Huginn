@@ -55,6 +55,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
     @Volatile private var fastTick: java.util.concurrent.ScheduledFuture<*>? = null
 
+    /** For the battery report: a check sent ([PING]), an alarm that woke the phone ([WAKE]), a connection made again ([RECONNECT]). */
+    @Volatile var counted: (String) -> Unit = {}
+
     /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
     var onEnvelope: ((String) -> Boolean)? = null
 
@@ -139,12 +142,13 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /**
      * One check for every socket together: a tiny request each relay answers at once. A socket that
      * doesn't answer within [PowerLogic.ANSWER_MS] is dropped and opened again (one missed check is
-     * enough). While saving battery the check rides on an alarm that also runs while the phone dozes
-     * (exact when Android allows it without asking, else Android may run it a little late to batch it
-     * with other apps' wake-ups); a timer backs it up while the phone is awake anyway.
+     * enough). While saving battery the check rides on an inexact alarm: Android runs it within the last
+     * [PowerLogic.PING_WINDOW_MS] before it's due, together with other apps' wake-ups, so the radio wakes
+     * once for all of them. A second alarm that also runs while the phone dozes backs it up, and a timer
+     * checks on time while the phone is awake anyway.
      */
     private fun tick() {
-        try { alarms?.cancel(alarmIntent) } catch (_: Exception) {}
+        try { alarms?.cancel(alarmIntent); alarms?.cancel(idleIntent) } catch (_: Exception) {}
         fastTick?.cancel(false); fastTick = null
         if (!keepAlive || keep == 0) { probedAt = 0L; return }
         val every = pingMs
@@ -153,14 +157,20 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             return
         }
         val at = android.os.SystemClock.elapsedRealtime() + every
+        val window = minOf(PowerLogic.PING_WINDOW_MS, every / 2)
         try {
             val a = alarms!!
-            if (android.os.Build.VERSION.SDK_INT < 31 || a.canScheduleExactAlarms())
-                a.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent)
-            else a.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent)
+            a.setWindow(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at - window, window, alarmIntent)
+            // Dozing, the alarm above waits for Android's next maintenance window: this one still runs (a little late).
+            a.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, idleIntent)
         } catch (_: Exception) {}
         // Awake anyway (screen on, or another app woke the phone): check on time without waiting for the alarm.
         fastTick = timer.schedule(Runnable { due() }, every, TimeUnit.MILLISECONDS)
+    }
+
+    private val idleIntent: android.app.PendingIntent by lazy {
+        android.app.PendingIntent.getBroadcast(context, 1, android.content.Intent(context, RelayAlarm::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     private val alarmIntent: android.app.PendingIntent by lazy {
@@ -170,6 +180,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** The keepalive alarm went off ([RelayAlarm]). */
     fun onAlarm() {
+        counted(WAKE)
         // Long enough for the requests to go out, the answers to come back, and a dead socket to be replaced.
         try { wake.acquire(PowerLogic.ANSWER_MS + 5_000) } catch (_: Exception) {}
         timer.execute { due() }
@@ -195,6 +206,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             ws.send(JSONArray().put("REQ").put(PROBE).put(filter).toString())
         }
         probedAt = now
+        counted(PING)
         // One missed check is enough: look again once the answers should be in. Usually they all are within
         // a second or two; then the phone may sleep again at once.
         timer.schedule(Runnable { if (answered(now)) release() }, 2, TimeUnit.SECONDS)
@@ -223,6 +235,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         synchronized(sockets) { if (!sockets.remove(url, ws)) return; live.remove(url); _connected.value = live.size }
         ws.cancel()
         retries.remove(url)
+        counted(RECONNECT)
         open(url)
     }
 
@@ -314,8 +327,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
             val n = (retries[url] ?: 0) + 1
             retries[url] = n
-            // Saving battery with only a few relays open: one that keeps failing gives its place to a healthier one.
-            if (keep != null && n >= 2) {
+            counted(RECONNECT)
+            // Saving battery with one relay open (or a few): one that fails gives its place to a healthier one,
+            // the only one at once.
+            if (keep != null && n >= PowerLogic.swapAfter(keep)) {
                 chosen = null
                 val now = targets()
                 for (u in now) if (u != url) open(u)
@@ -367,6 +382,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     companion object {
         const val KIND = 1059
         private const val PROBE = "muninn-alive"
+        const val PING = "ping"
+        const val WAKE = "wake"
+        const val RECONNECT = "reconnect"
         private const val BURST_SECONDS = 20L
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
 
