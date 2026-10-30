@@ -193,7 +193,7 @@ object KidTv {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         val me = app.identity.publicKey
         val s = _state.value
-        // k5: a parent reconnecting after a wipe (TvReconnect).
+        // k6: a parent reconnecting after a wipe (TvReconnect).
         if (s.parents.isNotEmpty()) TvReconnect.onTv(app, fromKey, mailbox, o, inviteOk, s.parents, s.cfg?.raw)?.let { return it }
         when (o.optString("t")) {
             "config" -> {
@@ -203,7 +203,7 @@ object KidTv {
                     if (!inviteOk || new.opt("by") != fromKey) return false
                     listOf(fromKey)
                 } else if (TvReconnect.orphanFrom(fromKey) && new.opt("by") == fromKey) {
-                    // k5: no parent was left to approve; the one who scanned "Connect a parent" signs for themselves.
+                    // k6: no parent was left to approve; the one who scanned "Connect a parent" signs for themselves.
                     listOf(fromKey)
                 } else s.parents
                 val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)

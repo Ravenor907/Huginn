@@ -104,7 +104,7 @@ object TvParent {
      * and sends the TV its first config. True if it was a TV's code.
      */
     fun adoptIfTv(app: Muninn, codeText: String): Boolean {
-        // A TV's "Connect a parent" code (k5): ask to look after it again.
+        // A TV's "Connect a parent" code (k6): ask to look after it again.
         if (TvReconnect.askToRejoin(app, codeText)) return true
         val key = tvKeyIn(codeText) ?: return false
         if (isManaged(key) || app.contacts.get(key) == null) return true
@@ -184,7 +184,7 @@ object TvParent {
     }
 
     /**
-     * k5: [person] looks after the TV again (another parent approved), and [gone] (their old, wiped key: the parents
+     * k6: [person] looks after the TV again (another parent approved), and [gone] (their old, wiped key: the parents
      * that didn't answer) is taken off the TV, as a parent and from its list.
      */
     fun swapParent(tvKey: String, person: TvPerson, gone: Set<String>) = change(tvKey) { t ->
@@ -194,7 +194,7 @@ object TvParent {
     }
 
     /**
-     * k5: nobody else was left to approve, so this phone takes the TV over from its own signed config [cfg]: the next
+     * k6: nobody else was left to approve, so this phone takes the TV over from its own signed config [cfg]: the next
      * config lists only this phone as parent (the old parents go), with the same people, messages and settings.
      */
     fun takeOver(app: Muninn, tvKey: String, cfg: TvConfig) {

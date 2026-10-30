@@ -68,7 +68,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93, Huginn from 0.94. |
 | `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
 | `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn from 0.94. |
-| `k5` | kids' TV reconnect (7.10): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only, from 0.95. |
+| `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only, from 0.95. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn from 0.95. |
 | `x1` | moving to another device (section 18). Muninn and Huginn from 0.95. |
 
@@ -1069,7 +1069,7 @@ Android still asks on the TV before it installs. A TV used normally (not in kids
 files it receives out of Downloads and asks "Install …?" first; anyone the person accepts files from can
 send one there, with no `apps` needed.
 
-### 7.10 A parent reconnects after a wipe (`k5`)
+### 7.11 A parent reconnects after a wipe (`k6`)
 
 A parent whose phone was wiped or reinstalled has a new chat key, so the TV no longer knows them. All messages are in
 room `tvconfig`; reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-vectors.json`.
@@ -1176,7 +1176,7 @@ Each app's unit tests should:
 and what a `MUNINNL1:` link code carries. Muninn checks it in `I1F1VectorsTest`, Huginn in `--chat-selftest` (which
 also sends a file between two copies of FileLink on 127.0.0.1, losing some pieces on the way).
 
-`python3 tools/p95_ref.py` writes `tests/p95-vectors.json` (sections 7.10, 17 and 18): the move key from the two one-off
+`python3 tools/p95_ref.py` writes `tests/p95-vectors.json` (sections 7.11, 17 and 18): the move key from the two one-off
 keys and the code's secret on both sides, the 4 emoji, the hello, ready and status checks, a sealed part and the sealed
 link code, the payload layout and part counts; link ids and when a link lets someone in; `mi` in a group state; which
 Kids' TV reconnect messages are well-formed. Muninn checks it in `P95VectorsTest`, Huginn in `--chat-selftest` (the file

@@ -14,7 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
 
-/** tests/p95-vectors.json (sections 7.10, 17 and 18): the same vectors Huginn checks, so both apps agree byte for byte. */
+/** tests/p95-vectors.json (sections 7.11, 17 and 18): the same vectors Huginn checks, so both apps agree byte for byte. */
 class P95VectorsTest {
     private val v = JSONObject(javaClass.classLoader!!.getResource("p95-vectors.json")!!.readText())
     private val m = v.getJSONObject("move")

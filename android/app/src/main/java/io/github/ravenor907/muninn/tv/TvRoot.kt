@@ -283,7 +283,7 @@ private fun TvHoldChip(text: String, onHeld: () -> Unit) {
 private const val HOLD_MS = 5_000L
 
 /**
- * k5: a parent whose phone was wiped scans this to look after the TV again. Another parent approves with one tap;
+ * k6: a parent whose phone was wiped scans this to look after the TV again. Another parent approves with one tap;
  * if none is left, their phone takes over after about 2 minutes and the old parent goes.
  */
 @Composable

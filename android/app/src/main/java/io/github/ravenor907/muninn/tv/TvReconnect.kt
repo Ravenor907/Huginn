@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * A parent who wiped or reinstalled their phone gets back onto the Kids' TV (cap k5, docs/protocol-0.6.md 7.10).
+ * A parent who wiped or reinstalled their phone gets back onto the Kids' TV (cap k6, docs/protocol-0.6.md 7.11).
  *
  * On the TV a parent holds OK for 5 seconds on "For a parent", and the TV shows a "Connect a parent" code: its
  * contact code with "tv":2 and a fresh invite. The parent's phone scans it and sends `rejoin`. The TV asks every
@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
  * newcomer's own next config (it lists only them as parent).
  */
 object TvReconnect {
-    const val CAP = "k5"
+    const val CAP = "k6"
     const val WAIT_MS = 120_000L
     /** The code's marker: 1 is pairing (7.1), 2 is connecting a parent again. */
     const val CODE_TV = 2

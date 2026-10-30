@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reference for what 0.95 adds to the wire (docs/protocol-0.6.md, sections 7.10, 17 and 18), and the test vectors both
+"""Reference for what 0.95 adds to the wire (docs/protocol-0.6.md, sections 7.11, 17 and 18), and the test vectors both
 apps check (tests/p95-vectors.json). Run it to write the vectors; it checks every case twice (building, then from the file).
 
  - x1 (18): moving to another device. The key from the two one-off keys and the secret in the QR, the 4 emoji, the hello
    and status checks, a sealed part, the sealed link code, and the payload's layout.
  - j1 (17): a link's id, whether a link still lets someone in, and "mi" in a group state.
- - k5 (7.10): which Kids' TV reconnect messages are well-formed.
+ - k6 (7.11): which Kids' TV reconnect messages are well-formed.
 """
 import base64, hashlib, hmac, json, os, struct
 
@@ -108,7 +108,7 @@ def link_ok(x, mx, uses, off, maker_in, maker_may, now):
     return (not off) and (x == 0 or x > now) and (mx == 0 or uses < mx) and maker_in and maker_may
 
 
-# ------------------------------------------------------------------ k5: Kids' TV reconnect
+# ------------------------------------------------------------------ k6: Kids' TV reconnect
 
 def tv_ok(o):
     def key(f): return isinstance(o.get(f), str) and 0 < len(o[f]) <= 200 and len(b64d(o[f])) > 0
@@ -147,7 +147,7 @@ def build():
     nonce = b"\x09" * 12
     n = parts(len(blob))
     return {
-        "about": "docs/protocol-0.6.md 7.10, 17 and 18. Written by tools/p95_ref.py.",
+        "about": "docs/protocol-0.6.md 7.11, 17 and 18. Written by tools/p95_ref.py.",
         "move": {
             "newScalar": "5001", "oldScalar": "6001", "newPub": b64(new_pub), "oldPub": b64(old_pub),
             "newPriv": b64(new_priv.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())),

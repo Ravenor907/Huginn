@@ -114,7 +114,7 @@ object Proto06 {
      * What this app says it speaks, next to the old cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 k5 t1 v1 m1 m2 i1 f1 d1 j1 x1"
+    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 k6 t1 v1 m1 m2 i1 f1 d1 j1 x1"
     /** Cap j1: group invite links and "Members can invite" (section 17). */
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
