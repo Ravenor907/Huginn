@@ -146,6 +146,8 @@ Item {
             }
             Text {
                 visible: prompt.choices.length > 0 && prompt.choicesLabel.length > 0
+                width: parent.width
+                wrapMode: Text.WordWrap
                 topPadding: Theme.px(8)
                 text: prompt.choicesLabel
                 color: Theme.textMuted

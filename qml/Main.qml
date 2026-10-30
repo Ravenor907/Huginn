@@ -180,7 +180,7 @@ Window {
         id: voicePanel
         tour: app.tourVoice
         roomBar: roomBar
-        visible: !app.portrait && app.pageList && !app.privacyCovered
+        visible: app.pageList && !app.privacyCovered
         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.bottomMargin: Theme.px(8)
@@ -659,7 +659,8 @@ Window {
             { page: "g:tour-crew", zone: "messages", theme: "metal", density: "spacious", file: "25-brushed-metal" },
             { page: "g:tour-crew", zone: "messages", size: "150", file: "26-size-150" },
             { page: "dms", zone: "messages", portrait: true, file: "27-portrait" },
-            { page: "dms", portrait: true, file: "28-portrait-list" }
+            { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
+            { page: "dms", changeLock: true, file: "29-lock" }
         ]
         interval: 1500
         repeat: true
@@ -686,6 +687,7 @@ Window {
             if (s.groupOptions) args.groupOptions = true
             if (s.voice) args.voice = true
             if (s.folders) args.folders = true
+            if (s.changeLock) args.changeLock = true
             app.openPage(s.page, args)
             if (s.rail) app.focusRail()
             if (s.picker) picker.openList("Message", [{ header: "", items: [{ name: "Unsend", detail: "Removes it from both sides", url: "unsend" }, { name: "Delete for me", detail: "Only on this computer", url: "delete" }] },

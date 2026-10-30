@@ -216,6 +216,7 @@ Rectangle {
         PageHeader {
             id: listHead
             width: parent.width
+            carved: false
             title: "Direct messages"
             // Folders are sections of the list below; this makes a new one (with a pointer).
             Rectangle {
