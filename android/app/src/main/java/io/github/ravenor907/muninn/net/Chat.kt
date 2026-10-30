@@ -1343,6 +1343,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun arrived(g: String, title: String, text: String) { arrivals.tryEmit(Triple(title, text, Folders.groupKey(g))) }
         override fun deleteBlob(id: String) { File(photosDir, id).delete() }
         override fun hasM1(k: String) = this@Chat.hasM1(k)
+        override fun hasM2(k: String) = this@Chat.hasM2(k)
     }
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
@@ -1351,7 +1352,25 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return groups.invite(g, peerKey)
     }
 
-    fun sendGroupText(g: String, ch: String, text: String, re: String = "") = groups.sendText(g, ch, text.trim().take(MAX), re)
+    /** A link gets its preview first (cap m2), made on this phone only when Settings › Privacy allows it. */
+    fun sendGroupText(g: String, ch: String, text: String, re: String = ""): Boolean {
+        val t = text.trim().take(MAX)
+        val link = if (id.linkPreviews) More.firstLink(t) else null
+        if (link == null) return groups.sendText(g, ch, t, re)
+        if (t.isEmpty()) return false
+        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link)) }
+        return true
+    }
+
+    /** A poll in group [g] (cap m2; members with older apps see its text). Null when sent, else what to say. */
+    fun sendGroupPoll(g: String, ch: String, question: String, options: List<String>, multi: Boolean): String? {
+        val poll = More.Poll(question.trim(), options.map { it.trim() }.filter { it.isNotEmpty() }, multi)
+        if (!More.ok("rich", JSONObject().put("text", More.fallback(poll.q, poll.options)).put("poll", More.pollJson(poll))))
+            return "A poll needs a question and 2 to ${More.OPTIONS_MAX} different answers."
+        return if (groups.sendText(g, ch, More.fallback(poll.q, poll.options), poll = poll)) null else "That poll didn't send."
+    }
+
+    fun groupVote(g: String, msgId: String, choices: List<Int>) = groups.vote(g, msgId, choices)
 
     /**
      * Messenger style: a new group with [keys] (contacts) in it, named after them. Contacts whose app has m1 go
@@ -1383,10 +1402,30 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun sendGroupPhoto(g: String, ch: String, jpeg: ByteArray) = sendGroupBlob(g, ch, jpeg, 0)
     fun sendGroupVoice(g: String, ch: String, aac: ByteArray, ms: Int) = sendGroupBlob(g, ch, aac, ms.coerceAtLeast(1))
 
-    private fun sendGroupBlob(g: String, ch: String, bytes: ByteArray, voiceMs: Int) {
+    /** Several photos at once: albums of up to 10. */
+    fun sendGroupPhotos(g: String, ch: String, jpegs: List<ByteArray>) {
+        if (jpegs.size == 1) { sendGroupPhoto(g, ch, jpegs[0]); return }
+        jpegs.chunked(More.ALBUM_MAX).forEach { part ->
+            val album = UUID.randomUUID().toString()
+            part.forEachIndexed { i, j -> sendGroupBlob(g, ch, j, 0, album = Triple(album, i, part.size)) }
+        }
+    }
+
+    /** A video message to everyone in [g] whose app plays it (cap m2). Null when sent, else what to say. */
+    fun sendGroupVideo(g: String, ch: String, mp4: ByteArray, ms: Int): String? {
+        if (!More.isVideo(mp4) || mp4.size > Photos.MAX_PIECES * Photos.PIECE) return "That video is too big to send."
+        val s = groups.group(g)?.state ?: return "That group isn't here any more."
+        val older = s.members.filter { it.k != id.publicKey && !hasM2(it.k) }
+        if (!sendGroupBlob(g, ch, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))) return "That video didn't send."
+        return if (older.isEmpty()) null else "${older.size} ${if (older.size == 1) "person needs" else "people need"} a newer Muninn to see video messages."
+    }
+
+    private fun sendGroupBlob(g: String, ch: String, bytes: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean {
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), bytes)
-        if (!groups.sendBlob(g, ch, blob, voiceMs)) File(photosDir, blob).delete()
+        val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album)
+        if (!ok) File(photosDir, blob).delete()
+        return ok
     }
 
     /** Leaves the group or, once out of it, deletes it here; its folder entries go too. */
@@ -1409,7 +1448,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return seal("gphoto", o.to, parts.mapIndexed { i, part ->
             ChatWire.base("gphoto", id.publicKey, id.username, id.fingerprint, nostr.publicKey, o.env).put("i", i).put("n", parts.size)
                 .put("g", o.g).put("ch", o.ch).put("gid", o.id)
-                .apply { if (o.voice > 0) put("kind", "voice").put("ms", o.voice) } to part
+                .apply {
+                    if (o.voice > 0) put("kind", "voice").put("ms", o.voice)
+                    if (o.video > 0) put("kind", "video").put("ms", o.video)
+                    if (o.album.isNotEmpty()) put("al", o.album).put("ai", o.albumAt).put("an", o.albumOf)
+                } to part
         }).map { it.toString() }
     }
 
@@ -1454,6 +1497,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val g = o.optString("g"); val ch = o.optString("ch"); val gid = o.optString("gid"); val env = o.optString("id")
         val n = o.optInt("n"); val i = o.optInt("i", -1)
         if (!Proto06.isLogicalId(gid) || env != Proto06.envelopeId(gid, id.publicKey) || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
+        if (!More.ok("piece", o)) return 400 to "{}"
         if (!groups.isMember(g, fromKey)) return 403 to "{}"
         val key = "g|$fromKey|$gid"
         val dup = {
@@ -1479,12 +1523,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 incoming.remove(key)
             }
             val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
+            val videoMs = if (o.optString("kind") == "video") o.optInt("ms").coerceIn(1, More.VIDEO_MAX_MS) else 0
             val joined = inc.parts.map { it!! }
-            val bytes = (if (voiceMs > 0) Voice.check(joined) else Photos.join(joined)) ?: return@opened 400 to "{}"
+            val bytes = (when { voiceMs > 0 -> Voice.check(joined); videoMs > 0 -> Videos.join(joined); else -> Photos.join(joined) }) ?: return@opened 400 to "{}"
             val blob = "g-$gid"
+            val al = o.optString("al")
+            val album = if (al.isEmpty()) null else Triple(al, o.optInt("ai"), o.optInt("an"))
             if (groups.knownEnvelope(env) == null) {
                 vault.writeBytes(File(photosDir, blob), bytes)
-                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs) && groups.knownEnvelope(env) == null) File(photosDir, blob).delete()
+                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs, videoMs, album) && groups.knownEnvelope(env) == null) File(photosDir, blob).delete()
             }
             200 to "{}"
         }
