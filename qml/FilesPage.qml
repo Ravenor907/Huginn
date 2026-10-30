@@ -37,11 +37,13 @@ Rectangle {
     // ============================================================= middle column
     Rectangle {
         id: middle
+        // Portrait: the list on top, the rest under it.
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: Ui.dock
-        width: Theme.listWidth
+        anchors.bottomMargin: Theme.portrait ? parent.height * 0.45 : Ui.dock
+        width: Theme.portrait ? parent.width : Theme.listWidth
         color: Theme.column
+        Brushed {}
 
         PageHeader { id: head; width: parent.width; title: "Files" }
 
@@ -129,9 +131,9 @@ Rectangle {
     // ============================================================= main column
     Item {
         id: main
-        anchors.left: middle.right
+        anchors.left: Theme.portrait ? parent.left : middle.right
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: Theme.portrait ? middle.bottom : parent.top
         anchors.bottom: parent.bottom
 
         PageHeader {

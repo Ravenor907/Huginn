@@ -16,7 +16,7 @@ Column {
             readonly property bool running: modelData.state !== "done" && modelData.state !== "failed"
             width: strip.width
             height: Theme.px(52)
-            radius: Theme.px(8)
+            radius: Theme.radius
             color: Theme.panel
             border.color: modelData.state === "failed" ? Theme.dangerLine : Theme.line
             border.width: 1

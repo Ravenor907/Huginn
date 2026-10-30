@@ -3,8 +3,8 @@ import Huginn
 
 // A group, Discord style: the channel column (TEXT channels, VOICE rooms), the open channel's
 // conversation with its message box, and the member column (or a thread or the pins beside it).
-// The same on a desktop and a handheld, only bigger there. LT opens the group's options (invite,
-// the group code, channels, members, rename, leave). D-pad left and right move between the columns.
+// A portrait window shows one column at a time. LT (or a right click) opens the group's options
+// (invite, the group code, channels, members, rename, leave). D-pad left and right move between the columns.
 Rectangle {
     id: page
     color: Theme.ground
@@ -25,7 +25,7 @@ Rectangle {
     // Narrow screens (a Steam Deck at handheld sizes, or a big Size): the member column folds away
     // so the conversation keeps room to read, and a thread or the pins slide over the conversation
     // instead of sitting beside it.
-    readonly property bool membersFit: width - chanCol.width - Theme.px(230) >= Theme.px(520)
+    readonly property bool membersFit: !Theme.portrait && width - chanCol.width - Theme.memberWidth >= Theme.px(480)
     readonly property bool sideDocked: width - chanCol.width - Theme.px(360) >= Theme.px(420)
     // The message box the controller is typing in, if any (picking a message takes it out).
     readonly property var typingIn: compose.hasFocus && zone === "messages" && sel < 0 ? compose
@@ -46,7 +46,7 @@ Rectangle {
 
     function setArgs(a) {
         tour = !!a.tour
-        zone = a.zone || (Theme.listShown || a.voice ? "channels" : "messages")
+        zone = a.zone || (Theme.portrait || Theme.listShown || a.voice ? "channels" : "messages")
         sel = -1
         viewing = ""
         shownCode = ""
@@ -140,6 +140,14 @@ Rectangle {
 
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
+    // Discord-style grouping: the same person again within 7 minutes shows no name or picture.
+    function groupedAt(i) {
+        if (i <= 0 || i === newFrom) return false
+        const a = messages[i - 1], b = messages[i]
+        if (!a || !b || a.system || b.system) return false
+        if (!!a.mine !== !!b.mine || (a.from || a.name) !== (b.from || b.name)) return false
+        return Math.abs((b.time || 0) - (a.time || 0)) < 420000
+    }
     function stateLabel(m) {
         if (!m.mine || m.unsent) return ""
         if ((m.readCount || 0) > 0) return ""   // the check mark and the count say it
@@ -172,14 +180,37 @@ Rectangle {
     readonly property bool membersVisible: memberCol.visible
     Rectangle {
         id: chanCol
-        visible: Theme.listShown || page.zone === "channels"
+        visible: Theme.portrait ? page.zone === "channels" : Theme.listShown || page.zone === "channels"
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Ui.dock
-        width: visible ? Theme.listWidth : 0
+        width: visible ? (Theme.portrait ? page.width : Theme.listWidth) : 0
         color: Theme.column
+        Brushed {}
 
-        PageHeader { id: chanHead; width: parent.width; title: page.locked ? "Locked" : (page.info.name || "Group") }
+        PageHeader {
+            id: chanHead; width: parent.width; carved: false
+            title: page.locked ? "Locked" : (page.info.name || "Group")
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !page.locked && page.exists && !page.isTour
+                text: page.isTour || !page.exists ? "" : (Chat.groups, Chat.groupLimit(page.gid)).days + " days"
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(11)
+            }
+            // Invite people: admins, or anyone when the group lets members invite.
+            Rectangle {
+                visible: page.canInvite
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width; radius: Theme.radius
+                color: invHover.hovered ? Theme.raised : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Invite people"
+                Accessible.onPressAction: page.invitePeople()
+                Icon { anchors.centerIn: parent; name: "plus"; size: Theme.px(16); color: Theme.textSoft }
+                HoverHandler { id: invHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.invitePeople() }
+            }
+        }
 
         ListView {
             id: chanList
@@ -188,14 +219,15 @@ Rectangle {
             anchors.topMargin: Theme.px(12)
             anchors.bottom: voiceStrip.top
             anchors.bottomMargin: Theme.px(6)
-            x: Theme.px(10)
-            width: parent.width - Theme.px(20)
-            spacing: Theme.px(2)
+            x: Theme.px(8)
+            width: parent.width - Theme.px(16)
+            spacing: Theme.px(1)
             clip: true
-            model: page.rows
+            model: chanModel
             currentIndex: page.chRow
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+            LiveList { id: chanModel; keys: ["kind", "cat", "id"]; items: page.rows }
             delegate: Item {
                 id: rowItem
                 readonly property bool header: modelData.kind === "header"
@@ -204,14 +236,14 @@ Rectangle {
                 readonly property bool here: !header && (voice ? Rooms.inRoom && Rooms.group === page.gid && Rooms.room === modelData.id : modelData.id === page.channelId)
                 readonly property var people: header ? [] : page.roomPeople(modelData.id)
                 width: chanList.width
-                height: header ? Theme.px(index === 0 ? 30 : 42) : Theme.px(Theme.desktop ? 40 : 48) + (people.length ? Theme.px(36) : 0)
+                height: header ? Theme.px(index === 0 ? 24 : 36) : Theme.px(32) + (people.length ? people.length * Theme.px(30) + Theme.px(4) : 0)
                 // A category: its name, a fold arrow, and what a folded one hides that's new.
                 Rectangle {
                     visible: rowItem.header
                     anchors.bottom: parent.bottom
                     width: parent.width
-                    height: Theme.px(28)
-                    radius: Theme.px(6)
+                    height: Theme.px(24)
+                    radius: Theme.radius
                     color: rowItem.on ? Theme.tile : "transparent"
                     border.width: rowItem.on ? Theme.focusWidth : 0
                     border.color: Theme.accent
@@ -231,7 +263,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.text || ""
                         color: catHover.hovered ? Theme.text : Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
+                        font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(0.5)
                     }
                     CountBadge {
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
@@ -246,8 +278,8 @@ Rectangle {
                     id: chanTile
                     visible: !rowItem.header
                     width: parent.width
-                    height: Theme.px(Theme.desktop ? 40 : 48)
-                    radius: Theme.px(9)
+                    height: Theme.px(32)
+                    radius: Theme.radius
                     color: rowItem.on || rowItem.here ? Theme.tile : chanHover.hovered ? Theme.raised : "transparent"
                     border.width: rowItem.on ? Theme.focusWidth : 0
                     border.color: Theme.accent
@@ -255,20 +287,20 @@ Rectangle {
                     Accessible.name: (rowItem.voice ? "Voice room " : "Channel ") + (modelData.name || "")
                     Icon {
                         id: chanIcon
-                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
                         anchors.verticalCenter: parent.verticalCenter
                         name: rowItem.voice ? "speaker" : "hash"
-                        size: Theme.px(18)
+                        size: Theme.px(16)
                         color: Theme.textMuted
                     }
                     Text {
-                        anchors.left: chanIcon.right; anchors.leftMargin: Theme.px(10)
+                        anchors.left: chanIcon.right; anchors.leftMargin: Theme.px(6)
                         anchors.right: unreadDot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         elide: Text.ElideRight
                         text: modelData.name || ""
                         color: rowItem.on || rowItem.here || modelData.unread > 0 ? Theme.text : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread > 0 ? Font.Bold : Font.Normal
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: modelData.unread > 0 ? Font.DemiBold : Font.Medium
                     }
                     // Unread: a dot; @mentions of me: how many, like Discord.
                     CountBadge {
@@ -279,26 +311,33 @@ Rectangle {
                         mentions: rowItem.header ? 0 : modelData.mentions || 0
                     }
                     HoverHandler { id: chanHover }
-                    TapHandler { onTapped: { page.zone = "channels"; page.chRow = index; page.openRow() } }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) page.groupOptions(); else page.openRow() }
+                    }
                 }
-                // Who's in a voice room, as small avatars under it.
-                Row {
+                // Who's in a voice room, one under the other like Discord.
+                Column {
                     visible: rowItem.people.length > 0
                     anchors.top: chanTile.bottom
-                    anchors.topMargin: Theme.px(4)
-                    x: Theme.px(38)
+                    anchors.topMargin: Theme.px(2)
+                    x: Theme.px(30)
                     spacing: Theme.px(6)
                     Repeater {
                         model: rowItem.people
-                        Rectangle {
-                            width: Theme.px(28); height: width; radius: width / 2
-                            color: Theme.avatar(modelData.name, !!modelData.me).bg
-                            // A gold ring while they talk.
-                            border.width: modelData.speaking ? Theme.px(2) : 0
-                            border.color: Theme.accent
+                        Row {
+                            spacing: Theme.px(8)
                             Accessible.role: Accessible.StaticText
                             Accessible.name: modelData.name + (modelData.speaking ? ", speaking" : "")
-                            Text { anchors.centerIn: parent; text: page.initial(modelData.name); color: Theme.avatar(modelData.name, !!modelData.me).fg; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
+                            Rectangle {
+                                width: Theme.px(24); height: width; radius: width / 2
+                                color: Theme.avatar(modelData.name, !!modelData.me).bg
+                                // A green ring while they talk.
+                                border.width: modelData.speaking ? Theme.px(2) : 0
+                                border.color: Theme.online
+                                Text { anchors.centerIn: parent; text: page.initial(modelData.name); color: Theme.avatar(modelData.name, !!modelData.me).fg; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
+                            }
+                            Text { anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                         }
                     }
                 }
@@ -311,7 +350,7 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: page.locked ? "Chat is locked. Open Direct messages to unlock it." : "This group isn't on this device anymore."
+            text: page.locked ? "Huginn is locked. Open Direct messages to unlock it." : "This group isn't on this computer anymore."
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
@@ -321,7 +360,7 @@ Rectangle {
             id: voiceStrip
             anchors.bottom: parent.bottom
             width: parent.width
-            height: Theme.px(44)
+            height: Theme.px(32)
             color: Theme.groundDeep
             Row {
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
@@ -332,9 +371,9 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceStrip.width - Theme.px(50)
                     elide: Text.ElideRight
-                    text: Chat.netStatus + " · encrypted" + (isTour || !exists ? "" : " · " + (Chat.groups, Chat.groupLimit(gid)).days + " days")
-                    color: Theme.textSoft
-                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    text: Chat.netStatus + " · encrypted"
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
                 }
             }
         }
@@ -343,6 +382,7 @@ Rectangle {
     // ============================================================= conversation
     Item {
         id: main
+        visible: !Theme.portrait || !chanCol.visible
         anchors.left: chanCol.right
         anchors.right: sidePanel.visible && page.sideDocked ? sidePanel.left : memberCol.visible ? memberCol.left : parent.right
         anchors.top: parent.top
@@ -352,7 +392,10 @@ Rectangle {
             id: convHead
             width: parent.width
             carved: false
-            title: page.locked || !page.exists ? "" : "# " + page.channel.name
+            backShown: Theme.portrait
+            onBack: { page.zone = "channels"; page.sel = -1 }
+            glyph: page.locked || !page.exists ? "" : "#"
+            title: page.locked || !page.exists ? "" : page.channel.name
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only: you're no longer in " + page.info.name
                     : "Encrypted for the " + page.info.count + (page.info.count === 1 ? " person in " : " people in ") + page.info.name
             // Pinned messages of this channel (only on this computer).
@@ -360,12 +403,19 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !page.locked && page.exists
                 text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
-                fontSize: 15
+                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
                 onClicked: page.side = page.side === "pins" ? "" : "pins"
+            }
+            HButton {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !page.locked && page.exists && !Theme.portrait
+                text: "Group options"
+                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
+                onClicked: page.groupOptions()
             }
             // The desktop: show or hide the channel list and the member list.
             PaneToggle { which: "list" }
-            PaneToggle { which: "members"; visible: Theme.desktop && page.membersFit && !page.locked && page.exists }
+            PaneToggle { which: "members"; visible: page.membersFit && !page.locked && page.exists }
         }
 
         Item {
@@ -384,24 +434,25 @@ Rectangle {
                 anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
                 anchors.margins: Theme.px(12)
                 height: visible ? goneText.implicitHeight + Theme.px(20) : 0
-                radius: Theme.px(8); color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
+                radius: Theme.radius; color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
                 Text {
                     id: goneText
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     wrapMode: Text.WordWrap
-                    text: (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + ". The messages stay here until you delete it: X, then Delete from Huginn."
+                    text: (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + ". The messages stay here until you delete it: Group options, then Delete it from this computer."
                     color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
 
+            // Messages change in place (LiveList): a new one adds a row instead of redrawing them all.
+            LiveList { id: messageModel; keys: ["id"]; items: page.messages }
             ListView {
                 id: list
                 anchors.top: gone.visible ? gone.bottom : parent.top
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
-                spacing: Theme.px(8)
-                model: page.messages
+                spacing: 0
+                model: messageModel
                 onCountChanged: positionViewAtEnd()
                 delegate: MessageRow {
                     host: page
@@ -410,6 +461,7 @@ Rectangle {
                     at: index
                     picked: page.active && page.zone === "messages" && page.sel === index
                     lineH: index === page.newFrom ? Theme.px(30) : 0
+                    grouped: page.groupedAt(index)
                     hoverTools: !page.readOnly
                     onChosen: { page.zone = "messages"; page.sel = index }
                     onOptions: { page.zone = "messages"; page.sel = index; page.messageOptions() }
@@ -421,8 +473,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 visible: list.count === 0
-                text: page.readOnly ? "Nothing here." : "Nothing in #" + page.channel.name + " yet. Press A to write, hold Y to talk."
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+                text: page.readOnly ? "Nothing here." : "Nothing in #" + page.channel.name + " yet." + (page.pad ? " Press A to write, hold Y to talk." : " Say hello.")
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
 
             Rectangle {
@@ -437,12 +489,12 @@ Rectangle {
                 anchors.margins: Theme.px(12)
                 height: Theme.px(52)
                 visible: Voice.recording
-                radius: Theme.px(8); color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
+                radius: Theme.radius; color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
                 Row {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: Voice.length(Voice.elapsed) + "   Let go of Y to send · B to cancel"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
+                    Text { text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -456,7 +508,7 @@ Rectangle {
                 visible: page.newFrom >= 0 && !lineInView && list.count > 0
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: Theme.px(10)
-                width: jumpText.implicitWidth + Theme.px(28); height: Theme.px(32); radius: height / 2
+                width: jumpText.implicitWidth + Theme.px(28); height: Theme.px(28); radius: Theme.radius
                 color: Theme.danger
                 z: 3
                 Accessible.role: Accessible.Button
@@ -475,7 +527,7 @@ Rectangle {
                     anchors.fill: parent
                     visible: parent.containsDrag
                     color: Qt.rgba(0, 0, 0, 0.55)
-                    border.color: Theme.accent; border.width: 2; radius: Theme.px(10)
+                    border.color: Theme.accent; border.width: 2; radius: Theme.radius
                     Text { anchors.centerIn: parent; text: "Drop to send to #" + page.channel.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
                 }
             }
@@ -493,7 +545,7 @@ Rectangle {
             id: compose
             visible: !page.locked && page.exists && !page.readOnly
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-            anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20); anchors.bottomMargin: Theme.px(18)
+            anchors.leftMargin: Theme.px(16); anchors.rightMargin: Theme.px(16); anchors.bottomMargin: Theme.px(24)
             height: implicitHeight
             placeholder: "Message #" + page.channel.name
             target: page.isTour ? "" : page.chatKey
@@ -527,7 +579,7 @@ Rectangle {
             width: parent.width
             title: page.side === "thread" ? "Thread" : "Pinned"
             subtitle: page.side === "thread" ? "#" + page.channel.name : page.pinnedMsgs.length ? page.pinnedMsgs.length + " in #" + page.channel.name + " · only on this computer" : "Nothing pinned in #" + page.channel.name
-            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: { page.side = ""; page.threadRoot = "" } }
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; kind: "plain"; implicitHeight: Theme.px(30); fontSize: 13; onClicked: { page.side = ""; page.threadRoot = "" } }
         }
         ListView {
             id: sideList
@@ -621,33 +673,46 @@ Rectangle {
     Rectangle {
         anchors.fill: parent
         visible: page.shownCode !== ""
-        color: Qt.rgba(0, 0, 0, 0.85)
+        color: Qt.rgba(0.03, 0.035, 0.04, 0.82)
+        TapHandler { onTapped: page.shownCode = "" }
         Rectangle {
             anchors.centerIn: parent
-            width: Theme.px(560); height: codeCol.implicitHeight + Theme.px(40)
-            color: Theme.panel; radius: Theme.px(10); border.color: Theme.line; border.width: 1
+            width: Math.min(parent.width - Theme.px(32), Theme.px(440))
+            height: Math.min(parent.height - Theme.px(32), codeCol.implicitHeight + Theme.px(40))
+            color: Theme.panel; radius: Theme.radius; border.color: Theme.line; border.width: 1
+            TapHandler { }   // a click inside doesn't close it
             Column {
                 id: codeCol
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
-                spacing: Theme.px(12)
-                Text { text: "Join " + (page.info.name || ""); color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(21); font.weight: Font.DemiBold }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "Anyone who scans this with Muninn, or pastes it into Huginn's Add someone, joins the group. It works for an hour; remove anyone you didn't mean to let in from Members."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                spacing: Theme.px(10)
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: ("Join " + (page.info.name || "")).toUpperCase(); color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
+                Text { width: parent.width; wrapMode: Text.WordWrap; text: "Anyone who scans this with Muninn, or pastes it into Huginn's Add someone, joins the group. It works for an hour; remove anyone you didn't mean to let in from Members."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 Text {
                     property real now: Date.now()
                     Timer { interval: 10000; repeat: true; running: page.shownCode !== ""; onTriggered: parent.now = Date.now() }
-                    text: page.codeUntil > now ? "Good for " + Math.ceil((page.codeUntil - now) / 60000) + " more minutes · X: new code" : "This code has expired · X: new code"
-                    color: page.codeUntil > now ? Theme.accent : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                    text: page.codeUntil > now ? "Good for " + Math.ceil((page.codeUntil - now) / 60000) + " more minutes" : "This code has expired. Make a new one"
+                    color: page.codeUntil > now ? Theme.accent : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Theme.px(300); height: width; color: Theme.text
-                    Image { anchors.fill: parent; anchors.margins: Theme.px(14); smooth: false; source: page.shownCode !== "" ? "image://qr/" + encodeURIComponent(page.shownCode) : "" }
+                    width: Math.min(parent.width, Theme.px(260)); height: width; color: Theme.text
+                    Image { anchors.fill: parent; anchors.margins: Theme.px(12); smooth: false; source: page.shownCode !== "" ? "image://qr/" + encodeURIComponent(page.shownCode) : "" }
                 }
-                Text { width: parent.width; text: "A: copy the code · B: close"; horizontalAlignment: Text.AlignHCenter; color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                Row {
+                    anchors.right: parent.right
+                    spacing: Theme.px(8)
+                    HButton { text: "Close"; kind: "plain"; onClicked: page.shownCode = "" }
+                    HButton { text: "New code"; onClicked: page.showCode() }
+                    HButton { text: "Copy code"; kind: "primary"; onClicked: { Chat.copyText(page.shownCode); Ui.say("Group code copied. It works for an hour.") } }
+                }
             }
         }
-        TapHandler { onTapped: page.shownCode = "" }
     }
+
+    // Invite links (Discord style): make one, see them all, revoke.
+    InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; amAdmin: !!page.info.amAdmin }
+    readonly property bool canInvite: !page.locked && page.exists && !page.readOnly && !page.isTour && (!!page.info.amAdmin || invitePanel.membersCanInvite)
+    function invitePeople() { invitePanel.openCreate() }
 
     // ============================================================= actions
     function tell(result, done) { if (result === "") { if (done) Ui.say(done) } else Ui.say(result, true) }
@@ -740,20 +805,22 @@ Rectangle {
             people.push({ name: "Invite someone", detail: "A contact gets an invite to say yes to", url: "invite" })
             people.push({ name: "Show the group code", detail: "For anyone else: they scan or paste it within the hour", url: "code" })
         }
+        if (canInvite) people.push({ name: "Invite people", detail: "A link anyone can open to join", url: "invitelink" })
+        if (!readOnly && info.amAdmin && !isTour) people.push({ name: "Invites", detail: "Every invite link, who made it, uses and time left", url: "invites" })
         if (!memberCol.visible) people.push({ name: "Members", detail: info.count + (info.count === 1 ? " person" : " people"), url: "members" })
         if (!readOnly && info.amAdmin) {
             chans.push({ name: "Add a text channel", url: "addtext" }, { name: "Add a voice room", detail: "Up to " + Rooms.maxPeople + " people talk at once", url: "addvoice" })
             const r = rows[chRow]
             const target = zone === "channels" && r && r.kind === "channel" ? r : channel
             chans.push({ name: "Rename " + (target.type === "voice" ? "" : "#") + target.name, url: "rnch:" + target.id })
-            if (target.id !== "main") chans.push({ name: "Remove " + (target.type === "voice" ? "" : "#") + target.name, detail: "Its messages stay on this device", url: "rmch:" + target.id })
+            if (target.id !== "main") chans.push({ name: "Remove " + (target.type === "voice" ? "" : "#") + target.name, detail: "Its messages stay on this computer", url: "rmch:" + target.id })
             group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
         }
         if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
         if (!isTour) group.push({ name: "Messages", detail: limitDetail(), url: "limit" })
         if (!readOnly) group.push({ name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" })
         if (!isTour) chans.push({ name: "Shared in #" + channel.name, detail: "Photos, videos and links", url: "shared" })
-        if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
+        if (readOnly) group.push({ name: "Delete it from this computer", detail: "Its messages and photos here", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
         return [{ header: "Calls", items: calls }, { header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
     }
@@ -765,6 +832,8 @@ Rectangle {
         const g = gid
         {
             if (a === "invite") invite()
+            else if (a === "invitelink") invitePeople()
+            else if (a === "invites") invitePanel.openList()
             else if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone in " + info.name + ".")
             else if (a === "callsome") pickCallees([])
             else if (a === "code") showCode()
@@ -791,7 +860,7 @@ Rectangle {
                 if (info.amOwner && info.count > 1) { Ui.say("You own this group. Hand it to someone first: Members, then Make owner.", true); return }
                 Ui.sure("Leave " + info.name + "?", "You stop getting its messages. To come back, someone has to invite you again.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), false, true)
             } else if (a === "forget") {
-                Ui.sure("Delete " + info.name + " from Huginn?", "Its messages and photos on this device are deleted. Nobody else is affected.", "Hold to delete",
+                Ui.sure("Delete " + info.name + " from this computer?", "Its messages and photos here are deleted. Nobody else is affected.", "Hold to delete",
                         () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
             }
         }
@@ -826,7 +895,7 @@ Rectangle {
         if (!m.contact && !m.me && !readOnly) items.push({ name: "Add as a contact", detail: "They're asked too; once both say yes you can message directly", url: "add" })
         if (!readOnly && !m.me && info.amAdmin) {
             if (!m.admin) items.push({ name: "Make admin", detail: "They can invite, remove and change the group too", url: "admin" })
-            else if (info.amOwner && !m.owner) items.push({ name: "Take admin away", url: "unadmin" })
+            else if (info.amOwner && !m.owner) items.push({ name: "Remove as admin", url: "unadmin" })
             if (info.amOwner) items.push({ name: "Make owner", detail: "Hands the group to them; you stay an admin", url: "owner" })
             if (!m.owner && (!m.admin || info.amOwner)) items.push({ name: "Remove from the group", detail: "They're told, and stop getting its messages", url: "remove" })
         }
@@ -982,7 +1051,7 @@ Rectangle {
         return b === "b"
     }
     function boxOptions(box) {
-        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" },
+        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: page.pad ? "Pick one with the D-pad" : "", url: "emoji" },
                        { name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" }]
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
@@ -1018,6 +1087,7 @@ Rectangle {
             return false
         }
         if (more.busy) return more.handleButton(b)
+        if (invitePanel.visible) return invitePanel.handleButton(b)
         if (shownCode !== "") {
             if (b === "a") { Chat.copyText(shownCode); Ui.say("Code copied. It works for an hour.") }
             else if (b === "x") showCode()

@@ -18,7 +18,7 @@ Rectangle {
     signal more()
     height: Theme.px(32)
     width: icons.implicitWidth + Theme.px(8)
-    radius: Theme.px(8)
+    radius: Theme.radius
     color: Theme.panel
     border.color: Theme.line
     readonly property var actions: [{ id: "react", icon: "smile", tip: "React" }, { id: "reply", icon: "reply", tip: "Reply" }]
@@ -33,7 +33,7 @@ Rectangle {
         Repeater {
             model: bar.actions
             Rectangle {
-                width: Theme.px(28); height: width; radius: Theme.px(6)
+                width: Theme.px(28); height: width; radius: Theme.radius
                 color: aHover.hovered ? Theme.raised : "transparent"
                 Accessible.role: Accessible.Button
                 Accessible.name: modelData.tip

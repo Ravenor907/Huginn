@@ -8,9 +8,10 @@ Rectangle {
     property string status
     property color statusColor: Theme.textMuted
     property var prompts: []          // [{ key, label }]
+    property bool showKeys: true      // the buttons (Main.qml shows them only after Select)
     signal prompt(string key)
 
-    implicitHeight: Theme.px(50)
+    implicitHeight: Theme.px(44)
     color: Theme.ground
     Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.seam }
 
@@ -18,7 +19,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.leftMargin: Theme.px(24)
         anchors.verticalCenter: parent.verticalCenter
-        anchors.right: keys.left
+        anchors.right: bar.showKeys ? keys.left : bar.right
         anchors.rightMargin: Theme.px(20)
         elide: Text.ElideRight
         text: LocalSend.busy ? LocalSend.status + (LocalSend.progress > 0 ? "  " + Math.round(LocalSend.progress * 100) + "%" : "")
@@ -45,6 +46,7 @@ Rectangle {
 
     Row {
         id: keys
+        visible: bar.showKeys
         anchors.right: parent.right
         anchors.rightMargin: Theme.px(24)
         anchors.verticalCenter: parent.verticalCenter

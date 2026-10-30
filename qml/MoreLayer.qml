@@ -30,7 +30,7 @@ Item {
         if (where === "") { Ui.say("Pictures, videos and polls go to one person or a group. Open a chat first.", true); return }
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
             { name: "Pictures from this computer", detail: "Pick several at once: up to 10 go together as an album", url: "files", icon: "image" },
-            { name: "Recent pictures", detail: "Steam screenshots and the Pictures folder", url: "recent", icon: "image" },
+            { name: "Recent pictures", detail: "The newest in your Pictures folder", url: "recent", icon: "image" },
             { name: "Video message", detail: "Up to a minute with the camera. You see it before it's sent", url: "record", icon: "play" },
             { name: "Video file", detail: "An MP4 of up to a minute", url: "videofile", icon: "play" },
             { name: "Poll", detail: "A question with 2 to 10 answers to pick from", url: "poll", icon: "check" }]
@@ -217,7 +217,7 @@ Item {
             currentIndex: layer.sharedSel
             delegate: Rectangle {
                 width: mediaGrid.cellWidth - Theme.px(6); height: width
-                radius: Theme.px(6); color: Theme.groundDeep; clip: true
+                radius: Theme.radius; color: Theme.groundDeep; clip: true
                 border.color: Theme.accent; border.width: index === layer.sharedSel ? Theme.focusWidth : 0
                 Image {
                     anchors.fill: parent
@@ -252,7 +252,7 @@ Item {
             delegate: Rectangle {
                 width: linkList.width
                 height: Math.max(Theme.px(64), linkCol.implicitHeight) + Theme.px(16)
-                radius: Theme.px(8); color: Theme.panel
+                radius: Theme.radius; color: Theme.panel
                 border.color: index === layer.sharedSel ? Theme.accent : Theme.line; border.width: index === layer.sharedSel ? Theme.focusWidth : 1
                 Image {
                     id: linkThumb

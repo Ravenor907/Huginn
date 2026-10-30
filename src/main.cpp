@@ -28,6 +28,7 @@
 #include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
+#include "livelist.h"
 #include "updater.h"
 #include "wifiselftest.h"
 #include "morewire.h"
@@ -251,7 +252,7 @@ int main(int argc, char *argv[])
             if (t - last > 5 * 60000) {
                 last = t;
                 sound->play();
-                Q_EMIT chat->notice(QStringLiteral("New message. Open Chat and unlock it to read."));
+                Q_EMIT chat->notice(QStringLiteral("New message. Unlock Huginn to read it."));
             }
             return false;
         };
@@ -302,6 +303,7 @@ int main(int argc, char *argv[])
     QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
     auto *talkKey = new TalkKey(settings, rooms, &app);
 
+    qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);

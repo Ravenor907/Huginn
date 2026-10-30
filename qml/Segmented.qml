@@ -6,10 +6,11 @@ Rectangle {
     id: seg
     property var options: []
     property string value
+    property real cell: 0      // a fixed width for every choice (a dialog fills its width with them)
     signal picked(string value)
 
     implicitWidth: row.implicitWidth + 2
-    implicitHeight: Theme.px(44)
+    implicitHeight: Theme.px(36)
     radius: Theme.radius
     color: "transparent"
     border.color: Theme.lineStrong
@@ -22,7 +23,7 @@ Rectangle {
             model: seg.options
             Rectangle {
                 readonly property bool on: modelData.value === seg.value
-                width: txt.implicitWidth + Theme.px(36)
+                width: Math.max(txt.implicitWidth + Theme.px(28), seg.cell)
                 height: seg.height - 2
                 color: on ? Theme.accentFill : "transparent"
                 Text {
@@ -31,7 +32,7 @@ Rectangle {
                     text: modelData.label
                     color: parent.on ? Theme.accent : Theme.textSoft
                     font.family: Theme.body
-                    font.pixelSize: Theme.fs(16)
+                    font.pixelSize: Theme.fs(14)
                     font.weight: Font.DemiBold
                 }
                 TapHandler { onTapped: seg.picked(modelData.value) }

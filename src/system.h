@@ -7,14 +7,13 @@
 class QQuickWindow;
 class Settings;
 
-// Small helpers QML needs: the Steam keyboard, Game Mode detection, the layout density, files
+// Small helpers QML needs: the Steam keyboard, Game Mode detection, the Size setting, files
 // to share, and the screenshot tour that CI runs.
 class System : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool gameMode READ gameMode CONSTANT)
-    // Desktop density (smaller, for a mouse and keyboard). Main.qml decides from Settings.layout.
-    Q_PROPERTY(bool desktop READ desktop WRITE setDesktop NOTIFY layoutChanged)
+    // The Size setting as a factor (1.0 at 100%).
     Q_PROPERTY(double uiScale READ uiScale NOTIFY layoutChanged)
     Q_PROPERTY(bool windowed READ windowed CONSTANT)
     Q_PROPERTY(QString version READ version CONSTANT)
@@ -28,8 +27,6 @@ public:
     static bool inFlatpak();
 
     bool gameMode() const { return m_gameMode; }
-    bool desktop() const { return m_desktop; }
-    void setDesktop(bool on);
     double uiScale() const;
     bool windowed() const { return m_windowed; }
     QString version() const;
@@ -37,9 +34,6 @@ public:
 
     Q_INVOKABLE void showSteamKeyboard();
     Q_INVOKABLE void hideSteamKeyboard();
-    // The newest files in Downloads, Documents, Pictures, Videos and Music, for sending:
-    // [{ header, items: [{ name, detail, url, icon }] }], ready for the list picker.
-    Q_INVOKABLE QVariantList sendableFiles(int perFolder) const;
     // The computer's own file picker, several at once. Empty when nothing was picked.
     Q_INVOKABLE QStringList pickFiles() const;
     // Ask the system not to dim or sleep while files are being sent or received.
@@ -62,5 +56,4 @@ private:
     QString m_tourDir;
     bool m_windowed;
     bool m_gameMode;
-    bool m_desktop = false;
 };

@@ -53,33 +53,39 @@ Item {
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.85) }
     MouseArea { anchors.fill: parent; onClicked: picker.close() }
 
+    // Sized to its rows (no taller than the window) and about 480 px wide; a detail wraps under its name.
     Rectangle {
+        id: box
         anchors.centerIn: parent
-        width: Math.min(parent.width - Theme.px(80), Theme.px(760))
-        height: parent.height - Theme.px(120)
-        radius: Theme.radius + 1
+        width: Math.min(parent.width - Theme.px(32), Theme.px(480))
+        height: Math.min(parent.height - Theme.px(48), head.height + Theme.px(28) + list.contentHeight + (keys.visible ? keys.height : Theme.px(8)))
+        radius: Theme.radius
         color: Theme.panel
-        border.color: Theme.lineStrong
+        border.color: Theme.line
+        MouseArea { anchors.fill: parent }   // a click between rows doesn't close it
 
         Text {
             id: head
-            x: Theme.px(24); y: Theme.px(20)
+            x: Theme.px(20); y: Theme.px(18)
+            width: parent.width - Theme.px(40)
+            wrapMode: Text.WordWrap
             text: picker.title.toUpperCase()
             color: Theme.text
             font.family: Theme.display
-            font.pixelSize: Theme.fs(20)
+            font.pixelSize: Theme.fs(16)
             font.weight: Font.Bold
             font.letterSpacing: Theme.px(2)
         }
         ListView {
             id: list
             anchors.top: head.bottom
-            anchors.topMargin: Theme.px(12)
+            anchors.topMargin: Theme.px(8)
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.bottom: keys.top
-            anchors.margins: Theme.px(12)
+            anchors.bottom: keys.visible ? keys.top : parent.bottom
+            anchors.margins: Theme.px(8)
             clip: true
+            boundsBehavior: Flickable.StopAtBounds
             model: picker.entries
             currentIndex: picker.current
             highlightMoveDuration: 80
@@ -88,65 +94,74 @@ Item {
             highlightRangeMode: ListView.ApplyRange
             delegate: Item {
                 width: list.width
-                height: modelData.header ? Theme.px(40) : Theme.px(54)
+                height: modelData.header ? headText.implicitHeight + Theme.px(14) : Math.max(Theme.px(40), rowCol.implicitHeight + Theme.px(14))
                 Text {
+                    id: headText
                     visible: !!modelData.header
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.px(12)
+                    anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
+                    anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
                     anchors.bottom: parent.bottom
-                    anchors.bottomMargin: Theme.px(6)
+                    anchors.bottomMargin: Theme.px(4)
+                    wrapMode: Text.WordWrap
                     text: modelData.header ? modelData.header.toUpperCase() : ""
                     color: Theme.textMuted
-                    font.family: Theme.display
-                    font.pixelSize: Theme.fs(14)
+                    font.family: Theme.body
+                    font.pixelSize: Theme.fs(11)
                     font.weight: Font.DemiBold
-                    font.letterSpacing: 2
+                    font.letterSpacing: Theme.px(0.5)
                 }
                 Rectangle {
                     visible: !modelData.header
                     anchors.fill: parent
                     radius: Theme.radius
                     readonly property bool on: index === picker.current
-                    color: on ? Theme.focusFill : "transparent"
-                    border.width: on ? Theme.focusWidth : 0
+                    color: on ? (Ui.main && Ui.main.padInUse ? Theme.focusFill : Theme.tile) : rowHover.hovered ? Theme.raised : "transparent"
+                    border.width: on && Ui.main && Ui.main.padInUse ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: modelData.name || ""
-                    Row {
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.px(14)
+                    Accessible.name: (modelData.name || "") + (modelData.detail ? ", " + modelData.detail : "")
+                    Icon {
+                        id: rowIcon
+                        visible: !!modelData.icon
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: Theme.px(14)
-                        Icon { visible: !!modelData.icon; anchors.verticalCenter: parent.verticalCenter; name: modelData.icon || "file"; color: Theme.textMuted }
+                        name: modelData.icon || "file"; size: Theme.px(18); color: Theme.textMuted
+                    }
+                    Column {
+                        id: rowCol
+                        anchors.left: rowIcon.visible ? rowIcon.right : parent.left
+                        anchors.leftMargin: Theme.px(12)
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Theme.px(1)
                         Text {
-                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width
+                            wrapMode: Text.Wrap
                             text: modelData.name || ""
                             color: Theme.text
                             font.family: Theme.body
-                            font.pixelSize: Theme.fs(19)
+                            font.pixelSize: Theme.fs(15)
                             font.weight: Font.Medium
-                            elide: Text.ElideMiddle
-                            width: list.width - Theme.px(modelData.detail ? 300 : 60)
+                        }
+                        Text {
+                            visible: !!modelData.detail
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            text: modelData.detail || ""
+                            color: Theme.textMuted
+                            font.family: Theme.body
+                            font.pixelSize: Theme.fs(13)
                         }
                     }
-                    Text {
-                        anchors.right: parent.right
-                        width: Theme.px(240)
-                        horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideRight
-                        anchors.rightMargin: Theme.px(14)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.detail || ""
-                        color: Theme.textMuted
-                        font.family: Theme.body
-                        font.pixelSize: Theme.fs(15)
-                    }
+                    HoverHandler { id: rowHover; onHoveredChanged: if (hovered && !(Ui.main && Ui.main.padInUse)) picker.current = index }
                     TapHandler { onTapped: { picker.current = index; picker.pick() } }
                 }
             }
         }
+        // The buttons only while a controller is in use; a mouse clicks a row or outside.
         PromptBar {
             id: keys
+            visible: !!Ui.main && Ui.main.padInUse
             anchors.bottom: parent.bottom
             width: parent.width
             color: "transparent"
