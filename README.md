@@ -18,12 +18,21 @@
 <p align="center">
   <a href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk"><b>Muninn for Android and Google TV</b></a> &nbsp;·&nbsp;
   <a href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip"><b>Huginn for Windows</b></a> &nbsp;·&nbsp;
-  <a href="#install"><b>Huginn for Linux and SteamOS</b></a>
+  <a href="#install"><b>Huginn for Linux</b></a>
 </p>
 
-Odin sends two ravens out every morning: Huginn (thought) and Muninn (memory). They fly the world and come back with what he needs to know.
+Odin sends two ravens out every morning: Huginn (thought) and Muninn (memory). They fly the world and bring back what he needs to know.
 
-These two do the same for you. **Huginn** runs on Windows and Linux, and works with a controller on handhelds like the Steam Deck. **Muninn** runs on Android phones, tablets and Google TV. Together they are a private place for your family and friends to talk: messages, groups, calls and file sharing, with no accounts, no phone numbers, no servers that can read anything, and no tracking.
+These two carry your messages. **Muninn** runs on Android phones, tablets and Google TV. **Huginn** runs on Windows and Linux computers. Together they are a private place for your family and friends to keep in touch, with nobody in the middle who can read it.
+
+## Keep in touch
+
+- **Chats and groups:** messages, photos, albums, voice and video messages, polls, reactions and replies. Groups have their own channels.
+- **Calls:** voice and video calls, group calls, and voice rooms people drop in and out of. Group video works for up to 4 people.
+- **Files:** send files to someone across the room or across the country. They go straight from your device to theirs.
+- **Easy to add the people you trust:** share your code or QR, send an invite link that works once, tap phones together, or let someone you both know introduce you.
+- **Kids' TV:** turn a Google TV into a simple screen your kids use to reach the people you approve.
+- **All your screens:** your phone, a tablet or second phone linked to it, and your computer.
 
 ## Made for families
 
@@ -37,190 +46,72 @@ Turn a Google TV into a simple screen your kids can use to reach Mom and Dad. No
 
 <p align="center"><img src="docs/panels/09-private.png" width="100%" alt="How it stays private"></p>
 
-- **Private by design.** Every message, photo, voice note and call is end-to-end encrypted. Only the people talking can read or hear it.
-- **Relays see only a sealed envelope.** Internet messages go through public Nostr relays, end-to-end encrypted and sealed so a relay sees only a mailbox id, never who sent it or what it says. Relay servers can see the IP address that connects to them. The app never shows anyone's IP address.
-- **Calls without showing your address.** Internet calls go through the Cloudflare call relay, so the person you call never sees your IP address. Close by, calls go straight over Wi-Fi.
-- **Works with or without the internet.** Next to each other, the ravens talk over Bluetooth and Wi-Fi. Apart, they use the Nostr relays. Messages take every route at once and arrive by whichever is fastest.
-- **Free and open.** GPL-3.0, no ads, no analytics, no sign-up.
+- **Only the people talking can read or hear it.** Every message, photo, voice note, call and file is end-to-end encrypted, with a fresh key for every message.
+- **No account.** You are a key made on your own device, not a phone number or email address. Strangers without your code can't reach you.
+- **Works with or without the internet.** Close by, your devices talk over Wi-Fi and Bluetooth. Apart, sealed messages travel through free public relays that can't see who sent them or what they say.
+- **Your address stays yours.** Calls with people you haven't chosen to trust go through a relay, so they never see your IP address.
+- **Locked on your device.** A pattern or password opens the app, and everything it keeps is encrypted. Panic lock locks it all in a moment.
+- **Free and open.** GPL-3.0, no ads, no analytics, no tracking.
 
 ## On every screen you have
 
 <p align="center"><img src="docs/panels/01-muninn-phone.png" width="100%" alt="Muninn on your phone: chats, calls and file sharing"></p>
 <p align="center"><img src="docs/panels/02-muninn-tablet.png" width="100%" alt="Muninn on tablets: groups, channels and voice rooms"></p>
 <p align="center"><img src="docs/panels/03-huginn-desktop.png" width="100%" alt="Huginn on Windows and Linux"></p>
-<p align="center"><img src="docs/panels/04-huginn-handheld.png" width="100%" alt="Huginn on handhelds with a controller"></p>
 
 ## Easy on the battery
 
 <p align="center"><img src="docs/panels/08-battery.png" width="100%" alt="Choose how often Muninn checks for messages, quiet hours and a battery report"></p>
 
-## What's new in 0.92
+## What's new in 0.93
 
 | | |
 |---|---|
-| **Choose how often to check** | Settings › Notifications › Check for messages: Right away, Every 15 minutes, Every hour, or Only when open. The saving modes keep nothing running while Muninn is closed; calls that come in between show as missed. |
-| **Low battery saves more** | Below 30% Muninn checks every 15 minutes, below 15% every hour, and goes back to your choice once it's charging. You can switch this off. |
-| **Quiet hours** | Check every hour, or not at all, overnight or whenever you choose. |
-| **Lighter in the background** | Bluetooth and Nearby only look for phones close by while Muninn is open (unless you turn on Find phones close by in the background), fewer connections stay open, and Wi-Fi discovery works hardest on the Files tab. |
-| **Battery report** | Settings › Notifications shows what Muninn kept running today, how often it checked, and the data it used. |
-| **True black** | A pure black background under Display, which saves a little on OLED screens. |
-| **Video calls on the speaker** | Video calls start on the speaker unless a Bluetooth headset or headphones are connected, and use less battery when it's low. |
+| **Albums and a camera inside the app** | Pick several photos at once and they arrive as one album. Take photos with Muninn's own camera, with a front/back flip, without the picture landing in your gallery. |
+| **Video messages** | Record up to a minute, watch it back, then choose Send or Discard. Nothing is sent until you tap Send. |
+| **Polls** | Ask a question with up to 10 answers, in a chat or a group, and see who voted for what. |
+| **Link previews** | A link shows its title and picture. Your phone makes the preview, so the other person's phone never visits the site. Turn it off under Settings › Privacy. |
+| **Shared photos, videos and links** | Every chat has a page with everything that's been shared in it. |
+| **Requests in their own list** | People who have your code but aren't contacts yet, introductions and group invites wait under Requests until you say yes. |
+| **Easier to add the people you trust** | Invite links that work once, introductions ("Mom wants to introduce you to Grandma", and you both say yes), an offer to add the people in your Family group, tapping phones together, and 4 matching emoji to check it's really them. |
+| **Files over the internet** | Send a file of up to 4 GB straight to a contact's phone, wherever they are. Small files can also go in pieces through the free relays. Files never go through our server. |
+| **Group video** | Turn on the camera in a voice room with up to 4 people. Video goes straight between phones; anyone who can't connect directly stays on voice. |
+| **Linked devices** | Use your chats on a tablet or second phone. It shows your phone's chats and sends through it while your phone is on and online. |
+| **Mute, archive and mark as unread** | Hold a chat for the options. Rename people from the chat list too, and give each chat its own color. |
+| **Refresh buttons** | Check for new messages, or look for phones nearby again, with one tap. |
+| **Kinder to your battery** | Follow Do Not Disturb, check less when nothing has happened for a while, a mobile data saver, and backups and Kids' TV updates only while charging. |
+| **Folk** | The third starting folder is now called Folk. |
+| **No location prompt** | Muninn no longer asks for location on Android 13 and newer. Older phones are asked only when you turn on Nearby. |
 
-<details>
-<summary><b>Earlier releases: 0.91, 0.9, 0.8, 0.7 and 0.6</b></summary>
-
-### Also in 0.91
-
-| | |
-|---|---|
-| **Noise removal switch** | Settings › Calls › Noise removal, in Muninn and in Huginn. Turn it off if people say you sound quiet; echo is still removed. |
-| **Send apps to a TV** | Files › Send an app sends an app from your phone (or an .apk file) to a TV with Muninn on the same Wi-Fi. The TV asks before it installs. |
-| **Apps for the Kids' TV** | On the TV's page, Apps › Send an app. The TV takes only the app its parent sends, and Android asks on the TV before installing. |
-| **Settings in folders** | Settings opens on a short list (Notifications, Privacy, Lock, Calls, Nearby and sharing, Display and accessibility, Backup and erase, About and updates), the same in both apps. |
-
-Muninn 0.91 updates over 0.9 as usual: tap Install when Android asks. Only phones still on 0.8 need the one-time reinstall described under 0.9.
-
-### Also in 0.9
-
-> **Muninn needs reinstalling once.** From 0.9 Muninn is signed with a private key instead of the shared test key, so nobody else can make an update your phone would accept. Android won't install it over 0.8, so on each phone: Settings › **Back up chats**, uninstall Muninn, install Muninn.apk from this release, then **Restore from backup**. A Kids' TV is reinstalled the same way and added again from the parent's phone. Updates after this one install as normal. Huginn updates as usual.
-
-| | |
-|---|---|
-| **Choose where call sound goes** | During a call or voice room, tap **Audio** to switch between the phone, the speaker, wired headphones or a Bluetooth headset. |
-| **Video calls you can see** | The name, connection and timer sit in a strip under the video instead of on top of it, and answering a video call asks for the camera if it's needed. |
-| **Tidy your contacts** | Remove a contact to the Trash (kept 30 days, with the chat, so Restore brings everything back), drag contacts to reorder them, and folders show as sections you can collapse. |
-| **Nearby, your way** | Nearby always sits at the bottom of the list, and **Visible to people nearby** in Settings hides you from strangers while your contacts still reach you. |
-| **Finish setting up** | A card on Muninn's main screen lists any missing permissions with one tap each. |
-| **Steam Deck like a PC** | Huginn on a handheld gets the full desktop layout. The right stick moves a mouse pointer (R3 or RB to click, RT to right-click), the left stick scrolls, LB switches section and LT opens options. |
-| **Pattern unlock with a controller or remote** | Draw your unlock pattern with the D-pad, a controller or a TV remote. |
-| **Kids' TV** | The child hears callers again, the TV is locked to its parents, and more than one parent can manage it. |
-| **Clearer calls on the PC** | Huginn now cancels echo and removes background noise, like Muninn. |
-| **Safer updates and files** | Every update is checked against its SHA-256 before it installs, the Flatpak only sees your Downloads, Documents, Pictures, Videos and Music folders, and with a password set, Panic lock now locks your keys away too. |
-
-### Also in 0.8
-
-| | |
-|---|---|
-| **Video calls** | One-to-one video calls between phones and Windows, end-to-end encrypted, with camera switching and a small self view. |
-| **Direct calls for family** | People in your Family folder (or anyone you switch on) connect straight to you, so calls and video use no relay data. Everyone else stays on the relay and never sees your IP address. |
-| **Smoother calls** | An adaptive buffer, loss repair and higher quality sound; calls ring faster and reconnect when you change networks. |
-| **Screen share** | Share your screen from Huginn in a voice room. |
-| **Group text and call from the list** | Hold a contact, tick a few more, and start a group text or a group call. Group messages show how many have read them. |
-| **Messenger touches** | Reactions, swipe to reply, reply from the notification, edit with "(edited)", emoji picker, typing dots, active status, a photo gallery and search in each chat. |
-| **Desktop like it should be** | Huginn on a PC types in a normal box at the bottom of the chat, with Ctrl+K, threads, pins, drag and drop, @mentions and a New messages line. |
-| **Kids' TV** | Clearer calls with echo cancelling and noise removal, a microphone control on the TV, full-screen photos, the show pauses for a call and picks back up after, storage and Clear history from the parent's phone, and people who haven't accepted yet show as waiting. |
-| **Battery saver** | Muninn uses far less battery with the screen off while still getting messages and calls. Turn it off for maximum speed. |
-| **Windows** | No more antivirus false alarms from the updater, a cleaner folder, updates checked before they install, and it runs on Linux through Proton and Wine. |
-| **Linux and SteamOS** | The Flatpak is back. |
-
-### Also in 0.7
-
-| | |
-|---|---|
-| **Faster messages** | Tor is gone. Messages, photos and voice clips go straight to the relays again, still end-to-end encrypted, and arrive right away. |
-| **Calls that work anywhere** | Calls over cell service connect quickly and carry sound both ways. |
-| **Group calls and voice rooms** | Ring a whole group, or make a channel a voice room people drop in and out of. |
-| **Kids' TV calls** | Kids call the people a parent approved, and the TV rings over whatever is playing when a parent calls, even right after it restarts. Message notifications show too. |
-| **Louder TV microphone** | The TV's microphone is boosted for voice clips, dictation and calls, with a level slider on the parent's phone. |
-| **Invite family to the TV** | From the phone, a parent can invite another adult to talk with the kids on the TV, and add people to family groups. |
-| **TV updates itself** | Muninn on the TV checks for updates daily and installs them with the remote, or when a parent taps Update TV. |
-| **Share the app** | Someone who scans your code with a regular camera gets a download page, and "Share the app" sends Muninn straight to a nearby phone. |
-| **Lock first** | Opening the app never shows a chat before the lock screen, and the recent apps view stays blank. |
-| **Rename anywhere** | Rename people from the Contacts tab or by holding a chat. |
-| **Tidy Windows folder** | The Windows zip holds just Huginn.exe and a lib folder, and the message sound crash is fixed. |
-| **Sharing stays home** | Huginn's Wi-Fi sharing listens only on your home network. |
-
-### Also in 0.6
-
-| | |
-|---|---|
-| **Group chats and channels** | Groups with their own channels, a member list and admins. Every message is encrypted to each member separately. |
-| **Contact folders** | Sort people into Family, Work, Folk or any folder you name. |
-| **Encrypted calls** | One-to-one voice calls on both apps, with a call history. |
-| **Kids' TV** | Muninn on a Google TV becomes a simple screen for children to reach Mom and Dad: big buttons, quick messages, voice clips and dictation. No sign-in. A parent pairs it once from their phone, edits its quick messages, and is the only one who can unlock it. |
-| **Windows** | Huginn as a portable zip: unzip anywhere and run, nothing to install. |
-| **New layouts** | Huginn, and Muninn on tablets, use a Discord-style rail of groups, channels and members. |
-
-</details>
-
-## The messenger (both apps)
-
-| | |
-|---|---|
-| **End-to-end encryption** | Each person has a key pair made on their own device. Messages are sealed with AES-256-GCM using keys only the people talking share. |
-| **A fresh key for every message** | Forward secrecy: a key stolen tomorrow can't open yesterday's conversation. |
-| **Key change warnings** | If a contact's security key ever changes, the chat says so and asks you to check the code with them. |
-| **No account** | You are a key, not a phone number or email. Share your code or QR to add someone. |
-| **Codes that expire** | Your contact code lasts 1 hour. Strangers without a valid code are dropped silently. |
-| **Sent, delivered, read** | Ticks for each message. Read receipts can be turned off. |
-| **Unsend** | Remove a message from every device in the chat. |
-| **Photos and voice messages** | Photos are scrubbed of location and camera data. Voice messages carry no metadata. |
-| **Groups and channels** | Group chats with their own channels, members and admins. Every message is encrypted to each member separately. |
-| **Calls** | Voice and video calls, group calls and voice rooms, and screen share from Huginn, all end-to-end encrypted. Switch between the phone, speaker, wired or Bluetooth headset, and turn noise removal on or off. |
-| **Battery** | Choose how often Muninn checks for messages, from right away to only when you open it, with quiet hours, automatic saving on a low battery, and a battery report. |
-| **File sharing** | Encrypted transfers between Huginn, Muninn and any LocalSend app on the same Wi-Fi. A phone can also send its apps to a TV with Muninn. |
-| **Lock** | A 9-dot pattern or a password opens the app. Everything on disk is encrypted with it. |
-| **Private nicknames** | Rename anyone. Only you see it. |
-| **Encrypted backup** | Save all your chats to one password-protected file and restore them later. |
-| **Panic lock** | Lock everything instantly: a quick settings tile, a shortcut or a hard shake on Muninn; hold L3 and R3 on Huginn. |
-| **Accessibility** | Interface size, larger text, high contrast, a color blind palette and reduced motion. |
-| **Kids' TV** | Muninn on a Google TV becomes a simple, locked-down screen for children: big buttons, calls and messages with the people a parent approves. Parents pair it, manage it and send it apps from their phones. |
+Every earlier release is in [What changed](docs/CHANGELOG.md).
 
 ## Install
 
-Both apps ship together, in the same release, with the same version number, and both update themselves when they open.
+Both apps come out together with the same version number, and both update themselves when they open.
 
-**Huginn on Windows:** download [Huginn-Windows.zip](https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip), unzip it anywhere and run `Huginn.exe`.
+**Muninn on Android and Google TV:** open this link on the device and install it:
+https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk
 
-**Huginn on Linux and SteamOS** (in a terminal; on SteamOS, Konsole in Desktop Mode):
+**Huginn on Windows:** download [Huginn-Windows.zip](https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip), unzip it anywhere and run `Huginn.exe`. Nothing to install.
+
+**Huginn on Linux** (in a terminal):
 
 ```
 cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
-On SteamOS, add it to Steam (Add a Non-Steam Game › Huginn) to launch it from Game Mode.
+Huginn also works with a game controller or TV remote: see [Using Huginn with a controller](docs/controller.md).
 
-**Muninn on Android and Google TV:** open this link on the device and install it:
+## For developers
 
-https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk
-
-## Controller (Huginn)
-
-| Button | What it does |
-|---|---|
-| D-pad | Move the highlight, from the last thing highlighted or clicked |
-| A | Open, choose, or write a message |
-| B | Back |
-| Y (hold) | Record a voice message |
-| LB | Next section (hold LB and press D-pad left or right to go back or forward) |
-| LT | Options: message options, Send a picture, Call and more |
-| Left stick | Scroll |
-| Right stick | Move the pointer (it hides after a few seconds) |
-| RB or R3 (right stick click) | Click |
-| RT | Right click |
-| Menu | Settings |
-| L3 + R3 (hold) | Panic lock |
-
-The pattern lock works with the D-pad: move to a dot, A starts there, move on through the dots, A again when done. B starts over.
-
-A mouse and keyboard work too (Tab and Shift+Tab switch sections, Page Up and Page Down scroll).
-
-## What's next
-
-1.0 once everything has been tested on every device.
-
-## Versions
-
-One dot only, read as a decimal: 0.9, 0.91, 0.92, then 1.0 when it's rock solid. The `VERSION` file on main decides releases for both apps: change it and CI builds Huginn for Linux, SteamOS and Windows and Muninn, tests them all, and publishes them together.
-
-## Building
+Versions use one dot, read as a decimal (0.92, 0.93, then 1.0). The `VERSION` file on main decides releases for both apps: change it and CI builds, tests and publishes them together. 1.0 comes once everything has been tested on every device.
 
 ```
 tools/get-fonts.sh
 flatpak-builder --user --install --force-clean build packaging/io.github.ravenor907.Huginn.json
 ```
 
-Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`.
+Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`. The wire protocol is in [docs/protocol-0.6.md](docs/protocol-0.6.md).
 
 ## Code signing policy
 
@@ -238,6 +129,8 @@ Huginn and Muninn collect nothing about you: no accounts, no analytics, no ads, 
 - **Messages, photos and voice clips** are end-to-end encrypted and sealed before they reach the public Nostr relays that carry them. Relays see only a sealed mailbox id and the IP address that connects to them.
 - **Calls** go through the Cloudflare call relay ([Cloudflare privacy policy](https://www.cloudflare.com/privacypolicy/)), or straight between devices for contacts you trust. Audio and video are end-to-end encrypted. The relay login service keeps no logs.
 - **Updates** are downloaded from GitHub ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
+- **Files over the internet** go straight between the two devices, end-to-end encrypted. To find a direct path, each device asks a public STUN server (Cloudflare's) for its own internet address; the file itself never goes through it. Small files that can't go straight travel in sealed pieces through the Nostr relays.
+- **Link previews** are made on the sender's phone, which fetches the page, so that site sees the sender's IP address. Turn them off in Settings › Privacy.
 - **Nearby sharing** stays on your home Wi-Fi or Bluetooth.
 
 ## License
