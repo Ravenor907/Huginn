@@ -114,7 +114,7 @@ Rectangle {
             onJump: host.jumpTo(msg.m.re)
         }
         Image {
-            visible: !!msg.m.photo && !msg.m.voice && !msg.m.unsent
+            visible: !!msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent
             width: Theme.px(300); height: Theme.px(170)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
@@ -134,7 +134,7 @@ Rectangle {
             }
         }
         Text {
-            visible: !msg.m.photo || !!msg.m.unsent
+            visible: !msg.m.photo || !!msg.m.file || !!msg.m.unsent
             width: parent.width; wrapMode: Text.Wrap
             textFormat: Text.PlainText
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
@@ -165,7 +165,7 @@ Rectangle {
         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
         y: msg.lineH - Theme.px(6)
         z: 2
-        canEdit: !!msg.m.mine && !msg.m.photo && !msg.m.failed
+        canEdit: !!msg.m.mine && !msg.m.photo && !msg.m.failed && !msg.m.file
         canThread: !msg.inThread
         canPin: !msg.inThread
         pinnedNow: host.pins.indexOf(msg.m.id) >= 0
@@ -188,7 +188,7 @@ Rectangle {
             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
             msg.chosen()
             if (button === Qt.RightButton) msg.options()
-            else if (msg.m.photo && !msg.m.voice && !msg.m.unsent) host.viewing = msg.m.photo
+            else if (msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent) host.viewing = msg.m.photo
         }
     }
     TapHandler {

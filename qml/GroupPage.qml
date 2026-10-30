@@ -798,6 +798,7 @@ Rectangle {
         if (!m || isTour) return
         const items = []
         if (m.contact && !m.me) items.push({ name: "Message", detail: "Your direct chat", url: "dm" })
+        if (!m.contact && !m.me && !readOnly) items.push({ name: "Add as a contact", detail: "They're asked too; once both say yes you can message directly", url: "add" })
         if (!readOnly && !m.me && info.amAdmin) {
             if (!m.admin) items.push({ name: "Make admin", detail: "They can invite, remove and change the group too", url: "admin" })
             else if (info.amOwner && !m.owner) items.push({ name: "Take admin away", url: "unadmin" })
@@ -808,6 +809,7 @@ Rectangle {
         const g = gid
         Ui.pickFrom(m.name, [{ header: m.owner ? "Owner" : m.admin ? "Admin" : "", items: items }], a => {
             if (a === "dm") Ui.openPage("dms", { open: m.key })
+            else if (a === "add") PeopleActions.askToAdd(g, m)
             else if (a === "admin") tell(Chat.setAdmin(g, m.key, true), m.name + " is an admin now.")
             else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin anymore.")
             else if (a === "owner") Ui.sure("Hand " + info.name + " to " + m.name + "?", "They become the owner. You stay an admin, and can leave after.", "Hand it over", () => tell(Chat.handOver(g, m.key), m.name + " owns the group now."), false, true)

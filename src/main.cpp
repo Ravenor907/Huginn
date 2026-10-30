@@ -30,6 +30,9 @@
 #include "updater.h"
 #include "wifiselftest.h"
 #include "richwire.h"
+#include "filelink.h"
+#include "link.h"
+#include "trust.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -132,7 +135,8 @@ int main(int argc, char *argv[])
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return selfTested(a && b && c && d);
+        const bool e = Trust::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("i1f1-vectors.json")));
+        return selfTested(a && b && c && d && e);
     }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
@@ -225,6 +229,13 @@ int main(int argc, char *argv[])
     rooms->lacksRooms = [chat](const QString &k) { return chat->lacksRooms(k); };
     rooms->memberName = [chat](const QString &g, const QString &k) { return chat->groupMemberName(g, k); };
     calls->busyElsewhere = [rooms] { return rooms->inRoom(); };
+    // Caps i1 and f1 and linked devices: introductions, files straight between trusted contacts
+    // ("Direct calls" on for each other, as calls decide it) and a phone's companion.
+    auto *trust = new Trust(chat, &app);
+    auto *files = new FileLink(chat, &app);
+    files->trusted = [calls](const QString &k) { return calls->trusted(k); };
+    auto *linked = new Link(chat, &app);
+    chat->setExtras(trust, files, linked);
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
@@ -299,6 +310,9 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Rooms", rooms);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);

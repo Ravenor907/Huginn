@@ -79,6 +79,9 @@ Rectangle {
                                                   detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
+        // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
+        PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true }, e)))
+        if (Linked.phone.key) out.push({ kind: "mirror", name: Linked.phone.name + "'s chats", detail: "Your linked phone, while it's online" })
         const chats = Chat.chats, byKey = {}
         chats.forEach(c => byKey[c.key] = c)
         const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route, section: section })
@@ -578,10 +581,17 @@ Rectangle {
                 }
             }
 
+            // Files going straight to or from them (cap f1).
+            FileStrip {
+                id: fileStrip
+                peer: page.tour ? "" : page.openKey
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
+            }
             ListView {
                 id: list
                 anchors.top: keep.visible ? keep.bottom : parent.top
-                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: fileStrip.visible ? fileStrip.top : parent.bottom
                 anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: Theme.px(6)
@@ -866,7 +876,7 @@ Rectangle {
             onEditLast: page.editLast()
             onEscaped: page.escapeKey()
             onCancelBanner: { page.replyId = ""; if (page.editId !== "") { page.editId = ""; compose.text = "" } }
-            onAttach: page.pickPicture()
+            onAttach: page.attach()
         }
     }
 
@@ -931,7 +941,7 @@ Rectangle {
             onHasFocusChanged: if (hasFocus) { page.zone = "side"; page.sideSel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
             onEscaped: { page.side = ""; page.threadRoot = ""; compose.focusField() }
-            onAttach: page.pickPicture()
+            onAttach: page.attach()
         }
     }
 
@@ -1005,7 +1015,7 @@ Rectangle {
             if (c.expired) { Ui.say("That code has expired (they last an hour). Ask them for a new one.", true); return }
             const r = Chat.replaces(t)
             const added = () => { Ui.say(c.name + " added. Say hi: they'll get it wherever they are."); openKey = c.key; zone = "messages" }
-            if (!r.key) { Chat.addContact(t); added(); return }
+            if (!r.key) { Chat.addContact(t); PeopleActions.added(t, c.key); added(); return }
             // A contact with this inbox or name already has another security key: never replaced quietly.
             if (r.sameInbox) {
                 Ui.sure(r.name + "'s security key changed?", "This code has " + r.name + "'s inbox but a different security key. Use it only if you've checked with them "
@@ -1027,10 +1037,19 @@ Rectangle {
         Ui.ask("Rename " + Chat.realNameOf(k), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(k), "Save",
                t => { Chat.setNickname(k, t); Ui.say(t.trim() === "" ? "Back to " + Chat.realNameOf(k) + "." : "Renamed to " + Chat.nameOf(k) + ".") }, false, true)
     }
-    function checkCode(k) {
-        const n = Chat.nameOf(k)
-        Ui.sure("Check it's really " + n, "Code: " + Chat.codeWith(k) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
-                "It matches", () => Chat.verify(k))
+    function checkCode(k) { PeopleActions.checkCode(k) }
+    // Cap f1 and i1 additions to a 1:1 chat's options.
+    function moreItems() {
+        if (openKey === "" || !Chat.isContact(openKey)) return []
+        return [{ name: "Send a file", detail: "Straight to them over the internet, up to 4 GB", url: "file" },
+                { name: "Introduce to someone", detail: "Two of your contacts meet, if both say yes", url: "introduce" }]
+    }
+    function attach() {
+        if (openKey === "" || !Chat.isContact(openKey)) { pickPicture(); return }
+        const k = openKey
+        Ui.pickFrom("Send to " + openName, [{ header: "", items: [{ name: "A picture", detail: "Location and camera details are removed", url: "picture" },
+                                                                   { name: "A file", detail: "Straight to them over the internet, up to 4 GB", url: "file" }] }],
+                    a => { if (a === "picture") pickPicture(); else PeopleActions.sendFile(k) })
     }
     function conversationItems() {
         const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" }]
@@ -1040,6 +1059,7 @@ Rectangle {
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
                        { name: "Folders", detail: folderNames(openKey), url: "folders" },
                        { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
+        moreItems().forEach(i => items.push(i))
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -1057,6 +1077,8 @@ Rectangle {
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
+            else if (a === "file") PeopleActions.sendFile(k)
+            else if (a === "introduce") PeopleActions.introduce(k)
         })
     }
     // ------------------------------------------------------------- folders (only on this computer)
@@ -1107,7 +1129,9 @@ Rectangle {
         if (e.kind === "chat") { personOptions(e); return }
         if (e.kind === "folder") { folderOptions(e); return }
         if (e.kind === "trash") { openTrash(); return }
-        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" }] }], a => { if (a === "folder") newFolder("") })
+        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" },
+                                                             { name: "One-time invite link", detail: "Works for the first person who uses it, within a day", url: "once" }] }],
+                    a => { if (a === "folder") newFolder(""); else if (a === "once") PeopleActions.inviteLink() })
     }
     function personOptions(e) {
         const k = e.key, section = e.section, keys = sectionKeys(section), at = keys.indexOf(k)
@@ -1270,6 +1294,8 @@ Rectangle {
             Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
             return
         case "stranger": Chat.meet(e.key, e.name); openKey = e.key; zone = "messages"; return
+        case "intro": PeopleActions.answer(e); return
+        case "mirror": mirror.open(); return
         default: openKey = e.key; zone = "messages"
         }
     }
@@ -1315,7 +1341,8 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
+        if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", detail: m.file, url: "savefile" })
+        else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", url: "play" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it from both sides; they'll see “Message deleted by " + Chat.username + "”", url: "unsend" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
@@ -1345,6 +1372,9 @@ Rectangle {
             else if (a === "pins") openPins()
             else if (a === "call") startCall()
             else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
+            else if (a === "savefile") PeopleActions.saveFile(k, m)
+            else if (a === "file") PeopleActions.sendFile(k)
+            else if (a === "introduce") PeopleActions.introduce(k)
         })
     }
 
@@ -1446,6 +1476,7 @@ Rectangle {
             else others.push(urls[i])
         }
         if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
+        if (others.length && openKey !== "" && PeopleActions.dropFiles(openKey, others)) return
         if (others.length) {
             Transfer.share(others)
             Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
@@ -1470,12 +1501,14 @@ Rectangle {
     function boxOptions(box) {
         const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" }]
         if (openKey !== "") items.push({ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" })
+        moreItems().slice(0, 1).forEach(i => items.push(i))
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
             else if (a === "picture") pickPicture()
+            else if (a === "file") PeopleActions.sendFile(openKey)
             else if (a === "cancel") box.cancelBanner()
             else if (a === "leave") box.leave()
         })
@@ -1501,6 +1534,7 @@ Rectangle {
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)
+        if (mirror.visible) return mirror.handleButton(b)
         if (showCode) {
             if (b === "a") { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") }
             else if (b === "x") Chat.newLink()
@@ -1557,6 +1591,8 @@ Rectangle {
         if (b === "y" && Voice.recording && openKey !== "") Voice.finish(openKey)
         return true
     }
+    // A linked phone's chats, over everything (companion side of linked devices).
+    MirrorPanel { id: mirror; anchors.fill: parent; z: 20 }
     Connections {
         target: Voice
         function onErrorChanged() { if (Voice.error !== "") Ui.say(Voice.error, true) }

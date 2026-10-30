@@ -16,8 +16,11 @@
 #include <QVariantList>
 
 class Ble;
+class FileLink;
+class Link;
 class LocalSend;
 class Nostr;
+class Trust;
 class Vault;
 
 // Huginn's messaging, the same as Muninn's (net/Chat.kt) so the two work together:
@@ -253,6 +256,9 @@ public:
     bool canRoom(const QString &key) const;
     bool lacksRooms(const QString &key) const;
 
+    // Caps i1 and f1 and linked devices live in their own classes (trust.*, filelink.*, link.*), made in main.cpp.
+    void setExtras(Trust *trust, FileLink *files, Link *link) { m_trust = trust; m_files = files; m_linked = link; }
+
     static const int kMax = 2000;
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
 
@@ -267,6 +273,18 @@ Q_SIGNALS:
     void liveChanged();
 
 private:
+    // Caps i1 and f1 and linked devices (trust.cpp, filelink.cpp, link.cpp): rooms intro, file and
+    // link, small files as pieces, and sending one message on every route.
+    friend class Trust;
+    friend class FileLink;
+    friend class Link;
+    Trust *m_trust = nullptr;
+    FileLink *m_files = nullptr;
+    Link *m_linked = nullptr;
+    int receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p);
+    void sendEverywhere(const QString &key, const QString &room, const QJsonObject &msg, const QString &mailbox);
+    QString sendFileBlob(const QString &key, const QByteArray &bytes, const QString &name);
+
     void start();
     int receive(const QByteArray &body, const QString &via);
     int receiveEnvelope(const QJsonObject &o, const QString &via);

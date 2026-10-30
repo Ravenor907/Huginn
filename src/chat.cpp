@@ -3,6 +3,9 @@
 #include "ble.h"
 #include "chatcrypto.h"
 #include "call/callcrypto.h"
+#include "filelink.h"
+#include "link.h"
+#include "trust.h"
 #include "groupwire.h"
 #include "localsend.h"
 #include "nostr.h"
@@ -1173,7 +1176,8 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 return 200;
     }
     const bool once = room == QLatin1String("receipt") || room == QLatin1String("unsend") || room == QLatin1String("keep") || room == QLatin1String("call")
-        || room == QLatin1String("mx") || room == QLatin1String("live");
+        || room == QLatin1String("mx") || room == QLatin1String("live")
+        || room == QLatin1String("intro") || room == QLatin1String("file") || room == QLatin1String("link");
     if (once && m_seen.has(fromKey, sentId)) {
         // An unsend's resend: say "unsent" again in case the first answer was lost.
         const QString gone = m_seen.note(fromKey, sentId);
@@ -1213,6 +1217,19 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         if (!sentId.isEmpty())
             m_seen.add(fromKey, sentId, now());   // the same signal on another route is dropped
         Q_EMIT callMessage(fromKey, msg);
+        return 200;
+    }
+    // Caps i1 and f1 and linked devices (trust.cpp): introductions, files straight between devices
+    // and a phone's companion, each with its own checks and limits.
+    if (room == QLatin1String("intro") || room == QLatin1String("file") || room == QLatin1String("link")) {
+        const int code = receiveExtra(room, fromKey, name, mailbox, QJsonDocument::fromJson(plain).object());
+        if (code != 200) {
+            m_pendingPeer.reset();
+            return code;
+        }
+        commitPeer();
+        if (!sentId.isEmpty())
+            m_seen.add(fromKey, sentId, now());
         return 200;
     }
     // Kids' TV card (0.6, 7.6): a contact invited this person to talk with their kids' TV and sent the
@@ -1323,6 +1340,20 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 m_unread.insert(fromKey);
                 Q_EMIT arrived(nameOf(fromKey), text, fromKey);
             }
+            receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
+        } else if (m_trust && m_trust->useOnce(o.value(QStringLiteral("invite")).toString())) {
+            // My one-time invite link (i1, 13.6): whoever used it first is a contact now, no asking.
+            commitPeer();
+            m_contacts.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox},
+                                        {QStringLiteral("verified"), false}});
+            m_met.remove(fromKey);
+            saveContacts();
+            saveMet();
+            if (addPrivate(fromKey, incoming)) {
+                m_unread.insert(fromKey);
+                Q_EMIT arrived(nameOf(fromKey), text, fromKey);
+            }
+            Q_EMIT notice(QStringLiteral("%1 added you with your invite link.").arg(name));
             receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
         } else if (!inviteOk(o.value(QStringLiteral("invite")).toString())) {
             return 403;   // from far away with no valid invite (an old or leaked code): dropped quietly
@@ -1603,6 +1634,10 @@ QList<QJsonObject> Chat::pieces(const QVariantMap &m)
             o.insert(QStringLiteral("kind"), QStringLiteral("voice"));
             o.insert(QStringLiteral("ms"), voice);
         }
+        if (!str(m, "file").isEmpty()) {   // cap f1: a small file through the relays (14.2)
+            o.insert(QStringLiteral("kind"), QStringLiteral("file"));
+            o.insert(QStringLiteral("fn"), str(m, "file"));
+        }
         out << seal(o, peer, parts.at(i));   // each piece is its own message (r1: its own ratchet step)
     }
     return out;
@@ -1664,7 +1699,11 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
         return 200;
     const QList<QByteArray> parts = m_incoming.take(id).parts;
     const int voiceMs = o.value(QStringLiteral("kind")).toString() == QLatin1String("voice") ? qBound(1, o.value(QStringLiteral("ms")).toInt(), Photos::kMaxVoiceMs) : 0;
-    const QByteArray joined = voiceMs > 0 ? Photos::joinVoice(parts) : Photos::join(parts);   // join() also strips any metadata
+    // Cap f1: a file's name (14.2) is checked like an offer's; its bytes are kept as they came.
+    const QString fileName = o.value(QStringLiteral("kind")).toString() == QLatin1String("file") ? o.value(QStringLiteral("fn")).toString() : QString();
+    if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && !FileLink::nameOk(o.value(QStringLiteral("fn"))))
+        return 400;
+    const QByteArray joined = !fileName.isEmpty() ? parts.join() : voiceMs > 0 ? Photos::joinVoice(parts) : Photos::join(parts);   // join() also strips any metadata
     if (joined.isEmpty())
         return 400;
     m_vault->write(QStringLiteral("photos/") + id, joined);
@@ -1675,12 +1714,14 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
             m.insert(QStringLiteral("mailbox"), mailbox);
         putMet(fromKey, m);
     }
-    QVariantMap msg = message(id, fromKey, name, QString(), false, via);
+    QVariantMap msg = message(id, fromKey, name, fileName.isEmpty() ? QString() : QStringLiteral("File: ") + fileName, false, via);
     msg.insert(QStringLiteral("photo"), id);
     msg.insert(QStringLiteral("voice"), voiceMs);
+    if (!fileName.isEmpty())
+        msg.insert(QStringLiteral("file"), fileName);
     if (addPrivate(fromKey, msg)) {
         m_unread.insert(fromKey);
-        Q_EMIT arrived(nameOf(fromKey), voiceMs > 0 ? QStringLiteral("Voice message") : QStringLiteral("Photo"), fromKey);
+        Q_EMIT arrived(nameOf(fromKey), !fileName.isEmpty() ? QStringLiteral("File: ") + fileName : voiceMs > 0 ? QStringLiteral("Voice message") : QStringLiteral("Photo"), fromKey);
     }
     receipt(fromKey, {id}, QStringLiteral("delivered"), mailbox);
     return 200;
@@ -2214,6 +2255,8 @@ bool Chat::addPrivate(const QString &peer, const QVariantMap &m)
     while (l.size() > 1000)
         l.removeFirst();
     save();
+    if (m_linked)
+        m_linked->onMessage(peer, m);   // a linked companion gets it too
     Q_EMIT changed();
     return true;
 }
@@ -2439,6 +2482,8 @@ QVariantList Chat::chats() const
                 preview = QStringLiteral("Message deleted");
             else if (last.value(QStringLiteral("voice")).toInt() > 0)
                 preview = mine ? QStringLiteral("You sent a voice message") : QStringLiteral("Voice message");
+            else if (!str(last, "file").isEmpty())
+                preview = (mine ? QStringLiteral("You sent ") : QString()) + str(last, "file");
             else if (!str(last, "photo").isEmpty())
                 preview = mine ? QStringLiteral("You sent a photo") : QStringLiteral("Photo");
             else

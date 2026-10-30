@@ -32,6 +32,7 @@ Rectangle {
         switch (sections[section]) {
         case "Privacy": return [
             { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
+            { kind: "button", key: "linked", title: "Linked devices", note: Linked.phone.key ? "Showing " + Linked.phone.name + "'s chats" : Linked.companions.length ? Linked.companions.length + " linked" : "Show your phone's chats here, or this computer's on another device", label: "Open" },
             { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
               options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
@@ -304,6 +305,7 @@ Rectangle {
         if (key === "exit") Ui.main.requestExit()
         else if (key === "chatName") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (key === "contacts") Ui.openPage("contacts", {})
+        else if (key === "linked") PeopleActions.linkedDevices()
         else if (key === "backup") startBackup()
         else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })

@@ -65,8 +65,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
-| `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93. |
-| `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93. |
+| `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93, Huginn from 0.94. |
+| `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -1131,6 +1131,11 @@ Each app's unit tests should:
   each `result` (with the named state, receiver and clock); running `presence` in order through one table
   gives each `in` list (and `changed`); `glare` gives each winner.
 
+`python3 tools/i1f1_ref.py` writes `tests/i1f1-vectors.json` (sections 13 to 15): the 4 emoji and `add` ids, which
+`intro` and `file` messages are well-formed, the file key from both one-off keys, sealed packets byte for byte, acks,
+and what a `MUNINNL1:` link code carries. Muninn checks it in `I1F1VectorsTest`, Huginn in `--chat-selftest` (which
+also sends a file between two copies of FileLink on 127.0.0.1, losing some pieces on the way).
+
 `python3 tools/m1_ref.py` writes `tests/m1-vectors.json` (section 11): every `good` payload is well-formed for its
 room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
 gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn checks it in `RichTest`, Huginn in
@@ -1303,13 +1308,13 @@ first route that takes it (the relays keep it for the receiver). Limit: 20 per s
 
 - Both said yes (`yes` both ways, or `add` both ways): each phone adds the other as a contact, not verified. An `add`
   pair is named on both phones by `id = first 32 hex of SHA-256("add|" + g + "|" + the two chat keys sorted, joined by "|")`.
-- Muninn offers `add` for the members of a group called Family (or one in the person's own Family folder) who aren't
+- Both apps offer `add` for the members of a group called Family (or one in the person's own Family folder) who aren't
   contacts yet, once their caps include `i1`.
 - Saying no sends nothing.
 
 ### 13.5 Checking a contact by pictures (local)
 
-Besides the 6-digit code (0.5), Muninn shows 4 emoji for a pair: byte `i` (0 to 3) of
+Besides the 6-digit code (0.5), both apps show 4 emoji for a pair: byte `i` (0 to 3) of
 `SHA-256(UTF-8("emoji code") || shared key)` picks emoji `byte mod 64` from the list `ChatCrypto.EMOJI` (its order is
 fixed). The same on both phones means nobody is in between. Nothing goes on the wire.
 
@@ -1352,8 +1357,8 @@ photo and saves it to Downloads when the person taps Save.
 ## 15. Linked devices, companion style (room `link`)
 
 A tablet or second phone (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
-online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn only; Huginn ignores the
-room. Envelopes in room `link` are sealed like private messages and go on every route (LAN, Direct, Nostr); they are
+online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn from 0.93; Huginn from
+0.94, as a companion or as the phone. Envelopes in room `link` are sealed like private messages and go on every route (LAN, Direct, Nostr); they are
 exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the
 check below.
 

@@ -144,8 +144,7 @@ Rectangle {
         items.push({ name: "Remove", detail: "Goes to the Trash with your chat. Restore brings both back within 30 days", url: "remove" })
         Ui.pickFrom(p.name, [{ header: "", items: items }], a => {
             if (a === "open") Ui.openPage("dms", { open: p.key })
-            else if (a === "code") Ui.sure("Check it's really " + p.name, "Code: " + Chat.codeWith(p.key) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
-                                           "It matches", () => Chat.verify(p.key))
+            else if (a === "code") PeopleActions.checkCode(p.key)
             else if (a === "rename")
                 Ui.ask("Rename " + Chat.realNameOf(p.key), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
                        t => Chat.setNickname(p.key, t), false, true)
