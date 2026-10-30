@@ -105,6 +105,7 @@ import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
+import io.github.ravenor907.muninn.ui.brushed
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -151,11 +152,18 @@ object ChatNav {
     var open by mutableStateOf("")
     /** A code handed in from a scanned QR, waiting on Add someone. */
     var incoming by mutableStateOf("")
-    /** The + menu on the chat list (Add someone, My code) is showing. */
-    var menu by mutableStateOf(false)
-    /** From this width on, Muninn uses the tablet layout (rail, chat list, conversation); narrower, a conversation takes the whole screen. */
-    val WIDE = 600.dp
-    /** True while the tablet layout is showing: the list stays beside the conversation, so no back arrow. */
+    /** Held for the press-and-hold sheet: a person's key or "g:" and a group, "" for none. */
+    var hold by mutableStateOf("")
+    /** The chat list's Move up and Move down for [hold], when it was held there. */
+    internal var holdMoves by mutableStateOf<ListMoves?>(null)
+    /** People picked on the chat list for a new group (Start a group from the sheet, then tap more). */
+    var pick by mutableStateOf(setOf<String>())
+    /**
+     * Held sideways (wider than tall) and at least this wide, Muninn uses the landscape layout (rail, chat list,
+     * conversation); upright, a conversation takes the whole screen.
+     */
+    val WIDE_MIN = 480.dp
+    /** True while the landscape layout is showing: the list stays beside the conversation, so no back arrow. */
     var wide by mutableStateOf(false)
     /** Tablets: what the rail has picked, "" for direct messages or a group's id. */
     var space by mutableStateOf("")
@@ -269,11 +277,12 @@ fun ChatMain(app: Muninn) {
 /** The slim top bar for a full-screen page: back arrow and a title, then a hairline. */
 @Composable
 private fun PageBar(title: String, backLabel: String = "Back to chats", back: () -> Unit = { ChatNav.open = "" }) {
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().brushed()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction("back", backLabel, Palette.text, size = 24.dp) { back() }
             Spacer(Modifier.width(6.dp))
-            Text(title, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics { heading() })
+            Text(title.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).semantics { heading() })
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
     }
@@ -308,7 +317,7 @@ private fun ListLabel(text: String, top: Dp = 4.dp, modifier: Modifier = Modifie
 
 @Composable
 private fun SearchBox(value: String, onChange: (String) -> Unit) {
-    val shape = RoundedCornerShape(22.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 12.dp).fillMaxWidth().heightIn(min = 44.dp)
         .clip(shape).background(Palette.field).hcBorder(shape).padding(start = 14.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -431,7 +440,7 @@ private fun PersonRow(name: String, preview: String, time: String, unread: Int, 
             }
             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(preview, style = previewStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (unread > 0) Box(Modifier.padding(start = 8.dp).heightIn(min = 20.dp).widthIn(min = 20.dp).clip(RoundedCornerShape(10.dp))
+                if (unread > 0) Box(Modifier.padding(start = 8.dp).heightIn(min = 20.dp).widthIn(min = 20.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                     .background(Palette.gold).padding(horizontal = 6.dp).semantics { contentDescription = "$unread unread" },
                     contentAlignment = Alignment.Center) {
                     Text(if (unread > 99) "99+" else "$unread", style = tinyStyle.copy(fontWeight = FontWeight.SemiBold, color = Palette.onGold))
@@ -465,23 +474,19 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val intros by app.chat.intros.collectAsState()
     val linkedPhone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
     val flagState by app.chat.flags.all.collectAsState()
+    // A TV used normally has a remote, not a touchscreen: no holding and dragging hints.
+    val onTv = io.github.ravenor907.muninn.tv.KidMode.isTv(LocalContext.current)
     var showArchived by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    var foldersFor by remember { mutableStateOf<Pair<String, String>?>(null) }
-    // Rename straight from the list: hold a person, then the pencil.
-    var renamingKey by remember { mutableStateOf<String?>(null) }
-    // The section the chat in [foldersFor] was held in ("" no folder), for Move up, Move down and Move to folder.
-    var heldIn by remember { mutableStateOf<String?>(null) }
     var addingFolder by remember { mutableStateOf(false) }
     var editingFolder by remember { mutableStateOf<Folders.Folder?>(null) }
     val activeMap by app.chat.active.collectAsState()
-    // Messenger style: hold a contact to pick them, tap more, then Group text or Group call.
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    if (selected.isNotEmpty()) BackHandler { selected = emptySet() }
+    // Messenger style: Start a group from a person's sheet picks them, tap more, then Group text or Group call.
+    if (ChatNav.pick.isNotEmpty()) BackHandler { ChatNav.pick = emptySet() }
     fun startGroup(call: Boolean) {
-        val picked = selected.toList()
+        val picked = ChatNav.pick.toList()
         val (g, msg) = app.chat.startGroup(picked)
-        selected = emptySet()
+        ChatNav.pick = emptySet()
         if (g == null) { Ui.say(msg, true); return }
         ChatNav.openGroup(g)
         Ui.say(msg)
@@ -523,8 +528,11 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val byKey = chatRows.associateBy { it.key }
     val newest = chatRows.map { it.key }
     val foldered = folders.flatMap { it.keys }.toSet()
-    fun sectionKeys(sec: String): List<String> = if (sec == Folders.NONE) Folders.arrange(newest.filter { it !in foldered }, topOrder)
-        else folders.firstOrNull { it.id == sec }?.let { f -> Folders.arrange(newest.filter { it in f.keys }, f.keys) }.orEmpty()
+    // Pinned chats (from the press-and-hold sheet) come first in their section, in the order they were pinned.
+    val pins by People.all.collectAsState()
+    fun pinFirst(l: List<String>): List<String> = pins.pinned.filter { it in l } + l.filter { it !in pins.pinned }
+    fun sectionKeys(sec: String): List<String> = pinFirst(if (sec == Folders.NONE) Folders.arrange(newest.filter { it !in foldered }, topOrder)
+        else folders.firstOrNull { it.id == sec }?.let { f -> Folders.arrange(newest.filter { it in f.keys }, f.keys) }.orEmpty())
     fun movesFor(sec: String?, key: String): ListMoves? {
         if (sec == null) return null
         val l = sectionKeys(sec)
@@ -598,8 +606,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }, last?.let { when_(it.time) } ?: "",
                 if (c.group in gunread) groupUnread(msgs) else if (c.key in flagState.unread) 1 else 0, false, { GroupAvatar(c.name, others, 48.dp) },
                 muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
-                onLong = { heldIn = sec; foldersFor = c.key to c.name }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
-                if (selected.isNotEmpty()) Ui.say("Pick people for a new group. Groups open once you're done.") else ChatNav.openGroup(c.group)
+                onLong = { ChatNav.holdMoves = movesFor(sec, c.key); ChatNav.hold = c.key }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
+                if (ChatNav.pick.isNotEmpty()) Ui.say("Pick people for a new group. Groups open once you're done.") else ChatNav.openGroup(c.group)
             }
         } else {
             val msgs = convos[c.key].orEmpty()
@@ -608,13 +616,13 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             PersonRow(c.name, last?.let { preview(it) } ?: routeText(app.chat.route(c.key)), last?.let { when_(it.time) } ?: "",
                 if (c.key in unread) unreadCount(msgs) else if (c.key in flagState.unread) 1 else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.name, 48.dp, 18.sp, online = c.key in activeMap) },
                 muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
-                onLong = { heldIn = sec; if (pickable) selected = selected + c.key else foldersFor = c.key to c.name }, picked = c.key in selected,
-                longLabel = if (pickable) "Pick for a group" else "Options", modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
+                onLong = { if (ChatNav.pick.isNotEmpty() && pickable) ChatNav.pick = ChatNav.pick + c.key else { ChatNav.holdMoves = movesFor(sec, c.key); ChatNav.hold = c.key } },
+                picked = c.key in ChatNav.pick, longLabel = "Role, permissions and more", modifier = rowMod, onDrag = onDrag, onDrop = onDrop) {
                 when {
-                    selected.isEmpty() -> ChatNav.open = c.key
+                    ChatNav.pick.isEmpty() -> ChatNav.open = c.key
                     !pickable -> Ui.say("Only contacts can be put in a group.")
-                    c.key in selected -> selected = selected - c.key
-                    else -> selected = selected + c.key
+                    c.key in ChatNav.pick -> ChatNav.pick = ChatNav.pick - c.key
+                    else -> ChatNav.pick = ChatNav.pick + c.key
                 }
             }
         }
@@ -623,9 +631,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
             item {
-                if (selected.isNotEmpty()) SelectBar(selected.size, { startGroup(false) }, { startGroup(true) },
-                    onFolders = if (selected.size == 1) ({ val k = selected.first(); foldersFor = k to app.chat.nameOf(k); selected = emptySet() }) else null,
-                    onRename = if (selected.size == 1) ({ renamingKey = selected.first(); selected = emptySet() }) else null) { selected = emptySet() }
+                if (ChatNav.pick.isNotEmpty()) SelectBar(ChatNav.pick.size, { startGroup(false) }, { startGroup(true) },
+                    onFolders = if (ChatNav.pick.size == 1) ({ val k = ChatNav.pick.first(); ChatNav.pick = emptySet(); ChatNav.holdMoves = null; ChatNav.hold = k }) else null,
+                    onRename = null) { ChatNav.pick = emptySet() }
                 else SearchBox(query) { query = it }
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     if (closeError != null) Text(closeError!!, style = Type.small.copy(color = if (closeError == io.github.ravenor907.muninn.net.Close.OFFER_TEXT) Palette.accent else Palette.danger),
@@ -674,7 +682,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     if (!f.collapsed) {
                         items(keys.mapNotNull { byKey[it] }, key = { "c${f.id}|" + it.key }) { c -> chatRow(c, f.id, "c${f.id}|" + c.key) }
                         if (keys.isEmpty()) item(key = "e" + f.id) {
-                            Text("Empty. Hold a chat and drag it here, or hold it and pick Move to folder.", style = Type.small,
+                            Text(if (onTv) "Empty. Open a chat's menu and pick Folders to put it here." else "Empty. Hold a chat and drag it here, or hold it and set its role.", style = Type.small,
                                 modifier = Modifier.fillMaxWidth().background(if (hover == "e" + f.id) Palette.focusFill else Color.Transparent)
                                     .padding(horizontal = 16.dp, vertical = 8.dp))
                         }
@@ -682,8 +690,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
             }
             if (chatRows.isEmpty()) item {
-                Text(if (visible) "No chats yet. Tap anyone under Around you to message them, no asking needed. To message someone far away, tap + to add them or to share your code."
-                    else "No chats yet. Tap + to add someone or to share your code.",
+                Text(if (visible) "No chats yet. Tap anyone under Around you to message them, no asking needed. To message someone far away, tap + at the top to add them."
+                    else "No chats yet. Tap + at the top to add someone.",
                     style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             } else if (shownRows.isEmpty() && q.isNotEmpty()) item {
                 Text("No chats match “$q”.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -721,7 +729,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     shownStrangers.forEach { (k, name, r) ->
-                        val shape = RoundedCornerShape(20.dp)
+                        val shape = io.github.ravenor907.muninn.ui.Corner
                         Row(Modifier.heightIn(min = 40.dp).clip(shape).border(1.dp, if (Access.contrast) Palette.lineMuted else Palette.line, shape)
                             .clickable(role = Role.Button, onClickLabel = "Message $name") { app.chat.meet(k, name); ChatNav.open = k }
                             .semantics { stateDescription = routeText(r) }.padding(horizontal = 14.dp),
@@ -733,28 +741,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     }
                 }
             }
-            // Room for the + button over the end of the list.
-            item { Spacer(Modifier.height(96.dp)) }
-        }
-        // New: a small menu with the ways to start a chat or a group.
-        Box(Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 18.dp)) {
-            val shape = RoundedCornerShape(18.dp)
-            Box(Modifier.size(58.dp).clip(shape).background(Palette.gold).clickable(role = Role.Button) { ChatNav.menu = true }
-                .semantics { contentDescription = "New" }, contentAlignment = Alignment.Center) {
-                MIcon("plus", Palette.onGold, 26.dp, weight = 2.2f)
-            }
-            DropdownMenu(expanded = ChatNav.menu, onDismissRequest = { ChatNav.menu = false }, modifier = Modifier.background(Palette.panel)) {
-                DropdownMenuItem(text = { Text("Add someone", style = bodyStyle) }, leadingIcon = { MIcon("plus", Palette.accent, 20.dp) },
-                    onClick = { ChatNav.menu = false; ChatNav.open = "add" })
-                DropdownMenuItem(text = { Text("New group", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
-                    onClick = { ChatNav.menu = false; ChatNav.open = "newgroup" })
-                DropdownMenuItem(text = { Text("My code", style = bodyStyle) }, leadingIcon = { MIcon("user", Palette.accent, 20.dp) },
-                    onClick = { ChatNav.menu = false; ChatNav.open = "code" })
-            }
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
-    foldersFor?.let { (key, name) -> FolderPicker(app, key, name, movesFor(heldIn, key)) { foldersFor = null } }
-    renamingKey?.let { key -> app.chat.contacts.contact(key)?.let { c -> RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renamingKey = null } } ?: run { renamingKey = null } }
     FolderDialogs(app, addingFolder, editingFolder) { addingFolder = false; editingFolder = null }
 }
 
@@ -771,7 +760,7 @@ private fun ThreadBar(name: String, status: String, statusIcon: String, statusTi
             // Tablets keep the chat list beside the conversation, so there's nothing to go back to.
             if (!ChatNav.wide) IconAction("back", "Back to chats", Palette.text, size = 24.dp) { ChatNav.open = "" }
             else Spacer(Modifier.width(12.dp))
-            Row(Modifier.weight(1f).heightIn(min = 52.dp).clip(RoundedCornerShape(8.dp))
+            Row(Modifier.weight(1f).heightIn(min = 52.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                 .clickable(role = Role.Button, onClickLabel = "Chat details") { showMenu = true }.padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 avatar()
@@ -906,7 +895,6 @@ private fun Conversation(app: Muninn, key: String) {
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var matchAt by remember { mutableStateOf(0) }
-    var gallery by remember { mutableStateOf(false) }
     val typingMap by app.chat.typing.collectAsState()
     val activeMap by app.chat.active.collectAsState()
     val typingNow = key in typingMap
@@ -970,11 +958,6 @@ private fun Conversation(app: Muninn, key: String) {
         if (v.video > 0) VideoPlayer(app.chat.photo(v.photo), { viewing = null }) else PhotoViewer(app, v) { viewing = null }
         return
     }
-    if (gallery) {
-        BackHandler { gallery = false }
-        MediaGallery("Photos and voice · $name", msgs, { app.chat.photo(it.photo) }, { viewing = it }) { gallery = false }
-        return
-    }
     if (camera.isNotEmpty()) {
         CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
             onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVideo(key, mp4, ms)?.let { Ui.say(it, true) } } }) { camera = "" }
@@ -1000,30 +983,33 @@ private fun Conversation(app: Muninn, key: String) {
             // Someone met close by can be called too while on the same Wi-Fi.
             if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
-                IconAction("call", if (callable) "Call $name" else "Calling needs Muninn or Huginn 0.6", if (callable) Palette.text else Palette.textSoft) {
+                IconAction("call", if (callable) "Call $name" else "Calling needs a newer Muninn or Huginn", if (callable) Palette.text else Palette.textSoft) {
                     if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
-                    else Ui.say("$name needs Muninn or Huginn 0.6 to take calls.")
+                    else Ui.say("$name needs a newer Muninn or Huginn to take calls.")
                 }
                 // Video calls: both apps must speak c2 (docs/protocol-0.6.md 5.8.5).
                 if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
                     IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
             }
+            // A Kids' TV this phone looks after: its settings one tap away.
+            if (isTv) IconAction("gear", "Kids' TV settings", Palette.text) { tvSettings = true }
         }) { close ->
             MenuNote("${routeText(route)} · end-to-end encrypted · ${if (verified) "verified" else "not verified"}")
             DropdownMenuItem(text = { Text("Search in chat", style = bodyStyle) }, leadingIcon = { MIcon("search", Palette.accent, 20.dp) },
                 onClick = { close(); searching = true; matchAt = 0 })
-            DropdownMenuItem(text = { Text("Photos and voice", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
-                onClick = { close(); gallery = true })
-            DropdownMenuItem(text = { Text("Shared photos, videos and links", style = bodyStyle) }, leadingIcon = { MIcon("link", Palette.accent, 20.dp) },
+            DropdownMenuItem(text = { Text("Photos, videos, voice and links", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
                 onClick = { close(); shared = true })
-            if (!verified) DropdownMenuItem(text = { Text("Check code", style = bodyStyle) }, leadingIcon = { MIcon("shield", Palette.accent, 20.dp) },
+            // Role, what they can do, where the chat sits: the same sheet as holding them on the chat list.
+            DropdownMenuItem(text = { Text("Role and permissions", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
+                onClick = { close(); ChatNav.holdMoves = null; ChatNav.hold = key })
+            if (!verified) DropdownMenuItem(text = { Text("Check 4 emoji", style = bodyStyle) }, leadingIcon = { MIcon("shield", Palette.accent, 20.dp) },
                 onClick = {
                     close()
-                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nCode: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
+                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nNumber: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check 4 emoji. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
                         "It matches", onConfirm = { app.chat.verify(key, name) }))
                 })
             // A name for them on this phone only: it's never sent.
-            if (c != null) DropdownMenuItem(text = { Text("Rename", style = bodyStyle) }, leadingIcon = { MIcon("user", Palette.accent, 20.dp) },
+            if (c != null) DropdownMenuItem(text = { Text("Nickname", style = bodyStyle) }, leadingIcon = { MIcon("user", Palette.accent, 20.dp) },
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
@@ -1033,15 +1019,16 @@ private fun Conversation(app: Muninn, key: String) {
             ChatFlagItems(app, key, name, close, { muting = true }, { coloring = true }) { ChatNav.open = "" }
             if (c != null) DropdownMenuItem(text = { Text("Introduce $name to…", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
                 onClick = { close(); introducing = true })
-            // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off means relay only.
+            // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off sends call audio the long way.
             if (c != null) {
-                val trustText = io.github.ravenor907.muninn.net.call.CallManager.trustText(key)
-                DropdownMenuItem(text = { Text("Direct calls: $trustText", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
+                val fast = io.github.ravenor907.muninn.net.call.CallManager.trusted(key)
+                DropdownMenuItem(text = { Text("Faster calls with $name: ${if (fast) "On" else "Off"}", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
                     onClick = {
                         close()
-                        val on = !io.github.ravenor907.muninn.net.call.CallManager.trusted(key)
+                        val on = !fast
                         io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, on)
-                        Ui.say(if (on) "Calls with $name go direct when they trust you too. Saves the relay's data." else "Calls with $name go through the relay only. Neither of you sees the other's IP address.")
+                        Ui.say(if (on) "Calls with $name go straight between you when they allow it too. They can see your internet address."
+                            else "Calls with $name take the long way. Neither of you sees the other's internet address.")
                     })
             }
             if (isTv) DropdownMenuItem(text = { Text("Kids' TV", style = bodyStyle) }, leadingIcon = { MIcon("gear", Palette.accent, 20.dp) },
@@ -1059,8 +1046,8 @@ private fun Conversation(app: Muninn, key: String) {
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
-            MButton("Check code") {
-                Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nCode: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
+            MButton("Check 4 emoji") {
+                Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nNumber: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check 4 emoji. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
                     "It matches", onConfirm = { app.chat.verify(key, name) }))
             }
         }
@@ -1185,7 +1172,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     LaunchedEffect(recording) { while (recording) { shown = Voice.elapsed(); kotlinx.coroutines.delay(200) } }
     if (voice != null && recording) {
         // Recording: hold the mic, let go to send, slide left to cancel.
-        Row(Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Palette.dangerFill)
+        Row(Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp).fillMaxWidth().clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.dangerFill)
             .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).background(Palette.danger, CircleShape))
             Text("  ${Voice.length(shown.toInt())}", style = Type.big)
@@ -1196,7 +1183,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     Row(Modifier.fillMaxWidth().padding(start = if (onPhoto != null) 6.dp else 12.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
         verticalAlignment = Alignment.Bottom) {
         if (onPhoto != null) { IconAction("image", "Send a picture", Palette.textMuted, size = 24.dp) { onPhoto() }; Spacer(Modifier.width(4.dp)) }
-        val shape = RoundedCornerShape(22.dp)
+        val shape = io.github.ravenor907.muninn.ui.Corner
         Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(shape).background(Palette.field).hcBorder(shape).padding(start = 16.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f).padding(vertical = 11.dp), contentAlignment = Alignment.CenterStart) {
@@ -1245,7 +1232,7 @@ private fun MyCode(app: Muninn) {
     var left by remember { mutableStateOf(0L) }
     LaunchedEffect(code) { while (true) { left = Contacts.expires(code) - System.currentTimeMillis(); kotlinx.coroutines.delay(10_000) } }
     Column(Modifier.fillMaxSize()) {
-        PageBar("My code")
+        PageBar("My code", "Back to Add someone") { ChatNav.open = "add" }
         // Scrolls, so with larger size and text settings the buttons can always be reached.
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             // The code fits the width and at most 40% of the height, so it never pushes the buttons far away.
@@ -1266,15 +1253,7 @@ private fun MyCode(app: Muninn) {
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
-                MButton("Tap phones together", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "phone") { ChatNav.open = "tap" }
-                // A link for one person: it works once, within a day, and they're added on both phones without asking.
-                Text("Invite one person: a link that works once, for a day. Whoever opens it first is added on both phones, nothing to accept.",
-                    style = Type.small, modifier = Modifier.padding(top = 16.dp))
-                MButton("Share a one-time invite link", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "link") {
-                    val link = app.chat.inviteLink(24)
-                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. This link adds us both, once, within a day (get Muninn first if you need to):\n$link"), "Share a one-time invite"))
-                }
+                if (!io.github.ravenor907.muninn.tv.KidMode.isTv(context)) MButton("Tap phones together", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "phone") { ChatNav.open = "tap" }
                 // Someone without Muninn, right here: hand them the app itself, no internet needed.
                 Text("They don't have Muninn yet? Send it to their phone straight from yours, by Quick Share or Bluetooth. Then they scan your code.",
                     style = Type.small, modifier = Modifier.padding(top = 16.dp))
@@ -1285,6 +1264,10 @@ private fun MyCode(app: Muninn) {
     }
 }
 
+/**
+ * + › Add someone: one screen, the camera first. Point it at their code (or a group's invite) and it's read at once.
+ * Underneath: show my code, send a one-time invite link, join a group, or paste a code that came as text.
+ */
 @Composable
 private fun AddSomeone(app: Muninn) {
     val context = LocalContext.current
@@ -1292,53 +1275,87 @@ private fun AddSomeone(app: Muninn) {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
         mutableStateOf(ChatNav.incoming.ifEmpty { if (Contacts.unlink(clip).contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
     }
+    // "": the camera; "paste": typing or pasting a code (Join a group opens here too).
+    var mode by remember { mutableStateOf("") }
+    var group by remember { mutableStateOf(false) }
     val found = Contacts.parse(text)
-    val groupCode = Proto06.parseCode(text)
+    val invite = GroupLinks.parse(app, text)
+    BackHandler(enabled = text.isNotEmpty() || mode.isNotEmpty()) { if (text.isNotEmpty()) text = "" else mode = "" }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("Add someone")
-        // Scrolls, so the Add button stays reachable with larger size and text settings or the keyboard up.
+        // Scrolls, so everything stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            Text("Paste the code or link they sent you (the code starts with MUNINN1, or MUNINNG1 for a group). Someone close by? They show up under Around you, no code needed.", style = Type.normal, modifier = Modifier.padding(top = 12.dp))
-            Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
             when {
-                text.isBlank() -> {}
-                groupCode != null -> {
-                    Text("Group: ${groupCode.gn}", style = Type.big)
-                    Text("${groupCode.an.ifBlank { "An admin" }} shared it. Once you're in, everyone in the group sees your name and can message you there.",
-                        style = Type.small, modifier = Modifier.padding(top = 4.dp))
-                    if (groupCode.x * 1000 < System.currentTimeMillis())
-                        Text("That group code has expired (they last an hour). Ask for a new one.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-                    else MButton("Join ${groupCode.gn}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
-                        val err = app.chat.groups.joinByCode(groupCode)
-                        if (err != null) Ui.say(err, true)
-                        else { Ui.say("Asked to join. ${groupCode.gn} shows up in your chats once ${groupCode.an.ifBlank { "the admin" }}'s phone answers."); ChatNav.open = "" }
+                text.isBlank() && mode.isEmpty() -> {
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                        QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 340.dp))) { scanned -> text = Contacts.unlink(scanned) }
                     }
+                    Text("Scan their code", style = Type.big, modifier = Modifier.padding(top = 12.dp))
+                    Text("Hold your phone up to the code on their screen. That's it.", style = Type.small)
                 }
-                found == null -> Text("That isn't a Muninn code. Ask them to tap My code › Share link.", style = Type.small.copy(color = Palette.danger))
-                Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has expired (they last an hour). Ask them for a new one.", style = Type.small.copy(color = Palette.danger))
-                found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger))
-                else -> {
+                text.isBlank() -> {
+                    Text(if (group) "Paste the group's invite link or code someone gave you." else "Paste the code or link they sent you.",
+                        style = Type.normal, modifier = Modifier.padding(top = 12.dp))
+                    Field(text, { text = it }, if (group) "Paste the invite" else "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
+                }
+                invite != null -> Panel(Modifier.padding(top = 12.dp)) { JoinCard(app, invite) { text = ""; if (!invite.expired) ChatNav.open = "" } }
+                found == null -> {
+                    Field(text, { text = it }, "Paste their code", Modifier.padding(vertical = 10.dp), single = false)
+                    Text("That isn't a Muninn code. Ask them to open Add someone › Show my code.", style = Type.small.copy(color = Palette.danger))
+                }
+                Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has ended (codes last an hour). Ask them for a new one.",
+                    style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 12.dp))
+                found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 12.dp))
+                else -> Panel(Modifier.padding(top = 12.dp)) {
                     Text("Found: ${found.name}", style = Type.big)
                     // Someone already here with a different key: adding this is a key change, so say it first.
                     val replaces = app.chat.keyChangeFor(found)
                     replaces?.let { old ->
-                        Text("You already have ${old.shown} with a different security key. If you add this code, check the code with them before trusting new messages.",
+                        Text("You already have ${old.shown} with a different security key. If you add this code, check the 4 emoji with them before trusting new messages.",
                             style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                     }
-                    MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
-                        app.chat.addContact(found)
-                        // A one-time invite link: say hi at once, which adds me on their phone too (the link is used up then).
-                        if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you with your invite link.")
-                        // A Kids' TV's code: offer to set it up (no lock on the TV, so ask first).
-                        io.github.ravenor907.muninn.tv.TvParent.adoptIfTv(app, text)
-                        // A key change has its own warning (from Chat): don't cover it.
-                        if (replaces == null) Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
-                        ChatNav.open = found.chatKey
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Not now", Modifier.weight(1f)) { text = "" }
+                        MButton("Add ${found.name}", Modifier.weight(1f), Kind.Accent) {
+                            app.chat.addContact(found)
+                            // A one-time invite link: say hi at once, which adds me on their phone too (the link is used up then).
+                            if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you with your invite link.")
+                            // A Kids' TV's code: offer to set it up (no lock on the TV, so ask first).
+                            io.github.ravenor907.muninn.tv.TvParent.adoptIfTv(app, text)
+                            // A key change has its own warning (from Chat): don't cover it.
+                            if (replaces == null) Ui.say("${found.name} added. Say hi: they'll get it wherever they are.")
+                            ChatNav.open = found.chatKey
+                        }
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            AddRow("qr", "Show my code", "For them to scan") { ChatNav.open = "code" }
+            AddRow("link", "Send an invite link", "Works once, for someone far away") {
+                val link = app.chat.inviteLink(24)
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. This link adds us both, once, within a day (get Muninn first if you need to):\n$link"), "Send an invite link"))
+            }
+            AddRow("people", "Join a group", "With a link or code someone gave you") { text = ""; group = true; mode = "paste" }
+            AddRow("plus", "Start a group", "Name it, then invite people") { ChatNav.open = "newgroup" }
+            if (mode.isEmpty() && text.isBlank()) AddRow("copy", "Paste a code", "They sent it as a message") { group = false; mode = "paste" }
+            Text("Someone close by? They show up under Around you on the chat list, no code needed.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/** One choice under the camera on Add someone: an icon, what it does, and one plain line under it. */
+@Composable
+private fun AddRow(icon: String, title: String, detail: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(Corner).clickable(role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).clip(Corner).background(Palette.goldTint), contentAlignment = Alignment.Center) { MIcon(icon, Palette.goldBright, 20.dp) }
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(title, style = Type.normal.copy(color = Palette.text))
+            Text(detail, style = Type.small)
+        }
+        MIcon("forward", Palette.textMuted, 18.dp)
     }
 }
 
@@ -1370,7 +1387,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     val replyNow by rememberUpdatedState(onReply)
     val align = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart
     // The corner nearest the sender is the sharp one.
-    val shape = if (m.mine) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
+    val shape = if (m.mine) RoundedCornerShape(4.dp, 4.dp, 1.dp, 4.dp) else RoundedCornerShape(4.dp, 4.dp, 4.dp, 1.dp)
     val status = when {
         statusText != null -> statusText
         !m.mine -> ""
@@ -1440,7 +1457,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                         isPhoto -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
                             val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo!!(), 720) } }
-                            val pic = RoundedCornerShape(12.dp)
+                            val pic = io.github.ravenor907.muninn.ui.Corner
                             Box(Modifier.widthIn(max = 260.dp).fillMaxWidth().aspectRatio(260f / 170f).clip(pic).background(Palette.groundDeep),
                                 contentAlignment = Alignment.Center) {
                                 bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
@@ -1679,7 +1696,7 @@ private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> U
 
 /** Introduce [key] to another contact: both are asked, and if both say yes they're in touch. */
 @Composable
-private fun IntroduceDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
+internal fun IntroduceDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
     val all by app.chat.contacts.all.collectAsState()
     val others = all.filter { !it.groupOnly && it.chatKey != key }.sortedBy { it.shown.lowercase() }
     androidx.compose.material3.AlertDialog(
@@ -1742,7 +1759,7 @@ internal fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (Str
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { done(null) },
         containerColor = Palette.panel,
-        title = { Text("Rename ${c.name}", style = Type.big) },
+        title = { Text("Nickname for ${c.name}", style = Type.big) },
         text = {
             Column {
                 Text("Only you see this name. Leave it empty to use “${c.name}”.", style = Type.normal)
@@ -1813,7 +1830,7 @@ private fun GroupAvatar(name: String, others: List<String>, size: Dp) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Chip(text: String, on: Boolean, icon: String? = null, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     Row(Modifier.heightIn(min = 40.dp).clip(shape)
         .then(if (on) Modifier.background(Palette.gold) else Modifier.border(1.dp, if (Access.contrast) Palette.lineMuted else Palette.line, shape))
         .combinedClickable(role = Role.Tab, onLongClickLabel = if (onLong != null) "Rename or delete" else null, onLongClick = onLong, onClick = onClick)
@@ -1943,7 +1960,7 @@ internal fun FolderPicker(app: Muninn, key: String, name: String, moves: ListMov
         title = { Text(name, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (contact != null) MButton("Rename", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
+                if (contact != null) MButton("Nickname", Modifier.fillMaxWidth().padding(bottom = 8.dp), icon = "user") { renaming = true }
                 // Mute, archive, mark as unread: on this phone only.
                 val muted = (flagState.muted[key] ?: 0L) > System.currentTimeMillis()
                 val archived = key in flagState.archived
@@ -2038,7 +2055,7 @@ private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> 
             }
         }
         RoomManager.groupCalls(s.g).forEach { (id, who) ->
-            Chip("Group call · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
+            Chip("Voice room · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
         }
     }
 }
@@ -2141,7 +2158,6 @@ private fun GroupConversation(app: Muninn, g: String) {
     var searching by remember(ch) { mutableStateOf(false) }
     var query by remember(ch) { mutableStateOf("") }
     var matchAt by remember(ch) { mutableStateOf(0) }
-    var gallery by remember { mutableStateOf(false) }
     if (searching) BackHandler { searching = false; query = "" }
     val matches = if (!searching || query.isBlank()) emptyList()
         else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
@@ -2179,11 +2195,6 @@ private fun GroupConversation(app: Muninn, g: String) {
         if (v.video > 0) VideoPlayer(app.chat.photo(v.photo), { viewing = null }) else PhotoViewer(app, v) { viewing = null }
         return
     }
-    if (gallery) {
-        BackHandler { gallery = false }
-        MediaGallery("Photos and voice · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it }) { gallery = false }
-        return
-    }
     if (camera.isNotEmpty()) {
         CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
             onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVideo(g, ch, mp4, ms)?.let { Ui.say(it) } } }) { camera = "" }
@@ -2196,6 +2207,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     val others = s.members.filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
     val inRoom by RoomManager.room.collectAsState()
     var callSome by remember { mutableStateOf(false) }
+    var linking by remember { mutableStateOf(false) }
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
@@ -2209,9 +2221,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             MenuNote("Each message is sealed separately to every member, end to end. Up to ${Proto06.MAX_MEMBERS} people.")
             DropdownMenuItem(text = { Text("Search in #$chName", style = bodyStyle) }, leadingIcon = { MIcon("search", Palette.accent, 20.dp) },
                 onClick = { close(); searching = true; matchAt = 0 })
-            DropdownMenuItem(text = { Text("Photos and voice", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
-                onClick = { close(); gallery = true })
-            DropdownMenuItem(text = { Text("Shared photos, videos and links", style = bodyStyle) }, leadingIcon = { MIcon("link", Palette.accent, 20.dp) },
+            DropdownMenuItem(text = { Text("Photos, videos, voice and links", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
                 onClick = { close(); shared = true })
             if (!grp.readOnly && s.members.size > 2) DropdownMenuItem(text = { Text("Call some people", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
                 onClick = { close(); callSome = true })
@@ -2228,6 +2238,14 @@ private fun GroupConversation(app: Muninn, g: String) {
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
         if (folderPick) FolderPicker(app, key, s.name) { folderPick = false }
         if (callSome) CallSomeDialog(app, s) { callSome = false }
+        if (linking) InviteLinkDialog(app, g, s.name) { linking = false }
+        // Invite people: a link anyone can open, for admins (or everyone, when the group allows it).
+        if (GroupLinks.canInvite(app, g) && s.members.size > 1) Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { linking = true }
+            .background(Palette.panelLow).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            MIcon("link", Palette.goldBright, 18.dp)
+            Text("Invite people", style = Type.normal.copy(color = Palette.goldBright), modifier = Modifier.padding(start = 10.dp).weight(1f))
+            Text("Make a link", style = Type.small)
+        }
         // Tablets list the channels in their own column.
         RoomManager.presence.collectAsState().value
         val calls = RoomManager.groupCalls(g)
@@ -2246,7 +2264,9 @@ private fun GroupConversation(app: Muninn, g: String) {
         } else if (s.members.size == 1) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
             Text("Just you so far", style = Type.big)
             Text("Invite contacts, or share a group code with anyone you want in it.", style = Type.small)
-            MButton("Invite people", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { ChatNav.open = "$key/settings" }
+            MButton("Invite people", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+                if (GroupLinks.canInvite(app, g)) linking = true else ChatNav.open = "$key/settings"
+            }
         }
         val gAlbums = remember(msgs) { albumsOf(msgs.map { asMsg(app, it) }) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
@@ -2376,7 +2396,7 @@ fun ChannelColumn(app: Muninn, g: String) {
                 }
             }
             calls.forEach { (id, who) ->
-                ChannelRow("Group call", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
+                ChannelRow("Voice room", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
                 RoomFaces(who)
             }
             if (grp.readOnly) Text(if (grp.gone == "removed") "You were removed from this group." else "You left this group.",
@@ -2394,7 +2414,7 @@ fun ChannelColumn(app: Muninn, g: String) {
 
 @Composable
 private fun ChannelRow(name: String, voice: Boolean, on: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(shape).background(if (on) Palette.raised else Color.Transparent)
         .clickable(role = Role.Tab, onClick = onClick).semantics { selected = on }.padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -2423,6 +2443,7 @@ private fun GroupSettings(app: Muninn, g: String) {
     var channel by remember { mutableStateOf<Proto06.Channel?>(null) }
     var addingChannel by remember { mutableStateOf(false) }
     var folderPick by remember { mutableStateOf(false) }
+    var linking by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("Group settings", "Back to ${s.name}") { ChatNav.open = key }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
@@ -2437,14 +2458,16 @@ private fun GroupSettings(app: Muninn, g: String) {
             s.members.sortedWith(compareBy({ it.k != s.owner }, { !s.isAdmin(it.k) }, { memberName(app, it).lowercase() })).forEach { m ->
                 val role = when { m.k == s.owner -> "Owner"; s.isAdmin(m.k) -> "Admin"; else -> "Member" }
                 val how = when { m.k == me -> ""; app.chat.isContact(m.k) -> " · contact"; else -> " · in this group only" }
-                Line(memberName(app, m), role + how, icon = "user") { if (m.k != me) member = m }
+                Line(memberName(app, m), role + how, icon = "user", onLong = if (m.k != me) ({ ChatNav.holdMoves = null; ChatNav.hold = m.k }) else null) { if (m.k != me) member = m }
             }
             if (admin) {
                 MButton("Invite contacts", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "plus") { inviting = true }
-                MButton("Share a group code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "link") {
+                MButton("Show the group code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "link") {
                     code = app.chat.groups.code(g) ?: run { Ui.say("Only admins can make a group code.", true); null }
                 }
             }
+            Text("Hold someone for their role and what they can do.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+            if (!grp.readOnly) InviteLinksSection(app, g, admin) { linking = true }
             GroupLimitPanel(app, g, s, admin)
             Section("Channels")
             s.channels.forEach { c ->
@@ -2476,6 +2499,7 @@ private fun GroupSettings(app: Muninn, g: String) {
     if (addingChannel) ChannelDialog(app, g, null) { addingChannel = false }
     channel?.let { c -> ChannelDialog(app, g, c) { channel = null } }
     if (folderPick) FolderPicker(app, key, s.name) { folderPick = false }
+    if (linking) InviteLinkDialog(app, g, s.name) { linking = false }
 }
 
 @Composable
@@ -2492,9 +2516,10 @@ private fun MemberDialog(app: Muninn, g: String, s: Proto06.State, m: Proto06.Me
                 Text((if (m.k == s.owner) "Owner" else if (s.isAdmin(m.k)) "Admin" else "Member") +
                     (if (app.chat.isContact(m.k)) " · a contact" else " · in this group only"), style = Type.small)
                 if (app.chat.isContact(m.k)) MButton("Message", Modifier.fillMaxWidth(), icon = "chat") { done(); ChatNav.space = ""; ChatNav.open = m.k }
-                MButton("Check code", Modifier.fillMaxWidth(), icon = "shield") {
+                MButton("Role and permissions", Modifier.fillMaxWidth(), icon = "people") { done(); ChatNav.holdMoves = null; ChatNav.hold = m.k }
+                MButton("Check 4 emoji", Modifier.fillMaxWidth(), icon = "shield") {
                     done()
-                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(m.k)}\n\nCode: ${app.chat.codeWith(m.k)}\n\nAsk them to show the code for you. If the 4 pictures (or the number, on Huginn) are the same, nobody is in between.",
+                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(m.k)}\n\nNumber: ${app.chat.codeWith(m.k)}\n\nAsk them to show the code for you. If the 4 pictures (or the number, on Huginn) are the same, nobody is in between.",
                         "It matches", onConfirm = { app.chat.verify(m.k, name) }))
                 }
                 if (admin && m.k != s.owner) {
@@ -2532,14 +2557,14 @@ private fun InviteDialog(app: Muninn, g: String, s: Proto06.State, done: () -> U
         containerColor = Palette.panel,
         title = { Text("Invite to ${s.name}", style = Type.big) },
         text = {
-            if (people.isEmpty()) Text("Everyone you're in touch with is in it already. Share a group code to add someone else.", style = Type.normal)
+            if (people.isEmpty()) Text("Everyone you're in touch with is in it already. Make an invite link to add someone else.", style = Type.normal)
             else LazyColumn(Modifier.heightIn(max = 380.dp)) {
                 items(people, key = { it.chatKey }) { c ->
                     val ready = "g1" in c.caps
                     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(c.shown, style = Type.normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(when { c.chatKey in sent -> "Invited. They join once they accept."; ready -> "Can join"; else -> "Needs Muninn or Huginn 0.6" },
+                            Text(when { c.chatKey in sent -> "Invited. They join once they accept."; ready -> "Can join"; else -> "Needs a newer Muninn or Huginn" },
                                 style = Type.small, maxLines = 2)
                         }
                         Spacer(Modifier.width(8.dp))
@@ -2561,7 +2586,7 @@ private fun GroupCodeDialog(app: Muninn, g: String, s: Proto06.State, code: Stri
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
-        title = { Text("Group code", style = Type.big) },
+        title = { Text("The group code", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Anyone with this code can join ${s.name} for the next hour, even if they aren't your contact. In Muninn or Huginn they tap + › Add someone and paste it.",
@@ -2599,7 +2624,6 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
                     MButton("Text", Modifier.weight(1f), if (!voice) Kind.Accent else Kind.Normal) { voice = false }
                     MButton("Voice room", Modifier.weight(1f), if (voice) Kind.Accent else Kind.Normal) { voice = true }
                 }
-                if (voice) Text("Voice rooms open once calls arrive in Muninn. You can set them up now.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
             }
         },
         confirmButton = {
@@ -2663,7 +2687,7 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
             items(msgs, key = { it.id }) { m ->
                 Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
                     Text(m.text, style = Type.normal.copy(color = Palette.text),
-                        modifier = Modifier.widthIn(max = 520.dp).clip(RoundedCornerShape(14.dp))
+                        modifier = Modifier.widthIn(max = 520.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                             .background(if (m.mine) Palette.goldTint else Palette.focusFill).padding(horizontal = 12.dp, vertical = 8.dp))
                 }
             }

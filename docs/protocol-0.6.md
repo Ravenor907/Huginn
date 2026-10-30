@@ -62,6 +62,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
 | `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
 | `k4` | kids' TV `apps` (7.9): a parent sends an app to the TV. Muninn only. |
+| `k5` | kids' TV config field `nr`, the TV's noise removal (7.10). Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
@@ -103,7 +104,7 @@ From 0.95:
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `m1` for rooms `rich`, `mx` and
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
@@ -910,8 +911,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`
-(7.5); `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic` and the k5 field `nr`
+(7.5, 7.10); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1069,12 +1070,26 @@ Android still asks on the TV before it installs. A TV used normally (not in kids
 files it receives out of Downloads and asks "Install …?" first; anyone the person accepts files from can
 send one there, with no `apps` needed.
 
+### 7.10 Noise removal on the TV (`k5`)
+
+A TV whose app says `k5` takes one more optional config field. A parent's app puts it in only for such a TV.
+
+| field | value | absent means | what the TV does |
+|---|---|---|---|
+| `nr` | integer 0 to 3 | 3 | the noise removal on its microphone, for calls, voice messages and speech to text: 0 none, 1 Standard (WebRTC's noise suppressor), 2 Strong (RNNoise), 3 both, Standard first |
+
+Anything else (a boolean, text, out of range) makes the config malformed. Anyone at the TV can also pick it in
+the TV's "For a parent" screen; like the microphone level (7.7), the TV keeps its own choice until a config
+arrives whose `nr` differs from the one before (a parent changed it), and the last change wins. A TV that can't
+run its voice library uses Android's own noise suppressor whenever `nr` is not 0. The echo canceller and
+automatic gain are not affected. Vectors: `tv.configs.cfg5` (`nr` 1) and step 8 of `tv.accept`.
+
 ### 7.11 A parent reconnects after a wipe (`k6`)
 
 A parent whose phone was wiped or reinstalled has a new chat key, so the TV no longer knows them. All messages are in
 room `tvconfig`; reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-vectors.json`.
 
-1. On the TV, holding OK on the remote for 5 seconds on "For a parent" shows a **Connect a parent** code: the TV's
+1. On the TV, holding OK on the remote for 5 seconds on "Connect a parent" shows a **Connect a parent** code: the TV's
    contact code with `"tv": 2` and a fresh invite (an hour). A child can't open it by pressing around.
 2. The parent's phone adds the TV from it and sends `{"t":"rejoin","n":<name>}`, with the invite in the envelope.
    The TV takes it only with a live invite, from someone who isn't a parent, and keeps them as the **joiner** (key,

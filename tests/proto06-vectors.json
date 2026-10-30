@@ -1536,6 +1536,51 @@
         },
         "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500250000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":4}",
         "hash": "ddceb0637f8837de99a05bd26c5b0b29a200024822c91142fee83b4c6163d2ea"
+      },
+      "cfg5": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 5,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500260000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "calls": false,
+          "mic": 80,
+          "nr": 1,
+          "sig": "MEYCIQCQtZpkfSVY7lDDNOygmHVKKE2OHGkdQhV+kt3uKEbvPAIhAOybw+feZGZJbM4T9QlCoXWpI0e8eC2N1msIPF0qxD5r"
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"nr\":1,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500260000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":5}",
+        "hash": "bed5af894cc727d5315ec0c0aa86655ac8dd4292695d8f6759f75f11b5d54aa1"
       }
     },
     "accept": [
@@ -1603,6 +1648,16 @@
         ],
         "current": "cfg3b",
         "new": "cfg4",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg4",
+        "new": "cfg5",
         "accept": true,
         "why": "newer"
       }

@@ -87,7 +87,7 @@ fun SetupCard(app: Muninn, modifier: Modifier = Modifier) {
     var tick by remember { mutableIntStateOf(0) }
     var list by remember { mutableStateOf(missing(ctx, app)) }
     // Android's own screens change these behind our back: look again every little while and after each answer.
-    LaunchedEffect(tick) { while (true) { list = missing(ctx, app); delay(1500) } }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(1500, tick) { list = missing(ctx, app) }
     var askedAt by remember { mutableLongStateOf(0L) }
     var asking by remember { mutableStateOf<Missing?>(null) }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->

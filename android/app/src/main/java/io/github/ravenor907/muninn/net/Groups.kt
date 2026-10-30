@@ -64,6 +64,8 @@ class Groups(
         val retry: Boolean = true, val photo: String = "", val voice: Int = 0, val ch: String = "", val tries: Int = 0,
         /** Cap m2, for a gphoto: a video's length, and the album it's in. */
         val video: Int = 0, val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
+        /** This try also goes to the relays (false while they hold it and it isn't time yet, see NetLogic). */
+        val net: Boolean = true,
     )
 
     /** [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). */
@@ -836,7 +838,7 @@ class Groups(
         for (id in ids) {
             val env = Proto06.envelopeId(id, from)
             outs.removeAll { (it.env == env).also { x -> if (x) host.drop(env) } }
-            tries.remove(env)
+            tries.remove(env); heldAt.remove(env); publishedAt.remove(env)
         }
         val list = chats[g] ?: return 200
         chats[g] = list.map { m ->
@@ -857,7 +859,13 @@ class Groups(
     /** Confirms again (a copy of something already handled came in: its sender missed my receipt). */
     fun ack(to: String, g: String, ids: List<String>, s: String) = act { receipt(to, g, ids.filter { Proto06.isLogicalId(it) }, s) }
 
-    private fun receipt(to: String, g: String, ids: List<String>, s: String) {
+    private fun receipt(to: String, g: String, ids0: List<String>, s: String) {
+        // "Delivered" for the same message at most once every few minutes (resends and photo pieces don't each get one).
+        val t = now()
+        val ids = if (s != "delivered") ids0 else ids0.filter { id ->
+            NetLogic.receiptDue(receipted["$to|$id"], t).also { if (it) receipted["$to|$id"] = t }
+        }
+        if (receipted.size > 2000) receipted.entries.removeIf { t - it.value > NetLogic.RECEIPT_GAP_MS }
         if (ids.isEmpty()) return
         queue.add(Out(Proto06.newLogicalId(), to, "greceipt", JSONObject().put("g", g).put("ids", JSONArray(ids)).put("s", s).toString(), "", g, now(), retry = false))
     }
@@ -872,18 +880,43 @@ class Groups(
         queue.add(o)
     }
 
+    /** When "delivered" last went back per member and message ("key|id"). */
+    private val receipted = HashMap<String, Long>()
+    /** Envelopes relays hold (when they first did) and when each last went to them: see [NetLogic]. */
+    private val heldAt = HashMap<String, Long>()
+    private val publishedAt = HashMap<String, Long>()
+
+    /** Relays hold envelope [env] now: it goes to them again only at 1 hour and 6 hours. */
+    fun relaysHold(env: String) = synchronized(lock) {
+        if (heldAt.containsKey(env) || outs.none { it.env == env }) return@synchronized
+        val t = now()
+        heldAt[env] = t
+        tries[env]?.let { (n, _) -> tries[env] = n to NetLogic.next(n, t, t) }
+    }
+
+    /** [k] just showed up close by or on the same Wi-Fi: what's still on its way to them goes now. */
+    fun nudge(k: String) = synchronized(lock) {
+        for (o in outs) if (o.to == k) tries[o.env]?.let { (n, _) -> tries[o.env] = n to 0L }
+    }
+
     /** Called every second or so: what to send again now (the same sealed bytes; tries counts up). */
     fun due(): List<Out> = synchronized(lock) {
         val t = now()
         val before = outs.size
         outs.removeAll { o ->
             val stale = t - o.t > DAY || (o.room != "group" && groups[o.g]?.let { it.readOnly || !it.state.has(o.to) } != false)
-            if (stale) { host.drop(o.env); tries.remove(o.env) }
+            if (stale) { host.drop(o.env); tries.remove(o.env); heldAt.remove(o.env); publishedAt.remove(o.env) }
             stale
         }
         val list = outs.mapNotNull { o ->
             val (n, next) = tries[o.env] ?: (0 to 0L)
-            if (next > t) null else { tries[o.env] = (n + 1) to t + RETRY[minOf(n, RETRY.size - 1)]; o.copy(tries = n + 1) }
+            if (next > t) null else {
+                val held = heldAt[o.env] ?: 0L
+                tries[o.env] = (n + 1) to NetLogic.next(n + 1, t, held)
+                val net = NetLogic.publish(held, publishedAt[o.env] ?: 0L, t)
+                if (net) publishedAt[o.env] = t
+                o.copy(tries = n + 1, net = net)
+            }
         }
         if (outs.size != before) save()
         list
@@ -947,7 +980,7 @@ class Groups(
     fun clear() = act {
         groups.clear(); chats.clear(); outs.clear(); tokens.clear(); invites.clear(); joining.clear(); last.clear()
         links.clear(); linkLists.clear(); madeLinks.clear()
-        deleted.clear(); unread.clear(); held.clear(); tries.clear()
+        deleted.clear(); unread.clear(); held.clear(); tries.clear(); heldAt.clear(); publishedAt.clear(); receipted.clear()
     }
 
     private fun publish() {
@@ -1055,8 +1088,8 @@ class Groups(
         const val CHATS = "gchats.json"
         const val OUTS = "gouts.json"
         const val DAY = 86_400_000L
-        /** 5 s, 10 s, 20 s, 1 min, then every 5 min, like private messages. */
-        val RETRY = longArrayOf(5_000, 10_000, 20_000, 60_000, 300_000)
+        /** 5 s, 10 s, 20 s, 1 min, then every 5 min, like private messages (until relays hold it, see NetLogic). */
+        val RETRY = NetLogic.RETRY
         /** Names and text from others: no control characters, at most [limit] characters. */
         fun clean(s: String, limit: Int): String {
             val t = s.filter { it.code >= 0x20 && it.code != 0x7F }.trim()

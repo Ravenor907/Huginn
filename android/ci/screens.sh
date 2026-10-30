@@ -6,6 +6,7 @@ PKG=io.github.ravenor907.muninn
 mkdir -p screens
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+adb shell pm grant $PKG android.permission.CAMERA 2>/dev/null || true
 for p in BLUETOOTH_ADVERTISE BLUETOOTH_CONNECT BLUETOOTH_SCAN NEARBY_WIFI_DEVICES ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION; do adb shell pm grant $PKG android.permission.$p 2>/dev/null || true; done
 adb logcat -c
 n=0
@@ -31,12 +32,19 @@ for screen in chats calls files contacts settings; do
   s=$screen; [ "$s" = chats ] && s=chat
   shot "$screen" --es screen "$s"
 done
-# A conversation (top bar, bubbles, composer), the chat list's + menu and the lock screen.
+# Settings: the short list's pages and More settings (each page opens on its own).
+shot settings-more --es screen settings --es folder more
+shot settings-lock --es screen settings --es folder lock
+shot settings-look --es screen settings --es folder look
+shot settings-notify --es screen settings --es folder notify
+# A conversation (top bar, bubbles, composer), Add someone (camera first) and the lock screen.
 shot conversation --es chat demo
-shot new-chat-menu --es screen chat --ez menu true
+shot add-someone --es chat add
 # Groups: a group conversation (channel chips, sender names) and its settings (members, channels, folders).
 shot group --ez group true
 shot group-settings --ez group true --ez gsettings true
+# Press and hold: the person and chat sheet (here on the group).
+shot hold-sheet --ez group true --ez hold true
 shot lock --es screen lock
 # The Kids' TV voice processing library (echo canceller, RNNoise) loads and runs on Android.
 adb shell am force-stop $PKG
@@ -48,6 +56,13 @@ case "$tvv" in
   *) echo "::error title=Kids' TV voice library::${tvv:-no self-check line in logcat}"; exit 1 ;;
 esac
 crashed tvvoice
+# A phone turned on its side gets the landscape layout (the rail) too.
+adb shell settings put system accelerometer_rotation 0
+adb shell settings put system user_rotation 1
+sleep 2
+shot phone-landscape --es screen chat
+adb shell settings put system user_rotation 0
+sleep 2
 # Tablet size (1280x800 at density 160, so 1280dp wide): the rail, chat list and conversation.
 adb shell wm size 1280x800
 adb shell wm density 160

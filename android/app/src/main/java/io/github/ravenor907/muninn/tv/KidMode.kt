@@ -77,9 +77,10 @@ object KidMode {
 /**
  * What a Kids' TV holds: its parents' keys (empty while pairing) and the config they last sent.
  * [micLocal]: a microphone level set on the TV itself (7.7), used instead of the config's until a parent
- * changes it; [micAt]: when (this TV's clock).
+ * changes it; [micAt]: when (this TV's clock). [nrLocal]: noise removal picked on the TV (7.10), the same way.
  */
-data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null, val micLocal: Int? = null, val micAt: Long = 0)
+data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null, val micLocal: Int? = null, val micAt: Long = 0,
+                    val nrLocal: Int? = null)
 
 /**
  * The TV side of protocol 0.6 section 7: pairing, taking configs, the people it may talk to, and
@@ -105,7 +106,8 @@ object KidTv {
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
         val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); TvRules.parse(c) } catch (e: Exception) { null } }
         val local = if (o.has("micLocal")) o.optInt("micLocal").coerceIn(0, TvRules.MAX_MIC) else null
-        _state.value = KidState(parents, cfg, local, o.optLong("micAt"))
+        val nr = if (o.has("nrLocal")) o.optInt("nrLocal").coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH) else null
+        _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr)
         if (KidMode.on(app)) tune(_state.value)
     }
 
@@ -114,6 +116,21 @@ object KidTv {
         TvMic.active = s.cfg != null
         TvMic.level = s.micLocal ?: s.cfg?.mic ?: TvRules.DEFAULT_MIC
         micLevel.value = TvMic.level
+        TvMic.noise = s.nrLocal ?: s.cfg?.nr ?: TvRules.NR_BOTH
+        noise.value = TvMic.noise
+    }
+
+    /** The noise removal in use, for the TV's "For a parent" screen. */
+    val noise = MutableStateFlow(TvRules.NR_BOTH)
+
+    /** Someone at the TV picked a noise removal: it takes effect from the next call or recording, until a parent picks another. */
+    fun setNoise(app: Muninn, nr: Int) = synchronized(lock) {
+        val s = _state.value
+        if (s.cfg == null || wiping.value) return@synchronized
+        val next = s.copy(nrLocal = nr.coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH))
+        _state.value = next
+        try { save(app, next) } catch (_: Exception) {}
+        tune(next)
     }
 
     /** The level in use, for the TV's own slider. */
@@ -123,6 +140,7 @@ object KidTv {
         val o = JSONObject().put("parents", JSONArray(s.parents))
         s.cfg?.let { o.put("cfg", it.raw) }
         s.micLocal?.let { o.put("micLocal", it).put("micAt", s.micAt) }
+        s.nrLocal?.let { o.put("nrLocal", it) }
         app.vault.write(file(app), o.toString())
     }
 
@@ -221,7 +239,10 @@ object KidTv {
                 // A parent who picked another microphone level wins over one set on the TV (the last change wins);
                 // a config that only carries the level on keeps the TV's own.
                 val parentMic = s.cfg == null || cfg.mic != s.cfg.mic
-                val next = if (parentMic) KidState(cfg.parents, cfg) else KidState(cfg.parents, cfg, s.micLocal, s.micAt)
+                // Noise removal (7.10) the same way: a parent's new pick wins over the TV's own.
+                val parentNr = s.cfg == null || cfg.nr != s.cfg.nr
+                val next = (if (parentMic) KidState(cfg.parents, cfg) else KidState(cfg.parents, cfg, s.micLocal, s.micAt))
+                    .copy(nrLocal = if (parentNr) null else s.nrLocal)
                 save(app, next)
                 _state.value = next
                 tune(next)

@@ -132,7 +132,7 @@ internal fun MessageSheet(mineReaction: String?, canReact: Boolean, actions: Lis
                         .semantics { contentDescription = "More reactions" }, contentAlignment = Alignment.Center) { MIcon("plus", Palette.accent, 20.dp, weight = 2f) }
                 }
                 actions.forEach { a ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).clickable(role = Role.Button) { onDismiss(); a.run() }
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = Role.Button) { onDismiss(); a.run() }
                         .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         MIcon(a.icon, if (a.danger) Palette.danger else Palette.accent, 20.dp)
                         Spacer(Modifier.width(14.dp))
@@ -152,7 +152,7 @@ internal fun ReactionChips(all: Map<String, Rich.Reaction>, me: String, alignEnd
     if (counts.isEmpty()) return
     val mine = all[me]?.e?.takeIf { it.isNotEmpty() }
     Row(Modifier.padding(top = 2.dp).fillMaxWidth(), horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start) {
-        val shape = RoundedCornerShape(12.dp)
+        val shape = io.github.ravenor907.muninn.ui.Corner
         Row(Modifier.clip(shape).background(Palette.raised).then(if (mine != null) Modifier.border(1.dp, Palette.gold, shape) else Modifier.hcBorder(shape))
             .clickable(role = Role.Button) { onTap() }.padding(horizontal = 8.dp, vertical = 3.dp)
             .semantics { contentDescription = counts.joinToString(", ") { (e, n) -> "$e $n" } + (if (mine != null) ", yours $mine" else "") },
@@ -168,7 +168,7 @@ internal fun ReactionChips(all: Map<String, Rich.Reaction>, me: String, alignEnd
 /** The quoted message at the top of a reply. */
 @Composable
 internal fun QuoteBlock(name: String, text: String, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     Row(Modifier.padding(bottom = 4.dp).clip(shape).background(Palette.groundDeep).clickable(role = Role.Button, onClickLabel = "Show the message") { onClick() }) {
         Box(Modifier.width(3.dp).height(38.dp).background(Palette.gold))
         Column(Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
@@ -181,7 +181,7 @@ internal fun QuoteBlock(name: String, text: String, onClick: () -> Unit) {
 /** Over the message box: "Replying to Raven" or "Editing", with an X. */
 @Composable
 internal fun ComposeBanner(title: String, text: String, icon: String, onClose: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 6.dp).clip(RoundedCornerShape(10.dp)).background(Palette.raised)
+    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 6.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.raised)
         .padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         MIcon(icon, Palette.gold, 18.dp)
         Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 6.dp)) {
@@ -195,7 +195,7 @@ internal fun ComposeBanner(title: String, text: String, icon: String, onClose: (
 /** Search inside one chat: the box, how many match, and up and down through them (newest first). */
 @Composable
 internal fun ChatSearchBar(query: String, onQuery: (String) -> Unit, found: Int, at: Int, onPrev: () -> Unit, onNext: () -> Unit, onClose: () -> Unit) {
-    val shape = RoundedCornerShape(22.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).heightIn(min = 42.dp).clip(shape).background(Palette.field).hcBorder(shape).padding(start = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -220,7 +220,7 @@ internal fun ChatSearchBar(query: String, onQuery: (String) -> Unit, found: Int,
 internal fun TypingRow(name: String) {
     Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 2.dp, bottom = 2.dp).semantics { contentDescription = "$name is typing" },
         verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.clip(RoundedCornerShape(16.dp)).background(Palette.field).padding(horizontal = 12.dp, vertical = 10.dp),
+        Row(Modifier.clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field).padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             repeat(3) { Box(Modifier.size(7.dp).clip(CircleShape).background(Palette.textMuted)) }
         }
@@ -233,41 +233,5 @@ internal fun TypingRow(name: String) {
 internal fun Circled(n: Int) {
     Box(Modifier.size(17.dp).clip(CircleShape).border(1.dp, Palette.gold, CircleShape), contentAlignment = Alignment.Center) {
         Text(if (n > 99) "99" else "$n", style = small.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Palette.gold), maxLines = 1)
-    }
-}
-
-/** A chat's photos (a grid) and voice messages (a list), newest first. */
-@Composable
-internal fun MediaGallery(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onPhoto: (Chat.Msg) -> Unit, onBack: () -> Unit) {
-    val photos = msgs.filter { it.unsent.isEmpty() && it.photo.isNotEmpty() && it.voice == 0 }.asReversed()
-    val voices = msgs.filter { it.unsent.isEmpty() && it.photo.isNotEmpty() && it.voice > 0 }.asReversed()
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction("back", "Back to the chat", Palette.text, size = 24.dp) { onBack() }
-            Spacer(Modifier.width(6.dp))
-            Text(title, style = Type.big, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
-        if (photos.isEmpty() && voices.isEmpty()) {
-            Text("No photos or voice messages in this chat yet.", style = Type.normal, modifier = Modifier.padding(16.dp))
-            return@Column
-        }
-        LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (photos.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Text("PHOTOS · ${photos.size}", style = Type.section, modifier = Modifier.padding(6.dp)) }
-            items(photos, key = { "p" + it.id }) { m ->
-                val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(bytes(m), 360) } }
-                Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(6.dp)).background(Palette.groundDeep).clickable(role = Role.Button) { onPhoto(m) }
-                    .semantics { contentDescription = "Photo" }, contentAlignment = Alignment.Center) {
-                    bmp?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                }
-            }
-            if (voices.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Text("VOICE · ${voices.size}", style = Type.section, modifier = Modifier.padding(start = 6.dp, top = 14.dp, bottom = 6.dp)) }
-            items(voices, key = { "v" + it.id }, span = { GridItemSpan(maxLineSpan) }) { m ->
-                Row(Modifier.fillMaxWidth().widthIn(max = 520.dp).clip(RoundedCornerShape(10.dp)).background(Palette.field).padding(10.dp)) {
-                    VoiceNote(m, { bytes(m) }, Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), small)
-                }
-            }
-        }
     }
 }

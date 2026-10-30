@@ -101,10 +101,15 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
-    /** A pure black background: an OLED screen leaves black pixels off, which saves a little battery. */
-    var trueBlack: Boolean
-        get() = prefs.getBoolean("trueBlack", false)
-        set(v) = prefs.edit().putBoolean("trueBlack", v).apply()
+    /** The look: "dark", "black" (true black, kept from the old True black switch), "light" or "metal". */
+    var look: String
+        get() = prefs.getString("look", null) ?: if (prefs.getBoolean("trueBlack", false)) "black" else "dark"
+        set(v) = prefs.edit().putString("look", v).apply()
+
+    /** Where the lock pattern sits on the screen: "top", "middle" or "lower" (easiest one-handed). */
+    var patternPos: String
+        get() = prefs.getString("patternPos", null)?.takeIf { it in setOf("top", "middle", "lower") } ?: "lower"
+        set(v) = prefs.edit().putString("patternPos", v).apply()
 
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
