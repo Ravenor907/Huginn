@@ -9,7 +9,7 @@ Rectangle {
     signal jump()
     height: Theme.px(30)
     width: Math.min(parent ? parent.width : Theme.px(400), quoteText.implicitWidth + Theme.px(26))
-    radius: Theme.px(6)
+    radius: Theme.radius
     color: qHover.hovered ? Theme.raised : Theme.panel
     Accessible.role: Accessible.Button
     Accessible.name: "Reply to " + who + ": " + what

@@ -16,15 +16,17 @@ Rectangle {
     property int lineH: 0
     property bool hoverTools: false
     property bool inThread: false
+    // Under the one before from the same person within 7 minutes: no name or picture again (Discord).
+    property bool grouped: false
     signal options()
     signal chosen()          // clicked: the page picks it (its tools show)
     property string who: m.name || "Someone"
     // Safe while a list takes the row away (its message is gone by then) and the theme changes.
     readonly property bool mine: !!m && !!m.mine
-    // Settings › Appearance: compact drops the avatar and the room around each message.
-    readonly property int pad: Theme.px(Theme.compact ? 3 : 7)
+    // Settings › Look: Compact drops the pictures and the room between messages; Spacious adds room.
+    readonly property int pad: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 2 : Theme.spacious ? 8 : 5)
     height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
-    radius: Theme.px(8)
+    radius: 0
     color: picked ? Theme.focusFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : "transparent"
     border.width: picked ? Theme.focusWidth : 0
     border.color: Theme.accent
@@ -36,7 +38,7 @@ Rectangle {
         Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
         Rectangle {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.px(4); color: Theme.danger
+            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.radius; color: Theme.danger
             Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
         }
     }
@@ -48,7 +50,7 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: Math.min(parent.width * 0.9, noteText.implicitWidth + Theme.px(28))
         height: noteText.implicitHeight + Theme.px(14)
-        radius: Theme.px(8)
+        radius: Theme.radius
         color: Theme.panel
         border.width: 1
         border.color: Theme.line
@@ -63,8 +65,8 @@ Rectangle {
     }
     Rectangle {
         id: face
-        visible: !msg.m.system && !Theme.compact
-        x: Theme.px(8); y: msg.lineH + msg.pad
+        visible: !msg.m.system && !Theme.compact && !msg.grouped
+        x: Theme.px(16); y: msg.lineH + msg.pad
         width: visible ? Theme.px(40) : 0; height: width; radius: width / 2
         color: Theme.avatar(msg.who, msg.mine).bg
         Text {
@@ -77,17 +79,18 @@ Rectangle {
     Column {
         id: col
         visible: !msg.m.system
-        anchors.left: face.right; anchors.leftMargin: Theme.px(Theme.compact ? 4 : 12)
-        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+        x: Theme.px(Theme.compact ? 16 : 72)
+        width: parent.width - x - Theme.px(16)
         y: msg.lineH + msg.pad
-        spacing: Theme.px(Theme.compact ? 1 : 3)
+        spacing: Theme.px(2)
         Row {
+            visible: !msg.grouped
             spacing: Theme.px(8)
             Text {
                 id: whoText
                 text: msg.who
                 color: Theme.avatar(msg.who, msg.mine).fg
-                font.family: Theme.body; font.pixelSize: Theme.ms(Theme.compact ? 15 : 16); font.weight: Font.DemiBold
+                font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.Medium
                 // A click on the name opens their profile card.
                 readonly property string key: msg.m.mine ? "me" : (msg.m.from || (msg.host && msg.host.openKey) || "")
                 HoverHandler { cursorShape: whoText.key !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor }
@@ -100,7 +103,7 @@ Rectangle {
                 anchors.baseline: whoText.baseline
                 text: host.clock(msg.m.time) + (msg.m.isEdited ? " · (edited)" : "") + host.stateLabel(msg.m)
                 color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? Theme.accent : Theme.textMuted
-                font.family: Theme.body; font.pixelSize: Theme.ms(13)
+                font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
             // Mine and read: a check mark and how many have read it, in a circle.
             Row {
@@ -150,7 +153,8 @@ Rectangle {
             textFormat: Text.PlainText
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
             font.italic: !!msg.m.unsent
-            color: msg.m.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.ms(17)
+            lineHeight: 1.2
+            color: msg.m.unsent ? Theme.textFaint : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
         }
         // Cap m2: an album, a video message, a poll or a link preview.
         MoreParts { width: parent.width; host: msg.host; m: msg.m; where: msg.host && msg.host.more ? msg.host.more.where : "" }

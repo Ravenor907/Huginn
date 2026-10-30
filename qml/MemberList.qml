@@ -14,6 +14,7 @@ Rectangle {
     readonly property bool statusOn: tour || Chat.activeStatus
     property alias flick: memFlick
     color: Theme.column
+    Brushed {}
 
     // Who is in which voice room or group call of this group: key -> its name.
     readonly property var voiceIn: {
@@ -57,9 +58,9 @@ Rectangle {
     Flickable {
         id: memFlick
         anchors.fill: parent
-        anchors.topMargin: Theme.px(18)
-        anchors.leftMargin: Theme.px(14)
-        anchors.rightMargin: Theme.px(10)
+        anchors.topMargin: Theme.px(8)
+        anchors.leftMargin: Theme.px(8)
+        anchors.rightMargin: Theme.px(8)
         contentHeight: memCol.implicitHeight + Theme.px(12)
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -72,7 +73,7 @@ Rectangle {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 bottomPadding: Theme.px(8)
-                text: "Active status is off, so nobody shows as online. Settings › Privacy."
+                text: "Active status is off, so nobody shows as online. Settings › Lock and privacy."
                 color: Theme.textFaint
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
@@ -84,11 +85,12 @@ Rectangle {
                     width: memCol.width
                     spacing: Theme.px(2)
                     Text {
-                        topPadding: index === 0 ? 0 : Theme.px(10)
+                        leftPadding: Theme.px(8)
+                        topPadding: Theme.px(index === 0 ? 12 : 20)
                         bottomPadding: Theme.px(4)
-                        text: modelData.title + " · " + modelData.people.length
+                        text: modelData.title + " - " + modelData.people.length
                         color: Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
+                        font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(0.5)
                     }
                     Repeater {
                         model: modelData.people
@@ -108,8 +110,8 @@ Rectangle {
         readonly property string line: list.statusText(person, status)
         readonly property var tone: Theme.avatar(person.name, person.me)
         width: memCol.width
-        height: Theme.px(line !== "" || person.owner || person.admin ? 48 : 42)
-        radius: Theme.px(8)
+        height: Theme.px(42)
+        radius: Theme.radius
         color: on ? Theme.tile : memHover.hovered ? Theme.raised : "transparent"
         border.width: on ? Theme.focusWidth : 0
         border.color: Theme.accent
@@ -118,7 +120,7 @@ Rectangle {
                          + (line !== "" ? ", " + line : list.statusOn ? ", offline" : "")
         Item {
             id: mface
-            anchors.left: parent.left; anchors.leftMargin: Theme.px(6)
+            anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
             anchors.verticalCenter: parent.verticalCenter
             width: Theme.px(32); height: width
             opacity: mr.status === "offline" && list.statusOn ? 0.5 : 1
@@ -150,7 +152,7 @@ Rectangle {
             }
         }
         Column {
-            anchors.left: mface.right; anchors.leftMargin: Theme.px(10)
+            anchors.left: mface.right; anchors.leftMargin: Theme.px(12)
             anchors.right: crown.visible ? crown.left : parent.right; anchors.rightMargin: Theme.px(6)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
@@ -159,7 +161,7 @@ Rectangle {
                 elide: Text.ElideRight
                 text: (mr.person.name || "") + (mr.person.me ? " (you)" : "")
                 color: mr.status === "offline" && list.statusOn ? Theme.textMuted : Theme.text
-                font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
             }
             Text {
                 visible: text !== ""
@@ -184,9 +186,14 @@ Rectangle {
             onTapped: (point, button) => {
                 if (!list.host) return
                 list.host.zone = "members"; list.host.memRow = mr.at
-                if (button === Qt.RightButton) list.host.memberOptions(mr.person)
+                // A right click: the person panel for a contact, the group's member options otherwise.
+                if (button === Qt.RightButton) {
+                    if (!mr.person.me && (list.tour || Chat.isContact(mr.person.key))) Ui.showPerson(mr.person.key, mr.person.name, { tour: list.tour, more: list.tour ? null : () => list.host.memberOptions(mr.person) })
+                    else list.host.memberOptions(mr.person)
+                }
                 else list.host.showMember(mr.person)
             }
+            onLongPressed: if (!mr.person.me && list.host && !list.tour && Chat.isContact(mr.person.key)) Ui.showPerson(mr.person.key, mr.person.name, {})
         }
     }
 }

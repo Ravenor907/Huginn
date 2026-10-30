@@ -82,7 +82,7 @@ Item {
             visible: box.suggestions.length > 0
             width: Math.min(parent.width, Theme.px(320))
             height: sugCol.implicitHeight + Theme.px(8)
-            radius: Theme.px(8)
+            radius: Theme.radius
             color: Theme.panel
             border.color: Theme.line
             Column {
@@ -94,7 +94,7 @@ Item {
                     Rectangle {
                         width: sugCol.width
                         height: Theme.px(32)
-                        radius: Theme.px(6)
+                        radius: Theme.radius
                         color: sugHover.hovered ? Theme.raised : "transparent"
                         Text { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(10); text: "@" + modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                         HoverHandler { id: sugHover; cursorShape: Qt.PointingHandCursor }
@@ -109,7 +109,7 @@ Item {
             visible: box.bannerTitle !== ""
             width: parent.width
             height: Theme.px(40)
-            radius: Theme.px(8)
+            radius: Theme.radius
             color: Theme.panel
             Icon { id: bannerIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: box.editing ? "edit" : "reply"; size: Theme.px(16); color: Theme.accent }
             Text {
@@ -134,8 +134,8 @@ Item {
         Rectangle {
             id: frame
             width: parent.width
-            height: Math.min(Math.max(field.implicitHeight, Theme.px(46)), Theme.px(180))
-            radius: Theme.px(11)
+            height: Math.min(Math.max(field.implicitHeight, Theme.px(44)), Theme.px(180))
+            radius: Theme.radius
             color: Theme.raised
             border.width: field.activeFocus ? (box.pad ? Theme.focusWidth : 1) : 0
             border.color: box.pad ? Theme.accent : Theme.lineMuted

@@ -236,43 +236,6 @@ void tidyOldLayout()
         moveAside(lib + QStringLiteral("/Huginn.exe"), &aside);
         QFile::remove(aside);
     }
-    // Updating from the 0.6 zip, which had everything at the top, leaves its files beside the new lib\.
-    // Remove only names that zip had at the top (or that lib\ now has a copy of), so anything the
-    // owner put in the folder stays.
-    static const QStringList keep{QStringLiteral("Huginn.exe"), QStringLiteral("LICENSE.txt"), QStringLiteral("lib"),
-                                  QStringLiteral("update-staging"), QStringLiteral("Huginn-start.log")};
-    // Everything else at the top of Huginn-Windows.zip 0.6: Qt, FFmpeg, OpenSSL, Opus, SDL2,
-    // libqrencode and the Visual C++ runtime DLLs, Qt's plugin and QML folders, and Tor.
-    static const QStringList old06Files{
-        QStringLiteral("tor.exe"), QStringLiteral("Qt6Bluetooth.dll"), QStringLiteral("Qt6Core.dll"), QStringLiteral("Qt6Gui.dll"),
-        QStringLiteral("Qt6Multimedia.dll"), QStringLiteral("Qt6Network.dll"), QStringLiteral("Qt6OpenGL.dll"), QStringLiteral("Qt6Qml.dll"),
-        QStringLiteral("Qt6QmlMeta.dll"), QStringLiteral("Qt6QmlModels.dll"), QStringLiteral("Qt6QmlWorkerScript.dll"), QStringLiteral("Qt6Quick.dll"),
-        QStringLiteral("Qt6QuickControls2.dll"), QStringLiteral("Qt6QuickControls2Basic.dll"), QStringLiteral("Qt6QuickControls2BasicStyleImpl.dll"),
-        QStringLiteral("Qt6QuickControls2Impl.dll"), QStringLiteral("Qt6QuickShapes.dll"), QStringLiteral("Qt6QuickTemplates2.dll"),
-        QStringLiteral("Qt6Svg.dll"), QStringLiteral("Qt6WebSockets.dll"), QStringLiteral("Qt6Widgets.dll"), QStringLiteral("SDL2.dll"),
-        QStringLiteral("avcodec-61.dll"), QStringLiteral("avformat-61.dll"), QStringLiteral("avutil-59.dll"), QStringLiteral("swresample-5.dll"),
-        QStringLiteral("swscale-8.dll"), QStringLiteral("concrt140.dll"), QStringLiteral("dxcompiler.dll"), QStringLiteral("dxil.dll"),
-        QStringLiteral("icuuc.dll"), QStringLiteral("legacy.dll"), QStringLiteral("libcrypto-3-x64.dll"), QStringLiteral("libssl-3-x64.dll"),
-        QStringLiteral("msvcp140.dll"), QStringLiteral("msvcp140_1.dll"), QStringLiteral("msvcp140_2.dll"), QStringLiteral("msvcp140_atomic_wait.dll"),
-        QStringLiteral("msvcp140_codecvt_ids.dll"), QStringLiteral("opus.dll"), QStringLiteral("qrencode.dll"), QStringLiteral("vccorlib140.dll"),
-        QStringLiteral("vcruntime140.dll"), QStringLiteral("vcruntime140_1.dll"), QStringLiteral("vcruntime140_threads.dll")};
-    static const QStringList old06Dirs{QStringLiteral("generic"), QStringLiteral("iconengines"), QStringLiteral("imageformats"),
-                                       QStringLiteral("multimedia"), QStringLiteral("networkinformation"), QStringLiteral("platforms"),
-                                       QStringLiteral("qml"), QStringLiteral("qmltooling"), QStringLiteral("styles"), QStringLiteral("tls")};
-    for (const QFileInfo &fi : QDir(root).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
-        const QString n = fi.fileName();
-        if (keep.contains(n, Qt::CaseInsensitive) || n.endsWith(kAside, Qt::CaseInsensitive))
-            continue;
-        const QFileInfo twin(lib + QLatin1Char('/') + n);
-        const bool sameInLib = twin.exists() && twin.isDir() == fi.isDir();
-        if (fi.isDir() && (sameInLib || old06Dirs.contains(n, Qt::CaseInsensitive)))
-            QDir(fi.absoluteFilePath()).removeRecursively();
-        else if (!fi.isDir() && (sameInLib || old06Files.contains(n, Qt::CaseInsensitive)))
-            QFile::remove(fi.absoluteFilePath());
-    }
-    // 0.6 kept Tor's licences in licenses\tor\; take the licenses folder too once nothing else is in it.
-    QDir(root + QStringLiteral("/licenses/tor")).removeRecursively();
-    QDir(root).rmdir(QStringLiteral("licenses"));
 #endif
 }
 

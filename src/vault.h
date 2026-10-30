@@ -124,6 +124,8 @@ public:
     bool lockOnLeave() const;
     void setLockOnLeave(bool on);
     Q_INVOKABLE void button(const QString &name, bool down);
+    // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second).
+    Q_INVOKABLE void panic();
 
 Q_SIGNALS:
     void changed();

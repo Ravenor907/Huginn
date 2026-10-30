@@ -67,11 +67,13 @@ Rectangle {
     // ============================================================= the list
     Rectangle {
         id: middle
+        // Portrait: the list on top, the rest under it.
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: Ui.dock
-        width: Theme.listWidth
+        anchors.bottomMargin: Theme.portrait ? parent.height * 0.45 : Ui.dock
+        width: Theme.portrait ? parent.width : Theme.listWidth
         color: Theme.column
+        Brushed {}
         PageHeader { id: head; width: parent.width; title: "Calls" }
         Text {
             visible: page.entries.length === 0
@@ -101,7 +103,7 @@ Rectangle {
                 readonly property bool on: page.row === index
                 width: list.width
                 height: Theme.px(56)
-                radius: Theme.px(10)
+                radius: Theme.radius
                 color: on ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
                 border.width: on && page.active ? Theme.focusWidth : 0
                 border.color: Theme.accent
@@ -144,9 +146,9 @@ Rectangle {
 
     // ============================================================= the picked call
     Item {
-        anchors.left: middle.right
+        anchors.left: Theme.portrait ? parent.left : middle.right
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: Theme.portrait ? middle.bottom : parent.top
         anchors.bottom: parent.bottom
         Column {
             anchors.centerIn: parent
@@ -181,8 +183,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: page.picked ? page.detail(page.picked)
-                    : "Call the people you chat with, on Huginn or Muninn. Open their conversation, press LT and pick Call. "
-                      + "Close by, the sound goes straight over Wi-Fi or Bluetooth; apart, it goes through a relay, still encrypted end to end."
+                    : "Call the people you chat with, on Huginn or Muninn: open their chat and choose Call. "
+                      + "Close by, the sound goes straight over Wi-Fi or Bluetooth; apart, it goes over the internet, still encrypted end to end."
                 color: page.picked && page.picked.missed ? Theme.danger : Theme.textMuted
                 font.family: Theme.body
                 font.pixelSize: Theme.fs(16)

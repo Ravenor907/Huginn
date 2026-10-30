@@ -6,22 +6,23 @@ Rectangle {
     property bool checked: false
     signal toggled()
 
-    implicitWidth: Theme.px(60)
-    implicitHeight: Theme.px(32)
-    radius: height / 2
+    implicitWidth: Theme.px(40)
+    implicitHeight: Theme.px(22)
+    radius: Theme.radius
     color: checked ? Theme.accentFill : Theme.raised
     border.color: checked ? Theme.accent : Theme.lineMuted
     border.width: 1
 
     Rectangle {
-        width: parent.height - Theme.px(8)
+        width: parent.height - Theme.px(6)
         height: width
-        radius: width / 2
-        y: Theme.px(4)
-        x: sw.checked ? parent.width - width - Theme.px(4) : Theme.px(4)
+        radius: 2
+        y: Theme.px(3)
+        x: sw.checked ? parent.width - width - Theme.px(3) : Theme.px(3)
         color: sw.checked ? Theme.accent : Theme.textFaint
         Behavior on x { NumberAnimation { duration: Theme.motion ? 120 : 0 } }
     }
+    HoverHandler { cursorShape: Qt.PointingHandCursor }
     TapHandler { onTapped: sw.toggled() }
     Accessible.role: Accessible.CheckBox
     Accessible.checked: checked

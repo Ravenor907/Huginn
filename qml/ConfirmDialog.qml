@@ -1,8 +1,9 @@
 import QtQuick
 import Huginn
 
-// Asks before something that can't be undone. With `hold` set, A has to be held for 2 seconds
-// (a touch also works by holding the button), so a stray press can't erase a drive.
+// Asks before something that can't be undone: the title on its own line, the message wrapping under
+// it, and Cancel and the answer at the foot, sized to the content. With `hold` set the answer has to
+// be held for 2 seconds (the mouse button, Enter or A), so a stray click can't erase anything.
 Item {
     id: dlg
     property string title
@@ -56,23 +57,24 @@ Item {
 
     Rectangle {
         anchors.centerIn: parent
-        width: Math.min(parent.width - Theme.px(80), Theme.px(720))
-        height: col.implicitHeight + Theme.px(48)
-        radius: Theme.radius + 1
+        width: Math.min(parent.width - Theme.px(32), Theme.px(440))
+        height: col.implicitHeight + Theme.px(40) + foot.height
+        radius: Theme.radius
         color: Theme.panel
-        border.color: dlg.danger ? Theme.dangerLine : Theme.lineStrong
+        border.color: dlg.danger ? Theme.dangerLine : Theme.line
+        clip: true
         Column {
             id: col
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: Theme.px(24)
-            spacing: Theme.px(16)
+            x: Theme.px(20); y: Theme.px(20)
+            width: parent.width - Theme.px(40)
+            spacing: Theme.px(8)
             Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
                 text: dlg.title.toUpperCase()
                 color: dlg.danger ? Theme.danger : Theme.text
                 font.family: Theme.display
-                font.pixelSize: Theme.fs(20)
+                font.pixelSize: Theme.fs(18)
                 font.weight: Font.Bold
                 font.letterSpacing: Theme.px(2)
             }
@@ -80,19 +82,28 @@ Item {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: dlg.message
-                color: Theme.textSoft
+                color: Theme.textMuted
                 font.family: Theme.body
-                font.pixelSize: Theme.fs(18)
+                font.pixelSize: Theme.fs(14)
                 lineHeight: 1.15
             }
+        }
+        Rectangle {
+            id: foot
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: Theme.px(64)
+            color: Theme.panelLow
+            Rectangle { width: parent.width; height: 1; color: Theme.line }
             Row {
-                anchors.right: parent.right
-                spacing: Theme.px(14)
-                HButton { text: dlg.cancelText; onClicked: dlg.cancel() }
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Theme.px(8)
+                HButton { text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
                 HButton {
                     id: go
-                    text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : "Hold A: " + dlg.confirmText) : dlg.confirmText
-                    kind: dlg.danger ? "danger" : "accent"
+                    text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : dlg.confirmText
+                    kind: dlg.danger ? "danger" : "primary"
                     TapHandler {
                         onPressedChanged: pressed ? dlg.startHold() : dlg.stopHold()
                     }
@@ -102,7 +113,7 @@ Item {
                         anchors.bottom: parent.bottom
                         height: 3
                         width: parent.width * dlg.held
-                        color: dlg.danger ? Theme.danger : Theme.accent
+                        color: dlg.danger ? Theme.danger : Theme.ground
                     }
                 }
             }

@@ -32,7 +32,7 @@ Item {
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(80), Theme.px(560))
         height: col.implicitHeight + Theme.px(56)
-        radius: Theme.radius + 1
+        radius: Theme.radius
         color: Theme.panel
         border.color: Theme.accent
         Column {

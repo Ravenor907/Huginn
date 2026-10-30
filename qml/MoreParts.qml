@@ -28,7 +28,7 @@ Column {
                 model: grid.photos
                 delegate: Rectangle {
                     width: Theme.px(grid.columns === 2 ? 140 : 96); height: width
-                    radius: Theme.px(6); color: Theme.groundDeep; clip: true
+                    radius: Theme.radius; color: Theme.groundDeep; clip: true
                     Image {
                         anchors.fill: parent
                         fillMode: Image.PreserveAspectCrop
@@ -49,7 +49,7 @@ Column {
     Rectangle {
         visible: parts.live && parts.m.video > 0 && !!parts.m.photo
         width: Theme.px(200); height: Theme.px(150)
-        radius: Theme.px(10); color: "black"
+        radius: Theme.radius; color: "black"
         border.color: Theme.line; border.width: 1
         Rectangle {
             anchors.centerIn: parent
@@ -75,7 +75,7 @@ Column {
         visible: parts.live && !!p
         width: Math.min(parts.width, Theme.px(420))
         height: pollCol.implicitHeight + Theme.px(20)
-        radius: Theme.px(10); color: Theme.panel
+        radius: Theme.radius; color: Theme.panel
         border.color: Theme.line; border.width: 1
         Column {
             id: pollCol
@@ -91,7 +91,7 @@ Column {
                 delegate: Rectangle {
                     width: pollCol.width
                     height: optRow.implicitHeight + Theme.px(18)
-                    radius: Theme.px(8)
+                    radius: Theme.radius
                     color: modelData.mine ? Theme.accentFill : optHover.hovered ? Theme.raised : Theme.groundDeep
                     Row {
                         id: optRow
@@ -157,7 +157,7 @@ Column {
         visible: parts.live && !!lp
         width: Math.min(parts.width, Theme.px(420))
         height: Math.max(thumb.visible ? thumb.height : 0, cardCol.implicitHeight) + Theme.px(16)
-        radius: Theme.px(10); color: cardHover.hovered ? Theme.raised : Theme.panel
+        radius: Theme.radius; color: cardHover.hovered ? Theme.raised : Theme.panel
         border.color: Theme.line; border.width: 1
         Image {
             id: thumb

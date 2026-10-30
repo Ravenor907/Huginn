@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSet>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
@@ -46,9 +47,6 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
         || !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY")
         || qEnvironmentVariable("SteamGamepadUI") == QLatin1String("1");
     connect(settings, &Settings::changed, this, &System::layoutChanged);
-    if (QScreen *screen = QGuiApplication::primaryScreen())
-        connect(screen, &QScreen::geometryChanged, this, &System::layoutChanged);
-    connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, &System::layoutChanged);
 }
 
 QString System::version() const
@@ -56,33 +54,11 @@ QString System::version() const
     return QCoreApplication::applicationVersion();
 }
 
-void System::setDesktop(bool on)
-{
-    if (on == m_desktop)
-        return;
-    m_desktop = on;
-    Q_EMIT layoutChanged();
-}
-
 double System::uiScale() const
 {
-    // Handheld: drawn for a 720-line screen, so a 1080p handheld gets 1.5x, and so on.
-    // Desktop: smaller, for a mouse and keyboard at arm's length (Qt already handles HiDPI).
-    // The owner's Size setting multiplies either.
-    double base = 1.5;   // the CI tour renders as a 1080p handheld, like the Ally X
-    if (m_tourDir.isEmpty()) {
-        base = 1.0;
-        if (const QScreen *screen = QGuiApplication::primaryScreen())
-            base = qBound(1.0, screen->geometry().height() / 720.0, 3.0);
-    }
-    if (m_desktop) {
-        base = 0.85;
-        if (m_tourDir.isEmpty())
-            if (const QScreen *screen = QGuiApplication::primaryScreen())
-                base = 0.85 * qBound(1.0, screen->geometry().height() / 1080.0, 2.0);
-    }
-    const double size = qBound(50, m_settings->uiSize().toInt(), 200) / 100.0;
-    return base * size;
+    // Real size at every resolution: Qt and the system already scale for high-DPI screens (a 4K
+    // monitor at 150% gets 1.5x without us). The owner's Size setting (50% to 200%) goes on top.
+    return qBound(50, m_settings->uiSize().toInt(), 200) / 100.0;
 }
 
 QString System::formatSize(qint64 bytes)
@@ -152,41 +128,10 @@ void System::hideSteamKeyboard()
         openSteamUrl(QStringLiteral("steam://close/keyboard"));
 }
 
-QVariantList System::sendableFiles(int perFolder) const
+QStringList System::pickFiles() const
 {
-    const QList<QPair<QString, QStandardPaths::StandardLocation>> places{
-        {QStringLiteral("Downloads"), QStandardPaths::DownloadLocation},
-        {QStringLiteral("Documents"), QStandardPaths::DocumentsLocation},
-        {QStringLiteral("Pictures"), QStandardPaths::PicturesLocation},
-        {QStringLiteral("Videos"), QStandardPaths::MoviesLocation},
-        {QStringLiteral("Music"), QStandardPaths::MusicLocation}};
-    const QLocale en(QLocale::English);
-    const QDate today = QDate::currentDate();
-    QSet<QString> seen;
-    QVariantList out;
-    for (const auto &place : places) {
-        const QString root = QStandardPaths::writableLocation(place.second);
-        if (root.isEmpty() || root == QDir::homePath() || seen.contains(root) || !QDir(root).exists())
-            continue;
-        seen.insert(root);
-        // The folder and one level below it: enough to find what just landed, and quick on a big Downloads.
-        const QDir dir(root);
-        QList<QFileInfo> found = dir.entryInfoList(QDir::Files | QDir::Readable);
-        for (const QFileInfo &sub : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable))
-            if (found.size() < 3000)
-                found += QDir(sub.absoluteFilePath()).entryInfoList(QDir::Files | QDir::Readable);
-        std::sort(found.begin(), found.end(), [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
-        QVariantList items;
-        for (const QFileInfo &f : found.mid(0, perFolder)) {
-            const QDate d = f.lastModified().date();
-            const QString when = d == today ? QStringLiteral("Today") : d == today.addDays(-1) ? QStringLiteral("Yesterday") : en.toString(d, QStringLiteral("MMM d"));
-            items << QVariantMap{{QStringLiteral("name"), f.fileName()}, {QStringLiteral("detail"), formatSize(f.size()) + QStringLiteral(" · ") + when},
-                                 {QStringLiteral("url"), QUrl::fromLocalFile(f.absoluteFilePath()).toString()}, {QStringLiteral("icon"), QStringLiteral("file")}};
-        }
-        if (!items.isEmpty())
-            out << QVariantMap{{QStringLiteral("header"), place.first}, {QStringLiteral("items"), items}};
-    }
-    return out;
+    return QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Pick files to send"),
+                                         QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
 }
 
 void System::grab(QQuickWindow *window, const QString &name)

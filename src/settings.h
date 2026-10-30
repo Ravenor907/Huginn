@@ -7,7 +7,6 @@
 class Settings : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QString layout READ layout WRITE setLayout NOTIFY changed)
     Q_PROPERTY(QString uiSize READ uiSize WRITE setUiSize NOTIFY changed)
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY changed)
     Q_PROPERTY(QString textSize READ textSize WRITE setTextSize NOTIFY changed)
@@ -22,7 +21,8 @@ class Settings : public QObject
     // Their own signal, so a resize or a theme change doesn't wake everything that follows changed().
     Q_PROPERTY(QString theme READ theme WRITE setTheme NOTIFY appearanceChanged)
     Q_PROPERTY(QString density READ density WRITE setDensity NOTIFY appearanceChanged)
-    Q_PROPERTY(QString messageSize READ messageSize WRITE setMessageSize NOTIFY appearanceChanged)
+    // Where the pattern sits on the lock screen: "top", "middle" or "lower" (the default, for one hand).
+    Q_PROPERTY(QString lockPosition READ lockPosition WRITE setLockPosition NOTIFY appearanceChanged)
     Q_PROPERTY(int railWidth READ railWidth WRITE setRailWidth NOTIFY appearanceChanged)
     Q_PROPERTY(int listWidth READ listWidth WRITE setListWidth NOTIFY appearanceChanged)
     Q_PROPERTY(int memberWidth READ memberWidth WRITE setMemberWidth NOTIFY appearanceChanged)
@@ -34,17 +34,8 @@ class Settings : public QObject
 public:
     explicit Settings(QObject *parent = nullptr);
 
-    // "auto", "handheld" or "desktop" (see Main.qml: Automatic picks desktop for a wide window with no controller in use).
-    QString layout() const
-    {
-#ifdef Q_OS_WIN
-        const QString v = value("layout", "desktop").toString();   // a Windows PC starts on the desktop layout
-#else
-        const QString v = value("layout", "auto").toString();
-#endif
-        return v == QLatin1String("handheld") || v == QLatin1String("desktop") ? v : QStringLiteral("auto");   // 0.5's "tv" is gone
-    }
-    QString uiSize() const { return value("uiSize", "100").toString(); }
+    // Size of everything, 50 to 200 (percent). 0.95 started over at real size, so a new key.
+    QString uiSize() const { return QString::number(qBound(50, value("size", 100).toInt(), 200)); }
     QString accent() const { return value("accent", "gold").toString(); }
     QString textSize() const { return value("textSize", "100").toString(); }
     bool highContrast() const { return value("highContrast", false).toBool(); }
@@ -58,22 +49,24 @@ public:
     bool noiseRemoval() const { return saved("noiseRemoval", true).toBool(); }
     // "dark", "black" (true black, for OLED screens) or "light".
     QString theme() const { return value("theme", "dark").toString(); }
-    // "cozy" (avatars, room between messages) or "compact" (more messages on screen).
+    // "compact" (more messages on screen, no pictures of people), "cozy" (the default) or "spacious".
     QString density() const { return value("density", "cozy").toString(); }
-    // Message text, on top of Size and Text size (85 to 150).
-    QString messageSize() const { return value("messageSize", "100").toString(); }
-    // Panel widths in Normal-size pixels (the screen scales them).
-    int railWidth() const { return value("railWidth", 83).toInt(); }
-    int listWidth() const { return value("listWidth", 270).toInt(); }
-    int memberWidth() const { return value("memberWidth", 230).toInt(); }
+    QString lockPosition() const
+    {
+        const QString v = value("lockPosition", "lower").toString();
+        return v == QLatin1String("top") || v == QLatin1String("middle") ? v : QStringLiteral("lower");
+    }
+    // Panel widths at 100% size (0.95 started over at Discord's sizes, so new keys).
+    int railWidth() const { return 72; }
+    int listWidth() const { return qBound(200, value("panels/list", 240).toInt(), 360); }
+    int memberWidth() const { return qBound(200, value("panels/members", 240).toInt(), 360); }
     bool showList() const { return value("showList", true).toBool(); }
     bool showMembers() const { return value("showMembers", true).toBool(); }
     bool pushToTalk() const { return value("pushToTalk", false).toBool(); }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
     static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(key, fallback); }
 
-    void setLayout(const QString &v) { set("layout", v); }
-    void setUiSize(const QString &v) { set("uiSize", v); }
+    void setUiSize(const QString &v) { set("size", qBound(50, v.toInt(), 200)); }
     void setAccent(const QString &v) { set("accent", v); }
     void setTextSize(const QString &v) { set("textSize", v); }
     void setHighContrast(bool v) { set("highContrast", v); }
@@ -85,10 +78,10 @@ public:
     void setNoiseRemoval(bool v) { set("noiseRemoval", v); }
     void setTheme(const QString &v) { setLook("theme", v); }
     void setDensity(const QString &v) { setLook("density", v); }
-    void setMessageSize(const QString &v) { setLook("messageSize", v); }
-    void setRailWidth(int v) { setLook("railWidth", v); }
-    void setListWidth(int v) { setLook("listWidth", v); }
-    void setMemberWidth(int v) { setLook("memberWidth", v); }
+    void setLockPosition(const QString &v) { setLook("lockPosition", v); }
+    void setRailWidth(int) {}
+    void setListWidth(int v) { setLook("panels/list", v); }
+    void setMemberWidth(int v) { setLook("panels/members", v); }
     void setShowList(bool v) { setLook("showList", v); }
     void setShowMembers(bool v) { setLook("showMembers", v); }
     void setPushToTalk(bool v) { set("pushToTalk", v); }

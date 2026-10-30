@@ -65,19 +65,14 @@ Vault::Vault(QObject *parent)
     // Panic lock: both stick clicks held this long.
     m_combo.setSingleShot(true);
     m_combo.setInterval(1000);
-    connect(&m_combo, &QTimer::timeout, this, [this] {
-        if (!panicLock() || !exists() || locked())
-            return;
-        lockScreen();
-        Q_EMIT panicked();
-    });
+    connect(&m_combo, &QTimer::timeout, this, &Vault::panic);
     // The controller: main.cpp makes it before the vault, as a child of the app.
     if (auto *pad = qApp ? qApp->findChild<Gamepad *>(QString(), Qt::FindDirectChildrenOnly) : nullptr) {
         connect(pad, &Gamepad::pressed, this, [this](const QString &b) { button(b, true); });
         connect(pad, &Gamepad::released, this, [this](const QString &b) { button(b, false); });
         connect(pad, &Gamepad::connectedChanged, this, [this] { m_l3 = m_r3 = false; m_combo.stop(); });
     }
-    // "Lock when I leave Huginn": Steam's menu, another app, or the handheld going to sleep.
+    // "Lock when I leave Huginn": another app, or the computer going to sleep.
     // Otherwise the privacy cover goes up at once and the away clock is checked right away.
     if (qGuiApp)
         connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
@@ -281,6 +276,14 @@ void Vault::setLockOnLeave(bool on)
 {
     settings().setValue(QStringLiteral("chatlock/leave"), on);
     Q_EMIT changed();
+}
+
+void Vault::panic()
+{
+    if (!panicLock() || !exists() || locked())
+        return;
+    lockScreen();
+    Q_EMIT panicked();
 }
 
 void Vault::button(const QString &name, bool down)
@@ -615,7 +618,7 @@ void Vault::backup(const QString &password)
     if (m_busy)
         return;
     if (locked() || screenLocked()) {
-        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Open Chat and unlock it first."));
+        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
     if (password.size() < 8) {
@@ -693,7 +696,7 @@ void Vault::openBackup(const QString &file, const QString &password)
         return;
     forgetOpened();
     if (locked() || screenLocked()) {
-        Q_EMIT done(QStringLiteral("open"), false, QStringLiteral("Open Chat and unlock it first."));
+        Q_EMIT done(QStringLiteral("open"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
     auto files = std::make_shared<Files>();

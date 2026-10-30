@@ -183,7 +183,7 @@ QString Link::link(const QString &text)
 {
     ensureLoaded();
     if (!m_chat->ready())
-        return QStringLiteral("Unlock Chat first.");
+        return QStringLiteral("Unlock Huginn first.");
     if (text.indexOf(QString::fromLatin1(kPrefix)) < 0)
         return QStringLiteral("That isn't a link code. On the other device: Settings › Linked devices › Use as a companion.");
     const QJsonObject o = readCode(text);

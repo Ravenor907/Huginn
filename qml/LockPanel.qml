@@ -1,10 +1,11 @@
 import QtQuick
 import Huginn
 
-// Chat's lock, required like Muninn's. "setup": first time, pick a 9-dot pattern or a password.
-// "unlock": draw or type it. "change": Settings › Chat › Change lock (already unlocked).
-// Everything chat keeps is encrypted with it; there's no way to recover it.
-Rectangle {
+// Huginn's lock, required like Muninn's. "setup": first time, pick a 9-dot pattern or a password.
+// "unlock": draw or type it. "change": Settings › Lock and privacy › Lock (already unlocked).
+// Everything Huginn keeps is locked with it; there's no way to recover it. The pattern sits in the
+// lower half (Settings › Lock and privacy › Where the pattern sits: Top, Middle or Lower).
+Item {
     id: panel
     property string mode: Vault.exists ? "unlock" : "setup"
     property bool usePattern: mode === "unlock" ? Vault.usesPattern : true
@@ -15,12 +16,9 @@ Rectangle {
     signal finished(string how)   // "setup", "unlock" or "change": what just finished
     signal cancelled()
 
-    color: Theme.panel
-    radius: Theme.radius + 1
-    border.width: 1
-    border.color: Theme.line
-    implicitWidth: Theme.px(560)
-    implicitHeight: col.implicitHeight + Theme.px(40)
+    implicitWidth: Theme.px(520)
+    // How the free room splits above and below the pattern.
+    readonly property var grow: Settings.lockPosition === "top" ? [0.15, 1] : Settings.lockPosition === "middle" ? [1, 1] : [1, 0.12]
 
     Timer { interval: 500; repeat: true; running: panel.wait > 0; onTriggered: panel.wait = Vault.waitSeconds }
 
@@ -44,72 +42,169 @@ Rectangle {
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
         saveSecret(secret, true)
     }
-    function typePassword() {
-        if (mode === "unlock") { Ui.ask("Chat password", "Unlocks your messages", "", "Unlock", t => tryUnlock(t), true); return }
-        Ui.ask("New password", "At least 4 characters. It can't be recovered.", "", "Next", t => {
-            if (t.length < 4) { note = "At least 4 characters."; bad = true; return }
-            Ui.ask("Type it again", "To be sure", "", "Save", t2 => { if (t2 === t) saveSecret(t, false); else { note = "They didn't match. Try again."; bad = true } }, true)
-        }, true)
+    // The password typed in the field on the lock screen.
+    function submitPassword() {
+        const t = pw.text
+        if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
+        if (t.length < 4) { note = "At least 4 characters."; bad = true; return }
+        if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
+        pw.text = ""; pw2.text = ""
+        saveSecret(t, false)
     }
+    function forgot() {
+        Ui.sure("Erase everything and start over?", "Without your " + (usePattern ? "pattern" : "password") + " nobody can open your messages, not even Huginn. Erasing removes every message, contact and key from this computer, and Huginn closes. Your contacts can add you again.",
+                "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
+    }
+    function focusField() { if (!usePattern) pw.forceActiveFocus() }
+    onUsePatternChanged: if (visible) Qt.callLater(focusField)
+    onVisibleChanged: if (visible) Qt.callLater(focusField)
 
     Column {
-        id: col
-        x: Theme.px(20); y: Theme.px(20)
-        width: parent.width - Theme.px(40)
+        id: intro
+        width: parent.width
         spacing: Theme.px(10)
+        topPadding: Theme.px(28)
+        Image {
+            anchors.horizontalCenter: parent.horizontalCenter
+            source: "assets/raven-gold.png"
+            width: Theme.px(56); height: width
+            sourceSize.width: 256; sourceSize.height: 256
+        }
         Text {
-            width: parent.width; wrapMode: Text.WordWrap
-            text: panel.mode === "setup" ? "Protect your messages" : panel.mode === "change" ? "Change lock" : "Chat is locked"
-            color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: panel.mode === "setup" ? "PROTECT YOUR MESSAGES" : panel.mode === "change" ? "CHANGE THE LOCK" : "HUGINN"
+            color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
         Text {
             width: parent.width; wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
             text: panel.mode === "unlock"
-                  ? (panel.usePattern ? "Draw your pattern. Your messages, photos, voice and contacts stay encrypted until you do." : "Press A to type your password.")
-                  : "Chat opens with a pattern or password. Everything it keeps is encrypted with it: without it nobody can read your messages, not even Huginn. There's no way to recover it."
-            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+                  ? (panel.usePattern ? "Draw your pattern" : "Type your password")
+                  : "Huginn opens with a pattern or password. Everything it keeps is locked with it: without it nobody can read your messages, not even Huginn. There's no way to recover it."
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
             visible: panel.mode !== "unlock"
+            anchors.horizontalCenter: parent.horizontalCenter
             spacing: Theme.px(8)
             HButton { text: "Pattern"; kind: panel.usePattern ? "accent" : "normal"; onClicked: { panel.usePattern = true; panel.first = null; panel.note = "" } }
             HButton { text: "Password"; kind: !panel.usePattern ? "accent" : "normal"; onClicked: { panel.usePattern = false; panel.first = null; panel.note = "" } }
         }
         Text {
             width: parent.width; wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
             visible: text !== ""
             text: panel.wait > 0 ? "Too many tries. Try again in " + panel.wait + " s."
                 : panel.note !== "" ? panel.note
                 : panel.usePattern && panel.mode !== "unlock" ? "Draw a pattern: connect at least 4 dots."
                 : ""
-            color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+            color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
-        PatternPad {
-            id: pad
-            visible: panel.usePattern
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: Theme.px(280); height: width
-            error: panel.bad
-            enabled: panel.wait === 0
-            onDone: d => panel.onPattern(d)
+    }
+
+    // The pattern (or the password) sits where Settings says: the free room is split above and below.
+    Item {
+        id: room
+        anchors.top: intro.bottom
+        anchors.bottom: foot.top
+        width: parent.width
+        readonly property real free: Math.max(0, height - entry.height)
+        Item {
+            id: entry
+            y: room.free * panel.grow[0] / (panel.grow[0] + panel.grow[1])
+            width: parent.width
+            height: panel.usePattern ? pad.height : pwCol.implicitHeight
+            PatternPad {
+                id: pad
+                visible: panel.usePattern
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(Theme.px(260), room.height, parent.width); height: width
+                error: panel.bad
+                enabled: panel.wait === 0
+                onDone: d => panel.onPattern(d)
+            }
+            Column {
+                id: pwCol
+                visible: !panel.usePattern
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width, Theme.px(320))
+                spacing: Theme.px(8)
+                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (at least 4 characters)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
+                PwField { id: pw2; visible: panel.mode !== "unlock"; placeholder: "Type it again"; onEnter: panel.submitPassword() }
+                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
+            }
         }
-        HButton {
-            visible: !panel.usePattern
-            text: panel.mode === "unlock" ? "Type password" : "Set a password"
-            kind: "accent"
-            onClicked: panel.typePassword()
-        }
+    }
+
+    Column {
+        id: foot
+        anchors.bottom: parent.bottom
+        width: parent.width
+        spacing: Theme.px(8)
+        bottomPadding: Theme.px(16)
         Text {
             width: parent.width; wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
             visible: Gamepad.connected && panel.usePattern
             text: "Controller: move with the D-pad, A starts on a dot, move to the next dots, A again when done. B starts over."
-            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
+        Text {
+            visible: panel.mode === "unlock"
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "Forgot it? Erase and start over"
+            color: forgotHover.hovered ? Theme.danger : Theme.textMuted
+            font.family: Theme.body; font.pixelSize: Theme.fs(13); font.underline: forgotHover.hovered
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+            HoverHandler { id: forgotHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: panel.forgot() }
+        }
+        HButton {
+            visible: panel.mode === "change"
+            anchors.horizontalCenter: parent.horizontalCenter
+            kind: "plain"; text: "Cancel"
+            onClicked: panel.cancelled()
+        }
+    }
+
+    component PwField: Rectangle {
+        id: pf
+        property alias text: input.text
+        property string placeholder
+        signal enter()
+        function forceActiveFocus() { input.forceActiveFocus() }
+        width: parent ? parent.width : 0
+        height: Theme.px(40)
+        radius: Theme.radius
+        color: Theme.groundDeep
+        border.color: input.activeFocus ? Theme.accent : Theme.line
+        TextInput {
+            id: input
+            anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
+            verticalAlignment: TextInput.AlignVCenter
+            echoMode: TextInput.Password
+            color: Theme.text
+            selectionColor: Theme.accentFill
+            font.family: Theme.body; font.pixelSize: Theme.fs(15)
+            clip: true
+            Keys.onReturnPressed: pf.enter()
+            Keys.onEnterPressed: pf.enter()
+            Keys.onEscapePressed: { input.text = ""; if (Ui.main) Ui.main.restoreFocus() }
+        }
+        Text {
+            visible: input.text.length === 0
+            anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+            anchors.verticalCenter: parent.verticalCenter
+            text: pf.placeholder
+            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+        }
+        TapHandler { onTapped: input.forceActiveFocus() }
     }
 
     function handleButton(b) {
         if (usePattern && pad.handleButton(b)) return true
-        if (b === "a" && !usePattern) { typePassword(); return true }
+        if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else { pw.forceActiveFocus(); System.showSteamKeyboard() } return true }
         if ((b === "lb" || b === "next" || b === "prev") && mode !== "unlock") { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "b") { cancelled(); return true }
         return false
