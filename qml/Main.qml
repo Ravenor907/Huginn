@@ -307,6 +307,27 @@ Window {
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
+    // Moving to another device (cap x1): over everything while it's under way.
+    MoveCover { anchors.fill: parent }
+    // Linked devices: always says where this computer's chats are mirrored.
+    Rectangle {
+        readonly property var on: Linked.companions.filter(c => c.ok)
+        visible: on.length > 0
+        anchors { right: parent.right; bottom: parent.bottom; margins: Theme.px(10) }
+        z: 30
+        radius: Theme.radius
+        color: Theme.raised
+        border.color: Theme.lineMuted
+        width: mirroredText.implicitWidth + Theme.px(24)
+        height: mirroredText.implicitHeight + Theme.px(12)
+        Text {
+            id: mirroredText
+            anchors.centerIn: parent
+            color: Theme.textSoft
+            font.pixelSize: Theme.px(14)
+            text: "Mirrored to " + parent.on.map(c => c.name).join(", ")
+        }
+    }
     // The right stick's mouse pointer, over everything.
     StickPointer {
         id: stick

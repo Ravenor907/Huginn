@@ -58,13 +58,10 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * What this phone keeps about a person for the press-and-hold sheet that has no place in the contact model yet:
- * pinned chats, a private note, and what each person may do. Kept encrypted in the vault ("people.json"),
- * on this phone only; nothing here goes on the wire.
- *
- * n95-trust hook: [Can] is where the trust work plugs in. Until it does, these switches are remembered here
- * and shown in the sheet; [can] and [setCan] are the two functions to point at the contact model (calls and
- * video, files, active status), so every screen that asks goes through one place.
+ * What the press-and-hold sheet shows about a person, in one place. A private note is kept here, encrypted in the
+ * vault ("people.json"), on this phone only. Pinned chats live in ChatFlags and what each person may do in the
+ * encrypted contacts (Contact.noCalls, noFiles, hideActive), where Chat enforces them; [all] mirrors both for the
+ * screens. Anything an earlier test build kept here moves over on the first load.
  */
 object People {
     /** What a person may do with me. All on unless switched off. */
@@ -80,37 +77,51 @@ object People {
     fun load(a: Muninn) {
         if (app === a) return
         app = a
-        val o = try { a.vault.read(file(a))?.let { JSONObject(it) } } catch (e: Exception) { null } ?: return
-        val pins = o.optJSONArray("pinned")
-        val notes = o.optJSONObject("notes")
-        val can = o.optJSONObject("can")
-        all.value = State(
-            if (pins == null) emptyList() else (0 until pins.length()).map { pins.getString(it) },
-            notes?.keys()?.asSequence()?.associateWith { notes.optString(it) }.orEmpty(),
-            can?.keys()?.asSequence()?.associateWith { k -> can.getJSONObject(k).let { Can(it.optBoolean("c", true), it.optBoolean("f", true), it.optBoolean("a", true)) } }.orEmpty(),
-        )
+        val o = try { a.vault.read(file(a))?.let { JSONObject(it) } } catch (e: Exception) { null }
+        val notes = o?.optJSONObject("notes")
+        all.value = State(notes = notes?.keys()?.asSequence()?.associateWith { notes.optString(it) }.orEmpty())
+        // Pins and choices kept here before they had their own place: moved over once.
+        val pins = o?.optJSONArray("pinned")
+        val can = o?.optJSONObject("can")
+        if (pins != null || can != null) {
+            if (pins != null) for (i in pins.length() - 1 downTo 0) a.chat.flags.pin(pins.getString(i), true)
+            can?.keys()?.forEach { k -> can.getJSONObject(k).let { apply(a, k, Can(it.optBoolean("c", true), it.optBoolean("f", true), it.optBoolean("a", true))) } }
+            set(all.value)
+        }
+        refresh()
     }
 
     private fun set(s: State) {
         all.value = s
         val a = app ?: return
-        val o = JSONObject().put("pinned", org.json.JSONArray(s.pinned))
-            .put("notes", JSONObject().apply { s.notes.forEach { (k, v) -> put(k, v) } })
-            .put("can", JSONObject().apply { s.can.forEach { (k, v) -> put(k, JSONObject().put("c", v.calls).put("f", v.files).put("a", v.active)) } })
+        val o = JSONObject().put("notes", JSONObject().apply { s.notes.forEach { (k, v) -> put(k, v) } })
         try { a.vault.write(file(a), o.toString()) } catch (_: Exception) {}
     }
 
-    fun pinned(key: String) = key in all.value.pinned
-    fun pin(key: String, on: Boolean) = all.value.let { s -> set(s.copy(pinned = if (on) listOf(key) + (s.pinned - key) else s.pinned - key)) }
+    /** Pins and choices as they are now, for the screens. */
+    private fun refresh() {
+        val a = app ?: return
+        all.value = all.value.copy(pinned = a.chat.flags.all.value.pinned,
+            can = a.contacts.all.value.filter { it.noCalls || it.noFiles || it.hideActive }.associate { it.chatKey to Can(!it.noCalls, !it.noFiles, !it.hideActive) })
+    }
+
+    private fun apply(a: Muninn, key: String, c: Can) {
+        a.chat.setCallsAllowed(key, c.calls)
+        a.chat.setFilesAllowed(key, c.files)
+        a.chat.setShowsActive(key, c.active)
+    }
+
+    fun pinned(key: String) = app?.chat?.flags?.pinned(key) == true
+    fun pin(key: String, on: Boolean) { app?.chat?.flags?.pin(key, on); refresh() }
     fun note(key: String): String = all.value.notes[key].orEmpty()
     fun setNote(key: String, text: String) = all.value.let { s ->
         val t = text.trim().take(500)
         set(s.copy(notes = if (t.isEmpty()) s.notes - key else s.notes + (key to t)))
     }
 
-    // ---- n95-trust hook: what a person may do. Point these two at the contact model when it has them.
-    fun can(key: String): Can = all.value.can[key] ?: Can()
-    fun setCan(key: String, c: Can) = all.value.let { s -> set(s.copy(can = if (c == Can()) s.can - key else s.can + (key to c))) }
+    /** What a person may do: from the contact, where Chat enforces it (calls and video, files, active status). */
+    fun can(key: String): Can = app?.chat?.let { Can(it.callsAllowed(key), it.filesAllowed(key), it.showsActive(key)) } ?: Can()
+    fun setCan(key: String, c: Can) { val a = app ?: return; apply(a, key, c); refresh() }
 }
 
 /** The three starting folders, used as a person's role. "None" is in none of them. */
@@ -182,7 +193,7 @@ internal fun HoldSheet(app: Muninn, key: String, moves: ListMoves?, done: () -> 
 
             if (contact != null) {
                 SheetLabel("What they can do")
-                val can = people.can[key] ?: People.Can()
+                val can = people.can[key] ?: People.can(key)
                 var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
                 ToggleRow("Always right away", "Their messages arrive and ring at once, even when saving battery", ra) {
                     app.power.setRightAway(key, it); ra = it

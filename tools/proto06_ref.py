@@ -112,7 +112,9 @@ def check_state(s):
     """Shape and limits; raises ValueError. Does not check the signature."""
     need = {"g", "v", "owner", "by", "name", "admins", "members", "channels", "ts", "sig"}
     # Cap d1 (section 16): "kind" and "days" may be there too, only for a Family or Work group.
-    if not need <= set(s) <= need | {"kind", "days"}: raise ValueError("fields")
+    # Cap j1 (section 17.1): "mi" (members can invite) may be there too, only ever true.
+    if not need <= set(s) <= need | {"kind", "days", "mi"}: raise ValueError("fields")
+    if "mi" in s and s["mi"] is not True: raise ValueError("mi")
     if "kind" in s and s["kind"] not in ("family", "work"): raise ValueError("kind")
     if "days" in s:
         d = s["days"]

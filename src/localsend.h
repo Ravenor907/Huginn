@@ -95,6 +95,8 @@ public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
+    // Moving to another device (cap x1): its own path on the same port, with an answer.
+    std::function<QPair<int, QByteArray>(const QByteArray &body)> moveReceive;
     struct Peer { QString base, chatKey, chatName, alias, type; };
     QList<Peer> chatPeers() const;
     QString baseFor(const QString &chatKey) const;
