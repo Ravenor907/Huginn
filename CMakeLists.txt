@@ -57,6 +57,7 @@ qt_add_executable(huginn
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
+    src/chatlimits.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
     src/morewire.cpp src/morewire.h
@@ -64,6 +65,7 @@ qt_add_executable(huginn
     src/linkpreview.cpp src/linkpreview.h
     src/videomsg.cpp src/videomsg.h
     src/thumbs.cpp src/thumbs.h
+    src/msglimits.cpp src/msglimits.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h

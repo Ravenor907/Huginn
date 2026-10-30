@@ -167,7 +167,15 @@ Rectangle {
         // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
         if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
     }
-    Component.onCompleted: Vault.back()   // away more than a minute: locked again
+    Component.onCompleted: { Vault.back(); showLimitsNote() }   // away more than a minute: locked again
+    // 0.94 (cap d1): told once, on the chat list, that messages don't stay forever any more.
+    function showLimitsNote() {
+        if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
+        Chat.dismissLimitsNote()
+        Ui.sure("Messages now disappear after 7 days", "Every chat deletes messages, pictures and voice clips older than its limit, on every device. "
+                + "Family and Work groups, and people in your Family or Work folder, can keep them up to 30 days.", "Got it", () => {})
+    }
+    Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
     Connections {
         target: Qt.application
@@ -1043,6 +1051,7 @@ Rectangle {
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
                        { name: "Folders", detail: folderNames(openKey), url: "folders" },
                        { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
+        if (Chat.isContact(openKey)) items.push({ name: "Messages", detail: "Disappear after " + Chat.chatDays(openKey) + " days", url: "limit" })
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -1061,7 +1070,19 @@ Rectangle {
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
             else if (a === "shared") more.openShared()
+            else if (a === "limit") pickLimit(k)
         })
+    }
+    // Cap d1: how long this chat keeps messages. My choice only for someone in my Family or Work folder; the shorter one counts.
+    function pickLimit(k) {
+        const l = Chat.limitInfo(k), n = Chat.nameOf(k)
+        const note = l.older ? n + "'s app is older: it keeps messages until it updates" : l.d1 ? n + " keeps them " + l.theirs + " days. The shorter one counts" : ""
+        if (!l.close) {
+            Ui.say("Messages disappear after " + l.days + " days. Put " + n + " in your Family or Work folder to keep them up to 30." + (note ? " " + note + "." : ""))
+            return
+        }
+        Ui.pickFrom("Keep messages with " + n, [{ header: note, items: l.choices.map(d => ({ name: d + " days", detail: d === l.mine ? "Your choice now" : "", url: String(d) })) }],
+                    d => { Chat.setKeep(k, Number(d)); Ui.say("Messages with " + n + " now disappear after " + Chat.chatDays(k) + " days.") })
     }
     // ------------------------------------------------------------- folders (only on this computer)
     function folderNames(k) {

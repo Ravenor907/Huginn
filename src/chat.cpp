@@ -5,6 +5,7 @@
 #include "chatcrypto.h"
 #include "call/callcrypto.h"
 #include "groupwire.h"
+#include "msglimits.h"
 #include "localsend.h"
 #include "nostr.h"
 #include "photos.h"
@@ -1087,6 +1088,7 @@ int Chat::receive(const QByteArray &body, const QString &via)
     if (code == 200 && !m_openedFrom.isEmpty()) {
         noteCapable(m_openedFrom, m_openedCap);
         noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps);
+        noteDays(m_openedFrom, m_openedDays);
     }
     m_openedFrom.clear();
     return code;
@@ -1116,6 +1118,7 @@ QByteArray Chat::open(const QJsonObject &o, const QString &fromKey, bool *ok)
         m_openedFrom = fromKey;
         m_openedCap = ChatWire::saysCapable(o);
         m_openedCaps = ChatWire::capsOf(o, &m_openedHasCaps);
+        m_openedDays = Limits::envelopeDays(o);
     }
     return *ok ? plain : QByteArray();
 }
@@ -1726,7 +1729,11 @@ QJsonObject Chat::seal(const QJsonObject &fields, const QString &theirKey, const
     const bool r1 = ChatWire::useRatchet(fields.value(QStringLiteral("room")).toString(), isContact(theirKey) || isGroupPeer(theirKey),
                                          m_capable.value(theirKey) || isGroupPeer(theirKey));
     Ratchet::Peer *peer = r1 ? &m_peers[theirKey] : nullptr;
-    const QJsonObject o = ChatWire::seal(fields, keyWith(theirKey), theirKey, plain, peer, kNewKey);
+    // Cap d1: how long I keep our chat, next to "caps" (only to an app that reads it).
+    QJsonObject f = fields;
+    if (hasD1(theirKey))
+        f.insert(QStringLiteral("days"), myDays(theirKey));
+    const QJsonObject o = ChatWire::seal(f, keyWith(theirKey), theirKey, plain, peer, kNewKey);
     if (peer && ChatWire::isRatchet(o))
         saveRatchet(theirKey);   // saved before it leaves, so a key is never used twice
     return o;
@@ -2311,36 +2318,8 @@ void Chat::prune()
 {
     if (m_ready)
         pruneTrash();
-    const qint64 age = deleteAfter();
-    if (age <= 0 || !m_ready)
-        return;
-    const qint64 cutoff = now() - age;
-    bool changedAny = false;
-    for (auto it = m_private.begin(); it != m_private.end(); ++it) {
-        QVariantList kept;
-        for (const QVariant &v : it.value()) {
-            const QVariantMap m = v.toMap();
-            if (m.value(QStringLiteral("time")).toLongLong() >= cutoff) {
-                kept << v;
-            } else {
-                changedAny = true;
-                if (!str(m, "photo").isEmpty())
-                    m_vault->remove(QStringLiteral("photos/") + str(m, "photo"));
-            }
-        }
-        it.value() = kept;
-    }
-    pruneGroups(cutoff);
-    QVariantList n;
-    for (const QVariant &v : std::as_const(m_nearby))
-        if (v.toMap().value(QStringLiteral("time")).toLongLong() >= cutoff)
-            n << v;
-    changedAny = changedAny || n.size() != m_nearby.size();
-    m_nearby = n;
-    if (changedAny) {
-        save();
-        Q_EMIT changed();
-    }
+    // Every chat's message limit (cap d1, chatlimits.cpp); runs at start too, so 0.94's first run applies it.
+    pruneToLimits();
 }
 
 void Chat::save()
@@ -2428,6 +2407,7 @@ void Chat::load()
     loadFolders();
     loadGroups();
     loadRatchet();
+    noteLimitsOnce();
     prune();
     sweepSealed();
 }

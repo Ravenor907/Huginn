@@ -33,6 +33,7 @@
 #include "linkpreview.h"
 #include "videomsg.h"
 #include "thumbs.h"
+#include "msglimits.h"
 #include "richwire.h"
 
 #include <QApplication>
@@ -138,7 +139,8 @@ int main(int argc, char *argv[])
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
         const bool e = MoreWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m2-vectors.json")));
         const bool f = LinkPreview::selfTest();
-        return selfTested(a && b && c && d && e && f);
+        const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g);
     }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
@@ -202,6 +204,7 @@ int main(int argc, char *argv[])
         return secret;
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
     auto *videos = new VideoMsg(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.

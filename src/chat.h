@@ -237,7 +237,8 @@ public:
     // Groups (chatgroups.cpp). Calls that can fail return what to tell the person, "" when done.
     QVariantList groups() const;
     QVariantList groupInvites() const;
-    Q_INVOKABLE QString createGroup(const QString &name);
+    // kind: "" (Standard), "family" or "work" (cap d1).
+    Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     Q_INVOKABLE QVariantMap groupInfo(const QString &g) const;
     Q_INVOKABLE QVariantList groupMessages(const QString &g, const QString &ch) const;
     Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re = QString());
@@ -272,6 +273,20 @@ public:
     QString groupMemberName(const QString &g, const QString &key) const { return memberName(g, key); }
     bool canRoom(const QString &key) const;
     bool lacksRooms(const QString &key) const;
+
+    // Message limits (cap d1, chatlimits.cpp): how many days a chat keeps messages. limitInfo: {days, mine,
+    // theirs, close (in my Family or Work folder), d1, older (their app keeps everything), choices}.
+    Q_INVOKABLE int chatDays(const QString &key) const;
+    Q_INVOKABLE QVariantMap limitInfo(const QString &key) const;
+    Q_INVOKABLE void setKeep(const QString &key, int days);
+    // A group's {kind, kindName, days, older (names whose apps keep everything), choices}; admins change it.
+    Q_INVOKABLE QVariantMap groupLimit(const QString &g) const;
+    Q_INVOKABLE QString setGroupLimit(const QString &g, const QString &kind, int days);
+    // "Messages now disappear after 7 days", once on the chat list after updating.
+    Q_INVOKABLE bool limitsNote() const;
+    Q_INVOKABLE void dismissLimitsNote();
+    // Before a backup: nothing past a chat's limit goes in it.
+    void pruneNow() { prune(); }
 
     static const int kMax = 2000;
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
@@ -422,7 +437,17 @@ private:
     void saveGroups();
     void saveGroupsSoon();
     void saveGroupChats();
-    void pruneGroups(qint64 cutoff);
+    // Messages past each group's limit go; their ids are added to gone. cutoff: the oldest time kept for a limit in days.
+    void pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *gone);
+    // cap d1 (chatlimits.cpp)
+    bool hasD1(const QString &key) const;
+    bool isClose(const QString &key) const;
+    int myDays(const QString &key) const;
+    int groupDays(const QString &g) const;
+    void noteDays(const QString &key, int days);
+    QString limitBlocked(const QString &g, const QString &kind) const;
+    void noteLimitsOnce();
+    void pruneToLimits();
 
     LocalSend *m_net;
     Vault *m_vault;
@@ -456,6 +481,7 @@ private:
     // Who the message being handled proved to be from, whether it said "cap":"r1", and its "caps".
     QString m_openedFrom;
     bool m_openedCap = false, m_openedHasCaps = false;
+    int m_openedDays = 0;                               // its "days" (cap d1), 0 when none
     QStringList m_openedCaps;
     QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
     QHash<QString, qint64> m_probed;                    // key -> last caps probe
