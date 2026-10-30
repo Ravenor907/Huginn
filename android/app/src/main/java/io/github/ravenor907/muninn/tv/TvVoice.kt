@@ -133,10 +133,14 @@ object TvVoice {
         // The speaker must carry the call: a 2000-peak tone is about 1400 RMS, silence is 0.
         val rms = kotlin.math.sqrt(heard / (40 * 960))
         if (rms < 700) return "speaker silent (rms ${rms.toInt()})"
-        val clip = Processor.open(44_100, 44_100, 16_000, 16_000, RNNOISE or AGC) ?: return "can't open 44.1 kHz"
-        val c = ShortArray(882)
-        val n = clip.capture(c, c.size, ShortArray(882))
-        clip.close()
-        return if (n == 882) "ok (voice $v)" else "clip length $n"
+        // Every noise removal choice (k5): none, Standard, Strong and both, for a clip.
+        for (nr in intArrayOf(0, NS, RNNOISE, NS or RNNOISE)) {
+            val clip = Processor.open(44_100, 44_100, 16_000, 16_000, nr or AGC) ?: return "can't open 44.1 kHz with noise $nr"
+            val c = ShortArray(882)
+            val n = clip.capture(c, c.size, ShortArray(882))
+            clip.close()
+            if (n != 882) return "clip length $n with noise $nr"
+        }
+        return "ok (voice $v)"
     }
 }

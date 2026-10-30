@@ -35,7 +35,8 @@ import io.github.ravenor907.muninn.ui.Ui
  * listed. [back]: shows a Back button (null in the tab, where the header names the page).
  */
 @Composable
-fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
+fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null, onChats: () -> Unit = {}) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val contacts by app.chat.contacts.all.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
@@ -59,9 +60,12 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
         if (back != null) Section("Contacts") { MButton("Back", icon = "back") { back() } }
         else Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.weight(1f)) {
-            if (active.isEmpty()) item { Text("Nobody yet. People you chat with show up here.", style = Type.normal) }
+            if (active.isEmpty()) item {
+                Text("Nobody yet. Add someone by scanning their code, and they show up here.", style = Type.normal)
+                MButton("Add someone", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, icon = "plus") { ChatNav.open = "add"; onChats() }
+            } else item { Text("Tap someone to message or call them. Hold for their role and what they can do.", style = Type.small, modifier = Modifier.padding(bottom = 6.dp)) }
             items(active, key = { "a" + it.key }) { p ->
-                Line(p.name, p.detail, icon = "user", onLong = { foldering = p }) { picked = p }
+                Line(p.name, p.detail, icon = "user", onLong = { ChatNav.holdMoves = null; ChatNav.hold = p.key }) { picked = p }
             }
             item {
                 Line("Trash", if (trashed.isEmpty()) "Empty" else "${trashed.size} · deleted for good after ${io.github.ravenor907.muninn.net.Trash.DAYS} days",
@@ -84,8 +88,13 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(p.detail, style = Type.small)
+                    MButton("Message", Modifier.fillMaxWidth(), Kind.Accent, icon = "chat") { picked = null; ChatNav.open = p.key; onChats() }
+                    if (p.contact && io.github.ravenor907.muninn.net.call.CallManager.canCall(p.key)) MButton("Call", Modifier.fillMaxWidth(), icon = "call") {
+                        picked = null; CallActivity.call(context, p.key)
+                    }
+                    MButton("Role and permissions", Modifier.fillMaxWidth(), icon = "people") { picked = null; ChatNav.holdMoves = null; ChatNav.hold = p.key }
                     // A name for them on this phone only: it's never sent.
-                    if (p.contact) MButton("Rename", Modifier.fillMaxWidth(), icon = "user") { picked = null; renaming = p }
+                    if (p.contact) MButton("Nickname", Modifier.fillMaxWidth(), icon = "user") { picked = null; renaming = p }
                     MButton("Folders", Modifier.fillMaxWidth(), icon = "folder") { picked = null; foldering = p }
                     if (p.contact) MButton("Move to trash", Modifier.fillMaxWidth(), icon = "delete") {
                         picked = null

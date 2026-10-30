@@ -1180,7 +1180,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         sends.tryEmit(peerKey)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
-            notices.tryEmit(if (isContact(peerKey)) "$name can't be reached: they're not nearby and have no internet mailbox yet."
+            notices.tryEmit(if (isContact(peerKey)) "$name can't be reached: they're not nearby, and their phone hasn't been online with Muninn yet."
                 else "$name is out of range. Say yes to Keep in touch to message from anywhere.")
             return
         }

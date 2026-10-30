@@ -69,6 +69,7 @@ import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FirstLock
 import androidx.compose.runtime.remember
 import io.github.ravenor907.muninn.screens.SettingsScreen
+import io.github.ravenor907.muninn.screens.SettingsNav
 import io.github.ravenor907.muninn.screens.Share
 import io.github.ravenor907.muninn.screens.TransferScreen
 import io.github.ravenor907.muninn.ui.AskDialog
@@ -82,6 +83,8 @@ import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
+import io.github.ravenor907.muninn.ui.brushed
+import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -148,7 +151,7 @@ class MainActivity : ComponentActivity() {
     /** Opens a tab by name (also what CI and older links ask for); anything unknown is the chat list. */
     private fun show(name: String) {
         val t = when (name) { "send", "files" -> "files"; "calls", "contacts", "settings" -> name; else -> "chat" }
-        if (t == "settings" && tab != "settings") beforeSettings = tab
+        if (t == "settings" && tab != "settings") { beforeSettings = tab; SettingsNav.folder = "" }
         tab = t
     }
 
@@ -166,10 +169,11 @@ class MainActivity : ComponentActivity() {
         // ChatNav lives as long as the process, and the message service keeps the process alive after
         // Muninn's window is closed. So a fresh open would land back in whatever chat was last on screen:
         // start on the chat list unless a notification (extra "chat") or a scanned code asks otherwise.
-        if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.menu = false; io.github.ravenor907.muninn.tv.TvNav.home() }
+        if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.hold = ""; io.github.ravenor907.muninn.tv.TvNav.home() }
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
-        if (ciSkip && intent?.getBooleanExtra("menu", false) == true) ChatNav.menu = true   // CI: the + menu
+        if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
+        if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: the press-and-hold sheet
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
             Thread { android.util.Log.i("Muninn", "TvVoice self-check: " + io.github.ravenor907.muninn.tv.TvVoice.selfCheck()) }.start()
@@ -193,7 +197,10 @@ class MainActivity : ComponentActivity() {
     /** Set when an intent picked the chat to show; cleared once Muninn is back on screen (onResume). */
     private var intentChose = false
 
-    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.space = ""; ChatNav.menu = false }
+    private fun toList() { tab = "chat"; ChatNav.open = ""; ChatNav.space = ""; ChatNav.hold = "" }
+
+    /** Test builds only: hold the first chat on the list once it's there. */
+    private var ciHold = false
 
     /**
      * A scanned contact QR opened Muninn: go to Add someone with the code filled in. Either the add
@@ -370,11 +377,21 @@ class MainActivity : ComponentActivity() {
         // Back from another tab (or Settings) goes to where you came from, then the chat list.
         BackHandler(enabled = tab != "chat") { if (tab == "settings") tab = beforeSettings else tab = "chat" }
 
+        // The status and navigation bars take the look's ground, with dark icons on parchment.
+        val light = Palette.light
+        val groundArgb = Palette.ground.toArgb()
+        SideEffect {
+            @Suppress("DEPRECATION") run { window.statusBarColor = groundArgb; window.navigationBarColor = groundArgb }
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = light; isAppearanceLightNavigationBars = light
+            }
+        }
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Palette.ground)) {
-            // Tablets and wide screens (600dp and up): Discord style, a rail, the chat list and the open chat.
-            val wide = maxWidth >= ChatNav.WIDE
+            // The layout follows the screen's shape, not the device: held sideways (a tablet, or a phone turned on
+            // its side) it's Discord style, a rail, the chat list and the open chat; upright, one thing at a time.
+            val wide = maxWidth > maxHeight && maxWidth >= ChatNav.WIDE_MIN
             SideEffect { ChatNav.wide = wide }
-            if (wide) TabletLayout(toast) else PhoneLayout(toast)
+            if (wide) TabletLayout(toast, maxWidth) else PhoneLayout(toast)
         }
 
         request?.let { r ->
@@ -408,6 +425,15 @@ class MainActivity : ComponentActivity() {
                 dismissButton = { MButton("Don't install") { io.github.ravenor907.muninn.update.ApkInstall.decline(o) } },
             )
         }
+        // Press and hold a person or chat, from anywhere: one sheet.
+        LaunchedEffect(ready) { if (ready) io.github.ravenor907.muninn.screens.People.load(app) }
+        if (ciHold) LaunchedEffect(Unit) {
+            ciHold = false
+            delay(1500)
+            app.chat.contacts.all.value.firstOrNull { !it.groupOnly }?.let { ChatNav.hold = it.chatKey }
+                ?: app.chat.groups.all.value.keys.firstOrNull()?.let { ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(it) }
+        }
+        if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.HoldSheet(app, ChatNav.hold, ChatNav.holdMoves) { ChatNav.hold = ""; ChatNav.holdMoves = null }
         ask?.let { AskDialog(it) }
     }
 
@@ -417,7 +443,7 @@ class MainActivity : ComponentActivity() {
         when (t) {
             "files" -> TransferScreen(app) { startDirect() }
             "calls" -> CallsScreen()
-            "contacts" -> ContactsScreen(app)
+            "contacts" -> ContactsScreen(app) { tab = "chat" }
             "settings" -> SettingsScreen(app) { secure() }
             else -> ChatScreen(app) { askClose() }
         }
@@ -452,6 +478,7 @@ class MainActivity : ComponentActivity() {
         val full = tab == "chat" && ChatNav.open.isNotEmpty()
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val header: @Composable () -> Unit = { Brand(title = title(tab).uppercase()) {
+                if (tab == "chat") IconAction("plus", "Add someone", Palette.onGold, Modifier.padding(end = 4.dp).clip(CircleShape).background(Palette.gold)) { ChatNav.open = "add" }
                 if (tab == "chat" && app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
                 SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
             } }
@@ -465,12 +492,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The main Settings button: the valknut, black and grey. A soft ring shows while Settings is open. */
+    /**
+     * The main Settings button: the valknut, black and grey. A soft ring shows while Settings is open. TalkBack
+     * reads "Settings", and holding it shows the word too, for anyone who doesn't know the knot.
+     */
+    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
     @Composable
     private fun SettingsButton(label: String, open: Boolean, onClick: () -> Unit) {
-        Box(Modifier.size(44.dp).clip(CircleShape).background(if (open) Palette.field else androidx.compose.ui.graphics.Color.Transparent)
-            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }, contentAlignment = Alignment.Center) { Valknut(28.dp) }
+        androidx.compose.material3.TooltipBox(
+            positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            tooltip = { androidx.compose.material3.PlainTooltip { Text("Settings") } },
+            state = androidx.compose.material3.rememberTooltipState(),
+        ) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(if (open) Palette.field else androidx.compose.ui.graphics.Color.Transparent)
+                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+                .semantics { contentDescription = label }, contentAlignment = Alignment.Center) { Valknut(28.dp) }
+        }
     }
 
     @Composable
@@ -479,7 +516,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun BottomTabs() {
-        Column(Modifier.fillMaxWidth().background(Palette.groundDeep)) {
+        Column(Modifier.fillMaxWidth().background(Palette.groundDeep).brushed()) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
             Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp)) {
                 listOf("chat" to ("chat" to "Chats"), "calls" to ("call" to "Calls"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
@@ -504,7 +541,7 @@ class MainActivity : ComponentActivity() {
         Box(Modifier.width(80.dp), contentAlignment = Alignment.Center) {
             if (on) Box(Modifier.align(Alignment.CenterStart).size(width = 4.dp, height = 32.dp)
                 .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp)).background(Palette.goldBright))
-            val shape = if (round) CircleShape else RoundedCornerShape(16.dp)
+            val shape = if (round) CircleShape else io.github.ravenor907.muninn.ui.Corner
             Box(Modifier.size(52.dp).clip(shape).background(fill).clickable(role = Role.Tab, onClick = onClick)
                 .semantics { contentDescription = label; selected = on }, contentAlignment = Alignment.Center) { content() }
         }
@@ -540,19 +577,24 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun TabletLayout(toast: Pair<String, Boolean>?) {
+    private fun TabletLayout(toast: Pair<String, Boolean>?, width: androidx.compose.ui.unit.Dp) {
+        // A phone on its side is narrower than a tablet: the list takes a little less, so the chat keeps room.
+        val listW = minOf(270.dp, width * 0.34f)
         Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).padding(vertical = 16.dp),
+            Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).brushed().padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 // Groups can be many: the top part scrolls, the tabs below stay put.
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
-                listOf("files" to ("folder" to "Files"), "calls" to ("call" to "Calls"), "contacts" to ("people" to "Contacts"), "settings" to ("gear" to "Settings")).forEach { (id, v) ->
+                listOf("files" to ("folder" to "Files"), "calls" to ("call" to "Calls"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
-                        onClick = { if (id == "settings") toggleSettings() else show(id) }) {
-                        if (id == "settings") Valknut(26.dp) else MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
+                        onClick = { show(id) }) {
+                        MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
                     }
+                }
+                Box(Modifier.width(80.dp), contentAlignment = Alignment.Center) {
+                    SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
                 }
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -564,7 +606,7 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(opened) { if (opened != null) ChatNav.space = opened }
                         val groups by app.chat.groups.all.collectAsState()
                         val space = groups[ChatNav.space]
-                        Column(Modifier.width(270.dp).fillMaxHeight().background(Palette.panelLow)) {
+                        Column(Modifier.width(listW).fillMaxHeight().background(Palette.panelLow)) {
                             if (space != null) {
                                 // A group: its channels (TEXT, then VOICE rooms), the conversation in the main column.
                                 ColumnHeader(space.state.name) {
@@ -572,7 +614,8 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
                             } else {
-                                ColumnHeader("Direct messages") {
+                                ColumnHeader("Chats") {
+                                    IconAction("plus", "Add someone", Palette.goldBright) { ChatNav.open = "add" }
                                     if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
@@ -593,9 +636,9 @@ class MainActivity : ComponentActivity() {
     /** A tablet column's 60dp title bar with a hairline under it. */
     @Composable
     private fun ColumnHeader(text: String, trailing: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}) {
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().brushed()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(text, style = Type.title.copy(fontSize = 18.sp, letterSpacing = 1.sp), maxLines = 1, modifier = Modifier.weight(1f))
+                Text(text.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, modifier = Modifier.weight(1f))
                 trailing()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))

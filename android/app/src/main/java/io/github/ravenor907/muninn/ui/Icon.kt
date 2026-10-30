@@ -63,6 +63,7 @@ object Icons {
         "smile" to "M12 3a9 9 0 1 0 0.01 0 M8 14a5 5 0 0 0 8 0 M9 9.5h0.01 M15 9.5h0.01",
         "edit" to "M4 20h4L19 9l-4-4L4 16z M14 6l4 4",
         "pin" to "M9 3h6l-1 6 4 4H6l4-4z M12 13v8",
+        "qr" to "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h2v2h-2z M18 18h2v2h-2z M14 18h2 M18 14h2",
     )
 }
 

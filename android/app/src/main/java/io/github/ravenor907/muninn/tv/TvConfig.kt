@@ -103,10 +103,12 @@ data class TvConfig(
     val contacts: List<TvPerson>, val dictation: Boolean, val ts: Long, val raw: JSONObject,
     /** k2 (7.5): calls with the people on the list (absent: on), and the microphone level 0..100 (absent: 50). */
     val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC,
+    /** k5 (7.10): the TV's noise removal, [TvRules.NR_NONE] to [TvRules.NR_BOTH] (absent: both). */
+    val nr: Int = TvRules.NR_BOTH,
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
-data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC)
+data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC, /** k5: only for a TV whose app said "k5". */ val nr: Int? = null)
 
 /**
  * The kids' TV rules (protocol 0.6, section 7): what a well-formed config is, when a TV takes a new
@@ -123,11 +125,16 @@ object TvRules {
     const val MAX_BYTES = 16 * 1024
     const val DEFAULT_MIC = 50
     const val MAX_MIC = 100
+    /** k5 (7.10): noise removal on the TV. None, Standard (WebRTC's), Strong (RNNoise) or both, the usual. */
+    const val NR_NONE = 0
+    const val NR_STANDARD = 1
+    const val NR_STRONG = 2
+    const val NR_BOTH = 3
     val DEFAULT_QUICK = listOf("I need you", "Please come here", "I'm hungry", "I love you")
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic")
+    private val OPTIONAL = setOf("calls", "mic", "nr")
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -137,6 +144,7 @@ object TvRules {
         require(ks0.containsAll(FIELDS) && (ks0 - FIELDS).all { it in OPTIONAL }) { "fields" }
         if (c.has("calls")) require(c.get("calls") is Boolean) { "calls" }
         if (c.has("mic")) { val m = c.get("mic"); require(Canon.isInt(m) && (m as Number).toLong() in 0..MAX_MIC.toLong()) { "mic" } }
+        if (c.has("nr")) { val n = c.get("nr"); require(Canon.isInt(n) && (n as Number).toLong() in NR_NONE.toLong()..NR_BOTH.toLong()) { "nr" } }
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -208,6 +216,7 @@ object TvRules {
             (0 until p.length()).map { p.getJSONObject(it).let { o -> TvPerson(o.getString("k"), o.getString("n"), o.getString("p")) } },
             c.getBoolean("dictation"), c.getLong("ts"), c,
             c.optBoolean("calls", true), if (c.has("mic")) c.getInt("mic") else DEFAULT_MIC,
+            if (c.has("nr")) c.getInt("nr") else NR_BOTH,
         )
     }
 
@@ -219,7 +228,7 @@ object TvRules {
             .put("quick", JSONArray().apply { quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
             .put("contacts", JSONArray().apply { contacts.distinctBy { it.k }.sortedBy { it.k }.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("dictation", dictation).put("ts", ts)
-        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)) }
+        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) } }
         return Canon.sign(priv, CONFIG, o)
     }
 
