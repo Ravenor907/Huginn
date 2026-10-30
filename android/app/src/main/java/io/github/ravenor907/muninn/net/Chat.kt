@@ -126,6 +126,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val deletedStore = File(context.filesDir, "deleted.json")
     private val recent = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val tries = ConcurrentHashMap<String, Tries>()
+    /** When "delivered" last went back for each message ("key|id"). */
+    private val receipted = ConcurrentHashMap<String, Long>()
+
+    /** Phones close by or on the same Wi-Fi at the last look, so one that just showed up is noticed. */
+    private var near = emptySet<String>()
+
+    /** The chats are written on their own thread, a moment after a change: many changes, one write, never on the screen's thread. */
+    private val writer = Executors.newSingleThreadScheduledExecutor()
+    private val saveDue = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val pool = Executors.newFixedThreadPool(8)
     /** Background work that can't take the app down: a failed send just stays unsent and is retried. */
     private fun bg(f: () -> Unit) = pool.execute { try { f() } catch (e: Exception) { android.util.Log.w("Muninn", "chat", e) } }
@@ -562,14 +572,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun attemptUnsend(m: Msg) {
         val t = tries.getOrPut(m.id) { Tries(0, 0) }
         t.count++
-        t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        schedule(t)
         // One envelope for the whole unsend: every retry sends the same bytes.
         val body = outbox.getOrMake(UNSEND + m.id) { listOf(envelope("unsend", m.peerKey, m.id, UUID.randomUUID().toString()).toString()) }
             ?.firstOrNull() ?: return
         close.endpointFor(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
         ble.send(m.peerKey, body)
         net.devices.value.firstOrNull { it.chatKey == m.peerKey }?.let { d -> bg { net.post(d, PATH, body) } }
-        internet(m.peerKey, listOf(body), contact(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox)
+        if (publishNow(t)) internet(m.peerKey, listOf(body), contact(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox, held = heldBy(t))
     }
 
     fun deleteNearbyMessage(msgId: String) {
@@ -1118,7 +1128,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun rank(s: String) = when (s) { "sending" -> 1; "sent" -> 2; "delivered" -> 3; "read" -> 4; else -> 0 }
 
     /** Tells the sender their messages arrived (always) or were read (only with read receipts on). Sealed like any message. */
-    private fun receipt(peerKey: String, ids: List<String>, state: String, mailbox: String?) {
+    private fun receipt(peerKey: String, ids0: List<String>, state: String, mailbox: String?) {
+        // "Delivered" for the same message at most once every few minutes: resends and photo pieces don't each get one.
+        val ids = if (state != "delivered") ids0 else {
+            val now = System.currentTimeMillis()
+            if (receipted.size > 2000) receipted.entries.removeIf { now - it.value > NetLogic.RECEIPT_GAP_MS }
+            ids0.filter { id -> val k = "$peerKey|$id"; NetLogic.receiptDue(receipted[k], now).also { if (it) receipted[k] = now } }
+        }
         if (ids.isEmpty()) return
         bg {
             // 40 ids a receipt keeps each one small on every route.
@@ -1336,9 +1352,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val (k, _) = mxOut[env] ?: return
         val t = tries.getOrPut(env) { Tries(0, 0) }
         t.count++
-        t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        schedule(t)
         val body = outbox.get(env) ?: run { mxOut.remove(env); saveMx(); return }
-        spread(k, body, false, t.count, contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox)
+        spread(k, body, false, t.count, contacts.get(k)?.mailbox ?: _met.value[k]?.mailbox, publishNow(t), heldBy(t))
     }
 
     private fun saveMx() {
@@ -1407,7 +1423,30 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     // phone keeps the first copy and drops the rest. Until a "delivered" receipt comes back it is
     // sent again after 5 s, then less often, for a day. So someone walking out of range still gets it.
 
-    private class Tries(@Volatile var count: Int, @Volatile var next: Long)
+    /**
+     * Tries so far and when the next is due. [heldAt]: when relays first held it (0: not yet); after that it goes
+     * to them again only at 1 hour and 6 hours ([NetLogic]). [publishedAt]: when it last went to the relays.
+     */
+    private class Tries(@Volatile var count: Int, @Volatile var next: Long) {
+        @Volatile var heldAt = 0L
+        @Volatile var publishedAt = 0L
+    }
+
+    /** After a try: when the next one is due. */
+    private fun schedule(t: Tries) { t.next = NetLogic.next(t.count, System.currentTimeMillis(), t.heldAt) }
+
+    /** Relays hold it now: from here on it waits there, sent to them again only at 1 hour and 6 hours. */
+    private fun heldBy(t: Tries): () -> Unit = {
+        if (t.heldAt == 0L) { t.heldAt = System.currentTimeMillis(); schedule(t) }
+    }
+
+    /** Whether this try also goes to the relays (always until they hold it, see [NetLogic.publish]). */
+    private fun publishNow(t: Tries): Boolean {
+        val now = System.currentTimeMillis()
+        if (!NetLogic.publish(t.heldAt, t.publishedAt, now)) return false
+        t.publishedAt = now
+        return true
+    }
 
     /** Their internet mailbox, if this message may use it: contacts always; someone met close by
      *  only for messages sent while they were in range (a backup as they walk away). */
@@ -1417,7 +1456,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun attempt(m: Msg) {
         val t = tries.getOrPut(m.id) { Tries(0, 0) }
         t.count++
-        t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
+        schedule(t)
         if (m.photo.isNotEmpty()) { attemptPhoto(m, t); return }
         // Sealed once; every try and every route sends these same bytes.
         val body = outbox.getOrMake(m.id) {
@@ -1434,7 +1473,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             // "Sent" only: a 200 just means some device answered; "Delivered" comes from their sealed receipt.
         }
         // Honest ticks: "Waiting for their phone" once a relay has stored it ("Delivered" comes from their receipt).
-        if (internet(m.peerKey, listOf(body), backupMailbox(m), stored = { markSent(m, "internet") })) any = true
+        // Once relays hold it, it isn't sent to them again every few minutes (see NetLogic).
+        val mailbox = backupMailbox(m)
+        if (mailbox != null && !publishNow(t)) any = true
+        else if (internet(m.peerKey, listOf(body), mailbox, stored = { markSent(m, "internet") }, held = heldBy(t))) any = true
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
@@ -1455,8 +1497,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
         }
         val mailbox = backupMailbox(m)
-        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") })) {
-            any = true
+        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && mailbox != null) {
+            if (!publishNow(t)) any = true
+            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t))) any = true
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
@@ -1471,6 +1514,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Runs every second: anything of mine not yet delivered (and under a day old) is tried again. */
     private fun retryLoop() {
         val now = System.currentTimeMillis()
+        nearbyNow()
         groups.due().forEach { o -> bg { sendGroupOut(o) } }
         incoming.entries.removeIf { now - it.value.started > 15 * 60_000 }   // half a photo that never finished
         // Cap m1: reactions and edits still on their way, typing and active status that ran out.
@@ -1478,7 +1522,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (now - v.second > DAY) { mxOut.remove(env); outbox.drop(env); tries.remove(env); saveMx(); continue }
             val t = tries[env]
             if (t == null) { tries[env] = Tries(1, now + RETRY[0]); continue }
-            if (now >= t.next) { t.next = now + RETRY[0]; bg { attemptMx(env) } }
+            if (now >= t.next) { t.next = NetLogic.NEVER; bg { attemptMx(env) } }
         }
         if (_typing.value.values.any { it < now }) _typing.update { m -> m.filterValues { it >= now } }
         if (_active.value.values.any { it < now }) _active.update { m -> m.filterValues { it >= now } }
@@ -1488,7 +1532,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val t = tries.getOrPut(m.id) { Tries(1, now + RETRY[0]) }
                 // About a day of tries; after that stop (their app may be too old to answer).
                 if (t.count > 300) { update(m.peerKey, m.id) { it.copy(state = "unsent") }; tries.remove(m.id); outbox.drop(UNSEND + m.id); continue }
-                if (now >= t.next) { t.next = now + RETRY[0]; bg { attemptUnsend(m) } }
+                if (now >= t.next) { t.next = NetLogic.NEVER; bg { attemptUnsend(m) } }
                 continue
             }
             // State "" is from before receipts existed: those were sent already, leave them be.
@@ -1499,12 +1543,27 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             val t = tries[m.id]
             if (t == null) { tries[m.id] = Tries(1, now + RETRY[0]); continue }   // after a restart: wait one round
-            if (now >= t.next) { t.next = now + RETRY[0]; bg { attempt(m) } }
+            if (now >= t.next) { t.next = NetLogic.NEVER; bg { attempt(m) } }
         }
     }
 
-    /** The refresh button: everything still waiting goes again on the next round, not when its timer says. */
-    fun retryAllNow() { for (t in tries.values) t.next = 0L }
+    /**
+     * The refresh button (and catching up): everything still waiting goes again on the next round, not when its
+     * timer says. Not what relays already hold: it waits there for their phone.
+     */
+    fun retryAllNow() { for (t in tries.values) if (t.heldAt == 0L) t.next = 0L }
+
+    /** Someone just showed up close by or on the same Wi-Fi: what's still on its way to them goes now. */
+    private fun nearbyNow() {
+        val now = (close.list.value.mapNotNull { p -> p.chatKey?.takeIf { p.connected } } +
+            ble.peers.value.mapNotNull { it.chatKey } + net.devices.value.mapNotNull { it.chatKey }).toSet()
+        val came = now - near
+        near = now
+        if (came.isEmpty()) return
+        for ((k, list) in _private.value) if (k in came) for (m in list) if (m.mine) tries[m.id]?.next = 0L
+        for ((env, v) in mxOut) if (v.first in came) tries[env]?.next = 0L
+        came.forEach { groups.nudge(it) }
+    }
 
         /** Tap a message that didn't send: try again now. */
     fun retry(peerKey: String, msgId: String) {
@@ -1527,21 +1586,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
-    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null): Boolean {
+    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null): Boolean {
         if (mailbox == null) return false
-        // [stored]: once a relay has said OK to every one of them.
+        // [stored]: once a relay has said OK to every one of them. [held]: once enough relays have (NetLogic.HELD_RELAYS).
         val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
-        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok) }
+        val heldLeft = java.util.concurrent.atomic.AtomicInteger(bodies.size)
+        val all: (() -> Unit)? = held?.let { done -> { if (heldLeft.decrementAndGet() == 0) done() } }
+        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all) }
         return true
     }
 
-    private fun update(peer: String, msgId: String, f: (Msg) -> Msg) {
-        edit { map ->
-            val before = map[peer] ?: return@edit false
-            map[peer] = before.map { if (it.id == msgId) f(it) else it }
-            true
-        }
+    /** Changes one message; false (and nothing saved) when that changed nothing. */
+    private fun update(peer: String, msgId: String, f: (Msg) -> Msg): Boolean = edit { map ->
+        val before = map[peer] ?: return@edit false
+        var changed = false
+        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true } else it }
+        if (changed) map[peer] = after
+        changed
     }
 
     /** Every change to the chats goes through here: one at a time, then saved. Returns whether it changed. */
@@ -1696,7 +1758,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!c.groupOnly && "g1" !in c.caps) { probeCaps(o.to); return }
         val bodies = (if (!o.retry) listOf(envelope(o.room, o.to, o.plain, o.env).toString())
             else outbox.getOrMake(o.env) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
-        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox)
+        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null)
     }
 
     /** A group photo or voice message: the 0.5 photo pieces plus g, ch and gid in the clear (3.9). */
@@ -1714,13 +1776,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }).map { it.toString() }
     }
 
-    /** Every route at once. A photo goes over the internet only when nothing close by took it (or on a later try). */
-    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?) {
+    /**
+     * Every route at once. A photo goes over the internet only when nothing close by took it (or on a later try).
+     * [publish]: false while relays already hold it (it isn't sent to them again yet); [held] runs once they do.
+     */
+    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null) {
         var local = false
         close.endpointFor(k)?.let { ep -> bodies.forEach { close.send(ep, JSONObject(it).put("t", "msg")) }; local = true }
         if (ble.peers.value.any { it.chatKey == k } && bodies.all { ble.send(k, it) }) local = true
         net.devices.value.firstOrNull { it.chatKey == k }?.let { d -> local = true; bg { bodies.forEach { net.post(d, PATH, it) } } }
-        if (!big || ((!local || tries >= 2) && bodies.size <= Photos.INTERNET_PIECES)) internet(k, bodies, mailbox)
+        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= Photos.INTERNET_PIECES))) internet(k, bodies, mailbox, held = held)
     }
 
     private fun receiveGroup(o: JSONObject, room: String, fromKey: String, name: String, mailbox: String?): Pair<Int, String> {
@@ -1898,7 +1963,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             photosDir.deleteRecursively()
             outbox.clear()
             mxOut.clear(); mxStore.delete()
-            save(); nearbyStore.delete()
+            saveNow(); nearbyStore.delete()
         }
     }
 
@@ -1987,9 +2052,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (m.file.isNotEmpty()) o.put("fn", m.file)
     }
 
-    private fun save() = synchronized(lock) {
-        val o = JSONObject(); _private.value.forEach { (k, v) -> o.put(k, toJson(v)) }
-        vault.write(store, o.toString())
+    private fun save() {
+        if (saveDue.compareAndSet(false, true)) writer.schedule({ saveDue.set(false); saveNow() }, SAVE_AFTER_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    private fun saveNow() {
+        try {
+            val chats = _private.value
+            val o = JSONObject(); chats.forEach { (k, v) -> o.put(k, toJson(v)) }
+            synchronized(writer) { vault.write(store, o.toString()) }
+        } catch (_: Exception) {}
     }
     private fun resendKeeps() {
         unsentKeeps.toList().forEach { (k, body) ->
@@ -2040,8 +2112,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val DAY = ChatWire.DAY
         /** Outbox key for a message's unsend envelope. */
         private const val UNSEND = "unsend:"
-        /** Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min. */
-        val RETRY = longArrayOf(5_000, 10_000, 20_000, 60_000, 300_000)
+        /** Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min (until relays hold it, see NetLogic). */
+        val RETRY = NetLogic.RETRY
+        /** A change to the chats is written this long after it (more changes meanwhile share the write). */
+        private const val SAVE_AFTER_MS = 500L
         private val GROUP_ROOMS = setOf("group", "gmsg", "greceipt")
     }
 }

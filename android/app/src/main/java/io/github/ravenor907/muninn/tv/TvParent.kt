@@ -79,10 +79,14 @@ object TvParent {
         synchronized(lock) {
             _tvs.value = try { app.vault.read(file(app))?.let { fromJson(JSONObject(it)) } } catch (e: Exception) { null } ?: emptyMap()
         }
-        if (!ticking) {
-            ticking = true
-            timer.scheduleWithFixedDelay(Runnable { try { tick() } catch (_: Exception) {} }, 2, 2, TimeUnit.SECONDS)
-        }
+        if (_tvs.value.isNotEmpty()) ticking()
+    }
+
+    /** The 2-second check runs only on a phone that manages a TV (or is inviting someone to one), never on others. */
+    @Synchronized private fun ticking() {
+        if (ticking) return
+        ticking = true
+        timer.scheduleWithFixedDelay(Runnable { try { tick() } catch (_: Exception) {} }, 2, 2, TimeUnit.SECONDS)
     }
 
     /** A TV this phone manages (and hasn't disconnected): its chat offers the Kids' TV screen. */
@@ -387,6 +391,7 @@ object TvParent {
         change(tvKey) { t -> t.copy(reach = (t.reach + add).distinct().take(TvRules.MAX_CONTACTS - 1)) }
         val now = System.currentTimeMillis()
         add.forEach { k -> app.chat.probeCaps(k); cards[k] = tvKey to now; sendCard(app, k, false) }
+        if (add.isNotEmpty()) ticking()
     }
 
     /** True when it went (as a card, or as a message once [late]). */
@@ -474,6 +479,7 @@ object TvParent {
     private fun put(t: ManagedTv) = synchronized(lock) {
         _tvs.value = _tvs.value + (t.key to t)
         app?.let { save(it) }
+        ticking()
     }
 
     private fun save(app: Muninn) {
