@@ -184,6 +184,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+    implementation("androidx.camera:camera-video:$camerax") // video messages (cap m2)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // org.json is a stub in unit tests

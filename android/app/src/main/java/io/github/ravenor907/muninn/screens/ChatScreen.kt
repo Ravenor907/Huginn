@@ -898,6 +898,12 @@ private fun Conversation(app: Muninn, key: String) {
     var picked by remember { mutableStateOf<Uri?>(null) }
     var preparing by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
+    // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
+    var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var attaching by remember { mutableStateOf(false) }
+    var camera by remember { mutableStateOf("") }
+    var polling by remember { mutableStateOf(false) }
+    var shared by remember { mutableStateOf(false) }
     // Cap m1: the message being answered or edited, the one held for its sheet, search and the photos page.
     var replyTo by remember { mutableStateOf<Chat.Msg?>(null) }
     var editing by remember { mutableStateOf<Chat.Msg?>(null) }
@@ -911,7 +917,9 @@ private fun Conversation(app: Muninn, key: String) {
     val typingNow = key in typingMap
     val activeNow = key in activeMap
     val me = app.identity.publicKey
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
+        if (uris.size == 1) picked = uris[0] else if (uris.size > 1) pickedMany = uris
+    }
     val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         Ui.say(if (ok) "Ready. Hold the mic to record." else "Voice messages need the microphone. Muninn only listens while you hold the button.", !ok)
     }
@@ -924,6 +932,19 @@ private fun Conversation(app: Muninn, key: String) {
             else withContext(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) }
             preparing = false; picked = null
         }
+    }
+    /** An album: up to 10 photos, each shrunk and scrubbed like any photo. */
+    fun sendMany(uris: List<Uri>) {
+        preparing = true
+        scope.launch {
+            val jpegs = withContext(Dispatchers.Default) { uris.mapNotNull { Photos.prepare(context, it, false) } }
+            if (jpegs.isEmpty()) Ui.say("Those photos couldn't be opened.", true)
+            else withContext(Dispatchers.IO) { app.chat.sendPhotos(key, jpegs) }
+            preparing = false; pickedMany = emptyList()
+        }
+    }
+    fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
+        app.chat.sendPoll(key, poll.q, poll.options, poll.multi)?.let { Ui.say(it, true) }
     }
     fun jumpTo(id: String) {
         val i = msgs.indexOfFirst { it.id == id }
@@ -940,12 +961,21 @@ private fun Conversation(app: Muninn, key: String) {
     }
     viewing?.let { v ->
         BackHandler { viewing = null }
-        PhotoViewer(app, v) { viewing = null }
+        if (v.video > 0) VideoPlayer(app.chat.photo(v.photo), { viewing = null }) else PhotoViewer(app, v) { viewing = null }
         return
     }
     if (gallery) {
         BackHandler { gallery = false }
         MediaGallery("Photos and voice · $name", msgs, { app.chat.photo(it.photo) }, { viewing = it }) { gallery = false }
+        return
+    }
+    if (camera.isNotEmpty()) {
+        CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
+            onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVideo(key, mp4, ms)?.let { Ui.say(it, true) } } }) { camera = "" }
+        return
+    }
+    if (shared) {
+        SharedMedia("Shared · $name", msgs, { app.chat.photo(it.photo) }, { viewing = it }) { shared = false }
         return
     }
     if (searching) BackHandler { searching = false; query = "" }
@@ -977,6 +1007,8 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); searching = true; matchAt = 0 })
             DropdownMenuItem(text = { Text("Photos and voice", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
                 onClick = { close(); gallery = true })
+            DropdownMenuItem(text = { Text("Shared photos, videos and links", style = bodyStyle) }, leadingIcon = { MIcon("link", Palette.accent, 20.dp) },
+                onClick = { close(); shared = true })
             if (!verified) DropdownMenuItem(text = { Text("Check code", style = bodyStyle) }, leadingIcon = { MIcon("shield", Palette.accent, 20.dp) },
                 onClick = {
                     close()
@@ -1028,16 +1060,19 @@ private fun Conversation(app: Muninn, key: String) {
         } else if (c == null && m?.iSaid == true) Text("You said yes to keeping in touch. Waiting for $name.", style = Type.small,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
         val current = matches.getOrNull(matchAt)
+        val albums = remember(msgs) { albumsOf(msgs) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom)) {
             items(msgs.size, key = { msgs[it].id }) { i ->
                 val m = msgs[i]
                 Column {
                     if (i == 0 || dayIndex(msgs[i - 1].time) != dayIndex(m.time)) DayLabel(m.time)
-                    Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
+                    // An album shows once, in its first photo's place.
+                    if (m.id !in albums.first) Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
                         quote = quoteOf(m.re), onQuote = { jumpTo(m.re) }, me = me, highlight = current == i,
                         onReply = if (m.failed) null else ({ editing = null; replyTo = m }), onReactions = { sheetFor = m },
-                        onTap = { viewing = m }) { sheetFor = m }
+                        onTap = { viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
+                        onVote = { v -> app.chat.vote(key, m.id, v)?.let { Ui.say(it, true) } }, voterName = { if (it == key) name else app.chat.nameOf(it) }) { sheetFor = m }
                 }
             }
             if (typingNow) item(key = "typing") { TypingRow(name) }
@@ -1062,10 +1097,22 @@ private fun Conversation(app: Muninn, key: String) {
                     style = Type.small, modifier = Modifier.padding(top = 6.dp))
             }
         }
+        if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }) { attaching = false }
+        if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
+        if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
+            Text(if (preparing) "Getting them ready…" else "Send ${pickedMany.size} photos as an album?", style = Type.big, modifier = Modifier.padding(top = 6.dp))
+            Text("Location and camera details are removed.", style = Type.small)
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Cancel", Modifier.weight(1f), enabled = !preparing) { pickedMany = emptyList() }
+                MButton("Send", Modifier.weight(1f), Kind.Accent, enabled = !preparing) { sendMany(pickedMany) }
+            }
+        }
         val banner: (@Composable () -> Unit)? = editing?.let { e -> { ComposeBanner("Editing your message", e.text, "edit") { editing = null; text = "" } } }
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${if (r.mine) "yourself" else name}", preview(r), "reply") { replyTo = null } } }
         Composer(text, { text = it; app.chat.typingTo(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
-            pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            attaching = true
         }, voice = VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
@@ -1288,7 +1335,10 @@ internal val LocalMineBubble = androidx.compose.runtime.compositionLocalOf { Col
 @Composable
 private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, photo: (() -> ByteArray?)? = null, statusText: String? = null,
                    quote: Pair<String, String>? = null, onQuote: () -> Unit = {}, me: String = "", groupRead: Int = -1, highlight: Boolean = false,
-                   onReply: (() -> Unit)? = null, onReactions: () -> Unit = {}, onTap: () -> Unit = {}, onLong: () -> Unit) {
+                   onReply: (() -> Unit)? = null, onReactions: () -> Unit = {}, onTap: () -> Unit = {},
+                   /** Cap m2: an album shown in this bubble, opening one of its photos; a vote on a poll; who voted, by key. */
+                   album: List<Chat.Msg>? = null, albumBytes: (Chat.Msg) -> ByteArray? = { null }, onAlbumTap: (Chat.Msg) -> Unit = {},
+                   onVote: ((List<Int>) -> Unit)? = null, voterName: (String) -> String = { "Someone" }, onLong: () -> Unit) {
     val tapNow by rememberUpdatedState(onTap)
     val longNow by rememberUpdatedState(onLong)
     val replyNow by rememberUpdatedState(onReply)
@@ -1319,7 +1369,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
         }
     }
     val isVoice = m.unsent.isEmpty() && m.voice > 0 && photo != null
-    val isPhoto = m.unsent.isEmpty() && photo != null && m.voice == 0
+    val isVideo = m.unsent.isEmpty() && photo != null && m.video > 0
+    val isPhoto = m.unsent.isEmpty() && photo != null && m.voice == 0 && m.video == 0
     // Swipe right to reply: the bubble follows the finger a little, and past the line it's a reply.
     var dragX by remember { mutableStateOf(0f) }
     val swipe = if (onReply != null && m.unsent.isEmpty()) Modifier.pointerInput(m.id) {
@@ -1348,6 +1399,16 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                             // Mine: length and receipt ("0:04 · Read"). Theirs: length and when it came.
                             VoiceNote(m, photo!!, Voice.length(m.voice) + " · " + (if (m.mine) status.ifEmpty { clock(m.time) } else clock(m.time)), metaStyle)
                         }
+                        isVideo -> Column(Modifier.padding(4.dp)) {
+                            Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
+                            VideoThumb(m, photo!!)
+                            Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
+                        }
+                        isPhoto && album != null -> Column(Modifier.padding(4.dp)) {
+                            Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
+                            AlbumGrid(album, albumBytes, onAlbumTap)
+                            Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
+                        }
                         isPhoto -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
                             val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo!!(), 720) } }
@@ -1358,6 +1419,11 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                                     ?: Text("Photo", style = Type.small)
                             }
                             Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
+                        }
+                        m.poll != null && m.unsent.isEmpty() -> Column(Modifier.padding(top = 4.dp, bottom = 6.dp)) {
+                            Box(Modifier.padding(horizontal = 12.dp)) { Column { name(); quoted() } }
+                            PollCard(m.poll, m.votes, me, voterName, onVote)
+                            Box(Modifier.align(Alignment.End).padding(horizontal = 12.dp)) { metaLine() }
                         }
                         else -> Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             name(); quoted()
@@ -1370,6 +1436,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                                 Spacer(Modifier.width(8.dp))
                                 metaLine()
                             }
+                            // Cap m2: what a link goes to, made on the sender's phone.
+                            if (m.unsent.isEmpty()) m.preview?.let { Box(Modifier.padding(top = 6.dp)) { PreviewCard(it) } }
                         }
                     }
                 }
@@ -1580,7 +1648,8 @@ private fun groupUnread(msgs: List<Groups.GMsg>): Int {
 /** A group message as a bubble: the sender's nickname if they're a contact. */
 private fun asMsg(app: Muninn, m: Groups.GMsg) = Chat.Msg(m.id, m.from,
     if (m.mine) app.identity.username else app.chat.contacts.contact(m.from)?.shown ?: m.name, m.text, m.mine, m.time,
-    state = m.state, photo = m.photo, unsent = m.unsent, voice = m.voice, re = m.re, reactions = m.reactions, edited = m.edited)
+    state = m.state, photo = m.photo, unsent = m.unsent, voice = m.voice, re = m.re, reactions = m.reactions, edited = m.edited,
+    video = m.video, album = m.album, albumAt = m.albumAt, albumOf = m.albumOf, poll = m.poll, votes = m.votes, preview = m.preview)
 
 /** Two members' initials, one over the other; a group of one or two shows a single circle. */
 @Composable
@@ -1908,6 +1977,12 @@ private fun GroupConversation(app: Muninn, g: String) {
     var picked by remember { mutableStateOf<Uri?>(null) }
     var preparing by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
+    // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
+    var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var attaching by remember { mutableStateOf(false) }
+    var camera by remember { mutableStateOf("") }
+    var polling by remember { mutableStateOf(false) }
+    var shared by remember { mutableStateOf(false) }
     // Cap m1: answering, editing, and the message held for its sheet.
     var replyTo by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
     var editing by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
@@ -1933,7 +2008,9 @@ private fun GroupConversation(app: Muninn, g: String) {
     val matches = if (!searching || query.isBlank()) emptyList()
         else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
     LaunchedEffect(matchAt, matches.size, query) { matches.getOrNull(matchAt)?.let { list.animateScrollToItem(it) } }
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
+        if (uris.size == 1) picked = uris[0] else if (uris.size > 1) pickedMany = uris
+    }
     val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         Ui.say(if (ok) "Ready. Hold the mic to record." else "Voice messages need the microphone. Muninn only listens while you hold the button.", !ok)
     }
@@ -1947,14 +2024,35 @@ private fun GroupConversation(app: Muninn, g: String) {
             preparing = false; picked = null
         }
     }
+    fun sendMany(uris: List<Uri>) {
+        preparing = true
+        scope.launch {
+            val jpegs = withContext(Dispatchers.Default) { uris.mapNotNull { Photos.prepare(context, it, false) } }
+            if (jpegs.isEmpty()) Ui.say("Those photos couldn't be opened.", true)
+            else withContext(Dispatchers.IO) { app.chat.sendGroupPhotos(g, ch, jpegs) }
+            preparing = false; pickedMany = emptyList()
+        }
+    }
+    fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
+        app.chat.sendGroupPoll(g, ch, poll.q, poll.options, poll.multi)?.let { Ui.say(it, true) }
+    }
     viewing?.let { v ->
         BackHandler { viewing = null }
-        PhotoViewer(app, v) { viewing = null }
+        if (v.video > 0) VideoPlayer(app.chat.photo(v.photo), { viewing = null }) else PhotoViewer(app, v) { viewing = null }
         return
     }
     if (gallery) {
         BackHandler { gallery = false }
         MediaGallery("Photos and voice · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it }) { gallery = false }
+        return
+    }
+    if (camera.isNotEmpty()) {
+        CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
+            onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVideo(g, ch, mp4, ms)?.let { Ui.say(it) } } }) { camera = "" }
+        return
+    }
+    if (shared) {
+        SharedMedia("Shared · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it }) { shared = false }
         return
     }
     val others = s.members.filter { it.k != app.identity.publicKey }.map { memberName(app, it) }
@@ -1975,6 +2073,8 @@ private fun GroupConversation(app: Muninn, g: String) {
                 onClick = { close(); searching = true; matchAt = 0 })
             DropdownMenuItem(text = { Text("Photos and voice", style = bodyStyle) }, leadingIcon = { MIcon("image", Palette.accent, 20.dp) },
                 onClick = { close(); gallery = true })
+            DropdownMenuItem(text = { Text("Shared photos, videos and links", style = bodyStyle) }, leadingIcon = { MIcon("link", Palette.accent, 20.dp) },
+                onClick = { close(); shared = true })
             if (!grp.readOnly && s.members.size > 2) DropdownMenuItem(text = { Text("Call some people", style = bodyStyle) }, leadingIcon = { MIcon("call", Palette.accent, 20.dp) },
                 onClick = { close(); callSome = true })
             DropdownMenuItem(text = { Text("Group settings", style = bodyStyle) }, leadingIcon = { MIcon("gear", Palette.accent, 20.dp) },
@@ -2010,6 +2110,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             Text("Invite contacts, or share a group code with anyone you want in it.", style = Type.small)
             MButton("Invite people", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { ChatNav.open = "$key/settings" }
         }
+        val gAlbums = remember(msgs) { albumsOf(msgs.map { asMsg(app, it) }) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom)) {
             items(msgs.size, key = { msgs[it].id }) { i ->
@@ -2018,12 +2119,14 @@ private fun GroupConversation(app: Muninn, g: String) {
                 Column {
                     if (i == 0 || dayIndex(msgs[i - 1].time) != dayIndex(gm.time)) DayLabel(gm.time)
                     // Mine: a check mark and how many have read it, circled; before anyone has, "Sending" or "Delivered".
-                    Bubble(m, showName = true, photo = if (gm.photo.isNotEmpty()) ({ app.chat.photo(gm.photo) }) else null,
+                    if (m.id !in gAlbums.first) Bubble(m, showName = true, photo = if (gm.photo.isNotEmpty()) ({ app.chat.photo(gm.photo) }) else null,
                         statusText = if (gm.mine) (if (gm.read.isNotEmpty()) "" else Groups.status(gm)) else null,
                         quote = quoteOf(gm.re), onQuote = { jumpTo(gm.re) }, me = me, groupRead = if (gm.mine) gm.read.size else -1,
                         highlight = matches.getOrNull(matchAt) == i || (!gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username)),
                         onReply = if (grp.readOnly) null else ({ editing = null; replyTo = gm }), onReactions = { sheetFor = gm },
-                        onTap = { viewing = m }) { sheetFor = gm }
+                        onTap = { viewing = m }, album = gAlbums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
+                        onVote = if (grp.readOnly) null else ({ v -> app.chat.groupVote(g, gm.id, v) }),
+                        voterName = { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }) { sheetFor = gm }
                 }
             }
         }
@@ -2045,10 +2148,22 @@ private fun GroupConversation(app: Muninn, g: String) {
                 }
             }
         }
+        if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }) { attaching = false }
+        if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
+        if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
+            Text(if (preparing) "Getting them ready…" else "Send ${pickedMany.size} photos as an album?", style = Type.big, modifier = Modifier.padding(top = 6.dp))
+            Text("Location and camera details are removed.", style = Type.small)
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Cancel", Modifier.weight(1f), enabled = !preparing) { pickedMany = emptyList() }
+                MButton("Send", Modifier.weight(1f), Kind.Accent, enabled = !preparing) { sendMany(pickedMany) }
+            }
+        }
         val banner: (@Composable () -> Unit)? = editing?.let { e -> { ComposeBanner("Editing your message", e.text, "edit") { editing = null; text = "" } } }
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${whoOf(r)}", groupPreview(app, r).substringAfter(": "), "reply") { replyTo = null } } }
         if (!grp.readOnly) Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
-            pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            attaching = true
         }, voice = VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
