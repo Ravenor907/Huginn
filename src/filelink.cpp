@@ -760,7 +760,9 @@ void FileLink::receivedAll(Xfer *x)
             fail(x, QStringLiteral("%1 arrived damaged, so it was thrown away.").arg(x->name));
             return;
         }
-        const QString final = QDir(saveDir).filePath(freeName(x->name));
+        // The name its .part was given, unless something took that name meanwhile.
+        const QString planned = x->path.chopped(5);
+        const QString final = QFile::exists(planned) ? QDir(saveDir).filePath(freeName(x->name)) : planned;
         if (!QFile::rename(x->path, final)) {
             fail(x, QStringLiteral("%1 couldn't be saved.").arg(x->name));
             return;
