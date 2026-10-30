@@ -113,6 +113,11 @@ class Power(private val app: Muninn) {
         get() = prefs.getBoolean("dataSaver", true)
         set(v) { prefs.edit().putBoolean("dataSaver", v).apply() }
 
+    /** Settings › Battery › Extreme battery saver was picked (the light connection stays, so calls still ring at once). */
+    var extreme: Boolean
+        get() = prefs.getBoolean("extremeSaver", false)
+        set(v) { prefs.edit().putBoolean("extremeSaver", v).apply() }
+
     /** Something arrived or Muninn was opened: wide awake again (Check less when it's quiet starts over). */
     fun activity() {
         prefs.edit().putLong("lastActivity", System.currentTimeMillis()).apply()

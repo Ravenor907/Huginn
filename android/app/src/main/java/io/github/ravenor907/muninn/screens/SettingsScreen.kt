@@ -178,25 +178,29 @@ private fun posName(p: String) = when (p) { "top" -> "Top"; "middle" -> "Middle"
 private enum class BatteryChoice(val title: String, val help: String) {
     FASTEST("Fastest", "Always fully connected. Messages and calls arrive in seconds. Uses the most battery."),
     BALANCED("Balanced", "Messages and calls still arrive in seconds. Muninn saves power while the screen is off."),
-    SAVING("Most saving", "Checks for messages every 15 minutes while Muninn is closed, and calls show as missed. Fully connected while charging.");
+    EXTREME("Extreme battery saver", "Keeps one light connection, so calls still ring almost at once. Bluetooth stops looking while closed, link previews and big downloads wait.");
 
     fun apply(app: Muninn) {
         val p = app.power
         when (this) {
-            FASTEST -> { p.check = Check.LIVE; p.saver = false; p.lowBatterySave = false; p.adaptive = false }
-            BALANCED -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true }
-            SAVING -> { p.check = Check.QUARTER; p.saver = true; p.lowBatterySave = true; p.adaptive = true }
+            FASTEST -> { p.check = Check.LIVE; p.saver = false; p.lowBatterySave = false; p.adaptive = false; p.dataSaver = false; p.extreme = false }
+            BALANCED -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true; p.extreme = false }
+            EXTREME -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true; p.extreme = true
+                p.closeBy = false; app.identity.linkPreviews = false }
         }
         p.refresh()
     }
 
     companion object {
         /** The choice the current switches match, or null for someone's own mix. */
-        fun of(app: Muninn): BatteryChoice? = when {
-            app.power.check == Check.LIVE && !app.power.saver -> FASTEST
-            app.power.check == Check.LIVE -> BALANCED
-            app.power.check == Check.QUARTER -> SAVING
-            else -> null
+        fun of(app: Muninn): BatteryChoice? {
+            val p = app.power
+            if (p.check != Check.LIVE) return null
+            return when {
+                !p.saver && !p.lowBatterySave && !p.adaptive && !p.dataSaver -> FASTEST
+                p.saver && p.lowBatterySave && p.adaptive && p.dataSaver -> if (p.extreme) EXTREME else BALANCED
+                else -> null
+            }
         }
     }
 }
