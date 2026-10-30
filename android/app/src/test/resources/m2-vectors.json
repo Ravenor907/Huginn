@@ -20,7 +20,7 @@
     "text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos",
     "poll": {
      "q": "Pizza or tacos?",
-     "o": [
+     "a": [
       "Pizza",
       "Tacos"
      ]
@@ -30,7 +30,7 @@
     "text": "Where?",
     "poll": {
      "q": "Where?",
-     "o": [
+     "a": [
       "Home",
       "Park",
       "Beach"
@@ -72,7 +72,7 @@
     "ts": 1761500130000,
     "poll": {
      "q": "Tonight?",
-     "o": [
+     "a": [
       "Yes",
       "No"
      ]
@@ -162,7 +162,7 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "only one"
      ]
     }
@@ -171,14 +171,14 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": []
+     "a": []
     }
    },
    {
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "0",
       "1",
       "2",
@@ -197,7 +197,7 @@
     "text": "x",
     "poll": {
      "q": "",
-     "o": [
+     "a": [
       "a",
       "b"
      ]
@@ -207,7 +207,7 @@
     "text": "x",
     "poll": {
      "q": "Q\nQ",
-     "o": [
+     "a": [
       "a",
       "b"
      ]
@@ -217,7 +217,7 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "a",
       "A "
      ]
@@ -227,7 +227,7 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "a",
       ""
      ]
@@ -237,7 +237,7 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "a",
       "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
      ]
@@ -247,7 +247,7 @@
     "text": "x",
     "poll": {
      "q": "Q",
-     "o": [
+     "a": [
       "a",
       "b"
      ],
@@ -322,7 +322,7 @@
     "text": "",
     "poll": {
      "q": "Pizza or tacos?",
-     "o": [
+     "a": [
       "Pizza",
       "Tacos"
      ]
@@ -339,7 +339,7 @@
     "ts": 1761500130000,
     "poll": {
      "q": "Q",
-     "o": []
+     "a": []
     }
    }
   ],
@@ -627,7 +627,7 @@
  "fallback": [
   {
    "q": "Pizza or tacos?",
-   "o": [
+   "a": [
     "Pizza",
     "Tacos"
    ],

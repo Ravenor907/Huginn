@@ -60,11 +60,11 @@ def need_poll(p):
     poll = p.get("poll")
     if not isinstance(poll, dict): raise Refused("poll")
     if not clean(poll.get("q"), 1, QUESTION_MAX) or "\n" in poll["q"]: raise Refused("poll.q")
-    o = poll.get("o")
-    if not isinstance(o, list) or not OPTIONS_MIN <= len(o) <= OPTIONS_MAX: raise Refused("poll.o")
+    o = poll.get("a")
+    if not isinstance(o, list) or not OPTIONS_MIN <= len(o) <= OPTIONS_MAX: raise Refused("poll.a")
     for x in o:
-        if not clean(x, 1, OPTION_MAX) or "\n" in x: raise Refused("poll.o")
-    if len(set(x.strip().lower() for x in o)) != len(o): raise Refused("poll.o same")
+        if not clean(x, 1, OPTION_MAX) or "\n" in x: raise Refused("poll.a")
+    if len(set(x.strip().lower() for x in o)) != len(o): raise Refused("poll.a same")
     if "m" in poll and not isinstance(poll["m"], bool): raise Refused("poll.m")
 
 
@@ -170,16 +170,16 @@ GID = "0123456789abcdef0123456789abcdef"
 G = "AAECAwQFBgcICQoLDA0ODw"
 T = 1761500130000
 JPEG = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 12).decode()
-POLL = {"q": "Pizza or tacos?", "o": ["Pizza", "Tacos"]}
+POLL = {"q": "Pizza or tacos?", "a": ["Pizza", "Tacos"]}
 LP = {"u": "https://example.com/a?b=c", "t": "Example Domain", "d": "This domain is for use in examples.", "i": JPEG}
 
 GOOD = {
-    "rich": [{"text": fallback(POLL["q"], POLL["o"]), "poll": POLL},
-             {"text": "Where?", "poll": {"q": "Where?", "o": ["Home", "Park", "Beach"], "m": True}},
+    "rich": [{"text": fallback(POLL["q"], POLL["a"]), "poll": POLL},
+             {"text": "Where?", "poll": {"q": "Where?", "a": ["Home", "Park", "Beach"], "m": True}},
              {"text": "Look https://example.com/a?b=c", "lp": LP},
              {"text": "Look http://example.org", "lp": {"u": "http://example.org", "t": "Example"}},
              {"text": "plain, with a field from later", "future": 1}, {"text": "a\ttab is fine in text"}],
-    "gmsg": [{"g": G, "ch": "main", "id": GID, "sv": 1, "text": fallback("Tonight?", ["Yes", "No"]), "ts": T, "poll": {"q": "Tonight?", "o": ["Yes", "No"]}},
+    "gmsg": [{"g": G, "ch": "main", "id": GID, "sv": 1, "text": fallback("Tonight?", ["Yes", "No"]), "ts": T, "poll": {"q": "Tonight?", "a": ["Yes", "No"]}},
              {"g": G, "ch": "main", "id": GID, "sv": 1, "text": "see https://example.com", "ts": T, "lp": {"u": "https://example.com", "t": "Example", "d": ""}}],
     "mx": [{"t": "vote", "msg": ID, "v": [0], "ts": T}, {"t": "vote", "msg": ID, "v": [], "ts": T}, {"t": "vote", "msg": ID, "v": [0, 2, 9], "ts": 0}],
     "group": [{"t": "vote", "g": G, "id": GID, "msg": GID, "v": [1], "ts": T}],
@@ -187,15 +187,15 @@ GOOD = {
               {"kind": "video", "ms": 60_000}, {"kind": "video", "ms": 1}],
 }
 REFUSE = {
-    "rich": [{"text": "x", "poll": {"q": "Q", "o": ["only one"]}},
-             {"text": "x", "poll": {"q": "Q", "o": ["a"] * 0}},
-             {"text": "x", "poll": {"q": "Q", "o": [str(i) for i in range(11)]}},
-             {"text": "x", "poll": {"q": "", "o": ["a", "b"]}},
-             {"text": "x", "poll": {"q": "Q\nQ", "o": ["a", "b"]}},
-             {"text": "x", "poll": {"q": "Q", "o": ["a", "A "]}},
-             {"text": "x", "poll": {"q": "Q", "o": ["a", ""]}},
-             {"text": "x", "poll": {"q": "Q", "o": ["a", "x" * (OPTION_MAX + 1)]}},
-             {"text": "x", "poll": {"q": "Q", "o": ["a", "b"], "m": 1}},
+    "rich": [{"text": "x", "poll": {"q": "Q", "a": ["only one"]}},
+             {"text": "x", "poll": {"q": "Q", "a": ["a"] * 0}},
+             {"text": "x", "poll": {"q": "Q", "a": [str(i) for i in range(11)]}},
+             {"text": "x", "poll": {"q": "", "a": ["a", "b"]}},
+             {"text": "x", "poll": {"q": "Q\nQ", "a": ["a", "b"]}},
+             {"text": "x", "poll": {"q": "Q", "a": ["a", "A "]}},
+             {"text": "x", "poll": {"q": "Q", "a": ["a", ""]}},
+             {"text": "x", "poll": {"q": "Q", "a": ["a", "x" * (OPTION_MAX + 1)]}},
+             {"text": "x", "poll": {"q": "Q", "a": ["a", "b"], "m": 1}},
              {"text": "x", "poll": "Pizza?"},
              {"text": "x", "lp": {"u": "ftp://example.com", "t": "T"}},
              {"text": "x", "lp": {"u": "javascript:alert(1)", "t": "T"}},
@@ -206,7 +206,7 @@ REFUSE = {
              {"text": "x", "lp": {"u": "https://example.com", "t": "T", "i": base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()}},
              {"text": "x", "lp": {"u": "https://example.com", "t": "T", "i": "A" * (THUMB_MAX + 4)}},
              {"text": "", "poll": POLL}],
-    "gmsg": [{"g": G, "ch": "main", "id": GID, "sv": 1, "text": "x", "ts": T, "poll": {"q": "Q", "o": []}}],
+    "gmsg": [{"g": G, "ch": "main", "id": GID, "sv": 1, "text": "x", "ts": T, "poll": {"q": "Q", "a": []}}],
     "mx": [{"t": "vote", "msg": ID, "v": [0, 0], "ts": T}, {"t": "vote", "msg": ID, "v": [2, 1], "ts": T},
            {"t": "vote", "msg": ID, "v": [10], "ts": T}, {"t": "vote", "msg": ID, "v": [-1], "ts": T},
            {"t": "vote", "msg": ID, "v": 1, "ts": T}, {"t": "vote", "msg": ID, "v": [0]},
@@ -229,7 +229,7 @@ VOTES = [
     {"n": 2, "events": [{"from": A, "v": [5], "ts": 10}], "result": [0, 0]},
     {"n": 2, "events": [{"from": A, "v": [0], "ts": 10}, {"from": A, "v": [1], "ts": 10}], "result": [1, 0]},
 ]
-FALLBACK = [{"q": "Pizza or tacos?", "o": ["Pizza", "Tacos"], "text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos"}]
+FALLBACK = [{"q": "Pizza or tacos?", "a": ["Pizza", "Tacos"], "text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos"}]
 VIDEO = [{"hex": (b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 8).hex(), "ok": True},
          {"hex": b"\xff\xd8\xff\xe0JFIF\x00\x00\x00\x00".hex(), "ok": False},
          {"hex": b"\x00\x00\x00\x18fty".hex(), "ok": False}]
@@ -248,7 +248,7 @@ def verify(v):
     for c in v["votes"]:
         if apply_votes(c["n"], c["events"]) != c["result"]: raise SystemExit("votes %r" % c)
     for c in v["fallback"]:
-        if fallback(c["q"], c["o"]) != c["text"]: raise SystemExit("fallback %r" % c)
+        if fallback(c["q"], c["a"]) != c["text"]: raise SystemExit("fallback %r" % c)
     for c in v["video"]:
         if is_video(bytes.fromhex(c["hex"])) != c["ok"]: raise SystemExit("video %r" % c)
 

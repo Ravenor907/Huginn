@@ -1260,10 +1260,10 @@ encrypted like a photo and decrypts it only to play it.
 A poll is a `rich` (11.2) or `gmsg` (3.8) message with one more field:
 
 ```json
-{"text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos", "poll": {"q": "Pizza or tacos?", "o": ["Pizza", "Tacos"], "m": false}}
+{"text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos", "poll": {"q": "Pizza or tacos?", "a": ["Pizza", "Tacos"], "m": false}}
 ```
 
-- `q`: 1 to 200 characters, one line. `o`: 2 to 10 options, each 1 to 100 characters, one line, no two the same (ignoring
+- `q`: 1 to 200 characters, one line. `a`: 2 to 10 answers, each 1 to 100 characters, one line, no two the same (ignoring
   case and spaces at the ends). `m`: several options may be chosen (default false).
 - `text` is what an app without `m2` shows: `"Poll: " + q`, then one line per option, `"1. Pizza"` (vectors: `fallback`).
 - A vote: room `mx` `{"t": "vote", "msg": "<poll id>", "v": [0], "ts": ...}` in a 1:1 chat, room `group`

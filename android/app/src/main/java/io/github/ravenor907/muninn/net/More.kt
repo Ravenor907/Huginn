@@ -10,7 +10,7 @@ import org.json.JSONObject
  *  - Albums: a photo piece's clear fields "al" (album id), "ai" (its place), "an" (how many). Anyone may get them;
  *    an app without m2 shows the photos one by one.
  *  - Video messages: a photo piece with "kind":"video" and "ms", the whole an MP4 of at most a minute. Only to m2.
- *  - Polls: "poll" {q, o, m} in a "rich" or "gmsg" payload, whose text says the same for apps without m2.
+ *  - Polls: "poll" {q, a, m} in a "rich" or "gmsg" payload, whose text says the same for apps without m2.
  *    Votes: room "mx" or "group", t "vote", {msg, v, ts}. Only to m2.
  *  - Link previews: "lp" {u, t, d, i} in a "rich" or "gmsg" payload, made on the sender's phone. The receiver never
  *    fetches anything; tapping asks before opening the browser.
@@ -43,13 +43,13 @@ object More {
     private fun checkPoll(poll: Any?) {
         if (poll !is JSONObject) throw Refused("poll")
         if (!oneLine(poll.opt("q"), 1, QUESTION_MAX)) throw Refused("poll.q")
-        val o = poll.opt("o") as? JSONArray ?: throw Refused("poll.o")
-        if (o.length() !in OPTIONS_MIN..OPTIONS_MAX) throw Refused("poll.o")
+        val o = poll.opt("a") as? JSONArray ?: throw Refused("poll.a")
+        if (o.length() !in OPTIONS_MIN..OPTIONS_MAX) throw Refused("poll.a")
         val seen = HashSet<String>()
         for (i in 0 until o.length()) {
             val x = o.opt(i)
-            if (!oneLine(x, 1, OPTION_MAX)) throw Refused("poll.o")
-            if (!seen.add((x as String).trim().lowercase())) throw Refused("poll.o same")
+            if (!oneLine(x, 1, OPTION_MAX)) throw Refused("poll.a")
+            if (!seen.add((x as String).trim().lowercase())) throw Refused("poll.a same")
         }
         if (poll.has("m") && poll.opt("m") !is Boolean) throw Refused("poll.m")
     }
@@ -143,11 +143,11 @@ object More {
 
     fun pollOf(p: JSONObject?): Poll? {
         val o = p?.optJSONObject("poll") ?: return null
-        val a = o.optJSONArray("o") ?: return null
+        val a = o.optJSONArray("a") ?: return null
         return Poll(o.optString("q"), (0 until a.length()).map { a.getString(it) }, o.optBoolean("m"))
     }
 
-    fun pollJson(poll: Poll): JSONObject = JSONObject().put("q", poll.q).put("o", JSONArray(poll.options)).apply { if (poll.multi) put("m", true) }
+    fun pollJson(poll: Poll): JSONObject = JSONObject().put("q", poll.q).put("a", JSONArray(poll.options)).apply { if (poll.multi) put("m", true) }
 
     /** One vote per person: who to (options, ts). A later ts replaces it ([] takes it back). */
     data class Vote(val v: List<Int>, val ts: Long)

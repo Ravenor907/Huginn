@@ -46,7 +46,7 @@ class MoreTest {
         val a = v.getJSONArray("fallback")
         for (i in 0 until a.length()) {
             val c = a.getJSONObject(i)
-            val o = c.getJSONArray("o").let { x -> (0 until x.length()).map { x.getString(it) } }
+            val o = c.getJSONArray("a").let { x -> (0 until x.length()).map { x.getString(it) } }
             assertEquals(c.getString("text"), More.fallback(c.getString("q"), o))
         }
     }
