@@ -59,6 +59,11 @@ qt_add_executable(huginn
     src/chatgroups.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
+    src/morewire.cpp src/morewire.h
+    src/chatmore.cpp
+    src/linkpreview.cpp src/linkpreview.h
+    src/videomsg.cpp src/videomsg.h
+    src/thumbs.cpp src/thumbs.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h
@@ -213,6 +218,10 @@ qt_add_qml_module(huginn
         qml/MessageRow.qml
         qml/QuickSwitcher.qml
         qml/StickPointer.qml
+        qml/MoreParts.qml
+        qml/MoreLayer.qml
+        qml/PhotoViewer.qml
+        qml/PollDialog.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -224,7 +233,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher StickPointer)
+                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

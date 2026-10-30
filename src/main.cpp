@@ -29,6 +29,10 @@
 #include "transfer.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "morewire.h"
+#include "linkpreview.h"
+#include "videomsg.h"
+#include "thumbs.h"
 #include "richwire.h"
 
 #include <QApplication>
@@ -132,7 +136,9 @@ int main(int argc, char *argv[])
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return selfTested(a && b && c && d);
+        const bool e = MoreWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m2-vectors.json")));
+        const bool f = LinkPreview::selfTest();
+        return selfTested(a && b && c && d && e && f);
     }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
@@ -197,6 +203,7 @@ int main(int argc, char *argv[])
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
     auto *voice = new Voice(chat, &app);
+    auto *videos = new VideoMsg(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
     auto *cs = new CallSignalHooks(&app);
     cs->onSend = [chat](const QString &k, const QJsonObject &m) { chat->sendCall(k, m); };
@@ -295,6 +302,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Chat", chat);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Vault", vault);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Voice", voice);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Videos", videos);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
@@ -302,6 +310,7 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
+    engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(chat));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);

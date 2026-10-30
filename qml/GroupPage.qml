@@ -699,16 +699,10 @@ Rectangle {
         Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "Encrypted for everyone in " + info.name, "", "Send",
                t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" }, false, true)
     }
+    // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
     function pickPicture() {
         if (readOnly || isTour) return
-        const pics = Chat.recentPictures()
-        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
-        const key = chatKey
-        Ui.pickFrom("Send a picture to #" + channel.name + " (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-            Ui.pickFrom("Send this picture", [{ header: "", items: [
-                { name: "Send", detail: "Quick anywhere", url: "normal" },
-                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi", url: "hd" }] }],
-                q => { if (Chat.sendPhoto(key, path, q === "hd")) Ui.say("Sending the picture.") }))
+        more.attach()
     }
     function showCode() {
         if (isTour) return
@@ -747,7 +741,8 @@ Rectangle {
             group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
         }
         if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
-        if (!readOnly) group.push({ name: "Send a picture", detail: "To #" + channel.name, url: "picture" })
+        if (!readOnly) group.push({ name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" })
+        if (!isTour) chans.push({ name: "Shared in #" + channel.name, detail: "Photos, videos and links", url: "shared" })
         if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
         return [{ header: "Calls", items: calls }, { header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
@@ -765,6 +760,7 @@ Rectangle {
             else if (a === "code") showCode()
             else if (a === "members") pickMember()
             else if (a === "pins") openPins()
+            else if (a === "shared") more.openShared()
             else if (a === "picture") pickPicture()
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
@@ -922,22 +918,7 @@ Rectangle {
         Chat.setPinned(chatKey, id, on)
         Ui.say(on ? "Pinned. Pins are only on this computer." : "Unpinned.")
     }
-    function dropFiles(urls) {
-        const others = []
-        let pics = 0
-        for (let i = 0; i < urls.length; i++) {
-            const path = Chat.localPath(urls[i])
-            if (path === "") continue
-            if (Chat.isPicture(path)) { if (Chat.sendPhoto(chatKey, path, false)) pics++ }
-            else others.push(urls[i])
-        }
-        if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
-        if (others.length) {
-            Transfer.share(others)
-            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
-            Ui.openPage("files", {})
-        }
-    }
+    function dropFiles(urls) { more.dropFiles(urls) }
     function pickReaction(m) {
         const g = gid, id = m.id
         const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
@@ -971,7 +952,7 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" },
-                       { name: "Send a picture", detail: "To #" + channel.name, url: "picture" }]
+                       { name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" }]
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
@@ -1005,6 +986,7 @@ Rectangle {
             if (b === "a") { Ui.openPage("dms", {}); return true }
             return false
         }
+        if (more.busy) return more.handleButton(b)
         if (shownCode !== "") {
             if (b === "a") { Chat.copyText(shownCode); Ui.say("Code copied. It works for an hour.") }
             else if (b === "x") showCode()
@@ -1076,5 +1058,15 @@ Rectangle {
             if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (!page.locked && !page.isTour && page.gid !== "") Chat.markGroupRead(page.gid, page.channelId) }
             else Vault.away()
         }
+    }
+
+    // Cap m2: albums full size, video messages, the camera, polls and the Shared page.
+    property alias more: moreLayer
+    MoreLayer {
+        id: moreLayer
+        visible: !page.locked
+        where: page.locked || page.readOnly || page.isTour || page.gid === "" ? "" : page.chatKey
+        title: "#" + (page.channel.name || "")
+        tour: page.isTour
     }
 }

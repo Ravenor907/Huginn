@@ -114,7 +114,7 @@ Rectangle {
             onJump: host.jumpTo(msg.m.re)
         }
         Image {
-            visible: !!msg.m.photo && !msg.m.voice && !msg.m.unsent
+            visible: !!msg.m.photo && !msg.m.voice && !msg.m.unsent && !msg.m.video && !msg.m.album
             width: Theme.px(300); height: Theme.px(170)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
@@ -134,13 +134,15 @@ Rectangle {
             }
         }
         Text {
-            visible: !msg.m.photo || !!msg.m.unsent
+            visible: (!msg.m.photo || !!msg.m.unsent) && !(msg.m.pollView && !msg.m.unsent)
             width: parent.width; wrapMode: Text.Wrap
             textFormat: Text.PlainText
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
             font.italic: !!msg.m.unsent
             color: msg.m.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
         }
+        // Cap m2: an album, a video message, a poll or a link preview.
+        MoreParts { width: parent.width; host: msg.host; m: msg.m; where: msg.host && msg.host.more ? msg.host.more.where : "" }
         Reactions {
             width: parent.width
             list: msg.m.rxList || []
@@ -188,7 +190,7 @@ Rectangle {
             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
             msg.chosen()
             if (button === Qt.RightButton) msg.options()
-            else if (msg.m.photo && !msg.m.voice && !msg.m.unsent) host.viewing = msg.m.photo
+            else if (msg.m.photo && !msg.m.voice && !msg.m.unsent && !msg.m.video && !msg.m.album) host.viewing = msg.m.photo
         }
     }
     TapHandler {

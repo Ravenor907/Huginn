@@ -3,6 +3,7 @@
 // What is deterministic (canonical JSON, signatures, acceptance) lives in GroupWire.
 #include "chat.h"
 #include "richwire.h"
+#include "morewire.h"
 #include "ble.h"
 #include "groupwire.h"
 #include "localsend.h"
@@ -199,7 +200,7 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
         }
         out << m;
     }
-    return out;
+    return withM2(out, g);   // cap m2: albums together, polls counted, previews ready to show
 }
 
 // ------------------------------------------------------------------ making and changing groups
@@ -723,7 +724,10 @@ void Chat::sendStateTo(const QString &g, const QString &to)
     sendControl(g, to, {{QStringLiteral("t"), QStringLiteral("state")}, {QStringLiteral("op"), QStringLiteral("sync")}, {QStringLiteral("state"), m_groups.value(g).state}});
 }
 
-void Chat::sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re)
+void Chat::sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re) { sendGroupWith(g, ch, text, re, QJsonObject()); }
+
+// poll: cap m2, a poll whose text says the same for older apps.
+void Chat::sendGroupWith(const QString &g, const QString &ch, const QString &text, const QString &re, const QJsonObject &poll)
 {
     const QString t = text.trimmed().left(kMax);
     const auto it = m_groups.constFind(g);
@@ -748,14 +752,16 @@ void Chat::sendGroup(const QString &g, const QString &ch, const QString &text, c
     const bool quoting = GroupWire::isLogicalId(re) && m_gidx.value(re) == g;
     if (quoting)
         m.insert(QStringLiteral("re"), re);
+    if (!poll.isEmpty())
+        m.insert(QStringLiteral("poll"), poll.toVariantMap());
     storeGroupMessage(g, m, false);
     QJsonObject p{{QStringLiteral("g"), g}, {QStringLiteral("ch"), channel}, {QStringLiteral("id"), id}, {QStringLiteral("sv"), ver(s)},
                   {QStringLiteral("text"), t}, {QStringLiteral("ts"), ts}};
     if (quoting)
         p.insert(QStringLiteral("re"), re);
-    const QByteArray plain = compact(p);
-    for (const QString &k : to)
-        queueGroup(g, k, QStringLiteral("gmsg"), id, plain);
+    if (!poll.isEmpty())
+        p.insert(QStringLiteral("poll"), poll);   // apps without m2 ignore it and show the text
+    queueGroupMessage(g, id, to, p);   // a link gets its preview first (cap m2)
 }
 
 // Cap m1: my reaction to a group message ("" takes it away), to every member whose app has m1.
@@ -856,7 +862,7 @@ bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &pa
     return !sendGroupBlob(g, ch, jpeg, 0).isEmpty();
 }
 
-QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs)
+QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra)
 {
     const auto it = m_groups.constFind(g);
     if (!m_ready || it == m_groups.cend() || it->state.isEmpty())
@@ -869,20 +875,25 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
     const QString channel = GroupWire::channel(s, ch).value(QStringLiteral("t")).toString() == QLatin1String("text") ? ch : QStringLiteral("main");
     const QString gid = GroupWire::newLogicalId();
     m_vault->write(QStringLiteral("photos/") + gid, bytes);
-    const QStringList to = without(GroupWire::keysOf(s), myKey());
+    QStringList to = without(GroupWire::keysOf(s), myKey());
+    // Cap m2: a video message goes only to members whose app plays it; an album's fields are ignored by older apps.
+    if (extra.value(QStringLiteral("video")).toInt() > 0)
+        to.erase(std::remove_if(to.begin(), to.end(), [this](const QString &k) { return !hasM2(k); }), to.end());
     QVariantMap m{{QStringLiteral("id"), gid}, {QStringLiteral("ch"), channel}, {QStringLiteral("from"), myKey()}, {QStringLiteral("name"), username()},
                   {QStringLiteral("text"), QString()}, {QStringLiteral("mine"), true}, {QStringLiteral("time"), now()},
                   {QStringLiteral("state"), to.isEmpty() ? QStringLiteral("delivered") : QStringLiteral("sending")}, {QStringLiteral("to"), to},
                   {QStringLiteral("dlv"), QStringList()}, {QStringLiteral("rd"), QStringList()}, {QStringLiteral("photo"), gid},
                   {QStringLiteral("voice"), voiceMs}, {QStringLiteral("unsent"), QString()}, {QStringLiteral("failed"), false}};
+    m.insert(extra);
     storeGroupMessage(g, m, false);
     for (const QString &k : to)
-        queueGroupBodies(g, k, QStringLiteral("gphoto"), gid, groupPieces(g, channel, gid, k, bytes, voiceMs));
+        queueGroupBodies(g, k, QStringLiteral("gphoto"), gid, groupPieces(g, channel, gid, k, bytes, voiceMs, extra));
     return gid;
 }
 
 // The 0.5 photo pieces, plus g, ch and gid in the clear; each member's copy has its own id (2.3).
-QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs)
+QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs,
+                                    const QVariantMap &extra)
 {
     const QList<QByteArray> parts = Photos::split(bytes);
     const QString envId = GroupWire::envelopeId(gid, to);
@@ -895,6 +906,7 @@ QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const Q
             o.insert(QStringLiteral("kind"), QStringLiteral("voice"));
             o.insert(QStringLiteral("ms"), voiceMs);
         }
+        MoreWire::addPieceFields(o, extra);   // cap m2: a video message, or a photo in an album
         out << compact(seal(o, to, parts.at(i)));
     }
     return out;
@@ -1028,6 +1040,7 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
             saveGroupsSoon();
         }
         const QString what = m.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
+                           : m.value(QStringLiteral("video")).toInt() > 0  ? QStringLiteral("Video message")
                            : !str(m, "photo").isEmpty()                    ? QStringLiteral("Photo")
                                                                            : str(m, "text");
         // An @mention of me says so (and Main.qml makes it stand out).
@@ -1253,6 +1266,12 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             return 400;
         if (member && !git->removed && !git->left)
             takeGroupChange(g, fromKey, p);
+    } else if (t == QLatin1String("vote")) {
+        // Cap m2: a vote on a poll, only from someone in the current state.
+        if (!MoreWire::ok(QStringLiteral("group"), p))
+            return 400;
+        if (member && !git->removed && !git->left)
+            takeGroupVote(g, fromKey, p);
     } else if (t == QLatin1String("unsend")) {
         const QString gone = p.value(QStringLiteral("msg")).toString();
         if (have && GroupWire::isLogicalId(gone)) {
@@ -1325,6 +1344,7 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
                   {QStringLiteral("photo"), QString()}, {QStringLiteral("voice"), 0}, {QStringLiteral("unsent"), QString()}};
     if (p.contains(QStringLiteral("re")))
         m.insert(QStringLiteral("re"), p.value(QStringLiteral("re")).toString());
+    MoreWire::keep(m, QStringLiteral("gmsg"), p);   // cap m2: a poll or a link preview
     storeGroupMessage(g, m, true);
     groupReceipt(g, from, {id}, QStringLiteral("delivered"));
     return 200;
@@ -1349,7 +1369,7 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     Q_UNUSED(mailbox)
     const QString g = o.value(QStringLiteral("g")).toString(), gid = o.value(QStringLiteral("gid")).toString();
     const int n = o.value(QStringLiteral("n")).toInt(), i = o.value(QStringLiteral("i")).toInt(-1);
-    if (!GroupWire::isGroupId(g) || !GroupWire::isLogicalId(gid) || n < 1 || n > Photos::kMaxPieces || i < 0 || i >= n)
+    if (!GroupWire::isGroupId(g) || !GroupWire::isLogicalId(gid) || n < 1 || n > Photos::kMaxPieces || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
         return 400;
     if (o.value(QStringLiteral("id")).toString() != GroupWire::envelopeId(gid, myKey()))
         return 400;   // someone else's copy
@@ -1396,7 +1416,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
         return 200;
     const QList<QByteArray> parts = m_incoming.take(key).parts;
     const int voiceMs = o.value(QStringLiteral("kind")).toString() == QLatin1String("voice") ? qBound(1, o.value(QStringLiteral("ms")).toInt(), Photos::kMaxVoiceMs) : 0;
-    const QByteArray joined = voiceMs > 0 ? Photos::joinVoice(parts) : Photos::join(parts);
+    const QVariantMap more = MoreWire::pieceFields(o);   // cap m2: a video message, or a photo in an album
+    const QByteArray joined = voiceMs > 0 ? Photos::joinVoice(parts) : more.contains(QStringLiteral("video")) ? MoreWire::joinVideo(parts) : Photos::join(parts);
     if (joined.isEmpty())
         return 400;
     m_vault->write(QStringLiteral("photos/") + gid, joined);
@@ -1406,6 +1427,7 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     QVariantMap m{{QStringLiteral("id"), gid}, {QStringLiteral("ch"), ch}, {QStringLiteral("from"), fromKey}, {QStringLiteral("name"), name},
                   {QStringLiteral("text"), QString()}, {QStringLiteral("mine"), false}, {QStringLiteral("time"), now()}, {QStringLiteral("via"), via},
                   {QStringLiteral("state"), QString()}, {QStringLiteral("photo"), gid}, {QStringLiteral("voice"), voiceMs}, {QStringLiteral("unsent"), QString()}};
+    m.insert(more);
     storeGroupMessage(g, m, true);
     groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
     return 200;
