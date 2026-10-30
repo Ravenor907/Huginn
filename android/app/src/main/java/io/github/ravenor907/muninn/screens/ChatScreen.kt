@@ -257,6 +257,7 @@ fun ChatMain(app: Muninn) {
             "newgroup" -> NewGroup(app)
             "nearby" -> NearbyRoom(app)
             "trash" -> TrashScreen(app) { ChatNav.open = "" }
+            "requests" -> RequestsScreen(app) { ChatNav.open = "" }
             else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
     }
@@ -628,34 +629,12 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     SetupCard(app, Modifier.padding(bottom = 8.dp))
                 }
             }
-            if (requests.isNotEmpty() || ginvites.isNotEmpty()) item { ListLabel("Wants to chat") }
-            items(requests, key = { "r" + it.peerKey }) { r ->
-                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
-                    Text("${r.name} wants to chat", style = Type.big)
-                    if (r.viaInternet) Text("They have your code. Only accept if you know who it is.", style = Type.small)
-                    else {
-                        Text("Code: ${r.code}", style = Type.title.copy(color = Palette.accent), modifier = Modifier.padding(vertical = 6.dp))
-                        Text("Accept if their screen shows the same code.", style = Type.small)
-                    }
-                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MButton("Accept", kind = Kind.Accent) { app.chat.acceptRequest(r); ChatNav.open = r.peerKey }
-                        MButton("Decline") { app.chat.declineRequest(r) }
-                    }
-                }
-            }
-            // Group invites from contacts: nothing changes until they're accepted.
-            items(ginvites, key = { "i" + it.g + it.inv }) { inv ->
-                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
-                    Text("${app.chat.contacts.get(inv.from)?.shown ?: inv.fromName} invited you to ${inv.name}", style = Type.big)
-                    Text("${inv.state.members.size} ${if (inv.state.members.size == 1) "person" else "people"} in it so far. Everyone in a group can see your name and message you there.", style = Type.small)
-                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MButton("Join", kind = Kind.Accent) {
-                            val err = app.chat.groups.acceptInvite(inv)
-                            if (err != null) Ui.say(err, true) else Ui.say("Asked to join ${inv.name}. It opens here once ${inv.fromName}'s phone answers.")
-                        }
-                        MButton("Decline") { app.chat.groups.declineInvite(inv) }
-                    }
-                }
+            // Message requests: people who have my code but aren't contacts yet, and group invites. Their own page.
+            if (requests.isNotEmpty() || ginvites.isNotEmpty()) item(key = "requests") {
+                val n = requests.size + ginvites.size
+                PersonRow("Requests", requests.firstOrNull()?.let { "${it.name} wants to chat" } ?: ginvites.firstOrNull()?.let { "Invited to ${it.name}" } ?: "",
+                    "", n, false, { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                        MIcon("people", Palette.goldBright, 22.dp) } }) { ChatNav.open = "requests" }
             }
             item(key = "h") {
                 ListLabel("Chats", modifier = if (hover == "h") Modifier.background(Palette.focusFill) else Modifier) {
@@ -1521,6 +1500,50 @@ internal fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, labe
         }
         Spacer(Modifier.width(10.dp))
         Text(label, style = labelStyle, maxLines = 1)
+    }
+}
+
+/** Message requests: someone with my code who isn't a contact yet, and group invites. Nothing reaches the chats until accepted. */
+@Composable
+private fun RequestsScreen(app: Muninn, back: () -> Unit) {
+    BackHandler { back() }
+    val requests by app.chat.requests.collectAsState()
+    val ginvites by app.chat.groups.pending.collectAsState()
+    Column(Modifier.fillMaxSize()) {
+        PageBar("Requests")
+        Text("People who have your code but aren't contacts yet, and group invites. Nothing from them shows in your chats until you accept.",
+            style = Type.small, modifier = Modifier.padding(16.dp))
+        LazyColumn(Modifier.weight(1f)) {
+            if (requests.isEmpty() && ginvites.isEmpty()) item { Text("No requests.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            items(requests, key = { "r" + it.peerKey }) { r ->
+                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    Text("${r.name} wants to chat", style = Type.big)
+                    if (r.viaInternet) Text("They have your code. Only accept if you know who it is.", style = Type.small)
+                    else {
+                        Text("Code: ${r.code}", style = Type.title.copy(color = Palette.accent), modifier = Modifier.padding(vertical = 6.dp))
+                        Text("Accept if their screen shows the same code.", style = Type.small)
+                    }
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Accept", kind = Kind.Accent) { app.chat.acceptRequest(r); ChatNav.open = r.peerKey }
+                        MButton("Decline") { app.chat.declineRequest(r) }
+                    }
+                }
+            }
+            // Group invites from contacts: nothing changes until they're accepted.
+            items(ginvites, key = { "i" + it.g + it.inv }) { inv ->
+                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    Text("${app.chat.contacts.get(inv.from)?.shown ?: inv.fromName} invited you to ${inv.name}", style = Type.big)
+                    Text("${inv.state.members.size} ${if (inv.state.members.size == 1) "person" else "people"} in it so far. Everyone in a group can see your name and message you there.", style = Type.small)
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Join", kind = Kind.Accent) {
+                            val err = app.chat.groups.acceptInvite(inv)
+                            if (err != null) Ui.say(err, true) else Ui.say("Asked to join ${inv.name}. It opens here once ${inv.fromName}'s phone answers.")
+                        }
+                        MButton("Decline") { app.chat.groups.declineInvite(inv) }
+                    }
+                }
+            }
+        }
     }
 }
 
