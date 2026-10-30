@@ -31,6 +31,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="31" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- Tap phones together to add each other: one phone hands its code to the other over NFC (net/Tap). -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
     <!-- Received files go to Downloads. Android 10 and newer need no permission for that (MediaStore);
          Android 8 and 9 ask for this one the first time a transfer is accepted. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -150,6 +154,18 @@
             </intent-filter>
         </service>
 
+        <!-- Tap phones together: answers only while the Tap to add screen is open, with a code that works once. -->
+        <service
+            android:name=".net.TapCard"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/tap_card" />
+        </service>
         <service
             android:name=".net.MessageService"
             android:exported="false"

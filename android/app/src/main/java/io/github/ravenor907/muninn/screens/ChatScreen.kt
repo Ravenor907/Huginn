@@ -258,6 +258,7 @@ fun ChatMain(app: Muninn) {
             "nearby" -> NearbyRoom(app)
             "trash" -> TrashScreen(app) { ChatNav.open = "" }
             "requests" -> RequestsScreen(app) { ChatNav.open = "" }
+            "tap" -> TapScreen(app) { ChatNav.open = "" }
             else -> androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
     }
@@ -1237,6 +1238,7 @@ private fun MyCode(app: Muninn) {
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
+                MButton("Tap phones together", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "phone") { ChatNav.open = "tap" }
                 // A link for one person: it works once, within a day, and they're added on both phones without asking.
                 Text("Invite one person: a link that works once, for a day. Whoever opens it first is added on both phones, nothing to accept.",
                     style = Type.small, modifier = Modifier.padding(top = 16.dp))

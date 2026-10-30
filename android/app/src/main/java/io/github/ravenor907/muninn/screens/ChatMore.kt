@@ -368,3 +368,64 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
         }
     }
 }
+
+/**
+ * Tap phones together to add each other. Both phones open this screen and touch backs: each hands over a code that
+ * works once and, in turns, reads the other's. Whoever reads a code adds that person and says hi, which adds them back.
+ */
+@Composable
+internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit) {
+    BackHandler { back() }
+    val context = LocalContext.current
+    val activity = context as? android.app.Activity
+    val nfc = remember { android.nfc.NfcAdapter.getDefaultAdapter(context) }
+    var status by remember { mutableStateOf(if (nfc == null) "This phone has no NFC. Use My code instead." else if (!nfc.isEnabled) "Turn on NFC in Android's settings, then come back." else "Hold the backs of the two phones together.") }
+    var added by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(Unit) {
+        val link = app.chat.inviteLink(1)
+        io.github.ravenor907.muninn.net.Tap.offer(link)
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        var reading = false
+        val got = android.nfc.NfcAdapter.ReaderCallback { tag ->
+            val iso = android.nfc.tech.IsoDep.get(tag) ?: return@ReaderCallback
+            val code = io.github.ravenor907.muninn.net.Tap.read(iso) ?: return@ReaderCallback
+            val c = io.github.ravenor907.muninn.net.Contacts.parse(code) ?: return@ReaderCallback
+            main.post {
+                if (c.chatKey == app.identity.publicKey || added == c.chatKey) return@post
+                app.chat.addContact(c)
+                if (io.github.ravenor907.muninn.net.Contacts.once(code)) app.chat.sendPrivate(c.chatKey, "Hi, it's ${app.identity.username}. We tapped phones.")
+                added = c.chatKey
+                status = "${c.name} added. You're in touch on both phones."
+            }
+        }
+        // A phone reading can't be read at the same moment: take turns, a little off beat so two phones meet.
+        val flip = object : Runnable {
+            override fun run() {
+                if (activity != null && nfc != null && nfc.isEnabled) try {
+                    if (reading) nfc.disableReaderMode(activity)
+                    else nfc.enableReaderMode(activity, got, android.nfc.NfcAdapter.FLAG_READER_NFC_A or android.nfc.NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK or
+                        android.nfc.NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS, null)
+                    reading = !reading
+                } catch (_: Exception) {}
+                main.postDelayed(this, 900L + (Math.random() * 700).toLong())
+            }
+        }
+        main.post(flip)
+        onDispose {
+            main.removeCallbacks(flip)
+            io.github.ravenor907.muninn.net.Tap.offer(null)
+            try { if (activity != null) nfc?.disableReaderMode(activity) } catch (_: Exception) {}
+        }
+    }
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) { MButton("Back", icon = "back") { back() } }
+        Text("Tap phones to add each other", style = Type.title, modifier = Modifier.padding(top = 16.dp))
+        Text("Both of you open this screen, then hold the backs of your phones together for a second or two. Each phone hands over a code that works once, only while this screen is open.",
+            style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+        Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(120.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) { MIcon(if (added != null) "check" else "phone", Palette.goldBright, 48.dp) }
+        }
+        Text(status, style = Type.big, modifier = Modifier.fillMaxWidth())
+        added?.let { k -> MButton("Say hi", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent, icon = "chat") { io.github.ravenor907.muninn.screens.ChatNav.open = k } }
+    }
+}
