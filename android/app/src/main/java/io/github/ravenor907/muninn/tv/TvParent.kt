@@ -104,6 +104,8 @@ object TvParent {
      * and sends the TV its first config. True if it was a TV's code.
      */
     fun adoptIfTv(app: Muninn, codeText: String): Boolean {
+        // A TV's "Connect a parent" code (k5): ask to look after it again.
+        if (TvReconnect.askToRejoin(app, codeText)) return true
         val key = tvKeyIn(codeText) ?: return false
         if (isManaged(key) || app.contacts.get(key) == null) return true
         Ui.sure(Ask(
@@ -181,6 +183,31 @@ object TvParent {
         return null
     }
 
+    /**
+     * k5: [person] looks after the TV again (another parent approved), and [gone] (their old, wiped key: the parents
+     * that didn't answer) is taken off the TV, as a parent and from its list.
+     */
+    fun swapParent(tvKey: String, person: TvPerson, gone: Set<String>) = change(tvKey) { t ->
+        t.copy(parents = (t.parents - gone + person.k).distinct(), sharedWith = t.sharedWith - gone,
+            reach = (t.reach - gone + person.k).distinct().take(TvRules.MAX_CONTACTS - 1),
+            others = t.others.filter { it.k !in gone && it.k != person.k } + person)
+    }
+
+    /**
+     * k5: nobody else was left to approve, so this phone takes the TV over from its own signed config [cfg]: the next
+     * config lists only this phone as parent (the old parents go), with the same people, messages and settings.
+     */
+    fun takeOver(app: Muninn, tvKey: String, cfg: TvConfig) {
+        val me = app.identity.publicKey
+        synchronized(lock) {
+            val t = adopted(app, ManagedTv(tvKey, myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME)), cfg)
+            val old = cfg.parents.toSet() - me
+            put(t.copy(parents = listOf(me), sharedWith = emptyList(), reach = t.reach - old, others = t.others.filter { it.k !in old }))
+        }
+        change(tvKey) { it }
+        Ui.say("You look after ${app.contacts.get(tvKey)?.shown ?: "the Kids' TV"} again.")
+    }
+
     /** Takes a parent off the TV. They can't change it any more; they stay on the list of people it can reach. */
     fun removeParent(app: Muninn, tvKey: String, person: String) {
         if (person == app.identity.publicKey) return
@@ -219,6 +246,7 @@ object TvParent {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
         if (o.optString("t") == "status") return takeStatus(fromKey, o)
+        TvReconnect.onParent(app, fromKey, o)?.let { return it }
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false

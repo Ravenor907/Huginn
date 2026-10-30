@@ -60,6 +60,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -250,6 +251,59 @@ private fun TvChip(text: String, requester: FocusRequester?, quiet: Boolean = fa
     }
 }
 
+/** Opens only after OK is held for 5 seconds on the remote, so a child doesn't wander in. */
+@Composable
+private fun TvHoldChip(text: String, onHeld: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    var down by remember { mutableLongStateOf(0L) }
+    val shape = RoundedCornerShape(13.dp)
+    Box(Modifier.onFocusChanged { focused = it.isFocused; if (!it.isFocused) down = 0L }
+        .onPreviewKeyEvent { e ->
+            if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+            when (e.type) {
+                KeyEventType.KeyDown -> { if (down == 0L) down = System.currentTimeMillis(); true }
+                KeyEventType.KeyUp -> {
+                    val held = if (down == 0L) 0L else System.currentTimeMillis() - down
+                    down = 0L
+                    if (held >= HOLD_MS) onHeld() else Ui.say("Hold OK for 5 seconds.")
+                    true
+                }
+                else -> false
+            }
+        }
+        .focusable()
+        .heightIn(min = 52.dp).clip(shape).background(if (!focused) Color.Transparent else Palette.field)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .padding(horizontal = 22.dp, vertical = 12.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(text, style = tvText(18.sp, Palette.textMuted, FontWeight.Medium))
+    }
+}
+
+private const val HOLD_MS = 5_000L
+
+/**
+ * k5: a parent whose phone was wiped scans this to look after the TV again. Another parent approves with one tap;
+ * if none is left, their phone takes over after about 2 minutes and the old parent goes.
+ */
+@Composable
+private fun TvConnectParent(app: Muninn, onBack: () -> Unit) {
+    val code = remember { try { TvReconnect.code(app) } catch (e: Exception) { "" } }
+    val joiner by TvReconnect.joiner.collectAsState()
+    BackHandler { onBack() }
+    TvDialog(onBack = onBack) {
+        Text("Connect a parent", style = tvTitle(28.sp))
+        Text("On the parent's phone, point the camera at this code. If another parent still looks after this TV, they approve with one tap. " +
+            "If none is left, this phone takes over in about 2 minutes.", style = tvText(17.sp, Palette.textSoft), textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 12.dp, bottom = 18.dp))
+        if (code.isNotEmpty()) Qr(Contacts.link(code), 240.dp)
+        joiner?.let { Text(if (it.orphan) "${it.n} is taking over…" else "Waiting for a parent to approve ${it.n}…",
+            style = tvText(17.sp, Palette.textMuted), modifier = Modifier.padding(top = 14.dp)) }
+        Spacer(Modifier.height(18.dp))
+        TvChip("Close", null) { onBack() }
+    }
+}
+
 // ------------------------------------------------------------------ the kids' screens
 
 @Composable
@@ -342,6 +396,7 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
     val focusAt = people.indexOfFirst { it.k == focusKey }.coerceAtLeast(0)
     val first = remember { FocusRequester() }
     val list = rememberLazyListState()
+    var connect by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         TvHeader()
         Text("Who do you want to talk to?", style = tvTitle(32.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 30.dp))
@@ -363,8 +418,10 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TvChip("Microphone: $level", null, quiet = true, onClick = onMic)
             if (setupLeft) TvChip("For a parent: finish setting up this TV", null, quiet = true, onClick = onSetup)
+            TvHoldChip("For a parent (hold OK)") { connect = true }
         }
     }
+    if (connect) TvConnectParent(app) { connect = false }
     LaunchedEffect(people) {
         if (people.isEmpty()) return@LaunchedEffect
         try { list.scrollToItem(focusAt) } catch (_: Exception) {}
