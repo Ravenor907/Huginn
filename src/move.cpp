@@ -10,6 +10,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMessageAuthenticationCode>
@@ -20,6 +21,8 @@
 #include <QSysInfo>
 #include <QUrl>
 #include <cstdio>
+#include <functional>
+#include <memory>
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
