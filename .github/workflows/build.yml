@@ -578,7 +578,7 @@ jobs:
           exit $bad
       - name: Update signature self-test under Wine
         # After the start test: run just before it, this quick self-test left the Wine prefix in a state that
-        # made the next start on the virtual X screen crash inside Wine's GDI font code.
+        # made the next start on the virtual X screen crash in Qt's text layout (Wine prefix state, not Huginn).
         run: |
           wineserver -k 2>/dev/null || true
           timeout 300 wine dist/Huginn/Huginn.exe --release-sig-selftest tests/release-sig-vectors.json > t.log 2>&1 || s=$?
