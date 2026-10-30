@@ -151,9 +151,9 @@ object ChatWire {
 
     const val PREFIX = "MUNINN1:"
 
-    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
+    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0, once: Boolean = false): String {
         val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
-            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
+            .apply { if (invite != null) put("i", invite).put("x", expires / 1000); if (once) put("1", true) }.toString()
         return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
     }
 

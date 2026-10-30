@@ -991,7 +991,7 @@ private fun Conversation(app: Muninn, key: String) {
             if (!verified) DropdownMenuItem(text = { Text("Check code", style = bodyStyle) }, leadingIcon = { MIcon("shield", Palette.accent, 20.dp) },
                 onClick = {
                     close()
-                    Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
+                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nCode: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
                         "It matches", onConfirm = { app.chat.verify(key, name) }))
                 })
             // A name for them on this phone only: it's never sent.
@@ -1025,7 +1025,7 @@ private fun Conversation(app: Muninn, key: String) {
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
             MButton("Check code") {
-                Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
+                Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(key)}\n\nCode: ${app.chat.codeWith(key)}\n\nAsk them to open your chat and tap Check code. If their screen shows the same 4 pictures (or the same number on Huginn), nobody is in between.",
                     "It matches", onConfirm = { app.chat.verify(key, name) }))
             }
         }
@@ -1230,6 +1230,14 @@ private fun MyCode(app: Muninn) {
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
+                // A link for one person: it works once, within a day, and they're added on both phones without asking.
+                Text("Invite one person: a link that works once, for a day. Whoever opens it first is added on both phones, nothing to accept.",
+                    style = Type.small, modifier = Modifier.padding(top = 16.dp))
+                MButton("Share a one-time invite link", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "link") {
+                    val link = app.chat.inviteLink(24)
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. This link adds us both, once, within a day (get Muninn first if you need to):\n$link"), "Share a one-time invite"))
+                }
                 // Someone without Muninn, right here: hand them the app itself, no internet needed.
                 Text("They don't have Muninn yet? Send it to their phone straight from yours, by Quick Share or Bluetooth. Then they scan your code.",
                     style = Type.small, modifier = Modifier.padding(top = 16.dp))
@@ -1282,6 +1290,8 @@ private fun AddSomeone(app: Muninn) {
                     }
                     MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
                         app.chat.addContact(found)
+                        // A one-time invite link: say hi at once, which adds me on their phone too (the link is used up then).
+                        if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you with your invite link.")
                         // A Kids' TV's code: offer to set it up (no lock on the TV, so ask first).
                         io.github.ravenor907.muninn.tv.TvParent.adoptIfTv(app, text)
                         // A key change has its own warning (from Chat): don't cover it.
@@ -2374,7 +2384,7 @@ private fun MemberDialog(app: Muninn, g: String, s: Proto06.State, m: Proto06.Me
                 if (app.chat.isContact(m.k)) MButton("Message", Modifier.fillMaxWidth(), icon = "chat") { done(); ChatNav.space = ""; ChatNav.open = m.k }
                 MButton("Check code", Modifier.fillMaxWidth(), icon = "shield") {
                     done()
-                    Ui.sure(Ask("Check it's really $name", "Code: ${app.chat.codeWith(m.k)}\n\nAsk them to show the code for you. If it's the same, nobody is in between.",
+                    Ui.sure(Ask("Check it's really $name", "${app.chat.emojiWith(m.k)}\n\nCode: ${app.chat.codeWith(m.k)}\n\nAsk them to show the code for you. If the 4 pictures (or the number, on Huginn) are the same, nobody is in between.",
                         "It matches", onConfirm = { app.chat.verify(m.k, name) }))
                 }
                 if (admin && m.k != s.owner) {

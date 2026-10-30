@@ -23,6 +23,10 @@ class ChatCryptoTest {
         assertEquals(v.getString("key"), hex(fromA))
         assertEquals(v.getString("key"), hex(fromB))
         assertEquals(v.getString("code"), ChatCrypto.pairingCode(fromA))
+        // The 4 emoji: the same on both phones, from 64 that are all different.
+        assertEquals(ChatCrypto.emojiCode(fromA), ChatCrypto.emojiCode(fromB))
+        assertEquals(4, ChatCrypto.emojiCode(fromA).split(" ").size)
+        assertEquals(64, ChatCrypto.EMOJI.toSet().size)
     }
 
     @Test

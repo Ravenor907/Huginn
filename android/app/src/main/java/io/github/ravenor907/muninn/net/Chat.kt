@@ -133,6 +133,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Invites handed out in my codes (token to expiry ms): declared before init, which loads them. */
     private val invites = HashMap<String, Long>()
     private val invitesStore = File(context.filesDir, "invites.json")
+    /** The tokens of one-time invite links (inviteLink), still unused. */
+    private val once = HashSet<String>()
+    private val onceStore = File(context.filesDir, "invites-once.json")
     /** Sealed envelopes per message id, so every retry and route sends the very same bytes. */
     private val outbox = Outbox(File(context.filesDir, "outbox"), { vault.read(it) }, { f, t -> vault.write(f, t) })
     /** Message ratchet state per contact. Erase all wipes it with everything else. */
@@ -197,7 +200,35 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return Contacts.code(id.username, id.publicKey, nostr.publicKey, token, until)
     }
 
-    private fun saveInvites() { try { vault.write(invitesStore, JSONObject(invites as Map<*, *>).toString()) } catch (_: Exception) {} }
+    /**
+     * A one-time invite link, good for [hours]: the first person to add it becomes a contact here as soon as their
+     * first message arrives, no request to accept. Then the link is used up.
+     */
+    fun inviteLink(hours: Int): String {
+        val token = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        val until = System.currentTimeMillis() + hours * 3_600_000L
+        synchronized(invites) {
+            invites[token] = until
+            once.add(token)
+            invites.entries.removeIf { it.value < System.currentTimeMillis() }
+            once.retainAll(invites.keys)
+            saveInvites()
+        }
+        return Contacts.link(ChatWire.code(id.username, id.publicKey, nostr.publicKey, token, until, once = true))
+    }
+
+    /** A one-time invite still good: used up now. */
+    private fun useOnce(token: String): Boolean = token.isNotEmpty() && synchronized(invites) {
+        if (token !in once || (invites[token] ?: 0L) <= System.currentTimeMillis()) return@synchronized false
+        invites.remove(token); once.remove(token); saveInvites(); true
+    }
+
+    private fun saveInvites() {
+        try {
+            vault.write(invitesStore, JSONObject(invites as Map<*, *>).toString())
+            vault.write(onceStore, JSONArray(once.toList()).toString())
+        } catch (_: Exception) {}
+    }
     private fun inviteOk(token: String): Boolean = token.isNotEmpty() && synchronized(invites) { (invites[token] ?: 0L) > System.currentTimeMillis() }
 
     /** Over the internet the whole message is sealed to their chat key with a one-off key, so relays
@@ -220,6 +251,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun codeWith(peerKey: String): String =
         ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
+
+    /** The 4 emoji both phones show for this pair: the same on each side means nobody is in between. */
+    fun emojiWith(peerKey: String): String =
+        ChatCrypto.emojiCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
 
     /** A real contact (a group peer isn't one: they're only reachable for group things). */
     fun isContact(peerKey: String) = contacts.contact(peerKey) != null
@@ -576,6 +611,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         _unread.update { it + fromKey }
                         arrivals.tryEmit(Triple(name, text, fromKey))
                     }
+                    receipt(fromKey, listOf(msgId), "delivered", mailbox)
+                } else if (useOnce(o.optString("invite"))) {
+                    // My one-time invite link: whoever used it first is a contact now, no asking. The link is used up.
+                    putContact(Contact(fromKey, name, mailbox, verified = false))
+                    if (addPrivate(fromKey, msg)) {
+                        _unread.update { it + fromKey }
+                        arrivals.tryEmit(Triple(name, text, fromKey))
+                    }
+                    notices.tryEmit("$name added you with your invite link.")
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else if (!inviteOk(o.optString("invite"))) {
                     // From far away with no valid invite (an old or leaked code): dropped quietly.
@@ -1701,6 +1745,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
             }
             vault.read(invitesStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
+            vault.read(onceStore)?.let { text -> val a = JSONArray(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
             vault.read(metStore)?.let { text ->
                 val o = JSONObject(text)
                 _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {

@@ -116,6 +116,15 @@ class Contacts(context: Context, private val vault: Vault) {
             return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optLong("x") * 1000 } catch (e: Exception) { 0 }
         }
 
+        /** An invite link that works once: whoever adds it is added back at once, no asking (the token is used up). */
+        fun once(link: String): Boolean {
+            val text = unlink(link)
+            val i = text.indexOf(PREFIX)
+            if (i < 0) return false
+            val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
+            return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optBoolean("1") } catch (e: Exception) { false }
+        }
+
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
         fun parse(link: String): Contact? {
             val text = unlink(link)
