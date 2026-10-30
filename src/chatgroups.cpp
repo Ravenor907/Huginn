@@ -1754,6 +1754,20 @@ void Chat::pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *go
         }
         it->messages = kept;
     }
+    // Their copies still on the way (kept per member under envelope ids) aren't sent again either.
+    const QSet<QString> goneIds(gone->cbegin(), gone->cend());
+    bool outs = false;
+    for (auto o = m_gout.begin(); o != m_gout.end();) {
+        if (goneIds.contains(o->logical)) {
+            dropSealed(o.key());
+            o = m_gout.erase(o);
+            outs = true;
+        } else {
+            ++o;
+        }
+    }
+    if (outs)
+        saveGroups();
     if (any)
         saveGroupChats();
 }

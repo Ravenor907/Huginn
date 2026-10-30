@@ -60,6 +60,8 @@ public:
     bool receive(const QString &fromKey, const QJsonObject &p);
     // On the phone: a message in or out of a 1:1 chat (Chat::addPrivate), for the companions.
     void onMessage(const QString &peer, const QVariantMap &m);
+    // On a companion: messages past each chat's limit (cap d1, the phone's "d") go, as on the phone.
+    void prune(qint64 now);
 
     // A link code's {k, p, n, i}; empty when it isn't one.
     static QJsonObject readCode(const QString &text);
@@ -80,6 +82,7 @@ private:
     struct Mirror {
         QString peer, name;
         QList<M> msgs;
+        int days = 7;                       // the phone's limit for this chat (Limits::kDefault)
     };
     void ensureLoaded() const;
     void save();
@@ -88,6 +91,7 @@ private:
     void syncAll(const Device *only);
     QJsonObject mJson(const QVariantMap &m, int max) const;
     static M mOf(const QJsonObject &o);
+    static int daysOf(const QJsonObject &o, int fallback);
 
     Chat *m_chat;
     mutable bool m_loaded = false;

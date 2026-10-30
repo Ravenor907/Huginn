@@ -1,6 +1,7 @@
 #include "link.h"
 #include "chat.h"
 #include "chatcrypto.h"
+#include "msglimits.h"
 #include "vault.h"
 
 #include <QDateTime>
@@ -54,7 +55,7 @@ void Link::ensureLoaded() const
     const QJsonObject mo = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("mirror.json"))).object();
     for (auto it = mo.begin(); it != mo.end(); ++it) {
         const QJsonObject c = it.value().toObject();
-        Mirror m{jstr(c, "peer"), jstr(c, "n"), {}};
+        Mirror m{jstr(c, "peer"), jstr(c, "n"), {}, daysOf(c, Limits::kDefault)};
         for (const QJsonValue &v : c.value(QStringLiteral("msgs")).toArray())
             m.msgs << mOf(v.toObject());
         if (!m.peer.isEmpty())
@@ -82,7 +83,7 @@ void Link::saveMirror()
         QJsonArray a;
         for (const M &x : m.msgs)
             a.append(QJsonObject{{QStringLiteral("id"), x.id}, {QStringLiteral("x"), x.text}, {QStringLiteral("me"), x.mine}, {QStringLiteral("t"), double(x.time)}});
-        o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("msgs"), a}});
+        o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a}});
     }
     m_chat->m_vault->write(QStringLiteral("mirror.json"), compact(o));
     Q_EMIT changed();
@@ -261,7 +262,7 @@ void Link::syncAll(const Device *only)
                 msgs.append(mJson(m, 600));
         }
         const QJsonObject json{{QStringLiteral("t"), QStringLiteral("chat")}, {QStringLiteral("peer"), peer}, {QStringLiteral("n"), m_chat->nameOf(peer)},
-                               {QStringLiteral("msgs"), msgs}};
+                               {QStringLiteral("msgs"), msgs}, {QStringLiteral("d"), m_chat->chatDays(peer)}};
         for (const Device &d : to)
             sendTo(d, json);
     }
@@ -273,12 +274,34 @@ void Link::onMessage(const QString &peer, const QVariantMap &m)
     if (m_companions.isEmpty() || !m_chat->isContact(peer) || m.value(QStringLiteral("system")).toBool())
         return;
     const QJsonObject json{{QStringLiteral("t"), QStringLiteral("msg")}, {QStringLiteral("peer"), peer}, {QStringLiteral("n"), m_chat->nameOf(peer)},
-                           {QStringLiteral("m"), mJson(m, 2000)}};
+                           {QStringLiteral("m"), mJson(m, 2000)}, {QStringLiteral("d"), m_chat->chatDays(peer)}};
     for (const Device &d : std::as_const(m_companions))
         sendTo(d, json);
 }
 
 // ------------------------------------------------------------------ room "link", either side
+
+// The phone's limit for a chat (cap d1), 7 to 30 days; fallback when it says nothing.
+int Link::daysOf(const QJsonObject &o, int fallback)
+{
+    if (!o.contains(QStringLiteral("d")))
+        return fallback;
+    return qBound(Limits::kDefault, o.value(QStringLiteral("d")).toInt(Limits::kDefault), Limits::kLongest);
+}
+
+void Link::prune(qint64 now)
+{
+    ensureLoaded();
+    bool changedAny = false;
+    for (Mirror &m : m_mirror) {
+        const qint64 cut = Limits::cutoff(now, m.days);
+        const qsizetype before = m.msgs.size();
+        m.msgs.erase(std::remove_if(m.msgs.begin(), m.msgs.end(), [cut](const M &x) { return x.time < cut; }), m.msgs.end());
+        changedAny = changedAny || m.msgs.size() != before;
+    }
+    if (changedAny)
+        saveMirror();
+}
 
 Link::M Link::mOf(const QJsonObject &o)
 {
@@ -322,13 +345,14 @@ bool Link::receive(const QString &from, const QJsonObject &p)
         return true;
     }
     if (ph && t == QLatin1String("chat")) {
-        Mirror m{jstr(p, "peer"), jstr(p, "n").left(40), {}};
+        Mirror m{jstr(p, "peer"), jstr(p, "n").left(40), {}, daysOf(p, Limits::kDefault)};
         for (const QJsonValue &v : p.value(QStringLiteral("msgs")).toArray())
             m.msgs << mOf(v.toObject());
         std::sort(m.msgs.begin(), m.msgs.end(), [](const M &a, const M &b) { return a.time < b.time; });
         if (!m.peer.isEmpty()) {
             m_mirror.insert(m.peer, m);
             saveMirror();
+            prune(now());
         }
         return true;
     }
@@ -338,8 +362,10 @@ bool Link::receive(const QString &from, const QJsonObject &p)
         if (peer.isEmpty() || mo.isEmpty())
             return true;
         const M x = mOf(mo);
+        const bool known = m_mirror.contains(peer);
         Mirror &c = m_mirror[peer];
         c.peer = peer;
+        c.days = daysOf(p, known ? c.days : Limits::kDefault);   // no "d": the last one stays
         const QString n = jstr(p, "n").left(40);
         if (!n.isEmpty())
             c.name = n;

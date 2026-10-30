@@ -3,6 +3,7 @@
 // state, each side of a 1:1 chat says its own in "days" and the shorter one counts. Limits has the rules.
 #include "chat.h"
 #include "groupwire.h"
+#include "link.h"
 #include "msglimits.h"
 #include "vault.h"
 
@@ -196,6 +197,9 @@ void Chat::pruneToLimits()
     }
     if (changedAny)
         save();
+    // A linked phone's chats on this computer (companion) go by the phone's limits too.
+    if (m_linked)
+        m_linked->prune(t);
     if (changedAny || groupsChanged)
         Q_EMIT changed();
 }
