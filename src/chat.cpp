@@ -14,6 +14,8 @@
 #include "photos.h"
 #include "vault.h"
 
+#include <QPointer>
+#include <QThreadPool>
 #include <QBuffer>
 #include <QClipboard>
 #include <QCryptographicHash>
@@ -1606,34 +1608,21 @@ bool Chat::savePhoto(const QString &id)
     return f.open(QIODevice::WriteOnly) && f.write(b) == b.size();
 }
 
-QVariantList Chat::recentPictures() const
+namespace
 {
-    // Steam's screenshots (every account) and the Pictures folder, the 40 newest.
-    const QString home = QDir::homePath();
-    QStringList roots{home + QStringLiteral("/.local/share/Steam/userdata"), home + QStringLiteral("/.steam/steam/userdata"),
-                      QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)};
-#ifdef Q_OS_WIN
-    // Steam on Windows says where it lives (usually C:/Program Files (x86)/Steam).
-    const QString steam = QSettings(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"), QSettings::NativeFormat)
-                              .value(QStringLiteral("SteamPath")).toString();
-    if (!steam.isEmpty())
-        roots.prepend(QDir::fromNativeSeparators(steam) + QStringLiteral("/userdata"));
-#endif
+// The Pictures folder, the 40 newest. Runs on a worker thread: a big folder takes a while.
+QVariantList findRecentPictures(const QString &root)
+{
     QList<QFileInfo> found;
-    QSet<QString> seen;
-    for (const QString &root : roots) {
-        if (!QDir(root).exists())
-            continue;
+    if (!root.isEmpty() && QDir(root).exists()) {
         QDirIterator it(root, {QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png"), QStringLiteral("*.webp")}, QDir::Files,
                         QDirIterator::Subdirectories);
         int n = 0;
         while (it.hasNext() && n < 4000) {
             const QFileInfo f(it.next());
             ++n;
-            if (f.path().contains(QLatin1String("/thumbnails")) || seen.contains(f.canonicalFilePath()))
-                continue;
-            seen.insert(f.canonicalFilePath());
-            found << f;
+            if (!f.path().contains(QLatin1String("/thumbnails")))
+                found << f;
         }
     }
     std::sort(found.begin(), found.end(), [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
@@ -1642,6 +1631,20 @@ QVariantList Chat::recentPictures() const
         out << QVariantMap{{QStringLiteral("name"), f.fileName()}, {QStringLiteral("detail"), f.lastModified().toString(QStringLiteral("MMM d, h:mm AP"))},
                            {QStringLiteral("url"), f.absoluteFilePath()}};
     return out;
+}
+}
+
+void Chat::loadRecentPictures()
+{
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    QPointer<Chat> self(this);
+    QThreadPool::globalInstance()->start([self, root] {
+        const QVariantList list = findRecentPictures(root);
+        QMetaObject::invokeMethod(qApp, [self, list] {
+            if (self)
+                Q_EMIT self->recentPicturesReady(list);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void Chat::copyLink() const

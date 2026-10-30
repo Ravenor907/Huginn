@@ -40,6 +40,8 @@ public:
     // The newest files in Downloads, Documents, Pictures, Videos and Music, for sending:
     // [{ header, items: [{ name, detail, url, icon }] }], ready for the list picker.
     Q_INVOKABLE QVariantList sendableFiles(int perFolder) const;
+    // The computer's own file picker, several at once. Empty when nothing was picked.
+    Q_INVOKABLE QStringList pickFiles() const;
     // Ask the system not to dim or sleep while files are being sent or received.
     void setKeepAwake(bool on, const QString &reason);
     Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }

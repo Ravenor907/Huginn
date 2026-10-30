@@ -363,6 +363,11 @@ jobs:
           Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$out/platforms/"
           # OpenSSL (chat crypto and Qt's TLS), Opus (calls), libvpx (video), SDL2 (controllers), libqrencode (QR codes)
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
+          # Not needed to run: the Direct3D 12 shader compiler (Huginn draws with Direct3D 11 or OpenGL),
+          # QML debugging plugins, and vcpkg's pkgconf build tool.
+          Remove-Item -Force "$out/dxcompiler.dll", "$out/dxil.dll" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$out/qmltooling" -ErrorAction SilentlyContinue
+          Get-ChildItem $out -Filter "pkgconf*.dll" | Remove-Item -Force
           # The Visual C++ runtime, so nothing has to be installed first
           $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }

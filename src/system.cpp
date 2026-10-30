@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSet>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
@@ -187,6 +188,12 @@ QVariantList System::sendableFiles(int perFolder) const
             out << QVariantMap{{QStringLiteral("header"), place.first}, {QStringLiteral("items"), items}};
     }
     return out;
+}
+
+QStringList System::pickFiles() const
+{
+    return QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Pick files to send"),
+                                         QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
 }
 
 void System::grab(QQuickWindow *window, const QString &name)

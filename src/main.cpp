@@ -77,18 +77,6 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 }
 }
 
-// 0.6 ran Tor: its data folder and this computer's onion key (in the chat folder) are no longer
-// used. Gone once; after that there is nothing left to find.
-static void dropTorFiles()
-{
-    const QString data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (data.isEmpty())
-        return;
-    QDir(data + QStringLiteral("/tor")).removeRecursively();
-    for (const char *f : {"/chat/tor-onion.key", "/chat/tor-onion.key.damaged"})
-        QFile::remove(data + QLatin1String(f));
-}
-
 int main(int argc, char *argv[])
 {
     // Windows: a start log next to Huginn.exe, cleanup after an update, settings that work under Wine.
@@ -168,8 +156,6 @@ int main(int argc, char *argv[])
         Platform::noStartLog();
         return 0;
     }
-    if (!quiet)
-        dropTorFiles();
     Platform::startStep(QStringLiteral("single instance claimed"));
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
@@ -182,7 +168,7 @@ int main(int argc, char *argv[])
     auto *settings = new Settings(&app);
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
-    auto *transfer = new TransferServer(settings, &app);
+    auto *transfer = new Transfer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
     Chat *chat = nullptr;

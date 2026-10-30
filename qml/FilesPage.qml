@@ -3,7 +3,7 @@ import Huginn
 
 // Files: share with phones and PCs. Middle column: pick files to send, then the devices nearby with
 // Muninn or the free LocalSend app (A sends to one). Main column: what's ready to send, what came in,
-// and the QR + PIN page for any phone without the app (it runs only while this screen is open).
+// and Direct connect for when there's no shared Wi-Fi.
 Rectangle {
     id: page
     color: Theme.ground
@@ -12,9 +12,9 @@ Rectangle {
     property int current: 0
     property bool tour: false
     readonly property var devices: LocalSend.devices
-    readonly property var incoming: LocalSend.items.concat(Transfer.items)
+    readonly property var incoming: LocalSend.items
     // Rows in the middle column: the two actions, then one per device.
-    readonly property var rows: [{ kind: "pick", name: "Pick files to send", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "From Downloads, Documents, Pictures and more" },
+    readonly property var rows: [{ kind: "pick", name: "Pick files to send", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "Pick one or several" },
                                  { kind: "clear", name: "Clear the list", detail: Transfer.sharedCount > 0 ? "Start over" : "Nothing picked yet" }]
         .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, type: d.type,
                                     detail: d.model ? d.model : d.app === "muninn" ? "Muninn" : d.app === "huginn" ? "Huginn" : d.type === "mobile" ? "Phone" : "Computer" })))
@@ -26,14 +26,13 @@ Rectangle {
     }
 
     function setArgs(a) { tour = !!a.tour }
-    Component.onCompleted: { Transfer.start(); LocalSend.refresh() }
-    Component.onDestruction: Transfer.stop()
+    Component.onCompleted: LocalSend.refresh()
 
     readonly property var prompts: LocalSend.sending ? [{ key: "b", label: "Stop sending" }]
         : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Choose" },
            { key: "y", label: "Look again" }, { key: "back", label: Direct.on ? "Stop Direct connect" : "Direct connect" },
-           { key: "x", label: "New PIN" }, { key: "b", label: "Back" }]
-    readonly property string status: "The QR page stops when you leave Files"
+           { key: "b", label: "Back" }]
+    readonly property string status: ""
 
     // ============================================================= middle column
     Rectangle {
@@ -77,7 +76,7 @@ Rectangle {
                         y: label.height
                         width: parent.width
                         height: Theme.px(56)
-                        radius: Theme.px(10)
+                        radius: Theme.radius
                         opacity: modelData.kind === "clear" && Transfer.sharedCount === 0 ? 0.55 : 1
                         color: on ? Theme.tile : tileHover.hovered ? Theme.raised : "transparent"
                         border.width: on ? Theme.focusWidth : 0
@@ -117,10 +116,10 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: !Settings.nearbySharing ? "Nearby sharing is off. Turn it on in Settings › General."
+            text: !Settings.nearbySharing ? "Nearby sharing is off. Turn it on in Settings › More settings › Find people close by."
                 : !LocalSend.running ? (LocalSend.error || "Nearby sharing is starting…")
                 : LocalSend.scanning ? "Looking for devices on your Wi-Fi…"
-                : "No devices yet. Open Muninn or the free LocalSend app on the same Wi-Fi, then press Y to look again. This device shows up as “" + LocalSend.alias + "”."
+                : "No devices yet. Open Muninn or the free LocalSend app on the same Wi-Fi, then choose Look again. This device shows up as “" + LocalSend.alias + "”."
             color: Theme.textMuted
             font.family: Theme.body
             font.pixelSize: Theme.fs(14)
@@ -143,11 +142,17 @@ Rectangle {
             subtitle: !Settings.nearbySharing ? "Nearby sharing is off in Settings"
                     : LocalSend.running ? "Shows up in LocalSend as “" + LocalSend.alias + "”" : (LocalSend.error || "Starting nearby sharing…")
             HButton {
-                implicitHeight: Theme.px(36)
-                fontSize: 15
+                implicitHeight: Theme.px(32)
+                fontSize: 14
                 enabled: LocalSend.running && !LocalSend.scanning
                 text: LocalSend.scanning ? "Looking…" : "Look again"
                 onClicked: LocalSend.refresh()
+            }
+            HButton {
+                implicitHeight: Theme.px(32)
+                fontSize: 14
+                text: Direct.on ? "Stop Direct connect" : "Direct connect"
+                onClicked: page.toggleDirect()
             }
         }
 
@@ -159,7 +164,7 @@ Rectangle {
             anchors.right: parent.right; anchors.rightMargin: Theme.px(24)
             spacing: Theme.px(8)
 
-            SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? "Pick a device and press A" : "" }
+            SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? (Ui.main && Ui.main.padInUse ? "Pick a device and press A" : "Click a device to send") : "" }
             Text {
                 visible: Transfer.sharedCount === 0
                 width: parent.width
@@ -184,7 +189,7 @@ Rectangle {
                 Rectangle {
                     width: lists.width
                     height: Theme.px(52)
-                    radius: Theme.px(8)
+                    radius: Theme.radius
                     color: Theme.panel
                     border.color: Theme.line
                     Column {
@@ -212,29 +217,31 @@ Rectangle {
             }
         }
 
-        // No app on the phone: scan a code instead, then type the PIN.
+        // Direct connect: a code for the phone's camera to join this computer's own Wi-Fi.
         Rectangle {
             id: backup
+            visible: Direct.on || Direct.error.length > 0
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Theme.px(18)
             anchors.left: parent.left; anchors.leftMargin: Theme.px(24)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(24)
             height: Theme.px(176)
-            radius: Theme.px(10)
+            radius: Theme.radius
             color: Theme.panelLow
             border.color: Theme.line
             Rectangle {
                 id: qr
+                visible: Direct.on
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
-                width: Theme.px(148); height: width
-                radius: Theme.px(6)
+                width: Direct.on ? Theme.px(148) : 0; height: width
+                radius: Theme.radius
                 color: Theme.text
                 Image {
                     anchors.fill: parent
                     anchors.margins: Theme.px(10)
-                    source: Direct.on ? "image://qr/" + encodeURIComponent(Direct.qr) : Transfer.running ? "image://qr/" + encodeURIComponent(Transfer.address) : ""
+                    source: Direct.on ? "image://qr/" + encodeURIComponent(Direct.qr) : ""
                     smooth: false
                     cache: false
                 }
@@ -246,17 +253,9 @@ Rectangle {
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: Direct.on ? "Direct connect is on. Scan with the phone camera to join this device's Wi-Fi" : "No app on the phone? Scan this with its camera"; color: Direct.on ? Theme.accent : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                Text { visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Direct connect is on. Scan this with the phone's camera to join this computer's Wi-Fi"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
                 Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                // Never an address on screen: the camera opens the page, then the PIN lets it in.
-                Text { visible: !Direct.on; width: parent.width; elide: Text.ElideRight; text: Transfer.running ? "Opens a page from “" + LocalSend.alias + "”, then type the PIN" : Transfer.error; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
-                Row {
-                    visible: !Direct.on
-                    spacing: Theme.px(10)
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: "PIN"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: Transfer.pin; color: Theme.accent; font.family: Theme.display; font.pixelSize: Theme.fs(23); font.weight: Font.Bold; font.letterSpacing: Theme.px(6) }
-                }
             }
         }
     }
@@ -283,12 +282,11 @@ Rectangle {
 
     // ============================================================= actions
     function pickFiles() {
-        const sections = System.sendableFiles(15)
-        if (!sections.length) { Ui.say("No files found in Downloads, Documents, Pictures, Videos or Music.", true); return }
-        Ui.pickFrom("Add a file to send", sections, url => {
-            Transfer.share([url])
-            Ui.say(Transfer.sharedCount === 1 ? "1 file ready. Pick more, or pick a device." : Transfer.sharedCount + " files ready. Pick more, or pick a device.")
-        })
+        if (page.tour) return
+        const paths = System.pickFiles()
+        if (!paths.length) return
+        Transfer.share(paths)
+        Ui.say(Transfer.sharedCount === 1 ? "1 file ready. Pick more, or pick a device." : Transfer.sharedCount + " files ready. Pick more, or pick a device.")
     }
     function sendTo(d) {
         if (Transfer.sharedCount === 0) { Ui.say("Pick files first: choose Pick files to send.", true); return }
@@ -302,7 +300,7 @@ Rectangle {
         else sendTo(r)
     }
 
-    // No shared Wi-Fi: the handheld makes its own for the phone to join.
+    // No shared Wi-Fi: this computer makes its own for the phone to join.
     function toggleDirect() {
         if (Direct.on) { Direct.stop(); Ui.say("Direct connect is off. This device goes back to your usual Wi-Fi."); return }
         Ui.sure("Start Direct connect?", "This device makes its own private Wi-Fi (no internet) and shows a code for the phone's camera. It leaves your usual Wi-Fi until you stop it.",
@@ -319,7 +317,6 @@ Rectangle {
         case "a": choose(); return true
         case "y": LocalSend.refresh(); return true
         case "back": toggleDirect(); return true
-        case "x": Transfer.newPin(); return true
         }
         return false   // Left and B: back to the rail
     }

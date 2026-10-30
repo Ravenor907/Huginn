@@ -53,14 +53,24 @@ Item {
         if (r !== "") Ui.say(r, true)
         else Ui.say(paths.length === 1 ? "Sending the picture." : "Sending " + paths.length + " pictures" + (paths.length > 1 ? " as an album." : "."))
     }
+    // The newest pictures load off screen; the list opens when they're in.
+    property bool wantPictures: false
     function recentPicture() {
-        const pics = Chat.recentPictures()
-        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
-        Ui.pickFrom("Send a picture (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-            Ui.pickFrom("Send this picture", [{ header: "", items: [
-                { name: "Send", detail: "Quick anywhere", url: "normal" },
-                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
-                q => sendPictures([path], q === "hd")))
+        wantPictures = true
+        Chat.loadRecentPictures()
+    }
+    Connections {
+        target: Chat
+        function onRecentPicturesReady(pics) {
+            if (!layer.wantPictures) return
+            layer.wantPictures = false
+            if (!pics.length) { Ui.say("No pictures found. Pictures in your Pictures folder show up here.", true); return }
+            Ui.pickFrom("Send a picture", [{ header: "Newest first. Location and camera details are removed", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
+                Ui.pickFrom("Send this picture", [{ header: "", items: [
+                    { name: "Send", detail: "Quick anywhere", url: "normal" },
+                    { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
+                    q => layer.sendPictures([path], q === "hd")))
+        }
     }
     function sendVideoFile() {
         const path = Videos.pickFile()

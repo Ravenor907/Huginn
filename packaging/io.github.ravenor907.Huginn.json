@@ -15,8 +15,6 @@
         "--filesystem=xdg-pictures",
         "--filesystem=xdg-videos:ro",
         "--filesystem=xdg-music:ro",
-        "--filesystem=~/.local/share/Steam/userdata:ro",
-        "--filesystem=~/.steam/steam/userdata:ro",
         "--system-talk-name=org.freedesktop.NetworkManager",
         "--talk-name=org.freedesktop.Flatpak",
         "--talk-name=org.freedesktop.ScreenSaver",

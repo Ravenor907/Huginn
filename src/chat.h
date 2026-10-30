@@ -127,7 +127,8 @@ public:
     Q_INVOKABLE QByteArray blob(const QString &id) const;
     Q_INVOKABLE QString photoUrl(const QString &id);
     Q_INVOKABLE bool savePhoto(const QString &id);
-    Q_INVOKABLE QVariantList recentPictures() const;   // Steam screenshots and Pictures, newest first
+    // The newest pictures in Pictures, found on a worker thread; recentPicturesReady brings them back.
+    Q_INVOKABLE void loadRecentPictures();
     Q_INVOKABLE void copyLink() const;
 
     // Cap m1 (docs/protocol-0.6.md section 11, RichWire): reactions, edits, typing, active status. Calls that
@@ -300,6 +301,7 @@ public:
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
 
 Q_SIGNALS:
+    void recentPicturesReady(const QVariantList &pictures);
     void changed();
     void notice(const QString &text);
     // A message arrived: for the toast, sound and desktop notification. For a group message the
