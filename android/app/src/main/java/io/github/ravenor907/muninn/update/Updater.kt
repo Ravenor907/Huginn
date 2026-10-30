@@ -21,8 +21,9 @@ import java.util.concurrent.Executors
  * Checks GitHub for a newer Muninn every time the app is opened (not just when its process starts:
  * the background service keeps the process alive for days). A newer release downloads by itself and
  * goes straight to Android's installer, which always asks the person to tap Install. The download must
- * match the release's SHA-256 (GitHub's digest for the file, or the Muninn.apk.sha256 next to it), so a
- * broken or swapped file is never installed.
+ * match the release's SHA-256 (GitHub's digest for the file, or the Muninn.apk.sha256 next to it) and carry
+ * the project's signature (Muninn.apk.sig, Ed25519 over the file, see docs/releases.md), so a broken or
+ * swapped file is never installed.
  */
 class Updater(private val context: Context, private val identity: Identity) {
     data class State(val status: String = "", val latest: String = "", val busy: Boolean = false, val ready: Boolean = false, val progress: Float = 0f)
@@ -79,6 +80,14 @@ class Updater(private val context: Context, private val identity: Identity) {
         _state.value = _state.value.copy(busy = true, status = "Downloading Muninn ${_state.value.latest}…")
         pool.execute {
             try {
+                // The project's signature, published beside the APK by the release job. Releases from before
+                // 0.94 have none, and every update from here on is newer, so it is always required.
+                val sig = signature("$u.sig")
+                if (sig == null) {
+                    _state.value = _state.value.copy(busy = false, status = NOT_SIGNED)
+                    return@execute
+                }
+                val signed = Ed25519.Check(hex(RELEASE_KEY), sig)
                 val dir = File(context.cacheDir, "updates").also { it.mkdirs() }
                 val out = File(dir, "Muninn.apk")
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -91,7 +100,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                     body.byteStream().use { ins ->
                         out.outputStream().use { os ->
                             val buf = ByteArray(1 shl 16); var got = 0L
-                            while (true) { val n = ins.read(buf); if (n < 0) break; os.write(buf, 0, n); digest.update(buf, 0, n); got += n
+                            while (true) { val n = ins.read(buf); if (n < 0) break; os.write(buf, 0, n); digest.update(buf, 0, n); signed.update(buf, 0, n); got += n
                                 if (total > 0) _state.value = _state.value.copy(progress = got.toFloat() / total) }
                         }
                     }
@@ -100,6 +109,11 @@ class Updater(private val context: Context, private val identity: Identity) {
                 if (want == null || got != want) {
                     out.delete()
                     _state.value = _state.value.copy(busy = false, status = if (want == null) "This update can't be checked, so it wasn't installed." else "The download didn't match the release, so it wasn't installed.")
+                    return@execute
+                }
+                if (!signed.valid()) {
+                    out.delete()
+                    _state.value = _state.value.copy(busy = false, status = NOT_SIGNED)
                     return@execute
                 }
                 _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
@@ -144,6 +158,13 @@ class Updater(private val context: Context, private val identity: Identity) {
         }
     } catch (e: Exception) { null }
 
+    /** The 64 bytes of a release's ".sig" file, or null when there is none. */
+    private fun signature(u: String): ByteArray? = try {
+        Net.client.newCall(Request.Builder().url(u).header("User-Agent", "Muninn").build()).execute().use { r ->
+            if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size == 64 } else null
+        }
+    } catch (e: Exception) { null }
+
     /** The website's "latest release" link redirects to its tag; the APK is always named Muninn.apk. */
     private fun fromWebsite(): Triple<String?, String?, String?> {
         val req = Request.Builder().url(LATEST).header("User-Agent", "Muninn").head().build()
@@ -172,6 +193,14 @@ class Updater(private val context: Context, private val identity: Identity) {
         private const val LATEST = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest"
         private const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download"
         private const val RECHECK_MS = 5 * 60_000L
+        private const val NOT_SIGNED = "This update isn't signed with the project's key, so it wasn't installed."
+        /** The project's release key (Ed25519, docs/release-key.pem). CI signs every release file with its private half. */
+        const val RELEASE_KEY = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06"
+
+        private fun hex(s: String) = ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+        /** True when [sig] is the project's signature of [data]. */
+        fun signedByProject(data: ByteArray, sig: ByteArray): Boolean = Ed25519.verify(hex(RELEASE_KEY), data, sig)
 
         /** ".../releases/tag/v0.6" -> "v0.6" (where the "latest" link lands), else null. */
         fun tagFromLatest(url: String): String? =

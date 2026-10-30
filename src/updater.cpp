@@ -18,6 +18,8 @@
 #include <QTimer>
 #include <QStringList>
 #include <QVariantMap>
+#include <openssl/evp.h>
+#include <cstdio>
 
 namespace
 {
@@ -25,6 +27,8 @@ const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/r
 const char *kLatestPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest";
 const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/";
 const char *kAppId = "io.github.ravenor907.Huginn";
+// The project's release key (Ed25519, docs/release-key.pem). CI signs every release file with its private half.
+const char *kReleaseKey = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06";
 
 // Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0.
 // An old test build ("0.3 Test 1", from before test builds were dropped) sits just below its version.
@@ -261,48 +265,120 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
 {
     m_status = QStringLiteral("Checking the download…");
     Q_EMIT changed();
-    auto check = [this, path](const QByteArray &expected) {
-        QFile f(path);
-        QCryptographicHash h(QCryptographicHash::Sha256);
-        if (expected.size() != 64 || !f.open(QIODevice::ReadOnly) || !h.addData(&f)) {
-            QFile::remove(path);
-            failed(QStringLiteral("The update couldn't be checked, so it wasn't installed. Try again later."));
-            return;
-        }
-        f.close();
-        if (h.result().toHex() != expected) {
-            qWarning("update: SHA-256 %s, release says %s", h.result().toHex().constData(), expected.constData());
-            QFile::remove(path);
-            failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
-            return;
-        }
-        if (!WinUpdate::supported()) {
-            installFlatpak(path);
-            return;
-        }
-        m_status = QStringLiteral("Installing…");
-        Q_EMIT changed();
-        WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
-            m_busy = false;
-            if (!ok)
-                m_auto = false;
-            m_status = msg;
-            Q_EMIT changed();
-            if (ok)
-                QTimer::singleShot(300, qApp, &QCoreApplication::quit);
-        });
+    const QString name = WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral("Huginn.flatpak");
+    auto get = [this, tag](const QString &file) {
+        QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + file));
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        return m_net.get(req);
     };
-    if (!m_assetDigest.isEmpty()) {
-        check(m_assetDigest);
+    // Huginn-Windows.zip.sig or Huginn.flatpak.sig: the project's signature, published by the release job.
+    // Releases from before 0.94 have none, and every update from here on is newer, so it is always required.
+    QNetworkReply *s = get(name + QStringLiteral(".sig"));
+    connect(s, &QNetworkReply::finished, this, [this, s, path, name, get] {
+        s->deleteLater();
+        const QByteArray sig = s->error() == QNetworkReply::NoError ? s->read(256) : QByteArray();
+        if (!m_assetDigest.isEmpty()) {
+            checkThenInstall(path, m_assetDigest, sig);
+            return;
+        }
+        // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
+        QNetworkReply *r = get(name + QStringLiteral(".sha256"));
+        connect(r, &QNetworkReply::finished, this, [this, r, path, sig] {
+            r->deleteLater();
+            checkThenInstall(path, r->error() == QNetworkReply::NoError ? WinUpdate::parseDigest(r->read(4096)) : QByteArray(), sig);
+        });
+    });
+}
+
+void Updater::checkThenInstall(const QString &path, const QByteArray &expected, const QByteArray &sig)
+{
+    QFile f(path);
+    if (expected.size() != 64 || !f.open(QIODevice::ReadOnly)) {
+        QFile::remove(path);
+        failed(QStringLiteral("The update couldn't be checked, so it wasn't installed. Try again later."));
         return;
     }
-    // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
-    const QString digestFile = WinUpdate::supported() ? WinUpdate::digestName() : QStringLiteral("Huginn.flatpak.sha256");
-    QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + digestFile));
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply *r = m_net.get(req);
-    connect(r, &QNetworkReply::finished, this, [r, check] {
-        r->deleteLater();
-        check(r->error() == QNetworkReply::NoError ? WinUpdate::parseDigest(r->read(4096)) : QByteArray());
+    const QByteArray data = f.readAll();
+    f.close();
+    const QByteArray got = QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex();
+    if (got != expected) {
+        qWarning("update: SHA-256 %s, release says %s", got.constData(), expected.constData());
+        QFile::remove(path);
+        failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
+        return;
+    }
+    if (!signedByProject(data, sig)) {
+        qWarning("update: no valid project signature (%d bytes of .sig)", int(sig.size()));
+        QFile::remove(path);
+        failed(QStringLiteral("This update isn't signed with the project's key, so it wasn't installed."));
+        return;
+    }
+    if (!WinUpdate::supported()) {
+        installFlatpak(path);
+        return;
+    }
+    m_status = QStringLiteral("Installing…");
+    Q_EMIT changed();
+    WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
+        m_busy = false;
+        if (!ok)
+            m_auto = false;
+        m_status = msg;
+        Q_EMIT changed();
+        if (ok)
+            QTimer::singleShot(300, qApp, &QCoreApplication::quit);
     });
+}
+
+bool Updater::signedBy(const QByteArray &data, const QByteArray &sig, const QByteArray &publicKey)
+{
+    if (publicKey.size() != 32 || sig.size() != 64)
+        return false;
+    EVP_PKEY *key = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, reinterpret_cast<const unsigned char *>(publicKey.constData()), publicKey.size());
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    // Ed25519 takes the whole message at once (no digest of its own to stream into).
+    const bool ok = key && ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, key) == 1
+        && EVP_DigestVerify(ctx, reinterpret_cast<const unsigned char *>(sig.constData()), sig.size(),
+                            reinterpret_cast<const unsigned char *>(data.constData()), data.size()) == 1;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    return ok;
+}
+
+bool Updater::signedByProject(const QByteArray &data, const QByteArray &sig)
+{
+    return signedBy(data, sig, QByteArray::fromHex(kReleaseKey));
+}
+
+bool Updater::selfTest(const QString &vectorsPath)
+{
+    QFile f(vectorsPath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        fprintf(stderr, "release-sig self-test: can't read %s\n", qPrintable(vectorsPath));
+        return false;
+    }
+    const QJsonArray cases = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("cases")).toArray();
+    auto b = [](const QJsonObject &o, const char *k) { return QByteArray::fromHex(o.value(QLatin1String(k)).toString().toLatin1()); };
+    bool ok = !cases.isEmpty();
+    for (const QJsonValue &v : cases) {
+        const QJsonObject c = v.toObject();
+        const bool want = c.value(QStringLiteral("valid")).toBool();
+        if (signedBy(b(c, "message"), b(c, "signature"), b(c, "public")) != want) {
+            fprintf(stderr, "release-sig self-test: case \"%s\" should be %s\n", qPrintable(c.value(QStringLiteral("name")).toString()), want ? "valid" : "refused");
+            ok = false;
+        }
+    }
+    // The built-in project key is a real Ed25519 key, and refuses a signature it didn't make.
+    const QByteArray key = QByteArray::fromHex(kReleaseKey);
+    EVP_PKEY *pk = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, reinterpret_cast<const unsigned char *>(key.constData()), key.size());
+    const bool keyOk = key.size() == 32 && pk;
+    EVP_PKEY_free(pk);
+    const QJsonObject first = cases.isEmpty() ? QJsonObject() : cases.first().toObject();
+    const bool refusesOthers = !signedByProject(b(first, "message"), b(first, "signature"));
+    if (!keyOk || !refusesOthers) {
+        fprintf(stderr, "release-sig self-test: the built-in project key %s\n", keyOk ? "accepted someone else's signature" : "isn't a valid Ed25519 key");
+        ok = false;
+    }
+    fprintf(stderr, "release-sig self-test: %s (%d cases)\n", ok ? "passed" : "FAILED", int(cases.size()));
+    return ok;
 }
