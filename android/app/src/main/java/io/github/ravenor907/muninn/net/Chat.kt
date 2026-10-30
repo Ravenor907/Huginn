@@ -97,6 +97,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** A private message arrived (name, text, key): for notifications while Muninn is in the background. */
     val arrivals = MutableSharedFlow<Triple<String, String, String>>(extraBufferCapacity = 16)
+    /** I sent a message (chat key, or "g:" and a group id): the conversation window opens (Power). */
+    val sends = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Someone unsent a message in this chat (key): clear its notification. */
     val recalls = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Cap m1: who is typing to me, until when (ms). */
@@ -950,6 +952,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, file = fileName)
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
+        sends.tryEmit(peerKey)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
             notices.tryEmit("$name is out of range. Say yes to Keep in touch to send from anywhere.")
@@ -1170,6 +1173,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun send(peerKey: String, name: String, r: String, mine: Msg) {
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
+        sends.tryEmit(peerKey)
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
             notices.tryEmit(if (isContact(peerKey)) "$name can't be reached: they're not nearby and have no internet mailbox yet."
@@ -1425,7 +1429,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
             // "Sent" only: a 200 just means some device answered; "Delivered" comes from their sealed receipt.
         }
-        if (internet(m.peerKey, listOf(body), backupMailbox(m))) { any = true; markSent(m, "internet") }
+        // Honest ticks: "Waiting for their phone" once a relay has stored it ("Delivered" comes from their receipt).
+        if (internet(m.peerKey, listOf(body), backupMailbox(m), stored = { markSent(m, "internet") })) any = true
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
@@ -1446,8 +1451,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
         }
         val mailbox = backupMailbox(m)
-        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && internet(m.peerKey, parts, mailbox)) {
-            any = true; markSent(m, "internet")
+        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") })) {
+            any = true
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
@@ -1518,9 +1523,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
-    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?): Boolean {
+    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null): Boolean {
         if (mailbox == null) return false
-        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it)) }
+        // [stored]: once a relay has said OK to every one of them.
+        val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
+        val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
+        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok) }
         return true
     }
 
@@ -1597,6 +1605,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A link gets its preview first (cap m2), made on this phone only when Settings › Privacy allows it. */
     fun sendGroupText(g: String, ch: String, text: String, re: String = ""): Boolean {
         val t = text.trim().take(MAX)
+        sends.tryEmit(Folders.groupKey(g))
         val link = if (id.linkPreviews) More.firstLink(t) else null
         if (link == null) return groups.sendText(g, ch, t, re)
         if (t.isEmpty()) return false
@@ -1666,7 +1675,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), bytes)
         val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album)
-        if (!ok) File(photosDir, blob).delete()
+        if (!ok) File(photosDir, blob).delete() else sends.tryEmit(Folders.groupKey(g))
         return ok
     }
 

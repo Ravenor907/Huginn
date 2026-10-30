@@ -74,7 +74,7 @@ class MessageService : Service() {
         fun start(context: Context) {
             val app = context.applicationContext as Muninn
             if (!app.identity.stayConnected) return
-            // Quiet hours or a low battery: the scheduled check takes over until "Right away" is back (Power starts it then).
+            // Quiet hours using a scheduled check: it takes over until "Right away" is back (Power starts it then).
             if (app.power.effective() != PowerLogic.Check.LIVE && !app.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) return
             try { ContextCompat.startForegroundService(context, Intent(context, MessageService::class.java)) } catch (_: Exception) {}
         }

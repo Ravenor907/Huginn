@@ -56,9 +56,12 @@ private fun missing(ctx: Context, app: Muninn): List<Missing> {
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled())
             add(Missing("notify", "Notifications", "So you see new messages and calls.",
                 if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null))
-        // Messages only arrive right away if Android lets Muninn run in the background.
+        // Messages only arrive right away if Android lets Muninn run in the background (unrestricted battery use).
         if (app.identity.stayConnected && !MessageService.unrestricted(ctx))
-            add(Missing("battery", "Run in the background", "Android's battery saver pauses Muninn while the phone sleeps, so messages arrive late.", null))
+            add(Missing("battery", "Unrestricted background use",
+                "So messages arrive the moment they're sent, even while the phone sleeps. Without it Android pauses Muninn " +
+                    "and messages can come up to 15 minutes late. It costs little: Muninn keeps one light connection and wakes " +
+                    "the phone only for a short check about every 5 minutes. No Google servers. On the next screen, tap Allow.", null))
     }.filter { it.id !in hidden }
 }
 
