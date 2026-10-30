@@ -55,7 +55,7 @@ class Muninn : Application() {
         identity = Identity(this, vault)
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
-            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; trueBlack = identity.trueBlack
+            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)
         }
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
         direct = Direct(this)
@@ -63,7 +63,6 @@ class Muninn : Application() {
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
             deleteNotificationChannel("messages")   // 0.32 and older: no vibration set
             deleteNotificationChannel("chat")       // test builds: sound not set
-            deleteNotificationChannel("forge")      // 0.5 and older: USB drive writing
             createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "New messages. Pops up on screen, vibrates and plays a sound."
                 enableVibration(true); vibrationPattern = BUZZ
@@ -87,8 +86,6 @@ class Muninn : Application() {
         power = io.github.ravenor907.muninn.net.Power(this)
         power.install()
         if (vault.openDefault()) start()
-        dropOldTools()
-        dropTorFiles()
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Check the internet inbox even when Muninn is closed: every 15 minutes (Android's shortest) or every
         // hour, as Settings › Check for messages says; never for "Only when open".
@@ -132,32 +129,6 @@ class Muninn : Application() {
         power.ready()
         // Messages that came while locked were only announced: ask the relays for them again now.
         nostr.resubscribe()
-    }
-
-    /**
-     * 0.6 dropped the USB drive tools and the file browser. Clear what they left behind once:
-     * downloaded system images (often several GB), their settings, and the recent files list.
-     */
-    private fun dropOldTools() {
-        val p = getSharedPreferences("muninn", MODE_PRIVATE)
-        if (p.getBoolean("oldToolsGone", false)) return
-        Thread {
-            try { java.io.File(getExternalFilesDir(null) ?: filesDir, "iso").deleteRecursively() } catch (_: Exception) {}
-            try { deleteSharedPreferences("forge") } catch (_: Exception) {}
-            p.edit().remove("recent").remove("receiveFolder").putBoolean("oldToolsGone", true).apply()
-        }.start()
-    }
-
-    /** 0.6 ran Tor: its folders, this phone's onion key and address are no longer used. */
-    private fun dropTorFiles() {
-        val p = getSharedPreferences("muninn", MODE_PRIVATE)
-        if (p.getBoolean("torGone", false)) return
-        Thread {
-            try { getDir("TorService", MODE_PRIVATE).deleteRecursively() } catch (_: Exception) {}
-            try { java.io.File(cacheDir, "TorService").deleteRecursively() } catch (_: Exception) {}
-            try { java.io.File(filesDir, "onion.key").delete() } catch (_: Exception) {}
-            p.edit().remove("onionId").putBoolean("torGone", true).apply()
-        }.start()
     }
 
     private var listening = false

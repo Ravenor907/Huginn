@@ -154,7 +154,7 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
                 Spacer(Modifier.height(24.dp))
                 Paths(c)
                 Spacer(Modifier.height(10.dp))
-                Text("Every path at once, so walking away doesn't drop the call", style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
+                Text("Muninn keeps every way open, so walking away doesn't drop the call", style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
             }
             if (c.note.isNotEmpty() && c.phase != Phase.ENDED) Text(c.note, style = Type.small.copy(color = Palette.danger), textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 10.dp))
@@ -179,16 +179,16 @@ private fun TopBar(onBack: () -> Unit) {
     }
 }
 
-/** Which paths carry the call right now. */
+/** Which ways carry the call right now, in one plain line that wraps on a narrow phone or with large text. */
 @Composable
 private fun Paths(c: CallManager.Ui) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Direct only between two people who trust each other; while it (or Wi-Fi) carries the call the relay rests.
-        if (c.directTried) Chip("Direct", "straight over the internet", c.direct)
-        Chip(if (c.directTried) "Relay" else "Internet", "through the relay", c.relay && !c.direct && !c.wifi)
-        Chip("Wi-Fi", "same Wi-Fi", c.wifi)
-        Chip("Bluetooth", "close by", c.bluetooth)
+    val ways = buildList {
+        if (c.wifi) add("Wi-Fi")
+        if (c.bluetooth) add("Bluetooth")
+        if (c.direct || (c.relay && !c.wifi)) add("the internet")
     }
+    Text(if (ways.isEmpty()) "Connecting…" else "Connected over " + ways.joinToString(" and "), style = Type.normal.copy(color = Palette.text),
+        textAlign = TextAlign.Center)
 }
 
 /** Decline and Answer while it rings; Mute, Audio, Camera, Flip or Message and End once it's on ([gap] above End). */
@@ -304,7 +304,7 @@ private fun SelfView(modifier: Modifier) {
         CallVideo.bindCamera(owner, view.surfaceProvider)
         onDispose { CallVideo.unbindCamera(owner) }
     }
-    AndroidView(factory = { view }, modifier = modifier.clip(RoundedCornerShape(14.dp)).border(1.dp, Palette.lineMuted, RoundedCornerShape(14.dp))
+    AndroidView(factory = { view }, modifier = modifier.clip(io.github.ravenor907.muninn.ui.Corner).border(1.dp, Palette.lineMuted, io.github.ravenor907.muninn.ui.Corner)
         .semantics { contentDescription = "Your camera" })
 }
 
@@ -350,7 +350,7 @@ private fun Avatar(name: String, speaking: Boolean) {
 
 @Composable
 private fun Chip(label: String, how: String, live: Boolean) {
-    val shape = RoundedCornerShape(15.dp)
+    val shape = io.github.ravenor907.muninn.ui.Corner
     var m = Modifier.heightIn(min = 30.dp).clip(shape)
     m = if (live) m.background(Palette.field) else m.border(1.dp, Palette.accentFill, shape)
     Row(m.padding(horizontal = 12.dp, vertical = 6.dp).semantics { contentDescription = "$label, $how"; stateDescription = if (live) "connected" else "not connected" },
@@ -364,7 +364,7 @@ private fun Chip(label: String, how: String, live: Boolean) {
 
 @Composable
 private fun Round(icon: String, text: String, bg: Color, fg: Color, size: Dp, on: Boolean? = null, label: Boolean = true, onClick: () -> Unit) {
-    Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onClick)
+    Column(Modifier.clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = Role.Button, onClick = onClick)
         .semantics { contentDescription = text; if (on != null) stateDescription = if (on) "on" else "off" }.padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(size).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { Glyph(icon, fg, if (size > 70.dp) 32.dp else 26.dp, 2f) }
@@ -407,7 +407,7 @@ internal fun AudioPicker(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 if (all.isEmpty()) Text("Nothing to choose from right now.", style = Type.small)
                 all.forEach { o ->
                     val on = o.id == now?.id
-                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(10.dp))
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                         .clickable(role = Role.RadioButton) { onPick(o.id) }
                         .semantics { stateDescription = if (on) "selected" else "not selected" }.padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {

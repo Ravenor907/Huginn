@@ -47,6 +47,8 @@ data class ManagedTv(
     val others: List<TvPerson> = emptyList(),
     /** Other parents this phone already handed the TV to (a card with the config), so they get it once. */
     val sharedWith: List<String> = emptyList(),
+    /** k5 (7.10): the TV's noise removal. */
+    val nr: Int = TvRules.NR_BOTH,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -159,7 +161,7 @@ object TvParent {
             val me = app.identity.publicKey
             val v = maxOf(t.v, t.applied) + 1
             val quick = t.quick.filter { it.text.isNotBlank() }.take(TvRules.MAX_QUICK)
-            val extras = if (k2(app, key)) TvExtras(t.calls, t.mic) else null
+            val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the TV (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -260,7 +262,7 @@ object TvParent {
                     put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version))
                     if (done) tries.remove(fromKey)
                     // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
-                    resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC)
+                    resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC || (k5(app, fromKey) && t.nr != TvRules.NR_BOTH))
                 }
             }
         }
@@ -276,7 +278,7 @@ object TvParent {
         return t.copy(
             v = cfg.v, applied = cfg.v, pendingV = cfg.v, pending = emptyList(),
             quick = cfg.quick, reach = people.map { it.k }, others = people, dictation = cfg.dictation,
-            parents = cfg.parents, calls = cfg.calls, mic = cfg.mic, extrasSent = cfg.raw.has("mic"),
+            parents = cfg.parents, calls = cfg.calls, mic = cfg.mic, extrasSent = cfg.raw.has("mic"), nr = cfg.nr,
             myName = cfg.contacts.firstOrNull { it.k == me }?.n ?: t.myName,
             sharedWith = (t.sharedWith + cfg.parents.filter { it != me }).distinct(),
         )
@@ -318,6 +320,12 @@ object TvParent {
 
     /** The parent moved the microphone slider here. */
     fun setMic(key: String, level: Int) = change(key) { it.copy(mic = level.coerceIn(0, TvRules.MAX_MIC), micAt = System.currentTimeMillis(), micOnTv = false) }
+
+    /** The parent picked the TV's noise removal (k5, 7.10). */
+    fun setNoise(key: String, nr: Int) = change(key) { it.copy(nr = nr.coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH)) }
+
+    /** The TV's app said "k5": it takes noise removal in its config. */
+    fun k5(app: Muninn, key: String): Boolean = "k5" in (app.contacts.get(key)?.caps ?: emptySet())
 
     /** The TV's app said "k3": it reports its level and storage and takes Clear history. */
     fun k3(app: Muninn, key: String): Boolean = "k3" in (app.contacts.get(key)?.caps ?: emptySet())
@@ -495,7 +503,7 @@ object TvParent {
             .put("micAt", t.micAt).put("micOnTv", t.micOnTv).put("used", t.used).put("usedAt", t.usedAt)
             .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } })
             .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
-            .put("sharedWith", JSONArray(t.sharedWith)))
+            .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr))
     }
 
     private fun fromJson(o: JSONObject): Map<String, ManagedTv> = o.keys().asSequence().mapNotNull { k ->
@@ -511,7 +519,7 @@ object TvParent {
                 x.optLong("micAt"), x.optBoolean("micOnTv"), x.optLong("used", -1), x.optLong("usedAt"),
                 x.optJSONObject("waiting")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap(),
                 x.optJSONArray("others")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { e -> TvPerson(e.getString("k"), e.getString("n"), e.getString("p")) } } } ?: emptyList(),
-                strs(x.optJSONArray("sharedWith")))
+                strs(x.optJSONArray("sharedWith")), x.optInt("nr", TvRules.NR_BOTH).coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH))
         } catch (e: Exception) { null }
     }.toMap()
 }

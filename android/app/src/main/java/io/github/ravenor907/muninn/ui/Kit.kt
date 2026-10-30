@@ -69,7 +69,7 @@ val Corner = RoundedCornerShape(4.dp)
  */
 @Composable
 fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", trailing: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
+    Row(Modifier.fillMaxWidth().brushed().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         val tap by androidx.compose.runtime.rememberUpdatedState(onLogo)
         val logo = Modifier.size(30.dp).then(if (onLogo != null) Modifier.pointerInput(Unit) { detectTapGestures(onTap = { tap?.invoke() }) } else Modifier)

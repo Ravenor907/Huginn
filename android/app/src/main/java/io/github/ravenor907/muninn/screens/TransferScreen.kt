@@ -177,7 +177,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
             // The one big action, in gold like the chat list's new chat button.
-            val shape = RoundedCornerShape(16.dp)
+            val shape = io.github.ravenor907.muninn.ui.Corner
             Row(Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(min = 56.dp).clip(shape).background(Palette.gold)
                 .clickable(role = Role.Button, enabled = !copying) { after = null; pick() }.padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
@@ -201,7 +201,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
             Label("Close by") {
                 Text(if (scanning) "Looking…" else "Look again", style = noteStyle.copy(color = if (scanning) Palette.textFaint else Palette.gold),
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, enabled = !scanning) { app.net.refresh() }
+                    modifier = Modifier.clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = Role.Button, enabled = !scanning) { app.net.refresh() }
                         .padding(horizontal = 8.dp, vertical = 10.dp))
             }
             if (error != null) Text(error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(bottom = 8.dp))
@@ -215,7 +215,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
         items(targets.chunked(3), key = { row -> row.joinToString("|") { it.key } }) { row ->
             Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 row.forEach { t ->
-                    val shape = RoundedCornerShape(14.dp)
+                    val shape = io.github.ravenor907.muninn.ui.Corner
                     Column(Modifier.weight(1f).clip(shape).background(Palette.field).hcBorder(shape)
                         .clickable(role = Role.Button, onClickLabel = "Send to ${t.name}") {
                             if (Share.pending.isEmpty()) { after = t; pick() } else deliver(t, Share.pending.toList())
@@ -231,16 +231,16 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
         }
         item {
-            Text("Muninn, Huginn and any LocalSend app, close by or on the same Wi-Fi. Never through the internet. Received files go to ${Received.place(context)}.",
+            Text("Files tab: nearby only, to Muninn, Huginn and any LocalSend app close by or on the same Wi-Fi. To send to someone anywhere, use a chat's + › File. Received files go to ${Received.place(context)}.",
                 style = noteStyle)
-            if (!showDirect && !direct.on) MButton("Huginn or LocalSend not showing up? No Wi-Fi?", Modifier.fillMaxWidth().padding(top = 12.dp), icon = "wifi") { showDirect = true }
+            if (!showDirect && !direct.on) MButton("No shared Wi-Fi?", Modifier.fillMaxWidth().padding(top = 12.dp), icon = "wifi") { showDirect = true }
             if (showDirect || direct.on) Label("Direct connect")
             if (showDirect || direct.on) Panel {
                 if (!direct.on) {
                     Text("No shared Wi-Fi? Muninn can make a private hotspot (no internet, no data used). The other phone scans the code with its camera to join, then sending and chat work as usual.", style = Type.normal)
                     if (direct.error != null) Text(direct.error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                     MButton(if (direct.starting) "Starting…" else "Start Direct connect", Modifier.fillMaxWidth().padding(top = 10.dp), enabled = !direct.starting, icon = "wifi") { askDirectPermission() }
-                    Text("For the handheld: start Direct connect in Huginn's Phone Transfer and scan its code with this phone's camera.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+                    Text("On a computer: Huginn › Files › Direct connect, then scan its code with this phone's camera.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
                 } else {
                     Text("Scan with the other phone's camera", style = Type.big)
                     Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Qr(direct.qr, 220.dp) }
@@ -254,7 +254,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
         }
         items(items) { it ->
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(Palette.coolTint), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(42.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) {
                     MIcon(if (it.sent) "upload" else "download", if (it.failed) Palette.danger else Palette.accent, 20.dp)
                 }
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
