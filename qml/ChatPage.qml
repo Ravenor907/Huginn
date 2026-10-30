@@ -676,7 +676,7 @@ Rectangle {
                             onJump: page.jumpTo(modelData.re)
                         }
                         Image {
-                            visible: !!modelData.photo && !modelData.voice && !modelData.unsent
+                            visible: !!modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album
                             width: Theme.px(280); height: Theme.px(170)
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
@@ -696,13 +696,15 @@ Rectangle {
                             }
                         }
                         Text {
-                            visible: !modelData.photo || !!modelData.unsent
+                            visible: (!modelData.photo || !!modelData.unsent) && !(modelData.pollView && !modelData.unsent)
                             width: parent.width; wrapMode: Text.Wrap
                             textFormat: Text.PlainText
                             text: modelData.unsent ? (modelData.mine ? "Message deleted by you" : "Message deleted by " + modelData.unsent) : (modelData.text || "")
                             font.italic: !!modelData.unsent
                             color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
                         }
+                        // Cap m2: an album, a video message, a poll or a link preview.
+                        MoreParts { width: parent.width; host: page; m: modelData; where: page.openKey }
                         Reactions {
                             width: parent.width
                             list: modelData.rxList || []
@@ -751,7 +753,7 @@ Rectangle {
                             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
                             if (button === Qt.RightButton) page.options()
-                            else if (modelData.photo && !modelData.voice && !modelData.unsent) page.viewing = modelData.photo
+                            else if (modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album) page.viewing = modelData.photo
                         }
                     }
                     TapHandler {
@@ -1036,7 +1038,8 @@ Rectangle {
         const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" }]
         if (Calls.canVideo(openKey)) items.push({ name: "Video call", detail: "Encrypted, 480p through the relay to save data", url: "video" })
         items.push(
-                       { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
+                       { name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" },
+                       { name: "Shared photos, videos and links", detail: "Everything sent in this chat", url: "shared" },
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
                        { name: "Folders", detail: folderNames(openKey), url: "folders" },
                        { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
@@ -1057,6 +1060,7 @@ Rectangle {
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
+            else if (a === "shared") more.openShared()
         })
     }
     // ------------------------------------------------------------- folders (only on this computer)
@@ -1273,17 +1277,8 @@ Rectangle {
         default: openKey = e.key; zone = "messages"
         }
     }
-    function pickPicture() {
-        if (openKey === "") { Ui.say("Pictures go to one person. Open a chat first.", true); return }
-        const pics = Chat.recentPictures()
-        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
-        const k = openKey
-        Ui.pickFrom("Send a picture (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-            Ui.pickFrom("Send this picture", [{ header: "", items: [
-                { name: "Send", detail: "Quick anywhere", url: "normal" },
-                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
-                q => { if (Chat.sendPhoto(k, path, q === "hd")) Ui.say("Sending the picture.") }))
-    }
+    // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
+    function pickPicture() { more.attach() }
     // A controller: the quick reactions in a list (the emoji panel needs a pointer).
     function pickReaction(m) {
         const k = openKey, id = m.id
@@ -1343,6 +1338,7 @@ Rectangle {
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
+            else if (a === "shared") more.openShared()
             else if (a === "call") startCall()
             else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
         })
@@ -1436,22 +1432,7 @@ Rectangle {
         newFrom = -1
     }
     // Dropped files: pictures go in the chat; anything else goes to Files, ready to send over the Wi-Fi.
-    function dropFiles(urls) {
-        const others = []
-        let pics = 0
-        for (let i = 0; i < urls.length; i++) {
-            const path = Chat.localPath(urls[i])
-            if (path === "") continue
-            if (Chat.isPicture(path)) { if (Chat.sendPhoto(openKey, path, false)) pics++ }
-            else others.push(urls[i])
-        }
-        if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
-        if (others.length) {
-            Transfer.share(others)
-            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
-            Ui.openPage("files", {})
-        }
-    }
+    function dropFiles(urls) { more.dropFiles(urls) }
 
     // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
     function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : listPane }
@@ -1469,7 +1450,7 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" }]
-        if (openKey !== "") items.push({ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" })
+        if (openKey !== "") items.push({ name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
@@ -1501,6 +1482,7 @@ Rectangle {
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)
+        if (more.busy) return more.handleButton(b)
         if (showCode) {
             if (b === "a") { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") }
             else if (b === "x") Chat.newLink()
@@ -1560,5 +1542,15 @@ Rectangle {
     Connections {
         target: Voice
         function onErrorChanged() { if (Voice.error !== "") Ui.say(Voice.error, true) }
+    }
+
+    // Cap m2: albums full size, video messages, the camera, polls and the Shared page.
+    property alias more: moreLayer
+    MoreLayer {
+        id: moreLayer
+        visible: !lock.visible
+        where: page.locked ? "" : page.openKey
+        title: page.openName
+        tour: page.tour
     }
 }

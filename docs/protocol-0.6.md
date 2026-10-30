@@ -1240,7 +1240,7 @@ page are local: nothing about them goes on the wire, and the two apps don't need
 Photo albums, video messages, polls and link previews. As in section 11 nothing here is new cryptography; the reference
 `tools/m2_ref.py` writes `tests/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
 refused; running each `votes` case in order gives `result`; `fallback` gives the text; `video` gives `ok`). Muninn checks it in
-`MoreTest`. Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
+`MoreTest`, Huginn in its chat self-test (`MoreWire::selfTest`). Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
 only spaces) are those of 11.1; the m2 fields may not contain control characters other than a newline, and one-line fields
 (a question, an option, a title) none at all.
 

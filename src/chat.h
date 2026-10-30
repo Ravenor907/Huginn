@@ -67,6 +67,8 @@ class Chat : public QObject
     Q_PROPERTY(QVariantMap typing READ typingMap NOTIFY liveChanged)
     Q_PROPERTY(QVariantMap active READ activeMap NOTIFY liveChanged)
     Q_PROPERTY(bool activeStatus READ activeStatus WRITE setActiveStatus NOTIFY changed)
+    // Cap m2: make link previews on this computer when sending (Settings › Privacy). Received ones always show.
+    Q_PROPERTY(bool linkPreviews READ linkPreviews WRITE setLinkPreviews NOTIFY changed)
 
 public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
@@ -146,6 +148,24 @@ public:
     Q_INVOKABLE bool pasteImage(const QString &where);
     Q_INVOKABLE QString localPath(const QUrl &url) const { return url.toLocalFile(); }
     Q_INVOKABLE bool isPicture(const QString &path) const;
+
+    // Cap m2 (docs/protocol-0.6.md section 12, chatmore.cpp): albums, video messages, polls, link previews and
+    // the Shared page. where: a contact's key or "g:<group>:<channel>". Calls that can fail return what to tell
+    // the person, "" when done.
+    Q_INVOKABLE bool hasM2(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m2")); }
+    bool linkPreviews() const { return m_settings.value(QStringLiteral("chat/linkPreviews"), true).toBool(); }
+    void setLinkPreviews(bool on) { m_settings.setValue(QStringLiteral("chat/linkPreviews"), on); Q_EMIT changed(); }
+    // Several pictures at once: albums of up to 10 (one picture goes on its own).
+    Q_INVOKABLE QString sendPhotos(const QString &where, const QStringList &paths, bool hd);
+    Q_INVOKABLE QStringList pickPictures() const;     // the system's file picker, several at once
+    QString sendVideo(const QString &where, const QByteArray &mp4, int ms);
+    Q_INVOKABLE QString sendPoll(const QString &where, const QString &question, const QStringList &answers, bool multi);
+    // My vote on a poll ([] takes it back).
+    Q_INVOKABLE QString vote(const QString &where, const QString &id, const QVariantList &choices);
+    // {media: [{id, photo, video, mine, name, time}], links: [{id, url, title, description, host, thumb, name, time}]}, newest first.
+    Q_INVOKABLE QVariantMap shared(const QString &where) const;
+    Q_INVOKABLE QString linkHost(const QString &url) const;
+    Q_INVOKABLE bool openLink(const QString &url) const;
 
     // People
     Q_INVOKABLE QString nameOf(const QString &key) const;          // the nickname when there is one
@@ -290,7 +310,8 @@ private:
     void addNearby(const QVariantMap &m);
     void becomeContacts(const QString &key);
     void putMet(const QString &key, const QVariantMap &m);
-    QString sendBlob(const QString &key, const QByteArray &bytes, int voiceMs);
+    // extra: cap m2 fields kept with the message and sent with its pieces ("video", "al", "ai", "an").
+    QString sendBlob(const QString &key, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
     QList<QJsonObject> pieces(const QVariantMap &m);
     QList<QByteArray> sealedFor(const QString &key, const QString &id, const QVariantMap &m);
     void keepSealed(const QString &id, const QString &key, const QList<QByteArray> &bodies);
@@ -344,6 +365,14 @@ private:
     static M1Index m1Index(const QVariantList &all);
     QVariantMap withM1(const QVariantMap &m, const QVariantList &all, const M1Index &idx, const QString &theirName) const;
     void takeGroupChange(const QString &g, const QString &from, const QJsonObject &p);
+    // cap m2 (chatmore.cpp)
+    QString sendPrivateWith(const QString &key, const QString &text, const QString &re, const QJsonObject &poll);
+    void sendGroupWith(const QString &g, const QString &ch, const QString &text, const QString &re, const QJsonObject &poll);
+    void attemptWithPreview(const QString &key, const QString &id);
+    void queueGroupMessage(const QString &g, const QString &id, const QStringList &to, const QJsonObject &p);
+    int takeVote(const QString &fromKey, const QString &mailbox, const QString &sentId, const QJsonObject &p);
+    void takeGroupVote(const QString &g, const QString &from, const QJsonObject &p);
+    QVariantList withM2(const QVariantList &list, const QString &g) const;
 
     // ---- groups (chatgroups.cpp)
     struct Group {
@@ -383,8 +412,9 @@ private:
     void groupNote(const QString &g, const QString &text);
     QString groupName(const QString &g) const;
     QString memberName(const QString &g, const QString &key) const;
-    QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs);
-    QList<QByteArray> groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs);
+    QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
+    QList<QByteArray> groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs,
+                                  const QVariantMap &extra = QVariantMap());
     void updateGroupMessage(const QString &g, const QString &id, const std::function<void(QVariantMap &)> &f);
     bool tokenOk(const QString &token, const QString &g) const;
     int gmsgIn(const QString &g, const QString &from, const QString &name, const QString &via, const QJsonObject &p);

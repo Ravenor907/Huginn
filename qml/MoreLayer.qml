@@ -1,0 +1,369 @@
+import QtQuick
+import QtMultimedia
+import Huginn
+
+// Cap m2 over a chat or a group channel (docs/protocol-0.6.md section 12), the same as Muninn's ChatMore.kt and
+// CameraScreen.kt: the attach menu (pictures, several at once as an album; a video message; a video file; a
+// poll), an album full size with arrows, a video message playing, the camera recording one (it waits for
+// Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos and links).
+// where: the contact's key or "g:<group>:<channel>"; title: who or what it goes to.
+Item {
+    id: layer
+    property string where: ""
+    property string title: ""
+    property bool tour: false
+    property var photos: []          // an album open full size
+    property int photoAt: 0
+    property string videoId: ""      // a video message playing (its stored photo id)
+    property bool camera: false      // recording a video message
+    property bool sharedOpen: false
+    property string sharedTab: "media"
+    property int sharedSel: -1
+    readonly property var sharedData: sharedOpen ? (Chat.chats, Chat.groups, Chat.shared(where)) : ({ media: [], links: [] })
+    readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen
+    anchors.fill: parent
+    z: 40
+
+    // ------------------------------------------------------------- what the page calls
+    function attach() {
+        if (tour) return
+        if (where === "") { Ui.say("Pictures, videos and polls go to one person or a group. Open a chat first.", true); return }
+        Ui.pickFrom("Send to " + title, [{ header: "", items: [
+            { name: "Pictures from this computer", detail: "Pick several at once: up to 10 go together as an album", url: "files", icon: "image" },
+            { name: "Recent pictures", detail: "Steam screenshots and the Pictures folder", url: "recent", icon: "image" },
+            { name: "Video message", detail: "Up to a minute with the camera. You see it before it's sent", url: "record", icon: "play" },
+            { name: "Video file", detail: "An MP4 of up to a minute", url: "videofile", icon: "play" },
+            { name: "Poll", detail: "A question with 2 to 10 answers to pick from", url: "poll", icon: "check" }] }], a => {
+                if (a === "files") pickPictures()
+                else if (a === "recent") recentPicture()
+                else if (a === "record") recordVideo()
+                else if (a === "videofile") sendVideoFile()
+                else if (a === "poll") newPoll()
+            })
+    }
+    function pickPictures() {
+        const paths = Chat.pickPictures()
+        if (!paths.length) return
+        sendPictures(paths, false)
+    }
+    function sendPictures(paths, hd) {
+        const r = Chat.sendPhotos(where, paths, hd)
+        if (r !== "") Ui.say(r, true)
+        else Ui.say(paths.length === 1 ? "Sending the picture." : "Sending " + paths.length + " pictures" + (paths.length > 1 ? " as an album." : "."))
+    }
+    function recentPicture() {
+        const pics = Chat.recentPictures()
+        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
+        Ui.pickFrom("Send a picture (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
+            Ui.pickFrom("Send this picture", [{ header: "", items: [
+                { name: "Send", detail: "Quick anywhere", url: "normal" },
+                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
+                q => sendPictures([path], q === "hd")))
+    }
+    function sendVideoFile() {
+        const path = Videos.pickFile()
+        if (path === "") return
+        const r = Videos.sendFile(where, path)
+        Ui.say(r !== "" ? r : "Sending the video message.", r !== "" && r.indexOf("need") < 0)
+    }
+    // Dropped files: pictures go in the chat (several as an album), MP4 videos as video messages, anything
+    // else to Files, ready to send over the Wi-Fi.
+    function dropFiles(urls) {
+        const pics = [], others = []
+        let videos = 0
+        for (let i = 0; i < urls.length; i++) {
+            const path = Chat.localPath(urls[i])
+            if (path === "") continue
+            if (Chat.isPicture(path)) pics.push(path)
+            else if (/\.(mp4|m4v|mov)$/i.test(path)) {
+                const r = Videos.sendFile(where, path)
+                if (r !== "") Ui.say(r, true); else videos++
+            } else others.push(urls[i])
+        }
+        if (pics.length) sendPictures(pics, false)
+        if (videos) Ui.say(videos === 1 ? "Sending the video message." : "Sending " + videos + " video messages.")
+        if (others.length) {
+            Transfer.share(others)
+            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
+            Ui.openPage("files", {})
+        }
+    }
+    function newPoll() { pollDlg.open("Poll for " + title) }
+    function viewPhotos(list, i) { photos = list; photoAt = i }
+    function playVideo(id) {
+        if (tour) return
+        videoId = id
+        Videos.play(id, playOut)
+    }
+    function closeVideo() { Videos.stop(); videoId = "" }
+    function recordVideo() {
+        if (!Videos.hasCamera()) { Ui.say("No camera found on this computer.", true); return }
+        camera = true
+        Qt.callLater(() => { if (!Videos.openCamera(camOut)) { Ui.say(Videos.error, true); camera = false } })
+    }
+    function closeCamera() {
+        Videos.closeCamera()
+        Videos.discard()
+        camera = false
+    }
+    function sendRecorded() {
+        const r = Videos.send(where)
+        Ui.say(r !== "" ? r : "Sending the video message.", r !== "")
+        if (!Videos.reviewing) camera = false
+    }
+    function askOpen(url) {
+        if (url === "") return
+        Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
+    }
+    function openShared() { if (!tour && where !== "") { sharedTab = "media"; sharedSel = -1; sharedOpen = true } }
+    function openSharedItem(i) {
+        const media = sharedData.media, links = sharedData.links
+        if (sharedTab === "media") {
+            const it = media[i]
+            if (!it) return
+            if (it.video > 0) { playVideo(it.photo); return }
+            const pics = media.filter(x => !(x.video > 0))
+            viewPhotos(pics.map(x => x.photo), Math.max(0, pics.findIndex(x => x.id === it.id)))
+        } else if (links[i]) askOpen(links[i].url)
+    }
+
+    function handleButton(b) {
+        if (photos.length > 0) {
+            viewer.handleButton(b)
+            return true
+        }
+        if (videoId !== "") {
+            if (b === "a" || b === "x") Videos.togglePause()
+            else if (b === "b") closeVideo()
+            return true
+        }
+        if (camera) {
+            if (Videos.reviewing) {
+                if (b === "a" || b === "start") sendRecorded()
+                else if (b === "x") Videos.play("review", reviewOut)
+                else if (b === "b") closeCamera()
+            } else if (b === "a") { if (Videos.recording) Videos.stopRecording(); else Videos.record() }
+            else if (b === "b") closeCamera()
+            return true
+        }
+        if (pollDlg.visible) return pollDlg.handleButton(b)
+        if (sharedOpen) {
+            const n = sharedTab === "media" ? sharedData.media.length : sharedData.links.length
+            const cols = sharedTab === "media" ? mediaGrid.columns : 1
+            switch (b) {
+            case "left": if (sharedTab === "media" && sharedSel > 0) sharedSel--; break
+            case "right": if (sharedTab === "media" && sharedSel < n - 1) sharedSel++; break
+            case "up": sharedSel = Math.max(0, sharedSel - cols); break
+            case "down": sharedSel = n ? Math.min(n - 1, sharedSel < 0 ? 0 : sharedSel + cols) : -1; break
+            case "x": sharedTab = sharedTab === "media" ? "links" : "media"; sharedSel = -1; break
+            case "a": if (sharedSel >= 0) openSharedItem(sharedSel); break
+            case "b": sharedOpen = false; break
+            }
+            return true
+        }
+        return false
+    }
+
+    // A recorded video plays as soon as it's ready, to be watched before Send or Discard.
+    property bool reviewingNow: Videos.reviewing
+    onReviewingNowChanged: if (reviewingNow && camera) Qt.callLater(() => Videos.play("review", reviewOut))
+
+    // ------------------------------------------------------------- the Shared page
+    Rectangle {
+        anchors.fill: parent
+        visible: layer.sharedOpen
+        color: Theme.ground
+        MouseArea { anchors.fill: parent }
+        PageHeader {
+            id: sharedHead
+            width: parent.width
+            carved: false
+            title: "Shared with " + layer.title
+            subtitle: layer.sharedData.media.length + " photos and videos · " + layer.sharedData.links.length + " links"
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: layer.sharedOpen = false }
+        }
+        Segmented {
+            id: sharedTabs
+            anchors.top: sharedHead.bottom; anchors.topMargin: Theme.px(10)
+            x: Theme.px(20)
+            options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }]
+            value: layer.sharedTab
+            onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1 }
+        }
+        GridView {
+            id: mediaGrid
+            readonly property int columns: Math.max(1, Math.floor(width / cellWidth))
+            visible: layer.sharedTab === "media"
+            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
+            clip: true
+            cellWidth: Theme.px(150); cellHeight: Theme.px(150)
+            model: layer.sharedData.media
+            currentIndex: layer.sharedSel
+            delegate: Rectangle {
+                width: mediaGrid.cellWidth - Theme.px(6); height: width
+                radius: Theme.px(6); color: Theme.groundDeep; clip: true
+                border.color: Theme.accent; border.width: index === layer.sharedSel ? Theme.focusWidth : 0
+                Image {
+                    anchors.fill: parent
+                    visible: !(modelData.video > 0)
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    // A small cached copy, loaded only for the tiles in view.
+                    source: visible && !layer.tour ? "image://thumb/" + modelData.photo : ""
+                }
+                Column {
+                    visible: modelData.video > 0
+                    anchors.centerIn: parent
+                    spacing: Theme.px(4)
+                    Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "play"; color: "white"; size: Theme.px(30) }
+                    Text { text: Voice.length(modelData.video || 0); color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                }
+                Accessible.role: Accessible.Button
+                Accessible.name: (modelData.video > 0 ? "Video from " : "Photo from ") + modelData.name
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
+            }
+        }
+        ListView {
+            id: linkList
+            visible: layer.sharedTab === "links"
+            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
+            clip: true
+            spacing: Theme.px(8)
+            model: layer.sharedData.links
+            currentIndex: layer.sharedSel
+            delegate: Rectangle {
+                width: linkList.width
+                height: Math.max(Theme.px(64), linkCol.implicitHeight) + Theme.px(16)
+                radius: Theme.px(8); color: Theme.panel
+                border.color: index === layer.sharedSel ? Theme.accent : Theme.line; border.width: index === layer.sharedSel ? Theme.focusWidth : 1
+                Image {
+                    id: linkThumb
+                    visible: modelData.thumb !== ""
+                    x: Theme.px(8); y: Theme.px(8); width: Theme.px(64); height: width
+                    fillMode: Image.PreserveAspectCrop
+                    source: modelData.thumb
+                }
+                Column {
+                    id: linkCol
+                    x: linkThumb.visible ? Theme.px(84) : Theme.px(12); y: Theme.px(8)
+                    width: parent.width - x - Theme.px(12)
+                    spacing: Theme.px(2)
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                    Text { visible: text !== ""; width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.description; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.host + " · " + modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
+            }
+        }
+        Text {
+            anchors.centerIn: parent
+            visible: (layer.sharedTab === "media" ? layer.sharedData.media.length : layer.sharedData.links.length) === 0
+            text: layer.sharedTab === "media" ? "No photos or videos yet." : "No links yet."
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+        }
+    }
+
+    // ------------------------------------------------------------- an album full size
+    PhotoViewer {
+        id: viewer
+        anchors.fill: parent
+        tour: layer.tour
+        photos: layer.photos
+        at: layer.photoAt
+        onAtChanged: layer.photoAt = at
+        onClosed: layer.photos = []
+    }
+
+    // ------------------------------------------------------------- a video message playing
+    Rectangle {
+        anchors.fill: parent
+        visible: layer.videoId !== ""
+        color: "black"
+        MouseArea { anchors.fill: parent; onClicked: Videos.togglePause() }
+        VideoOutput {
+            id: playOut
+            anchors.fill: parent; anchors.margins: Theme.px(10); anchors.bottomMargin: Theme.px(80)
+            fillMode: VideoOutput.PreserveAspectFit
+        }
+        Row {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
+            spacing: Theme.px(14)
+            HButton { text: "Back"; onClicked: layer.closeVideo() }
+            HButton { text: Videos.paused ? "Play" : "Pause"; kind: "accent"; onClicked: Videos.togglePause() }
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(240); height: Theme.px(4); color: Qt.rgba(1, 1, 1, 0.25)
+                Rectangle { width: parent.width * Videos.progress; height: parent.height; color: Theme.accent }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- recording a video message
+    Rectangle {
+        anchors.fill: parent
+        visible: layer.camera
+        color: "black"
+        MouseArea { anchors.fill: parent }
+        VideoOutput {
+            id: camOut
+            visible: !Videos.reviewing
+            anchors.fill: parent; anchors.margins: Theme.px(10); anchors.bottomMargin: Theme.px(90)
+            fillMode: VideoOutput.PreserveAspectFit
+        }
+        VideoOutput {
+            id: reviewOut
+            visible: Videos.reviewing
+            anchors.fill: camOut
+            fillMode: VideoOutput.PreserveAspectFit
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top; anchors.topMargin: Theme.px(16)
+            text: Videos.reviewing ? "Your video message · " + Voice.length(Videos.reviewMs) + " · it's only sent if you choose Send"
+                : Videos.recording ? "Recording " + Voice.length(Videos.elapsed) + " of 1:00"
+                : "Video message for " + layer.title + " · up to a minute"
+            color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+            style: Text.Outline; styleColor: "black"
+        }
+        Rectangle {
+            visible: Videos.recording
+            anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(20)
+            width: Theme.px(14); height: width; radius: width / 2; color: Theme.danger
+        }
+        Row {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
+            spacing: Theme.px(14)
+            HButton { visible: !Videos.reviewing; text: "Cancel"; onClicked: layer.closeCamera() }
+            HButton { visible: !Videos.reviewing; text: Videos.recording ? "Stop" : "Record"; kind: Videos.recording ? "danger" : "accent"; onClicked: Videos.recording ? Videos.stopRecording() : Videos.record() }
+            HButton { visible: Videos.reviewing; text: "Discard"; kind: "danger"; onClicked: layer.closeCamera() }
+            HButton { visible: Videos.reviewing; text: Videos.playing === "review" && !Videos.paused ? "Pause" : "Watch again"; onClicked: Videos.playing === "review" && !Videos.paused ? Videos.togglePause() : Videos.play("review", reviewOut) }
+            HButton { visible: Videos.reviewing; text: "Send"; kind: "accent"; onClicked: layer.sendRecorded() }
+        }
+        Text {
+            anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Theme.px(22)
+            visible: !!Ui.main && Ui.main.padInUse
+            text: Videos.reviewing ? "A: Send · X: watch again · B: Discard" : Videos.recording ? "A: Stop" : "A: Record · B: Cancel"
+            color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+        }
+    }
+
+    PollDialog {
+        id: pollDlg
+        onSend: (q, answers, multi) => {
+            const r = Chat.sendPoll(layer.where, q, answers, multi)
+            Ui.say(r !== "" ? r : "Poll sent.", r !== "")
+        }
+    }
+
+    Connections {
+        target: Videos
+        function onChanged() { if (Videos.error !== "" && (layer.camera || layer.videoId !== "")) { Ui.say(Videos.error, true) } }
+    }
+    Component.onDestruction: { Videos.stop(); if (camera) Videos.closeCamera() }
+}
