@@ -2516,6 +2516,7 @@ void Chat::load()
     loadFolders();
     loadGroups();
     loadFlags();
+    loadLinks();
     loadRatchet();
     noteLimitsOnce();
     prune();

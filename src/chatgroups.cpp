@@ -405,9 +405,27 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         if (want.value(QStringLiteral("kind")) == cur.value(QStringLiteral("kind")) && want.value(QStringLiteral("days")) == cur.value(QStringLiteral("days")))
             return QString();
         next = want;
+    } else if (what == QLatin1String("invites")) {
+        // Cap j1 (17.1): members may make invite links too. Older apps refuse a state with "mi", so everyone needs j1 first.
+        const bool on = op.value(QStringLiteral("on")).toBool();
+        if (on == cur.value(QStringLiteral("mi")).toBool())
+            return QString();
+        if (on) {
+            QStringList old;
+            for (const QJsonObject &m : std::as_const(members))
+                if (m.value(QStringLiteral("k")).toString() != me && !hasJ1(m.value(QStringLiteral("k")).toString()))
+                    old << m.value(QStringLiteral("n")).toString();
+            if (!old.isEmpty())
+                return QStringLiteral("Everyone needs Muninn or Huginn 0.95 first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+            next.insert(QStringLiteral("mi"), true);
+        } else {
+            next.remove(QStringLiteral("mi"));
+        }
     } else if (what == QLatin1String("add")) {
         if (GroupWire::isMember(cur, k))
             return QString();
+        if (cur.value(QStringLiteral("mi")).toBool() && !hasJ1(k))
+            return QStringLiteral("They need Muninn or Huginn 0.95 to join, because members can invite in this group.");
         // An app without d1 refuses a Family or Work group's state.
         if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
             return QStringLiteral("They need Muninn or Huginn 0.94 to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
@@ -1152,7 +1170,8 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     // Who may send what: contacts, members of that group, the admin being joined through, and
     // (for a group code) whoever brings a live token made here.
     bool allowed = isContact(fromKey) || member || str(m_joining.value(g), "admin") == fromKey;
-    if (!allowed && room == QLatin1String("group") && t == QLatin1String("join") && tokenOk(p.value(QStringLiteral("inv")).toString(), g))
+    if (!allowed && room == QLatin1String("group") && t == QLatin1String("join")
+        && (tokenOk(p.value(QStringLiteral("inv")).toString(), g) || !liveLink(p.value(QStringLiteral("inv")).toString(), g).isEmpty()))
         allowed = true;
     if (!allowed && room == QLatin1String("gmsg") && have && p.value(QStringLiteral("sv")).toInteger() > ver(git->state))
         allowed = true;   // maybe added in a version not seen here yet: held below
@@ -1274,7 +1293,9 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     } else if (t == QLatin1String("join")) {
         const QString inv = p.value(QStringLiteral("inv")).toString();
         const QVariantMap tok = m_gtokens.value(inv);
-        if (have && GroupWire::isAdmin(git->state, me) && tokenOk(inv, g) && (str(tok, "for").isEmpty() || str(tok, "for") == fromKey)) {
+        // Cap j1: an invite link this computer counts (17.3).
+        const bool byLink = !tokenOk(inv, g) && !liveLink(inv, g).isEmpty();
+        if (have && GroupWire::isAdmin(git->state, me) && (byLink || (tokenOk(inv, g) && (str(tok, "for").isEmpty() || str(tok, "for") == fromKey)))) {
             if (GroupWire::isMember(git->state, fromKey)) {
                 sendStateTo(g, fromKey);   // they missed it: once more
             } else {
@@ -1288,11 +1309,16 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                                                {QStringLiteral("p"), pm}});
                 if (!err.isEmpty())
                     Q_EMIT notice(QStringLiteral("%1 tried to join %2: %3").arg(name, groupName(g), err));
+                else if (byLink && m_groups.contains(g) && GroupWire::isMember(m_groups.value(g).state, fromKey))
+                    linkUsed(inv, g);
             }
             if (!str(tok, "for").isEmpty())
                 m_gtokens.remove(inv);   // a contact's invite is used once; a group code lasts its hour
             saveGroupsSoon();
         }
+    } else if (t == QLatin1String("link") || t == QLatin1String("linkoff") || t == QLatin1String("links")) {
+        if (!takeLinkControl(g, fromKey, p))
+            return 403;
     } else if (t == QLatin1String("decline")) {
         const QString inv = p.value(QStringLiteral("inv")).toString();
         if (str(m_gtokens.value(inv), "for") == fromKey && str(m_gtokens.value(inv), "g") == g) {

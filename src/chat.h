@@ -303,6 +303,14 @@ public:
     Q_INVOKABLE QString handOver(const QString &g, const QString &key);
     Q_INVOKABLE QString leaveGroup(const QString &g);
     Q_INVOKABLE void forgetGroup(const QString &g);
+    // Cap j1 (grouplinks.cpp): invite links. ttlMs 0 never expires, maxUses 0 no limit; answers {link, id} or {error}.
+    // groupLinks: the active ones [{id, by, byName, x (ms, 0 never), max, uses, counter, link (only my own), mine}];
+    // admins see every link, members their own. Joining by a link is joinWithCode (a pasted link works too).
+    Q_INVOKABLE QVariantMap createGroupLink(const QString &g, qint64 ttlMs, int maxUses);
+    Q_INVOKABLE QVariantList groupLinks(const QString &g) const;
+    Q_INVOKABLE QString revokeGroupLink(const QString &g, const QString &id);
+    Q_INVOKABLE QString setMembersInvite(const QString &g, bool on);   // an admin's signed change
+    Q_INVOKABLE bool membersInvite(const QString &g) const;
 
     // Voice rooms and group calls (call/roommanager.cpp, docs/protocol-0.6.md section 6): the current
     // state of a group this device is still in (empty otherwise), a member's name in it, whether a
@@ -497,6 +505,17 @@ private:
     void saveGroupChats();
     // Messages past each group's limit go; their ids are added to gone. cutoff: the oldest time kept for a limit in days.
     void pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *gone);
+    // cap j1 (grouplinks.cpp)
+    bool hasJ1(const QString &key) const;
+    void loadLinks();
+    void saveLinks();
+    QString liveLink(const QString &token, const QString &g) const;
+    void sendLinks(const QString &g);
+    bool takeLinkControl(const QString &g, const QString &from, const QJsonObject &p);
+    void linkUsed(const QString &token, const QString &g);
+    QHash<QString, QVariantMap> m_glinks;               // links counted here: token -> {g, by, x, max, uses, off}
+    QHash<QString, QVariantList> m_glinkLists;          // group -> links as their counters said
+    QHash<QString, QString> m_gmade;                    // link id -> the links made here
     // cap d1 (chatlimits.cpp)
     bool hasD1(const QString &key) const;
     bool isClose(const QString &key) const;
