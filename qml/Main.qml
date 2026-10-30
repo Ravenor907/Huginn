@@ -641,8 +641,9 @@ Window {
             if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density }
             if (step >= steps.length) { Settings.theme = savedTheme; Settings.density = savedDensity; stop(); System.tourFinished(); return }
             const s = steps[step]
-            Settings.theme = s.theme || savedTheme
-            Settings.density = s.density || savedDensity
+            // The look changes once the new page is in (not while the old one is being taken down).
+            const theme = s.theme || savedTheme, density = s.density || savedDensity
+            Qt.callLater(() => { Settings.theme = theme; Settings.density = density })
             app.tourVoice = !!s.voicePanel
             const args = { tour: true }
             if (s.section) args.section = s.section

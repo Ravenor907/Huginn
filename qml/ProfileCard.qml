@@ -236,7 +236,7 @@ Item {
                     model: card.mainActions
                     ActionButton {
                         width: (parent.width - Theme.px(8) * (card.mainActions.length - 1)) / card.mainActions.length
-                        action: modelData
+                        action: modelData || ({})
                         primary: true
                     }
                 }
@@ -246,7 +246,7 @@ Item {
                 spacing: Theme.px(8)
                 Repeater {
                     model: card.otherActions
-                    ActionButton { action: modelData }
+                    ActionButton { action: modelData || ({}) }
                 }
             }
         }

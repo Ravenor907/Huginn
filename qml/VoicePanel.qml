@@ -64,32 +64,35 @@ Rectangle {
             Repeater {
                 model: panel.people
                 Item {
+                    id: who
+                    // Safe while the list takes the face away.
+                    readonly property var p: modelData || ({})
                     width: Theme.px(34); height: width
                     Accessible.role: Accessible.StaticText
-                    Accessible.name: modelData.name + (modelData.speaking ? ", speaking" : "") + (modelData.muted ? ", muted" : "")
+                    Accessible.name: who.p.name + (who.p.speaking ? ", speaking" : "") + (who.p.muted ? ", muted" : "")
                     Rectangle {
                         anchors.fill: parent
                         radius: width / 2
                         color: "transparent"
                         border.width: Theme.px(2.5)
                         border.color: Theme.accent
-                        opacity: modelData.speaking ? 1 : 0
+                        opacity: who.p.speaking ? 1 : 0
                         Behavior on opacity { NumberAnimation { duration: Theme.motion ? 120 : 0 } }
                     }
                     Rectangle {
                         anchors.centerIn: parent
                         width: Theme.px(28); height: width; radius: width / 2
-                        color: Theme.avatar(modelData.name, !!modelData.me).bg
-                        opacity: modelData.state === "live" ? (modelData.muted ? 0.55 : 1) : 0.4
+                        color: Theme.avatar(who.p.name, !!who.p.me).bg
+                        opacity: who.p.state === "live" ? (who.p.muted ? 0.55 : 1) : 0.4
                         Text {
                             anchors.centerIn: parent
-                            text: panel.initial(modelData.name)
-                            color: Theme.avatar(modelData.name, !!modelData.me).fg
+                            text: panel.initial(who.p.name)
+                            color: Theme.avatar(who.p.name, !!who.p.me).fg
                             font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
                         }
                     }
-                    HoverHandler { cursorShape: modelData.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
-                    TapHandler { onTapped: if (!modelData.me && !panel.tour) Ui.showProfile(modelData.key, modelData.name, {}) }
+                    HoverHandler { cursorShape: who.p.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
+                    TapHandler { onTapped: if (!who.p.me && !panel.tour) Ui.showProfile(who.p.key, who.p.name, {}) }
                 }
             }
         }

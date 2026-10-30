@@ -19,6 +19,8 @@ Rectangle {
     signal options()
     signal chosen()          // clicked: the page picks it (its tools show)
     property string who: m.name || "Someone"
+    // Safe while a list takes the row away (its message is gone by then) and the theme changes.
+    readonly property bool mine: !!m && !!m.mine
     // Settings › Appearance: compact drops the avatar and the room around each message.
     readonly property int pad: Theme.px(Theme.compact ? 3 : 7)
     height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
@@ -64,11 +66,11 @@ Rectangle {
         visible: !msg.m.system && !Theme.compact
         x: Theme.px(8); y: msg.lineH + msg.pad
         width: visible ? Theme.px(40) : 0; height: width; radius: width / 2
-        color: Theme.avatar(msg.who, msg.m.mine).bg
+        color: Theme.avatar(msg.who, msg.mine).bg
         Text {
             anchors.centerIn: parent
             text: host.initial(msg.who)
-            color: Theme.avatar(msg.who, msg.m.mine).fg
+            color: Theme.avatar(msg.who, msg.mine).fg
             font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.DemiBold
         }
     }
@@ -84,7 +86,7 @@ Rectangle {
             Text {
                 id: whoText
                 text: msg.who
-                color: Theme.avatar(msg.who, msg.m.mine).fg
+                color: Theme.avatar(msg.who, msg.mine).fg
                 font.family: Theme.body; font.pixelSize: Theme.ms(Theme.compact ? 15 : 16); font.weight: Font.DemiBold
                 // A click on the name opens their profile card.
                 readonly property string key: msg.m.mine ? "me" : (msg.m.from || (msg.host && msg.host.openKey) || "")

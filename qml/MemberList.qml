@@ -12,7 +12,7 @@ Rectangle {
     readonly property string gid: host ? host.gid : ""
     readonly property bool tour: !!host && host.isTour
     readonly property bool statusOn: tour || Chat.activeStatus
-    readonly property alias flick: memFlick
+    property alias flick: memFlick
     color: Theme.column
 
     // Who is in which voice room or group call of this group: key -> its name.
@@ -92,7 +92,7 @@ Rectangle {
                     }
                     Repeater {
                         model: modelData.people
-                        MemberRow { person: modelData; at: sec.first + index }
+                        MemberRow { person: modelData || ({}); at: sec.first + index }
                     }
                 }
             }

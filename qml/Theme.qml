@@ -92,10 +92,14 @@ QtObject {
         : [{ bg: "#2C3A2C", fg: "#B6D6B6" }, { bg: "#2D3340", fg: "#B9C6E0" }, { bg: "#3A2724", fg: "#E6A596" }, { bg: "#33293A", fg: "#D2BCE0" }, { bg: "#24363A", fg: "#AED4D8" }]
     readonly property var avatarMine: hc ? ({ bg: "#1F1F1F", fg: "#FFFFFF" }) : light ? ({ bg: "#EADDBB", fg: "#6B5216" }) : ({ bg: "#3A3220", fg: "#E0C27F" })
     function avatar(name, mine) {
-        if (mine) return avatarMine
+        // Never undefined, even while a theme change is still settling.
+        const plain = { bg: raised, fg: text }
+        if (mine) return avatarMine || plain
+        const tones = avatarTones || []
         let h = 0
         const n = String(name || "")
         for (let i = 0; i < n.length; ++i) h = (h * 31 + n.charCodeAt(i)) % 9973
-        return avatarTones[h % avatarTones.length]
+        return tones[h % Math.max(1, tones.length)] || plain
     }
+
 }
