@@ -183,9 +183,9 @@ internal fun HoldSheet(app: Muninn, key: String, moves: ListMoves?, done: () -> 
             if (contact != null) {
                 SheetLabel("What they can do")
                 val can = people.can[key] ?: People.Can()
-                val ra = app.power.isRightAway(key)
+                var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
                 ToggleRow("Always right away", "Their messages arrive and ring at once, even when saving battery", ra) {
-                    app.power.setRightAway(key, it)
+                    app.power.setRightAway(key, it); ra = it
                 }
                 ToggleRow("Calls and video", "They can call you", can.calls) { People.setCan(key, can.copy(calls = it)) }
                 ToggleRow("Send me files", "Photos stay on; this is for other files", can.files) { People.setCan(key, can.copy(files = it)) }

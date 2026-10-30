@@ -84,6 +84,7 @@ import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Ui
 import io.github.ravenor907.muninn.ui.brushed
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -501,7 +502,7 @@ class MainActivity : ComponentActivity() {
     private fun SettingsButton(label: String, open: Boolean, onClick: () -> Unit) {
         androidx.compose.material3.TooltipBox(
             positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
-            tooltip = { androidx.compose.material3.PlainTooltip { Text("Settings") } },
+            tooltip = { PlainTooltip { Text("Settings") } },
             state = androidx.compose.material3.rememberTooltipState(),
         ) {
             Box(Modifier.size(44.dp).clip(CircleShape).background(if (open) Palette.field else androidx.compose.ui.graphics.Color.Transparent)
