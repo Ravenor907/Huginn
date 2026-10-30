@@ -158,7 +158,9 @@ object Move {
     }
 
     /** Everything is here and the person said the emoji match: take it in, then start again as you. */
-    private fun finishIfReady(a: Muninn) = synchronized(lock) {
+    private fun finishIfReady(a: Muninn) { synchronized(lock) { takeIn(a) } }
+
+    private fun takeIn(a: Muninn) {
         val s = json(a, "in") ?: return
         if (!s.optBoolean("ok") || s.optString("state") != "receiving") return
         val n = s.optInt("n"); val h = s.optString("h")

@@ -59,7 +59,10 @@ fun MoveSection(app: Muninn) {
         Field(pasted, { pasted = it }, "Paste the move code", Modifier.padding(top = 8.dp), single = false)
         MButton("Next", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) {
             val text = pasted
-            scope.launch { withContext(Dispatchers.IO) { Move.take(app, text) }?.let { Ui.say(it, true) } ?: run { pasted = "" } }
+            scope.launch {
+                val err = withContext(Dispatchers.IO) { Move.take(app, text) }
+                if (err != null) Ui.say(err, true) else pasted = ""
+            }
         }
     }
     if (showing) MoveHereDialog(app) { showing = false }
@@ -141,7 +144,10 @@ fun MoveCover(app: Muninn): Boolean {
             "Keep both on the same Wi-Fi. This device stays locked until the move is done.") {}
         "moved" -> Cover("Moved to ${o.to}", "You, your contacts and chats are on ${o.to} now. Nothing of yours is left here.", "") {
             MButton("Use as a linked device", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent) {
-                scope.launch { withContext(Dispatchers.IO) { Move.becomeLinked(app) }?.let { Ui.say(it, true) } ?: Ui.say("Linked. Your chats show up here in a moment.") }
+                scope.launch {
+                    val err = withContext(Dispatchers.IO) { Move.becomeLinked(app) }
+                    Ui.say(err ?: "Linked. Your chats show up here in a moment.", err != null)
+                }
             }
             MButton("Start fresh", Modifier.fillMaxWidth().padding(top = 8.dp)) { Move.startFresh(app) }
         }
