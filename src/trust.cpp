@@ -522,8 +522,8 @@ void Chat::sendEverywhere(const QString &key, const QString &room, const QJsonOb
         return;
     // Sealed once and the same copy on every route at once (5.1); the other side keeps the first.
     const QByteArray json = compact(envelope(room, key, compact(msg), QUuid::createUuid().toString(QUuid::WithoutBraces)));
-    m_ble->send(key, json);
-    const QString base = m_net->baseFor(key);
+    sendBle(key, json);
+    const QString base = baseTo(key);
     if (!base.isEmpty())
         post(base, json);
     sendInternet(key, {json}, mailbox.isEmpty() ? mailboxOf(key) : mailbox);

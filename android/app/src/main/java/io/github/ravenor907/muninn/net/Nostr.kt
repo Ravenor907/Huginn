@@ -492,9 +492,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val locked = secretHex() == null
         if (locked && synchronized(seen) { !announced.add(id) }) { synchronized(seen) { working.remove(id) }; return }
         try {
-            // Only trust what the event's own signature covers.
-            if (idOf(ev) != id || !Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig")))) return
-            if (onEnvelope?.invoke(ev.optString("content")) != true) { refused = true; return }
+            // Only trust what the event's own signature covers. A broken event (keys or signature that aren't hex) is
+            // dropped, never thrown up into the socket, and one whose id is its own is never looked at again.
+            val own = try { idOf(ev) == id } catch (e: Exception) { false }
+            val good = own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false }
+            if (!good) { if (own) synchronized(seen) { seen.add(id) }; return }
+            if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused = true; return }
         } finally { synchronized(seen) { working.remove(id) } }
         synchronized(seen) {
             seen.add(id)

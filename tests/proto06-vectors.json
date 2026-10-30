@@ -490,13 +490,13 @@
         "current": "s3a",
         "new": "s3b",
         "accept": false,
-        "why": "not newer"
+        "why": "the owner's stands"
       },
       {
         "current": "s3b",
         "new": "s3a",
         "accept": true,
-        "why": "same version, lower hash"
+        "why": "same version, signed by the owner"
       },
       {
         "current": "s3a",

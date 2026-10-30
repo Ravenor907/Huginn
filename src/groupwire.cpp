@@ -393,11 +393,24 @@ GroupWire::Verdict GroupWire::accept(const QJsonObject *cur, const QJsonObject &
     if (next.value(QStringLiteral("owner")).toString() != owner && by != owner)
         return {false, QStringLiteral("only the owner can hand over ownership")};
     const qint64 nv = next.value(QStringLiteral("v")).toInteger(), cv = cur->value(QStringLiteral("v")).toInteger();
+    // Cap s1 (section 20): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
+    if (nv > cv + kMaxAhead)
+        return {false, QStringLiteral("too far ahead")};
     if (nv > cv)
         return {true, QStringLiteral("higher version")};
-    if (nv == cv && hash(next) < hash(*cur))
-        return {true, QStringLiteral("same version, lower hash")};
+    if (nv == cv) {
+        // At the same version a state its owner signed wins, so the owner can always settle things.
+        if (byOwner(next) != byOwner(*cur))
+            return byOwner(next) ? Verdict{true, QStringLiteral("same version, signed by the owner")} : Verdict{false, QStringLiteral("the owner's stands")};
+        if (hash(next) < hash(*cur))
+            return {true, QStringLiteral("same version, lower hash")};
+    }
     return {false, QStringLiteral("not newer")};
+}
+
+bool GroupWire::byOwner(const QJsonObject &s)
+{
+    return s.value(QStringLiteral("by")).toString() == s.value(QStringLiteral("owner")).toString();
 }
 
 bool GroupWire::wins(const QJsonObject &a, const QJsonObject &b)
@@ -405,6 +418,8 @@ bool GroupWire::wins(const QJsonObject &a, const QJsonObject &b)
     const qint64 av = a.value(QStringLiteral("v")).toInteger(), bv = b.value(QStringLiteral("v")).toInteger();
     if (av != bv)
         return av > bv;
+    if (byOwner(a) != byOwner(b))
+        return byOwner(a);
     return hash(a) <= hash(b);
 }
 

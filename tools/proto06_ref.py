@@ -41,6 +41,7 @@ MAX_QUICK_TEXT = 80
 MAX_TV_CONTACTS = 50
 MAX_STATE_BYTES = 24 * 1024
 MAX_TVCONFIG_BYTES = 16 * 1024
+MAX_AHEAD = 1000             # a group state at most this many versions ahead of the current one (cap s1)
 
 EPOCH_BITS = 14              # a new media key every 16384 packets (about 5.5 minutes of 20 ms audio)
 REPLAY_WINDOW = 1024
@@ -150,13 +151,21 @@ def accept_state(cur, new):
     if new["g"] != cur["g"]: return False, "other group"
     if new["by"] not in cur["admins"]: return False, "signer is not an admin in the current state"
     if new["owner"] != cur["owner"] and new["by"] != cur["owner"]: return False, "only the owner can hand over ownership"
+    # Cap s1 (section 20): never more than 1000 versions ahead, so no admin can push v out of reach of everyone else.
+    if new["v"] > cur["v"] + MAX_AHEAD: return False, "too far ahead"
     if new["v"] > cur["v"]: return True, "higher version"
-    if new["v"] == cur["v"] and obj_hash(new) < obj_hash(cur): return True, "same version, lower hash"
+    if new["v"] == cur["v"]:
+        # At the same version a state its owner signed wins, so the owner can always settle things.
+        if by_owner(new) != by_owner(cur): return (True, "same version, signed by the owner") if by_owner(new) else (False, "the owner's stands")
+        if obj_hash(new) < obj_hash(cur): return True, "same version, lower hash"
     return False, "not newer"
 
+def by_owner(s): return s["by"] == s["owner"]
+
 def winner(a, b):
-    """Conflict rule on its own: higher v, then lower SHA-256 of the canonical signed state."""
+    """Conflict rule on its own: higher v, then the one its owner signed, then lower SHA-256 of the canonical signed state."""
     if a["v"] != b["v"]: return a if a["v"] > b["v"] else b
+    if by_owner(a) != by_owner(b): return a if by_owner(a) else b
     return a if obj_hash(a) <= obj_hash(b) else b
 
 def envelope_id(gid, recipient_key):

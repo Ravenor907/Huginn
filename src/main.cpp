@@ -31,6 +31,7 @@
 #include "livelist.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "proof.h"
 #include "morewire.h"
 #include "linkpreview.h"
 #include "videomsg.h"
@@ -136,7 +137,8 @@ int main(int argc, char *argv[])
         const bool f = LinkPreview::selfTest();
         const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
         const bool h = Trust::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("i1f1-vectors.json")));
-        return selfTested(a && b && c && d && e && f && g && h);
+        const bool i = Proof::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("s1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h && i);
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
@@ -176,11 +178,17 @@ int main(int argc, char *argv[])
     auto *ble = new Ble([&chat] {
         if (!chat || !chat->ready())
             return QByteArray();
-        // Hidden from people nearby: no name. The chat key still goes out, or contacts close by
-        // couldn't find this computer, so whoever already knows the key can tell it's here.
-        return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
-                                         {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
-                                         {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
+        // Hidden from people nearby: no name, chat key or mailbox, only a daily hint that contacts (who have the key)
+        // can match (cap s1), so nobody can follow this computer from place to place.
+        QJsonObject o{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
+                      {QStringLiteral("app"), QStringLiteral("huginn")}};
+        if (chat->visibleNearby()) {
+            o.insert(QStringLiteral("chatKey"), chat->chatKey());
+            o.insert(QStringLiteral("mailbox"), chat->mailbox());
+        } else {
+            o.insert(QStringLiteral("hint"), Proof::hintNow(chat->chatKey()));
+        }
+        return QJsonDocument(o).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
     if (quiet && !vault->exists())

@@ -1,4 +1,5 @@
 #include "localsend.h"
+#include "proof.h"
 #include "lan.h"
 #include "settings.h"
 #include "system.h"
@@ -114,6 +115,10 @@ QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
         const QJsonObject extra = chatInfo();
         for (auto it = extra.begin(); it != extra.end(); ++it)
             o.insert(it.key(), it.value());
+        // Cap s1: the chat key vouches for this certificate.
+        const QString proof = m_secure && chatProve ? chatProve(m_fingerprint) : QString();
+        if (!proof.isEmpty())
+            o.insert(QStringLiteral("chatProof"), proof);
     }
     if (withAnnounce)
         o.insert(QStringLiteral("announce"), announceFlag);
@@ -125,16 +130,39 @@ QList<LocalSend::Peer> LocalSend::chatPeers() const
     QList<Peer> out;
     for (const Device &d : m_devices)
         if (!d.chatKey.isEmpty())
-            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type};
+            out << Peer{QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port), d.chatKey, d.chatName, d.alias, d.type, d.proven};
     return out;
 }
 
-QString LocalSend::baseFor(const QString &chatKey) const
+QString LocalSend::baseFor(const QString &chatKey, bool strict) const
+{
+    const Device *best = nullptr;
+    for (const Device &d : m_devices) {
+        if (d.chatKey != chatKey || (strict && !d.proven))
+            continue;
+        if (!best || (d.proven && !best->proven) || (d.proven == best->proven && d.seen > best->seen))
+            best = &d;
+    }
+    return best ? QStringLiteral("%1://%2:%3").arg(best->protocol, best->ip).arg(best->port) : QString();
+}
+
+bool LocalSend::provenFor(const QString &chatKey) const
 {
     for (const Device &d : m_devices)
-        if (d.chatKey == chatKey)
-            return QStringLiteral("%1://%2:%3").arg(d.protocol, d.ip).arg(d.port);
-    return {};
+        if (d.proven && d.chatKey == chatKey)
+            return true;
+    return false;
+}
+
+bool LocalSend::asking(const QString &ip)
+{
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (m_asked.size() > 512)
+        m_asked.removeIf([t](const QHash<QString, qint64>::iterator it) { return t - it.value() > 10000; });
+    if (t - m_asked.value(ip, 0) < 10000)
+        return false;
+    m_asked.insert(ip, t);
+    return true;
 }
 
 // ------------------------------------------------------------------ certificates
@@ -396,9 +424,13 @@ void LocalSend::onDatagrams()
         if (o.isEmpty() || Tls::sameFingerprint(fp, m_fingerprint))   // our own announcement
             continue;
         const QString ip = QHostAddress(from.toIPv4Address()).toString();
-        remember(o, ip, QStringLiteral("https"));
-        if (o.value(QStringLiteral("announce")).toBool(o.value(QStringLiteral("announcement")).toBool()))
-            registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), false, fp);
+        // A multicast message proves nothing: a device is only listed once its certificate answered (register).
+        const bool announce = o.value(QStringLiteral("announce")).toBool(o.value(QStringLiteral("announcement")).toBool());
+        const auto known = m_devices.constFind(fp.toUpper());
+        if (!announce && known != m_devices.constEnd() && known->ip == ip)
+            continue;
+        if (asking(ip))
+            registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), !announce, fp);
     }
 }
 
@@ -406,10 +438,14 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
 {
     // provenFp: the fingerprint of a certificate the device actually showed us. It wins over
     // what the message claims.
+    const QString protocol = o.value(QStringLiteral("protocol")).toString(protocolFallback);
+    // Over HTTPS nothing is learned without a certificate it really showed: a spoofed announce can't take over another
+    // device's entry.
+    if (protocol == QLatin1String("https") && provenFp.isEmpty())
+        return;
     QString id = provenFp.isEmpty() ? o.value(QStringLiteral("fingerprint")).toString() : provenFp;
     if (id.isEmpty() || Tls::sameFingerprint(id, m_fingerprint))
         return;
-    const QString protocol = o.value(QStringLiteral("protocol")).toString(protocolFallback);
     if (protocol == QLatin1String("https"))
         id = id.toUpper();   // certificate hashes: one spelling, so a device is listed once
     // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
@@ -428,7 +464,14 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     d.ip = ip;
     d.port = o.value(QStringLiteral("port")).toInt(kPort);
     d.protocol = protocol;
-    d.chatKey = o.value(QStringLiteral("chatKey")).toString();
+    // Cap s1: whose chat it is. A hidden device sends a hint only a contact can match; its proof must check out against
+    // this certificate. A wrong proof means it isn't theirs; no proof at all is an older app (not proven).
+    QString claimed = o.value(QStringLiteral("chatKey")).toString();
+    if (claimed.isEmpty() && hintKey)
+        claimed = hintKey(o.value(QStringLiteral("hint")).toString());
+    const QString sig = o.value(QStringLiteral("chatProof")).toString();
+    d.proven = !claimed.isEmpty() && !provenFp.isEmpty() && !sig.isEmpty() && Proof::routeOk(claimed, provenFp, sig);
+    d.chatKey = d.proven || sig.isEmpty() ? claimed : QString();
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
     d.seen = QDateTime::currentDateTime();
@@ -453,7 +496,8 @@ QVariantList LocalSend::devices() const
 void LocalSend::onConnection(QTcpServer *server)
 {
     while (QTcpSocket *s = server->nextPendingConnection()) {
-        if (!Lan::isNeighbour(s->peerAddress())) {
+        // At most 32 at once (nobody can pile them up), and only from this very network.
+        if (!Lan::isNeighbour(s->peerAddress()) || m_conns.size() >= 32) {
             // Reached our home-network address from somewhere else (routed in over a VPN, say): no.
             s->abort();
             s->deleteLater();
@@ -530,6 +574,13 @@ void LocalSend::onData(QTcpSocket *s)
                                  QString::fromUtf8(lines.at(i).mid(colon + 1)).trimmed());
         }
         c.bodyLeft = c.headers.value(QStringLiteral("content-length")).toLongLong();
+        // Chat envelopes are at most 64 KB (protocol 9), other requests a little JSON: anything bigger is refused up front.
+        const bool upload = c.path == kApi + QStringLiteral("/upload");
+        const qint64 most = c.path == QLatin1String("/api/huginn/v1/message") ? 96 * 1024 : 2 * 1024 * 1024;
+        if (c.bodyLeft < 0 || (!upload && c.bodyLeft > most)) {
+            reply(s, 413);
+            return;
+        }
         route(s, c);
         if (!m_conns.contains(s))
             return;
@@ -552,7 +603,7 @@ void LocalSend::onData(QTcpSocket *s)
     } else if (!c.method.isEmpty() && c.bodyLeft >= 0) {
         c.body += chunk;
         c.bodyLeft -= chunk.size();
-        if (c.body.size() > 8 * 1024 * 1024) {
+        if (c.body.size() > 2 * 1024 * 1024 + 16 * 1024) {
             s->abort();
             return;
         }
@@ -575,6 +626,8 @@ void LocalSend::route(QTcpSocket *s, Conn &c)
         const QString ip = QHostAddress(s->peerAddress().toIPv4Address()).toString();
         auto f = m_session.files.find(fid);
         if (f == m_session.files.end() || f->token != token || ip != m_session.ip) { reply(s, 403); return; }
+        // Never more than the size it was accepted at: a sender can't fill the disk past what the person agreed to.
+        if (c.bodyLeft > f->size) { reply(s, 413); return; }
         f->savedAs = savePath(f->name);
         QDir().mkpath(QFileInfo(f->savedAs).absolutePath());
         c.file = new QFile(f->savedAs, this);
@@ -649,12 +702,17 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     const QJsonObject body = QJsonDocument::fromJson(c.body).object();
     // A sender that showed a certificate must claim that certificate's fingerprint, or it is
     // pretending to be another device: answer, but don't list it (LocalSend does the same).
+    // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
     const QString peerFp = c.peerFp;
     const auto learn = [this, ip, peerFp](const QJsonObject &o) {
-        if (peerFp.isEmpty())
-            remember(o, ip, QStringLiteral("https"));
-        else if (Tls::sameFingerprint(o.value(QStringLiteral("fingerprint")).toString(), peerFp))
+        if (peerFp.isEmpty()) {
+            if (o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")) != QLatin1String("https"))
+                remember(o, ip, QStringLiteral("http"));
+            else if (asking(ip))
+                registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), QStringLiteral("https"), false, o.value(QStringLiteral("fingerprint")).toString());
+        } else if (Tls::sameFingerprint(o.value(QStringLiteral("fingerprint")).toString(), peerFp)) {
             remember(o, ip, QStringLiteral("https"), peerFp);
+        }
     };
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
         learn(body);
@@ -667,6 +725,17 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     }
     if (path == kApi + QStringLiteral("/prepare-upload")) {
         if (m_session.active || m_pending.socket) { reply(s, 409); return; }
+        // Asking again and again from one address would keep a box up for a minute each time: past 3 in 10 minutes, wait.
+        {
+            QList<qint64> &q = m_prompts[ip];
+            const qint64 t = QDateTime::currentMSecsSinceEpoch();
+            while (!q.isEmpty() && t - q.first() > 600000)
+                q.removeFirst();
+            if (q.size() >= 3) { reply(s, 429); return; }
+            q << t;
+            if (m_prompts.size() > 256)
+                m_prompts.removeIf([t](const QHash<QString, QList<qint64>>::iterator it) { return it.value().isEmpty() || t - it.value().last() > 600000; });
+        }
         const QJsonObject from = body.value(QStringLiteral("info")).toObject();
         const QJsonObject files = body.value(QStringLiteral("files")).toObject();
         if (files.isEmpty()) { reply(s, 400); return; }
@@ -852,6 +921,8 @@ void LocalSend::reply(QTcpSocket *s, int code, const QByteArray &body)
     case 400: reason = "Bad Request"; break;
     case 401: reason = "Unauthorized"; break;
     case 403: reason = "Forbidden"; break;
+    case 413: reason = "Payload Too Large"; break;
+    case 429: reason = "Too Many Requests"; break;
     case 404: reason = "Not Found"; break;
     case 409: reason = "Conflict"; break;
     case 422: reason = "Unprocessable Entity"; break;

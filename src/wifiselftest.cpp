@@ -75,7 +75,10 @@ struct Run {
     {
         const QJsonObject fields{{QStringLiteral("room"), QStringLiteral("private")}, {QStringLiteral("fromKey"), myKey},
                                  {QStringLiteral("fromName"), QStringLiteral("Muninn self-test")}, {QStringLiteral("id"), id}};
-        return ChatWire::seal(fields, sk, huginnKey, text.toUtf8(), nullptr, [] { return ChatCrypto::newKeyPair(); });
+        QJsonObject o = ChatWire::seal(fields, sk, huginnKey, text.toUtf8(), nullptr, [] { return ChatCrypto::newKeyPair(); });
+        // This pretend phone has no certificate, so it can't prove its route (cap s1): it plays an older phone.
+        o.insert(QStringLiteral("caps"), QString::fromLatin1(ChatWire::kCaps).remove(QStringLiteral(" s1")));
+        return o;
     }
 };
 
@@ -106,7 +109,7 @@ void servePhone(Run *run)
                 if (o.value(QStringLiteral("room")).toString() != QLatin1String("receipt"))
                     return;
                 bool ok = false;
-                const QByteArray plain = ChatWire::open(o, run->sk, run->me, nullptr, [] { return ChatCrypto::newKeyPair(); }, &ok);
+                const QByteArray plain = ChatWire::open(o, run->sk, run->me, nullptr, [] { return ChatCrypto::newKeyPair(); }, &ok, run->myKey);
                 const QJsonObject r = QJsonDocument::fromJson(plain).object();
                 for (const QJsonValue &v : r.value(QStringLiteral("ids")).toArray())
                     run->receipts << v.toString();

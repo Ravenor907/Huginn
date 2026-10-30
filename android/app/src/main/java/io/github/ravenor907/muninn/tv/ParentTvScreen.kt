@@ -371,7 +371,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
  */
 private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
     if (files.isEmpty()) { Ui.say("That isn't an app Muninn can send. Pick an app, or an .apk file.", true); return }
-    val dev = app.net.devices.value.firstOrNull { it.chatKey == tvKey }
+    val dev = app.net.deviceFor(tvKey)
     if (dev == null) { Ui.say("The TV isn't on this Wi-Fi right now. Apps go over the same Wi-Fi, with the TV turned on.", true); return }
     if (app.net.transfer.value.active) { Ui.say("Wait for the transfer that's running to finish, then send.", true); return }
     val name = AppFiles.group(files) { it.name }.joinToString(", ") { it.first }

@@ -691,22 +691,24 @@ void Chat::groupAttempt(const QString &envId)
             }
         });
     };
+    // Cap s1: only a route that proved it's them keeps a big photo off the internet or counts as sent.
     bool any = false;
     bool ble = true;
     for (const QByteArray &b : bodies)
-        ble = ble && m_ble->send(o.to, b);
-    if (ble) {
+        ble = ble && sendBle(o.to, b);
+    if (ble && m_ble->proven(o.to)) {
         any = true;
         sent();
         if (media)
             m_gout[envId].next = qMax(m_gout[envId].next, now() + qint64(bodies.size()) * 3000);
     }
-    const QString base = m_net->baseFor(o.to);
+    const QString base = baseTo(o.to);
     if (!base.isEmpty()) {
-        any = true;
+        const bool proven = m_net->provenFor(o.to);
+        any = any || proven;
         for (const QByteArray &b : bodies)
-            post(base, b, [sent](int code) {
-                if (code == 200)
+            post(base, b, [sent, proven](int code) {
+                if (code == 200 && proven)
                     sent();
             });
     }
@@ -1117,7 +1119,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     }
     if (room == QLatin1String("gmsg")) {
         const QString logical = envId.section(QLatin1Char('-'), 0, 0);
-        if (GroupWire::isLogicalId(logical) && gmsgKnown(logical)) {
+        if (GroupWire::isLogicalId(logical) && (gmsgKnown(logical) || m_unsentBy.value(logical) == fromKey)) {
             const QString g = m_gidx.value(logical);
             if (!g.isEmpty())
                 groupReceipt(g, fromKey, {logical}, QStringLiteral("delivered"));
@@ -1329,8 +1331,12 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                 m.insert(QStringLiteral("voice"), 0);
                 m.insert(QStringLiteral("unsent"), name);
             });
-            if (!found && !m_gidx.contains(gone))
-                forget({gone});   // still on its way: it never shows
+            // Still on its way: a later copy from that very sender never shows (from anyone else it still does).
+            if (!found && !m_gidx.contains(gone)) {
+                if (m_unsentBy.size() > 2000)
+                    m_unsentBy.clear();
+                m_unsentBy.insert(gone, fromKey);
+            }
             groupReceipt(g, fromKey, {gone}, QStringLiteral("unsent"));
         }
     } else {
@@ -1349,7 +1355,7 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
     const QJsonValue textValue = p.value(QStringLiteral("text"));
     if (!GroupWire::isLogicalId(id) || !textValue.isString() || GroupWire::length(textValue.toString()) > kMax || !RichWire::ok(QStringLiteral("gmsg"), p))
         return 400;
-    if (gmsgKnown(id)) {
+    if (gmsgKnown(id) || m_unsentBy.value(id) == from) {
         groupReceipt(g, from, {id}, QStringLiteral("delivered"));
         return 200;
     }
@@ -1418,7 +1424,7 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     const auto git = m_groups.constFind(g);
     if (git == m_groups.cend() || git->state.isEmpty() || git->removed || git->left || !GroupWire::isMember(git->state, fromKey))
         return 403;
-    if (gmsgKnown(gid)) {
+    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey) {
         groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
         return 200;
     }

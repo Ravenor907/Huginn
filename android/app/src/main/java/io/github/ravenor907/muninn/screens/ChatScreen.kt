@@ -505,7 +505,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         else convos[r.key]?.lastOrNull()?.time ?: 0L
     // Contacts (never group peers), anyone else there's a conversation with, and groups, newest first.
     val everyRow = (contacts.filter { !it.groupOnly }.map { ChatRow(it.chatKey, it.shown, it.name) } +
-        convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> ChatRow(k, met[k]?.name ?: app.chat.nameOf(k)) } +
+        // Not a contact: marked, so a name they chose ("Mom") never looks like one of mine.
+        convos.filter { (k, v) -> v.isNotEmpty() && !app.chat.isContact(k) }.map { (k, _) -> (met[k]?.name ?: app.chat.nameOf(k)).let { n -> ChatRow(k, Chat.stranger(n), n) } } +
         groups.values.map { ChatRow(Folders.groupKey(it.g), it.state.name, group = it.g) })
         .filter { it.key !in blocked && it.key !in trashed }
         .sortedByDescending { lastTime(it) }

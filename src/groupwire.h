@@ -49,8 +49,11 @@ struct Verdict {
     QString why;
 };
 Verdict accept(const QJsonObject *cur, const QJsonObject &next);
-// The conflict rule on its own: true when a wins over b.
+// The conflict rule on its own: true when a wins over b (higher v, then the owner's, then the lower hash).
 bool wins(const QJsonObject &a, const QJsonObject &b);
+// Cap s1: a new state may be at most this many versions ahead; at the same version the one its owner signed wins.
+const qint64 kMaxAhead = 1000;
+bool byOwner(const QJsonObject &s);
 
 // 2.3
 QString envelopeId(const QString &logicalId, const QString &recipientKey);

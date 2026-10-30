@@ -49,8 +49,14 @@ public:
     void sayHello();
 
     // Queues a message for the peer with this chatKey. False when it isn't connected or is over 64 KB.
-    // True means queued, not delivered.
-    bool send(const QString &chatKey, const QByteArray &json);
+    // True means queued, not delivered. A link that proved it's that key (cap s1) first; one that couldn't (an
+    // older Muninn) only when not strict.
+    bool send(const QString &chatKey, const QByteArray &json, bool strict = false);
+    bool has(const QString &chatKey, bool strict = false) const;
+    bool proven(const QString &chatKey) const;
+    // Cap s1: signs the phone's number with my chat key (Proof::close); the contact a hidden phone's hint stands for.
+    std::function<QString(const QString &nonce)> prove;
+    std::function<QString(const QString &hint)> hintKey;
 
 Q_SIGNALS:
     void changed();
@@ -71,6 +77,9 @@ private:
         QLowEnergyService *svc = nullptr;
         QLowEnergyCharacteristic inbox;
         QString name, chatKey, mailbox;
+        QString theirNonce;         // cap s1: the number in the phone's HELLO, which our hello signs
+        QString myNonce;            // and ours, which the phone's "proof" signs
+        bool proven = false;
         bool ready = false;
         bool said = false;          // our hello went out: only then can messages use this link
         int mtu = BleFrames::kMinMtu;
@@ -94,6 +103,8 @@ private:
     void setError(const QString &e);
     void unusable(const QString &why);
     int linkMtu(Link *l) const;
+    QByteArray helloFor(Link *l) const;
+    Link *linkFor(const QString &chatKey, bool strict) const;
     // Compares pointers only, so it's safe to ask about a link that was already deleted.
     bool alive(const Link *l) const { return l && std::find(m_links.cbegin(), m_links.cend(), l) != m_links.cend(); }
 

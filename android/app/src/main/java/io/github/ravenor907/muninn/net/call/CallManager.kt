@@ -238,7 +238,7 @@ object CallManager {
         override val chatPrivate get() = app!!.identity.keys.private
         override fun send(peerKey: String, json: JSONObject) = this@CallManager.send(peerKey, json)
         override fun lanAddressOf(peerKey: String): InetAddress? = try {
-            app?.net?.devices?.value?.firstOrNull { it.chatKey == peerKey }?.ip?.let { CallLogic.literal(it) }
+            app?.net?.deviceFor(peerKey)?.ip?.let { CallLogic.literal(it) }
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null

@@ -60,6 +60,7 @@ qt_add_executable(huginn
     src/direct.h
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
+    src/proof.cpp src/proof.h
     src/chatgroups.cpp
     src/chatlimits.cpp
     src/groupwire.cpp src/groupwire.h

@@ -76,6 +76,35 @@ void Link::save()
     Q_EMIT changed();
 }
 
+bool Link::firstSend(const QString &id)
+{
+    if (id.isEmpty())
+        return true;   // an older companion's: nothing to check against
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (!m_sendsLoaded) {
+        m_sendsLoaded = true;
+        const QJsonObject o = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link-sends.json"))).object();
+        for (auto it = o.begin(); it != o.end(); ++it)
+            m_sends.insert(it.key(), qint64(it.value().toDouble()));
+    }
+    m_sends.removeIf([t](const QHash<QString, qint64>::iterator it) { return t - it.value() > 2 * 86400000LL; });
+    if (m_sends.contains(id))
+        return false;
+    m_sends.insert(id, t);
+    while (m_sends.size() > 1000) {
+        auto oldest = m_sends.begin();
+        for (auto it = m_sends.begin(); it != m_sends.end(); ++it)
+            if (it.value() < oldest.value())
+                oldest = it;
+        m_sends.erase(oldest);
+    }
+    QJsonObject o;
+    for (auto it = m_sends.cbegin(); it != m_sends.cend(); ++it)
+        o.insert(it.key(), double(it.value()));
+    m_chat->m_vault->write(QStringLiteral("link-sends.json"), compact(o));
+    return true;
+}
+
 void Link::saveMirror()
 {
     QJsonObject o;
@@ -383,8 +412,9 @@ bool Link::receive(const QString &from, const QJsonObject &p)
     }
     if (comp && t == QLatin1String("send")) {
         // The phone sends it as its own message, only to one of its contacts.
+        // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
         const QString peer = jstr(p, "peer"), text = jstr(p, "text").trimmed();
-        if (!text.isEmpty() && m_chat->isContact(peer))
+        if (!text.isEmpty() && m_chat->isContact(peer) && firstSend(jstr(p, "id")))
             m_chat->sendPrivate(peer, text.left(Chat::kMax));
         return true;
     }

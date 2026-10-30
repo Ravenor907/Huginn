@@ -30,7 +30,9 @@ import kotlin.random.Random
  * swap names and chat keys ("hello"), and then carry chat messages and files.
  */
 class Close(private val context: Context, private val identity: Identity) {
-    data class Peer(val endpoint: String, val name: String, val connected: Boolean, val chatKey: String? = null, val mailbox: String? = null)
+    /** [proven]: cap s1, it signed the number this phone picked with that chat key. Without (an older app), only an extra route. */
+    data class Peer(val endpoint: String, val name: String, val connected: Boolean, val chatKey: String? = null, val mailbox: String? = null,
+                    val proven: Boolean = false)
 
     private val client by lazy { Nearby.getConnectionsClient(context) }
     private val peers = ConcurrentHashMap<String, Peer>()
@@ -46,8 +48,16 @@ class Close(private val context: Context, private val identity: Identity) {
 
     /** Every message from a connected phone: (endpoint, json). */
     var onMessage: ((String, JSONObject) -> Unit)? = null
+    /** Cap s1: signs the other phone's number with my chat key ([Proof.close]); the contact a hidden phone's hint stands for. */
+    var prove: ((String) -> String?)? = null
+    var hintKey: ((String) -> String?)? = null
+    /** The number this phone picked for each connection, and the hello waiting for its proof. */
+    private val nonces = ConcurrentHashMap<String, String>()
+    private val claims = ConcurrentHashMap<String, String>()
     /** A file finished arriving: (endpoint, payload id, file or content Uri). */
     var onFile: ((String, Long, File?, Uri?) -> Unit)? = null
+    /** Whether a file of this size from that phone is wanted (an accepted offer): anything else is stopped at once, not written. */
+    var allowFile: ((endpoint: String, size: Long) -> Boolean)? = null
     /** One of our outgoing files finished. */
     var onSent: ((Long) -> Unit)? = null
     /** Progress of incoming or outgoing files: (payload id, bytes done, total). */
@@ -199,7 +209,9 @@ class Close(private val context: Context, private val identity: Identity) {
             if (result.status.isSuccess) {
                 peers[endpoint] = (peers[endpoint] ?: Peer(endpoint, "Phone", false)).copy(connected = true)
                 publish()
-                send(endpoint, hello().put("t", "hello"))
+                // Cap s1: a fresh number for this connection; the other phone signs it with its chat key.
+                val n = Proof.newNonce().also { nonces[endpoint] = it }
+                send(endpoint, hello().put("t", "hello").put("n", n))
             } else if (peers[endpoint]?.connected != true) {
                 peers.remove(endpoint)
                 publish()
@@ -208,6 +220,7 @@ class Close(private val context: Context, private val identity: Identity) {
 
         override fun onDisconnected(endpoint: String) {
             peers.remove(endpoint)
+            nonces.remove(endpoint); claims.remove(endpoint)
             publish()
         }
     }
@@ -217,15 +230,40 @@ class Close(private val context: Context, private val identity: Identity) {
             when (payload.type) {
                 Payload.Type.BYTES -> {
                     val o = try { JSONObject(String(payload.asBytes()!!)) } catch (e: Exception) { return }
-                    if (o.optString("t") == "hello") {
-                        peers[endpoint] = (peers[endpoint] ?: Peer(endpoint, "Phone", true)).copy(
-                            name = o.optString("name").ifBlank { peers[endpoint]?.name ?: "Phone" }.take(40),
-                            chatKey = o.optString("chatKey").ifEmpty { null }, mailbox = o.optString("mailbox").ifEmpty { null }, connected = true)
-                        publish()
+                    when (o.optString("t")) {
+                        "hello" -> {
+                            // A hidden phone sends a hint instead of its key: only a contact's can be matched.
+                            val key = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
+                            val was = peers[endpoint]
+                            peers[endpoint] = (was ?: Peer(endpoint, "Phone", true)).copy(
+                                name = o.optString("name").ifBlank { was?.name ?: "Phone" }.take(40),
+                                chatKey = key, mailbox = o.optString("mailbox").ifEmpty { null }, connected = true,
+                                proven = was?.proven == true && was.chatKey == key)
+                            if (key != null) claims[endpoint] = key
+                            publish()
+                            // Cap s1: answer its number with my key's signature.
+                            val n = o.optString("n")
+                            if (Proof.isNonce(n)) prove?.invoke(n)?.let { send(endpoint, JSONObject().put("t", "proof").put("sig", it)) }
+                        }
+                        "proof" -> {
+                            val key = claims[endpoint]
+                            val n = nonces[endpoint]
+                            // A wrong proof: not who it says it is, so no chat key at all.
+                            if (key != null && n != null) {
+                                val ok = Proof.closeOk(key, n, o.optString("sig"))
+                                peers[endpoint]?.let { peers[endpoint] = it.copy(proven = ok, chatKey = if (ok) key else null) }
+                                publish()
+                            }
+                            return
+                        }
                     }
                     onMessage?.invoke(endpoint, o)
                 }
-                Payload.Type.FILE -> incoming[payload.id] = endpoint to payload
+                Payload.Type.FILE -> {
+                    val size = payload.asFile()?.size ?: -1L
+                    if (allowFile?.invoke(endpoint, size) == false) { try { client.cancelPayload(payload.id) } catch (_: Exception) {}; return }
+                    incoming[payload.id] = endpoint to payload
+                }
                 else -> {}
             }
         }
@@ -258,7 +296,14 @@ class Close(private val context: Context, private val identity: Identity) {
 
     fun cancel(payloadId: Long) { client.cancelPayload(payloadId) }
 
-    fun endpointFor(chatKey: String): String? = peers.values.firstOrNull { it.connected && it.chatKey == chatKey }?.endpoint
+    /** A connected phone with that chat key: one that proved it first; one that couldn't (an older app) only when not [strict]. */
+    fun endpointFor(chatKey: String, strict: Boolean = false): String? {
+        val all = peers.values.filter { it.connected && it.chatKey == chatKey }
+        return (all.firstOrNull { it.proven } ?: if (strict) null else all.firstOrNull())?.endpoint
+    }
+
+    /** Whether a phone with that chat key proved it (cap s1). */
+    fun proven(chatKey: String) = peers.values.any { it.connected && it.proven && it.chatKey == chatKey }
 
     private fun publish() { _list.value = peers.values.sortedBy { it.name.lowercase() } }
 

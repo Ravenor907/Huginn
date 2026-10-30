@@ -21,6 +21,7 @@ object Link {
     const val PREFIX = "MUNINNL1:"
     const val TOKEN_MS = 10 * 60_000L
     const val CHAT_MSGS = 25
+    private const val SENDS = "link-sends.json"
 
     /** A device linked to this one: on the phone, a companion; on the companion, the phone. */
     data class Device(val key: String, val mailbox: String, val name: String)
@@ -194,12 +195,35 @@ object Link {
             }
             comp != null && t == "send" -> {
                 val text = p.optString("text").trim()
-                if (text.isNotEmpty()) h.sendAsMe(p.optString("peer"), text.take(2000))
+                // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
+                if (text.isNotEmpty() && firstSend(p.optString("id"))) h.sendAsMe(p.optString("peer"), text.take(2000))
             }
             comp != null && t == "sync" -> syncAll(comp)
             else -> return comp != null || ph != null
         }
         return true
+    }
+
+    /** Ids of companions' "send" already sent (kept two days, on disk), so none goes out twice. */
+    private val sends = LinkedHashMap<String, Long>()
+    @Volatile private var sendsLoaded = false
+
+    private fun firstSend(id: String): Boolean {
+        if (id.isEmpty()) return true   // an older companion's: nothing to check against
+        val h = host ?: return false
+        synchronized(sends) {
+            val now = System.currentTimeMillis()
+            if (!sendsLoaded) {
+                sendsLoaded = true
+                try { h.read(SENDS)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sends[it] = o.optLong(it) } } } catch (_: Exception) {}
+            }
+            sends.entries.removeIf { now - it.value > 2 * Limits.DAY }
+            if (sends.containsKey(id)) return false
+            sends[id] = now
+            while (sends.size > 1000) sends.remove(sends.keys.first())
+            h.write(SENDS, JSONObject().apply { sends.forEach { (k, t) -> put(k, t) } }.toString())
+            return true
+        }
     }
 
     // ------------------------------------------------------------------ the companion's side

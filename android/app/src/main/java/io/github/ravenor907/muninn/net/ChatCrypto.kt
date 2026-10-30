@@ -84,19 +84,18 @@ object ChatCrypto {
         null
     }
 
-    /** Same as seal/open, for raw bytes (photo pieces), so they aren't turned into text twice. */
-    fun sealBytes(key: ByteArray, plain: ByteArray): Sealed {
-        val nonce = ByteArray(12).also { random.nextBytes(it) }
+    /** Same as seal/open, for raw bytes (photo pieces), so they aren't turned into text twice. [aad]: cap s1's bound fields, else the constant. */
+    fun sealBytes(key: ByteArray, plain: ByteArray, aad: ByteArray? = null, nonce: ByteArray = ByteArray(12).also { random.nextBytes(it) }): Sealed {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
-        c.updateAAD(AAD)
+        c.updateAAD(aad ?: AAD)
         return Sealed(b64(nonce), b64(c.doFinal(plain)))
     }
 
-    fun openBytes(key: ByteArray, sealed: Sealed): ByteArray? = try {
+    fun openBytes(key: ByteArray, sealed: Sealed, aad: ByteArray? = null): ByteArray? = try {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, b64d(sealed.nonce)))
-        c.updateAAD(AAD)
+        c.updateAAD(aad ?: AAD)
         c.doFinal(b64d(sealed.data))
     } catch (e: Exception) {
         null

@@ -100,4 +100,8 @@ private:
     mutable QHash<QString, Mirror> m_mirror;
     QString m_token, m_code;
     qint64 m_tokenUntil = 0;
+    // Ids of companions' "send" already sent (two days, on disk), so none goes out twice.
+    bool firstSend(const QString &id);
+    QHash<QString, qint64> m_sends;
+    bool m_sendsLoaded = false;
 };

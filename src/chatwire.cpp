@@ -1,5 +1,7 @@
 #include "chatwire.h"
+#include "proof.h"
 
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -8,13 +10,17 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
-const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1";
+const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 s1";
 
 namespace
 {
 QString b64(const QByteArray &b) { return QString::fromLatin1(b.toBase64()); }
 QByteArray unb64(const QJsonValue &v) { return QByteArray::fromBase64(v.toString().toLatin1()); }
-QString key2(const QString &from, const QString &id) { return from + QStringLiteral("|") + id; }
+// Seen keeps a hash of "from|id", never the key itself (it's written to disk).
+QString key2(const QString &from, const QString &id)
+{
+    return QString::fromLatin1(QCryptographicHash::hash((from + QStringLiteral("|") + id).toUtf8(), QCryptographicHash::Sha256).toHex().left(32));
+}
 }
 
 bool ChatWire::useRatchet(const QString &room, bool contact, bool capable)
@@ -39,18 +45,31 @@ QStringList ChatWire::capsOf(const QJsonObject &o, bool *present)
         *present = v.isString();
     QStringList out;
     for (const QString &t : v.toString().split(QLatin1Char(' '), Qt::SkipEmptyParts))
-        if (t.size() <= 8 && !out.contains(t) && out.size() < 16)
+        // Muninn sends more than 16 tokens from 0.95 (s1 is its 17th): keep up to 32.
+        if (t.size() <= 8 && !out.contains(t) && out.size() < 32)
             out << t;
     return out;
 }
 
 QJsonObject ChatWire::seal(QJsonObject o, const QByteArray &sk, const QString &theirKey, const QByteArray &plain, Ratchet::Peer *peer,
-                           const Ratchet::NewKey &newKey)
+                           const Ratchet::NewKey &newKey, bool bind)
 {
     o.insert(QStringLiteral("cap"), QLatin1String(kCap));
     o.insert(QStringLiteral("caps"), QLatin1String(kCaps));
+    // Cap s1: the clear fields go into the seal too (and "aad":"s1" says so).
+    QByteArray text;
+    o.remove(QLatin1String(Proof::kMark));
+    if (bind) {
+        o.insert(QLatin1String(Proof::kMark), QLatin1String(Proof::kCap));
+        bool ok = false;
+        text = Proof::bound(o, theirKey, &ok);
+        if (!ok) {
+            text.clear();
+            o.remove(QLatin1String(Proof::kMark));
+        }
+    }
     if (peer) {
-        const std::pair<Ratchet::Header, QByteArray> out = peer->encrypt(sk, theirKey, plain, newKey);
+        const std::pair<Ratchet::Header, QByteArray> out = peer->encrypt(sk, theirKey, plain, newKey, text);
         if (!out.second.isEmpty()) {
             o.insert(QStringLiteral("rh"), out.first.toJson());
             o.insert(QStringLiteral("data"), b64(out.second));
@@ -58,29 +77,37 @@ QJsonObject ChatWire::seal(QJsonObject o, const QByteArray &sk, const QString &t
         }
     }
     QByteArray nonce, data;
-    ChatCrypto::seal(sk, plain, &nonce, &data);
+    ChatCrypto::seal(sk, plain, &nonce, &data, text.isEmpty() ? QByteArray() : Proof::aad(text));
     o.insert(QStringLiteral("nonce"), b64(nonce));
     o.insert(QStringLiteral("data"), b64(data));
     return o;
 }
 
 QByteArray ChatWire::open(const QJsonObject &o, const QByteArray &sk, const ChatCrypto::KeyPair &me, Ratchet::Peer *peer,
-                          const Ratchet::NewKey &newKey, bool *ok)
+                          const Ratchet::NewKey &newKey, bool *ok, const QString &myKey)
 {
     *ok = false;
     if (sk.isEmpty())
         return QByteArray();
+    // Cap s1: a bound envelope opens only with the fields it was sealed with, for the key it was sealed to.
+    QByteArray text;
+    if (o.contains(QLatin1String(Proof::kMark))) {
+        bool good = false;
+        if (!Proof::isBound(o) || (text = Proof::bound(o, myKey, &good), !good))
+            return QByteArray();
+    }
     const QByteArray data = unb64(o.value(QStringLiteral("data")));
     if (isRatchet(o)) {
         if (!peer || data.isEmpty())
             return QByteArray();
         bool hok = false;
-        const Ratchet::Header h = Ratchet::Header::fromJson(o.value(QStringLiteral("rh")).toObject(), &hok);
+        Ratchet::Header h = Ratchet::Header::fromJson(o.value(QStringLiteral("rh")).toObject(), &hok);
         if (!hok)
             return QByteArray();
+        h.bind = text;
         return peer->decrypt(sk, me, h, data, newKey, ok);
     }
-    return ChatCrypto::open(sk, unb64(o.value(QStringLiteral("nonce"))), data, ok);
+    return ChatCrypto::open(sk, unb64(o.value(QStringLiteral("nonce"))), data, ok, text.isEmpty() ? QByteArray() : Proof::aad(text));
 }
 
 // ------------------------------------------------------------------ Outbox
@@ -141,8 +168,30 @@ bool ChatWire::Seen::has(const QString &from, const QString &id) const { return 
 
 void ChatWire::Seen::add(const QString &from, const QString &id, qint64 now, const QString &note)
 {
-    if (!id.isEmpty())
+    if (!id.isEmpty()) {
         m_ids[key2(from, id)] = std::make_pair(now, note);
+        m_dirty = true;
+    }
+}
+
+QByteArray ChatWire::Seen::save()
+{
+    QJsonObject o;
+    for (const auto &e : m_ids)
+        o.insert(e.first, QJsonArray{double(e.second.first), e.second.second});
+    m_dirty = false;
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+void ChatWire::Seen::load(const QByteArray &json, qint64 now, qint64 maxAge)
+{
+    const QJsonObject o = QJsonDocument::fromJson(json).object();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonArray a = it.value().toArray();
+        const qint64 t = qint64(a.at(0).toDouble());
+        if (now - t <= maxAge && it.key().size() == 32)
+            m_ids[it.key()] = std::make_pair(t, a.at(1).toString());
+    }
 }
 
 QString ChatWire::Seen::note(const QString &from, const QString &id) const
@@ -293,6 +342,8 @@ bool ChatWire::selfTest()
         odd.insert(QStringLiteral("caps"), QStringLiteral("  g1 zz9  r1 g1 "));
         const QStringList t = ChatWire::capsOf(odd, &present);
         check(present && t.size() == 3 && t.contains(QStringLiteral("zz9")), "caps: any order, extra spaces, unknown tokens kept apart, duplicates once");
+        odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 k1 k2 k3 k4 k5 k6 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1"));
+        check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("s1")), "caps: all of Muninn 0.95's tokens are kept");
         check(ChatWire::capsOf(QJsonObject(), &present).isEmpty() && !present, "no caps field: a 0.5 app");
         check(ChatWire::useRatchet(QStringLiteral("gmsg"), true, true) && ChatWire::useRatchet(QStringLiteral("group"), true, true)
                   && ChatWire::useRatchet(QStringLiteral("greceipt"), true, true) && ChatWire::useRatchet(QStringLiteral("gphoto"), true, true)

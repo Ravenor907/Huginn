@@ -111,6 +111,8 @@ class Groups(
     private val joining = HashMap<String, String>()
     private val last = HashMap<String, Change>()
     private val deleted = HashMap<String, Long>()
+    /** Unsent before it got here: message id to who unsent it and when. Only a later copy from that very sender is dropped. */
+    private val unsentBy = HashMap<String, Pair<String, Long>>()
     private val unread = HashSet<String>()
     private val held = HashMap<String, MutableList<Held>>()
     private val tries = HashMap<String, Pair<Int, Long>>()
@@ -452,7 +454,9 @@ class Groups(
             "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from") ||
                 // Cap m1: a contact put me straight in (op "add"), no invite to accept.
                 (t == "state" && grp == null && p.optString("op") == "add" && host.isContact(from))
-            "leave", "sync", "unsend" -> inGroup
+            "leave", "unsend" -> inGroup
+            // Only someone in it now gets its states (a removed member doesn't keep learning who's in it).
+            "sync" -> grp != null && grp.state.has(from)
             // Cap m1: reactions and edits from someone in the current state.
             "react", "edit" -> grp != null && !grp.readOnly && grp.state.has(from)
             // Cap m2: votes, likewise.
@@ -512,7 +516,7 @@ class Groups(
                 if (!Proto06.isLogicalId(msg)) return 400
                 val m = chats[g]?.firstOrNull { it.id == msg && !it.mine }
                 when {
-                    m == null -> { deleted[msg] = now(); held[g]?.removeAll { it.plain.optString("id") == msg } }
+                    m == null -> { unsentBy[msg] = from to now(); held[g]?.removeAll { it.from == from && it.plain.optString("id") == msg } }
                     m.from == from && m.unsent.isEmpty() -> {
                         if (m.photo.isNotEmpty()) host.deleteBlob(m.photo)
                         edit(g, msg) { it.copy(text = "", photo = "", voice = 0, unsent = nameIn(grp!!.state, from, fromName)) }
@@ -625,7 +629,7 @@ class Groups(
         if (!Rich.ok("gmsg", p)) return 400
         val grp = groups[g] ?: return 403
         if (grp.readOnly) return 403
-        if (deleted.containsKey(id) || chats[g]?.any { it.id == id } == true) { receipt(from, g, listOf(id), "delivered"); return 200 }
+        if (deleted.containsKey(id) || unsentBy[id]?.first == from || chats[g]?.any { it.id == id } == true) { receipt(from, g, listOf(id), "delivered"); return 200 }
         val s = grp.state
         if (!s.has(from) || (s.channel(ch) == null && sv > s.v)) {
             // Maybe they're in a version I haven't seen yet: hold it and catch up.
@@ -654,7 +658,7 @@ class Groups(
                      videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean = act {
         val grp = groups[g]
         if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
-        if (deleted.containsKey(gid) || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
+        if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
         val s = grp.state
         val name = nameIn(s, from, fromName)
         addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs,
@@ -799,6 +803,7 @@ class Groups(
     private fun prune() {
         val t = now()
         deleted.entries.removeIf { t - it.value > 2 * DAY }
+        unsentBy.entries.removeIf { t - it.value.second > 2 * DAY }
         tokens.removeAll { it.x * 1000 < t }
         invites.removeAll { it.x * 1000 < t }
         asked.entries.removeIf { t - it.value > 10 * 60_000 }
@@ -832,7 +837,7 @@ class Groups(
     /** Erase all. */
     fun clear() = act {
         groups.clear(); chats.clear(); outs.clear(); tokens.clear(); invites.clear(); joining.clear(); last.clear()
-        deleted.clear(); unread.clear(); held.clear(); tries.clear(); heldAt.clear(); publishedAt.clear(); receipted.clear()
+        deleted.clear(); unsentBy.clear(); unread.clear(); held.clear(); tries.clear(); heldAt.clear(); publishedAt.clear(); receipted.clear()
     }
 
     private fun publish() {
@@ -856,6 +861,7 @@ class Groups(
             o.put("joining", JSONObject().apply { joining.forEach { (g, k) -> put(g, k) } })
             o.put("last", JSONObject().apply { last.forEach { (g, c) -> put(g, JSONObject().put("op", c.op).put("a", c.a).put("b", c.b).put("c", c.c).put("v", c.v)) } })
             o.put("deleted", JSONObject().apply { deleted.forEach { (k, t) -> put(k, t) } })
+            o.put("unsentBy", JSONObject().apply { unsentBy.forEach { (k, v) -> put(k, JSONArray().put(v.first).put(v.second)) } })
             o.put("unread", JSONArray(unread.toList()))
             write(FILE, o.toString())
             val c = JSONObject()
@@ -899,6 +905,7 @@ class Groups(
                 o.optJSONObject("last")?.let { j -> j.keys().forEach { g -> j.getJSONObject(g).let { c ->
                     last[g] = Change(c.getString("op"), c.optString("a"), c.optString("b"), c.optString("c"), c.optLong("v")) } } }
                 o.optJSONObject("deleted")?.let { j -> j.keys().forEach { deleted[it] = j.optLong(it) } }
+                o.optJSONObject("unsentBy")?.let { j -> j.keys().forEach { k -> j.optJSONArray(k)?.let { a -> unsentBy[k] = a.optString(0) to a.optLong(1) } } }
                 unread.addAll(strings(o.optJSONArray("unread")))
             }
             read(CHATS)?.let { text ->

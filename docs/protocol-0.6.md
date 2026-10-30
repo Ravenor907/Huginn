@@ -69,6 +69,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93, Huginn from 0.94. |
 | `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
 | `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn from 0.94. |
+| `s1` | proven routes and bound envelopes (section 20): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn from 0.95. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -214,7 +215,8 @@ Given the current state `cur` and an incoming state `new` (reference `accept_sta
 4. `new.by` is in `cur.admins`. (An admin removed in `cur` can't sign anything you will take.)
 5. `new.owner == cur.owner`, unless `new.by == cur.owner` (only the owner hands ownership over).
 6. Conflict rule: accept if `new.v > cur.v`, or `new.v == cur.v` and `hash(new) < hash(cur)` (string compare of
-   the lowercase hex). Otherwise refuse.
+   the lowercase hex). Otherwise refuse. From 0.95 (section 20.5): refuse `new.v > cur.v + 1000`, and at the same
+   version a state signed by its owner (`by == owner`) wins over one that isn't, before the hash decides.
 
 Versions may jump (v3 to v7) as long as rule 4 holds against `cur`. If rule 4 fails only because you are
 behind (the signer became an admin in a version you missed), send `sync` (3.6) to the envelope sender and
@@ -1152,6 +1154,11 @@ Each app's unit tests should:
 and what a `MUNINNL1:` link code carries. Muninn checks it in `I1F1VectorsTest`, Huginn in `--chat-selftest` (which
 also sends a file between two copies of FileLink on 127.0.0.1, losing some pieces on the way).
 
+`python3 tools/s1_ref.py` writes `tests/s1-vectors.json` (section 20): route proofs that check out and ones that don't,
+hints for three days and which match, bound fields for good and malformed envelopes, a bound v1 envelope (byte for
+byte from its nonce) with the changed copies that must not open, a bound ratchet envelope Bob opens on a new session,
+and the group state cases. Muninn checks it in `S1Test`, Huginn in `--chat-selftest`.
+
 `python3 tools/m1_ref.py` writes `tests/m1-vectors.json` (section 11): every `good` payload is well-formed for its
 room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
 gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn checks it in `RichTest`, Huginn in
@@ -1453,3 +1460,82 @@ group's members with older apps keep their messages until they update; the group
 Chats that already exist get their limit on the first run of 0.94: anything older is deleted then, and the chat list
 shows once: "Messages now disappear after 7 days".
 
+## 20. Proven routes and bound envelopes (cap `s1`)
+
+From 0.95. Everything here is in `tools/s1_ref.py`, which writes `tests/s1-vectors.json`.
+
+### 20.1 Every route, always
+
+Every message, receipt and control message goes on every route at once and **always to the internet too** (the
+contact's mailbox, when there is one), as section 0 says. A close-by or Wi-Fi route that answers is never a reason
+to skip the internet. A route counts as having taken a message ("sent") only when it is **proven** (20.2); an
+unproven one is only ever an extra copy. Among several devices that claim the same chat key, a proven one is used
+first, then the one seen most recently. Never pick one by its name or by list order.
+
+### 20.2 Route proofs
+
+A proof is a signed object (2.2) by the chat key, without the object itself on the wire: only its `sig` travels.
+
+- **Wi-Fi.** The LocalSend info (announce, `register` and its answer, `prepare-upload`) carries
+  `"chatProof": sig` over domain `"huginn-muninn route v1"` and `{"fp": <the device's certificate fingerprint,
+  64 uppercase hex>, "k": <chat key>}`. A device is learned only from a certificate it really showed over TLS (the
+  answer to my `register`, or the client certificate on a request to me). A multicast announce or a request without
+  a certificate is never believed: it is answered with a `register` to that address (at most one every 10 s per
+  address). `chatKey` is taken as that device's only if `chatProof` verifies with it against the certificate it
+  showed. A wrong proof means no chat key at all; no proof at all is an older app (unproven).
+- **Bluetooth LE and Nearby.** Each side puts a fresh one-off number in its hello, `"n": <16 random bytes as 32
+  lowercase hex>`, one per connection. The other side signs it over domain `"huginn-muninn close v1"` and
+  `{"k": <chat key>, "n": <that number>}`. Nearby: each phone answers the other's hello with
+  `{"t":"proof","sig":...}`. Bluetooth LE: Muninn's HELLO characteristic carries `n`; Huginn's hello (its first
+  frame) carries its own `n` and `"proof"` over Muninn's; Muninn answers with a `{"t":"proof","sig":...}` frame.
+  Only a number that is exactly 32 lowercase hex characters is ever signed, so a Wi-Fi proof and a close-by proof can
+  never stand in for each other.
+- Someone whose caps include `s1` always proves: for them an unproven route is never used at all.
+
+### 20.3 Hidden from people nearby
+
+Hidden, a device sends no name, `chatKey` or `mailbox` in announces and hellos. Instead it sends
+`"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]`, where day is the
+number of whole days since 1970 (UTC). A contact matches it against each contact's key for yesterday, today and
+tomorrow and, on a match, treats the device as that contact (its proof must still check out). Anyone else learns
+nothing they can follow from place to place.
+
+### 20.4 Bound envelopes
+
+To someone whose caps include `s1`, the envelope also carries `"aad": "s1"` and the clear fields are sealed in:
+
+- `bound` = canonical JSON (2.1) of `{"toKey": <the recipient's chat key>}` plus each of `room`, `id`, `fromKey`,
+  `mailbox`, `caps`, `invite` (strings) and `days` (an integer) that the envelope has. A field of the wrong type
+  makes the envelope malformed.
+- v1: AES-GCM associated data `"huginn-muninn s1\n" + bound` instead of `"huginn-muninn"`.
+- Ratchet: the header's associated data, then `"\n"`, then the same as v1.
+- `"aad"` with any other value is refused. An envelope without it opens the old way.
+- A day after a sender's envelopes first came bound (time for anything they sealed the old way to arrive), only bound
+  envelopes are taken from them, and v1 in a room their app always ratchets (2.4) is refused. A sender seals again
+  anything it kept from before (an Outbox copy) that isn't bound when the other side says `s1`.
+
+So nobody can change `days`, `room`, `mailbox` or `caps`, send a copy again under a new `id`, or send someone's
+envelope back to them or on to someone else.
+
+Also, without a new token: envelope ids already handled (receipts, unsends, keeps and the rest) are kept on disk for
+two days (by a hash of sender and id), so a restart doesn't let a copy in again; a linked companion's `send`
+(section 15) carries an `id` and the phone sends each id once; and after 20 ratchet envelopes from one key that
+don't open within a minute, more from that key wait a while before any ratchet work is done.
+
+### 20.5 Group states
+
+Accepting a state (3.3) refuses `new.v > cur.v + 1000`, and at the same version a state signed by its owner wins
+over one that isn't (then the hash decides as before). So no admin can push `v` out of the owner's reach. Also:
+an `unsend` for a group message that hasn't arrived yet only stops later copies **from that member**; `sync` (3.6)
+is answered only for members of the current state.
+
+### 20.6 Limits on the local routes (no wire change)
+
+- Wi-Fi: only from addresses on this very home network (a private address inside a subnet of one of the device's
+  own private addresses); at most 32 connections at once; a chat envelope body at most 96 KB, any other request
+  2 MB, read as it arrives; an upload never more than the size accepted; at most 3 "wants to send" prompts per
+  address in 10 minutes.
+- Nearby files: only as many as the accepted offer named, from that phone, none bigger than its biggest; anything
+  else is stopped, not written.
+- The Nearby room: at most 10 messages in 10 seconds from one address or connection, whatever keys it uses.
+- A stranger's private message close by shows as `"Name" · Not a contact · nearby`, in lists and notifications.

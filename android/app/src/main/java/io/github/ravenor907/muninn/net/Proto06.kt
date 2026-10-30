@@ -114,7 +114,7 @@ object Proto06 {
      * What this app says it speaks, next to the old cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 k5 t1 v1 m1 m2 i1 f1 d1"
+    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 k5 t1 v1 m1 m2 i1 f1 d1 s1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
 
     // ------------------------------------------------------------------ group state (3.2, 3.3)
@@ -223,13 +223,27 @@ object Proto06 {
         if (new.g != cur.g) return false to "other group"
         if (new.by !in cur.admins) return false to "signer is not an admin in the current state"
         if (new.owner != cur.owner && new.by != cur.owner) return false to "only the owner can hand over ownership"
+        // Cap s1 (section 20): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
+        if (new.v > cur.v + MAX_AHEAD) return false to "too far ahead"
         if (new.v > cur.v) return true to "higher version"
-        if (new.v == cur.v && new.hash < cur.hash) return true to "same version, lower hash"
+        if (new.v == cur.v) {
+            // At the same version a state its owner signed wins, so the owner can always settle things.
+            if (byOwner(new) != byOwner(cur)) return if (byOwner(new)) true to "same version, signed by the owner" else false to "the owner's stands"
+            if (new.hash < cur.hash) return true to "same version, lower hash"
+        }
         return false to "not newer"
     }
 
-    /** The conflict rule on its own: higher v, then the lower hash. */
-    fun winner(a: State, b: State): State = if (a.v != b.v) (if (a.v > b.v) a else b) else if (a.hash <= b.hash) a else b
+    /** A group state may be at most this many versions ahead of the one it replaces (cap s1). */
+    const val MAX_AHEAD = 1000L
+    private fun byOwner(s: State) = s.by == s.owner
+
+    /** The conflict rule on its own: higher v, then the one its owner signed, then the lower hash. */
+    fun winner(a: State, b: State): State = when {
+        a.v != b.v -> if (a.v > b.v) a else b
+        byOwner(a) != byOwner(b) -> if (byOwner(a)) a else b
+        else -> if (a.hash <= b.hash) a else b
+    }
 
     fun sortedMembers(l: List<Member>) = l.sortedBy { it.k }
 

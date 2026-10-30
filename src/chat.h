@@ -325,7 +325,8 @@ private:
     QString sendFileBlob(const QString &key, const QByteArray &bytes, const QString &name);
 
     void start();
-    int receive(const QByteArray &body, const QString &via);
+    // from: the address or link it came over (Wi-Fi and Bluetooth), so one device can't flood the Nearby room under many keys.
+    int receive(const QByteArray &body, const QString &via, const QString &from = QString());
     int receiveEnvelope(const QJsonObject &o, const QString &via);
     int receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via);
     QJsonObject envelope(const QString &room, const QString &theirKey, const QByteArray &plain, const QString &msgId);
@@ -333,6 +334,15 @@ private:
     QByteArray open(const QJsonObject &o, const QString &fromKey, bool *ok);
     void commitPeer();
     QString deliver(const QString &key, const QJsonObject &body, const QString &mailbox);
+    // Cap s1 (docs/protocol-0.6.md section 20): someone whose app proves its routes and seals its clear fields.
+    bool strict(const QString &key) const;
+    QString baseTo(const QString &key) const;         // their Wi-Fi address: proven first, an unproven one only when not strict
+    bool sendBle(const QString &key, const QByteArray &json);
+    bool staleSealed(const QString &key, const QByteArray &body) const;   // sealed before their app said s1 (or had the ratchet)
+    void noteS1(const QString &key, bool said, bool bound);
+    bool roomRate(const QString &from);
+    // Someone who isn't a contact, in lists and notifications: the name they chose, marked so it never passes for a contact's.
+    static QString stranger(const QString &name);
     void post(const QString &base, const QByteArray &body, std::function<void(int)> done = nullptr);
     void attempt(const QString &key, const QString &id);
     void attemptUnsend(const QString &key, const QString &id);
@@ -488,6 +498,7 @@ private:
     QHash<QString, QVariantMap> m_held;                // key -> {id -> message}, waiting on a request
     QHash<QString, QVariantMap> m_requests;            // key -> {key, name, code, mailbox}
     QHash<QString, qint64> m_deleted;
+    QHash<QString, QString> m_unsentBy;        // group message id unsent before it got here -> who unsent it
     QHash<QString, qint64> m_invites;                  // invites in my codes: token -> expiry ms
     QString m_link;
     qint64 m_linkExpires = 0;                  // ids deleted here (two days): late copies stay gone
@@ -505,6 +516,12 @@ private:
     bool m_openedCap = false, m_openedHasCaps = false;
     int m_openedDays = 0;                               // its "days" (cap d1), 0 when none
     QStringList m_openedCaps;
+    bool m_openedBound = false;                         // it came sealed with its clear fields (cap s1)
+    QString m_proofFp, m_proof;                         // cap s1: my chat key's signature over my certificate (made once)
+    QSet<QString> m_s1;                                 // keys whose app said s1
+    QHash<QString, qint64> m_bound;                     // key -> when their envelopes first came bound (cap s1)
+    QHash<QString, QList<qint64>> m_failures;           // key -> ratchet envelopes that didn't open lately
+    QHash<QString, QList<qint64>> m_roomTimes;          // address or link -> Nearby room messages lately
     QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
     QHash<QString, qint64> m_probed;                    // key -> last caps probe
     QList<QVariantMap> m_folders;                       // {id, name, keys, collapsed}
