@@ -43,6 +43,7 @@ These two carry your messages. **Muninn** runs on Android phones, tablets and Go
 - **Works with or without the internet.** Close by, your devices talk over Wi-Fi and Bluetooth. Apart, sealed messages travel through free public relays that can't see who sent them or what they say.
 - **Your address stays yours.** Calls with people you haven't chosen to trust go through a relay, so they never see your IP address.
 - **Locked on your device.** A pattern or password opens the app, and everything it keeps is encrypted. Panic lock locks it all in a moment.
+- **Messages don't stay forever.** Chats delete messages, photos, voice clips, videos and files after 7 days on every device, and backups leave them out. Family and Work groups, and people in your Family or Work folder, can keep them up to 30 days.
 - **Free and open.** GPL-3.0, no ads, no analytics, no tracking.
 
 ## On every screen you have
@@ -127,6 +128,7 @@ Windows builds (Huginn.exe in Huginn-Windows.zip) are built from this repository
 Huginn and Muninn collect nothing about you: no accounts, no analytics, no ads, no tracking. This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. What leaves your device, and only to do what you asked:
 
 - **Messages, photos and voice clips** are end-to-end encrypted and sealed before they reach the public Nostr relays that carry them. Relays see only a sealed mailbox id and the IP address that connects to them.
+- **How long messages stay**: 7 days, or up to 30 in Family and Work chats, then they are deleted on every device. Each app tells the other how long it keeps a chat, next to the list of features it understands.
 - **Calls** go through the Cloudflare call relay ([Cloudflare privacy policy](https://www.cloudflare.com/privacypolicy/)), or straight between devices for contacts you trust. Audio and video are end-to-end encrypted. The relay login service keeps no logs.
 - **Updates** are downloaded from GitHub ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
 - **Files over the internet** go straight between the two devices, end-to-end encrypted. To find a direct path, each device asks a public STUN server (Cloudflare's) for its own internet address; the file itself never goes through it. Small files that can't go straight travel in sealed pieces through the Nostr relays.

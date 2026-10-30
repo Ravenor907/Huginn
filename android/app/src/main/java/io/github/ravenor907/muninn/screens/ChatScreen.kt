@@ -632,6 +632,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(bottom = 8.dp))
                     // Permissions still missing (microphone, camera, notifications, running in the background).
                     SetupCard(app, Modifier.padding(bottom = 8.dp))
+                    LimitsNote(Modifier.padding(bottom = 8.dp))
                 }
             }
             // Message requests: people who have my code but aren't contacts yet, and group invites. Their own page.
@@ -870,7 +871,8 @@ private fun Conversation(app: Muninn, key: String) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val isTv = tvs[key]?.disconnecting == false
     // What their app speaks isn't known yet (no message since they upgraded): ask once (protocol 0.6, 1.2).
-    LaunchedEffect(key) { app.chat.probeCaps(key) }
+    LaunchedEffect(key) { app.chat.probeCaps(key); app.chat.pruneSoon() }
+    var limits by remember { mutableStateOf(false) }
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
@@ -1024,6 +1026,9 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
+            // Cap d1: how long this chat keeps messages.
+            if (c != null) DropdownMenuItem(text = { Text(io.github.ravenor907.muninn.net.Limits.words(app.chat.chatDays(key)), style = bodyStyle) },
+                leadingIcon = { MIcon("clock", Palette.accent, 20.dp) }, onClick = { close(); limits = true })
             ChatFlagItems(app, key, name, close, { muting = true }, { coloring = true }) { ChatNav.open = "" }
             if (c != null) DropdownMenuItem(text = { Text("Introduce $name to…", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
                 onClick = { close(); introducing = true })
@@ -1047,6 +1052,7 @@ private fun Conversation(app: Muninn, key: String) {
         if (folderPick) FolderPicker(app, key, name) { folderPick = false }
         if (muting) MuteDialog(app, key, name) { muting = false }
         if (coloring) ColorDialog(app, key) { coloring = false }
+        if (limits) ChatLimitDialog(app, key, name) { limits = false }
         if (introducing) IntroduceDialog(app, key, name) { introducing = false }
         if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         // Their security key changed: say so until the code has been checked.
@@ -1987,14 +1993,16 @@ private fun NoGroup() {
 @Composable
 private fun NewGroup(app: Muninn) {
     var name by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("New group")
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Text("Everyone in a group gets every message, each one sealed separately to them, end to end. Up to ${Proto06.MAX_MEMBERS} people.",
                 style = Type.normal, modifier = Modifier.padding(top = 12.dp))
             Field(name, { name = it.take(Proto06.MAX_NAME) }, "Group name", Modifier.padding(vertical = 10.dp))
-            MButton("Create", Modifier.fillMaxWidth(), Kind.Accent, enabled = name.isNotBlank()) {
-                val g = app.chat.groups.create(name)
+            GroupKindPicker(kind) { kind = it }
+            MButton("Create", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = name.isNotBlank()) {
+                val g = app.chat.groups.create(name, kind)
                 if (g == null) Ui.say("Give the group a name.", true)
                 else {
                     if (ChatNav.wide) ChatNav.space = g
@@ -2087,6 +2095,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     var muting by remember { mutableStateOf(false) }
     var coloring by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
+    LaunchedEffect(g) { app.chat.pruneSoon() }
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); app.chat.flags.read(Folders.groupKey(g)); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
     // While it's on screen, new messages here just buzz; its old notification goes.
@@ -2183,7 +2192,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
-            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
+            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted · ${io.github.ravenor907.muninn.net.Limits.groupDays(s)} days", "shield", Palette.online,
             { GroupAvatar(s.name, others, 40.dp) }, actions = {
                 if (!grp.readOnly && s.members.size > 1) IconAction("call", "Call everyone in ${s.name}", Palette.text) {
                     Ui.sure(Ask("Call everyone in ${s.name}?", "It rings everyone whose app can join. Up to ${RoomLogic.MAX_PEOPLE} people talk at once.", "Call",
@@ -2425,6 +2434,7 @@ private fun GroupSettings(app: Muninn, g: String) {
                     code = app.chat.groups.code(g) ?: run { Ui.say("Only admins can make a group code.", true); null }
                 }
             }
+            GroupLimitPanel(app, g, s, admin)
             Section("Channels")
             s.channels.forEach { c ->
                 Line(if (c.t == "voice") c.n else "# ${c.n}", when {

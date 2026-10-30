@@ -5,6 +5,7 @@
 #include "richwire.h"
 #include "ble.h"
 #include "groupwire.h"
+#include "msglimits.h"
 #include "localsend.h"
 #include "nostr.h"
 #include "photos.h"
@@ -204,7 +205,7 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
 
 // ------------------------------------------------------------------ making and changing groups
 
-QString Chat::createGroup(const QString &name)
+QString Chat::createGroup(const QString &name, const QString &kind)
 {
     if (!m_ready)
         return QString();
@@ -218,6 +219,7 @@ QString Chat::createGroup(const QString &name)
                                                                       {QStringLiteral("t"), QStringLiteral("text")}}}}};
     s = GroupWire::withAdmins(s, {me});
     s = GroupWire::withMembers(s, {GroupWire::member(me, username(), mailbox())});
+    s = Limits::withLimit(s, kind, Limits::kDefault);   // cap d1: Standard, Family or Work
     bool ok = false;
     s = GroupWire::sign(m_priv, QLatin1String(GroupWire::kDomain), s, &ok);
     if (!ok || !GroupWire::checkState(s).isEmpty())
@@ -369,9 +371,22 @@ QString Chat::change(const QString &g, const QJsonObject &op)
             return QStringLiteral("They aren't in the group anymore.");
         next.insert(QStringLiteral("owner"), k);
         next = GroupWire::withAdmins(next, GroupWire::adminsOf(cur) << k);
+    } else if (what == QLatin1String("limit")) {
+        // Cap d1 (section 16.2): the group's type and how many days messages stay, the same for everyone.
+        const QString kind = op.value(QStringLiteral("kind")).toString();
+        const QString why = limitBlocked(g, kind);
+        if (!why.isEmpty())
+            return why;
+        const QJsonObject want = Limits::withLimit(next, kind, op.value(QStringLiteral("days")).toInt());
+        if (want.value(QStringLiteral("kind")) == cur.value(QStringLiteral("kind")) && want.value(QStringLiteral("days")) == cur.value(QStringLiteral("days")))
+            return QString();
+        next = want;
     } else if (what == QLatin1String("add")) {
         if (GroupWire::isMember(cur, k))
             return QString();
+        // An app without d1 refuses a Family or Work group's state.
+        if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
+            return QStringLiteral("They need Muninn or Huginn 0.94 to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
         if (members.size() >= GroupWire::kMaxMembers)
             return QStringLiteral("This group is full: 50 people at most.");
         members << GroupWire::member(k, op.value(QStringLiteral("n")).toString(), op.value(QStringLiteral("p")).toString());
@@ -485,6 +500,10 @@ QString Chat::inviteToGroup(const QString &g, const QString &key)
     if (!canGroup(key)) {
         probeCaps(key);   // the answer shows up next time, if they have 0.6
         return QStringLiteral("Needs Muninn or Huginn 0.6");
+    }
+    if (it->state.contains(QStringLiteral("kind")) && !hasD1(key)) {
+        probeCaps(key);
+        return QStringLiteral("Needs Muninn or Huginn 0.94");
     }
     if (GroupWire::keysOf(it->state).size() >= GroupWire::kMaxMembers)
         return QStringLiteral("This group is full: 50 people at most.");
@@ -1670,19 +1689,21 @@ void Chat::loadGroups()
     }
 }
 
-void Chat::pruneGroups(qint64 cutoff)
+void Chat::pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *gone)
 {
     bool any = false;
     for (auto it = m_groups.begin(); it != m_groups.end(); ++it) {
+        const qint64 c = cutoff(Limits::groupDays(it->state));
         QVariantList kept;
         for (const QVariant &v : std::as_const(it->messages)) {
             const QVariantMap m = v.toMap();
-            if (m.value(QStringLiteral("time")).toLongLong() >= cutoff) {
+            if (m.value(QStringLiteral("time")).toLongLong() >= c) {
                 kept << v;
                 continue;
             }
             any = true;
             m_gidx.remove(str(m, "id"));
+            gone->append(str(m, "id"));
             if (!str(m, "photo").isEmpty())
                 m_vault->remove(QStringLiteral("photos/") + str(m, "photo"));
         }

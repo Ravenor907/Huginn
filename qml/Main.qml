@@ -76,9 +76,13 @@ Window {
     function newGroup() {
         if (Vault.screenLocked || !Vault.exists) { Ui.say("Open Direct messages and unlock Chat first.", true); openPage("dms", {}); return }
         Ui.ask("New group", "A name everyone in it sees, like Family or Folk. You can change it later.", "", "Make it", t => {
-            const g = Chat.createGroup(t)
-            if (g === "") { Ui.say("Give the group a name.", true); return }
-            openPage("g:" + g, {})
+            // Cap d1: Family and Work groups can keep messages up to 30 days (set later under Messages).
+            Ui.pickFrom("What kind of group?", [{ header: "Messages disappear after 7 days; Family and Work admins can make it up to 30", items: [
+                { name: "Standard", url: "standard" }, { name: "Family", url: "family" }, { name: "Work", url: "work" }] }], kind => {
+                const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
+                if (g === "") { Ui.say("Give the group a name.", true); return }
+                openPage("g:" + g, {})
+            })
         }, false, true)
     }
     function stepSection(dir) {

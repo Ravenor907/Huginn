@@ -144,15 +144,18 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         if (folder == "privacy") {
         Panel {
             Text("Everything Muninn keeps on this phone (messages, contacts, keys) is encrypted. Messages are end-to-end encrypted.", style = Type.small)
-            Text("Delete messages after a", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            Text("Delete messages after", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(0L to "Never", DAY to "Day", 7 * DAY to "Week", 30 * DAY to "Month").forEach { (ms, label) ->
-                    MButton(label, Modifier.weight(1f), if (deleteAfter == ms) Kind.Accent else Kind.Normal) {
-                        deleteAfter = ms; id.deleteAfter = ms; app.chat.prune()
+                // Every chat already deletes messages after its limit (7 days, up to 30 for Family and Work); Day is sooner.
+                val day = deleteAfter in 1 until 7 * DAY
+                listOf(0L to "The chat's limit", DAY to "A day").forEach { (ms, label) ->
+                    MButton(label, Modifier.weight(1f), if (day == (ms > 0)) Kind.Accent else Kind.Normal) {
+                        deleteAfter = ms; id.deleteAfter = ms; app.chat.pruneSoon()
                     }
                 }
             }
-            Text("Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            Text("Chats keep messages for 7 days, or up to 30 in Family and Work groups and with people in your Family or Work folder. " +
+                "Applies to both sides of every chat on this phone.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             ToggleRow("Show message text in notifications", "Off: notifications only say “New message”", preview) { preview = it; id.showPreview = it }
             ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
             ToggleRow("Active status", "A green dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }

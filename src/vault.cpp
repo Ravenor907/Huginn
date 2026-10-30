@@ -569,6 +569,8 @@ void Vault::backup(const QString &password)
         Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("The backup password needs at least 8 characters."));
         return;
     }
+    if (beforeBackup)
+        beforeBackup();
     const QString folder = backupFolder();
     const QString file = folder + QStringLiteral("/huginn-backup-") + QDate::currentDate().toString(Qt::ISODate) + QStringLiteral(".mbk");
     const QByteArray key = m_key;

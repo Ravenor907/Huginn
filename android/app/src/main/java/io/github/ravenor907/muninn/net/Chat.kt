@@ -197,6 +197,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun read(name: String) = vault.read(File(context.filesDir, name))
             override fun write(name: String, text: String) { try { vault.write(File(context.filesDir, name), text) } catch (_: Exception) {} }
             override fun notice(text: String) { notices.tryEmit(text) }
+            override fun days(peer: String) = chatDays(peer)
         }
         Link.load()
         // Devices trusted before contacts existed become contacts.
@@ -218,7 +219,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
         bg { emptyOldTrash() }
-        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash() } catch (_: Exception) {} } }
+        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache() } catch (_: Exception) {} } }
     }
 
     /**
@@ -681,8 +682,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // What their app speaks: tokens only ever add up (a changed key starts a new contact with none).
         val caps = c.caps + ChatWire.capsOf(o)
         val mailbox = if (c.groupOnly) o.optString("mailbox").takeIf { it.length == 64 } ?: c.mailbox else c.mailbox
-        val now = c.copy(ratchet = c.ratchet || ChatWire.capable(o), caps = caps, mailbox = mailbox)
+        // Cap d1: how long their app keeps our chat; anything that isn't a usable value leaves the old one.
+        val days = (if (Limits.CAP in caps) Limits.envelopeDays(o) else null) ?: c.days
+        val now = c.copy(ratchet = c.ratchet || ChatWire.capable(o), caps = caps, mailbox = mailbox, days = days)
         if (now != c) contacts.set(now)
+        if (days != c.days) bg { prune() }
     }
 
     private fun handle(o: JSONObject, envRoom: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
@@ -1555,6 +1559,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      */
     private fun seal(room: String, theirKey: String, items: List<Pair<JSONObject, ByteArray>>): List<JSONObject> {
         val sk = sharedKey(theirKey)
+        // Cap d1: how long I keep our chat, next to "caps" (only to an app that reads it).
+        if (hasD1(theirKey)) myDays(theirKey).let { d -> items.forEach { it.first.put("days", d) } }
         if (!ChatWire.useRatchet(room, contacts.get(theirKey)))
             return items.map { (o, plain) -> ChatWire.seal(o, plain, sk, theirKey, null, ChatCrypto::newKeyPair) }
         synchronized(ratchets.lock(theirKey)) {
@@ -1586,6 +1592,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun deleteBlob(id: String) { File(photosDir, id).delete() }
         override fun hasM1(k: String) = this@Chat.hasM1(k)
         override fun hasM2(k: String) = this@Chat.hasM2(k)
+        override fun hasD1(k: String) = this@Chat.hasD1(k) || envCaps[k]?.contains(Limits.CAP) == true
     }
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
@@ -1715,6 +1722,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return opened(o, fromKey, dup) { plain ->
             val p = try { JSONObject(String(plain, Charsets.UTF_8)) } catch (e: Exception) { return@opened 400 to "{}" }
             if (!groupRate(room, fromKey)) return@opened 429 to "{}"
+            // Someone joining by code isn't a contact yet: what their app speaks decides if they may join a Family or Work group.
+            if (contacts.get(fromKey) == null) envCaps[fromKey] = ChatWire.capsOf(o)
             val r = groups.receive(room, fromKey, name, mailbox, p)
             if (r == 200 && room in ChatWire.SEEN_ROOMS && sentId.isNotEmpty()) seen.add("$fromKey|$sentId", if (room == "group") p.optString("g") else "")
             r to "{}"
@@ -1798,26 +1807,78 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    /** Removes messages older than the person's "Delete messages after" choice. */
+    /**
+     * Message limits (cap d1, docs/protocol-0.6.md section 16): every chat loses messages older than its limit, with
+     * their photos, voice, videos, files, votes and previews; "Delete messages after: Day" only makes it sooner.
+     * Runs every minute, when a chat opens and at start. Late copies of what went stay gone (the deleted list).
+     */
     fun prune() {
-        val age = id.deleteAfter
-        if (age <= 0) return
-        val cutoff = System.currentTimeMillis() - age
-        groups.pruneOlder(cutoff)
+        val now = System.currentTimeMillis()
+        val sooner = id.deleteAfter.takeIf { it in 1 until Limits.DEFAULT * DAY }
+        fun cutoff(days: Int) = maxOf(Limits.cutoff(now, days), if (sooner != null) now - sooner else 0L)
+        groups.pruneOlder(::cutoff)
+        val near = cutoff(Limits.DEFAULT)
         synchronized(lock) {
-            val n = _nearby.value.filter { it.time >= cutoff }
+            val n = _nearby.value.filter { it.time >= near }
             if (n.size != _nearby.value.size) { _nearby.value = n; if (id.keepNearbyHistory) saveNearby() }
         }
+        val days = _private.value.keys.associateWith { chatDays(it) }
+        if (_private.value.none { (k, l) -> l.any { it.time < cutoff(days[k] ?: Limits.DEFAULT) } }) return
+        val gone = ArrayList<String>()
         edit { map ->
             var changed = false
             for (k in map.keys.toList()) {
-                val (old, keep) = map[k]!!.partition { it.time < cutoff }
+                val (old, keep) = map[k]!!.partition { it.time < cutoff(days[k] ?: Limits.DEFAULT) }
                 if (old.isEmpty()) continue
-                old.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete() }
+                old.forEach { if (it.photo.isNotEmpty()) File(photosDir, it.photo).delete(); gone += it.id }
                 map[k] = keep; changed = true
             }
             changed
         }
+        if (gone.isNotEmpty()) { forget(gone); gone.forEach { outbox.drop(it); outbox.drop(UNSEND + it); tries.remove(it) } }
+    }
+
+    // ------------------------------------------------------------------ message limits (cap d1, section 16)
+
+    /** A chat was opened: anything past its limit goes now, off the main thread. */
+    fun pruneSoon() = bg { prune() }
+
+    /** Someone joining a group by code, not a contact yet: the caps their envelope said. */
+    private val envCaps = ConcurrentHashMap<String, Set<String>>()
+
+    fun hasD1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(Limits.CAP) == true
+
+    /** In my Family or Work folder: I may keep our chat longer than 7 days. */
+    fun isClose(peerKey: String) = folders.of(peerKey).any { it.name in Limits.CLOSE_FOLDERS }
+
+    /** How long I keep our chat (what my envelopes tell them). */
+    fun myDays(peerKey: String) = Limits.myDays(contacts.get(peerKey)?.keep?.takeIf { it > 0 }, isClose(peerKey))
+
+    /** How long a 1:1 chat keeps messages on this phone: the shorter of their limit and mine. */
+    fun chatDays(peerKey: String) = Limits.pairDays(myDays(peerKey), hasD1(peerKey), contacts.get(peerKey)?.days?.takeIf { it > 0 })
+
+    fun groupDays(g: String) = groups.group(g)?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT
+
+    /** My choice for a Family or Work contact (7 to 30). They learn it at once from an empty receipt. */
+    fun setKeep(peerKey: String, days: Int) {
+        val c = contacts.get(peerKey) ?: return
+        contacts.set(c.copy(keep = days.coerceIn(Limits.DEFAULT, Limits.LONGEST)))
+        bg { prune() }
+        if (hasD1(peerKey)) bg {
+            val r = JSONObject().put("ids", JSONArray()).put("s", "delivered").toString()
+            deliver(peerKey, envelope("receipt", peerKey, r, UUID.randomUUID().toString()), c.mailbox)
+        }
+    }
+
+    /** Pictures and files made for sending or opening (camera shots, files on their way): gone after 7 days. */
+    @Volatile private var cacheSwept = 0L
+    private fun sweepCache() {
+        val now = System.currentTimeMillis()
+        // Once an hour is plenty (it rides on the minute's prune).
+        if (now - cacheSwept < 60 * 60_000L) return
+        cacheSwept = now
+        Link.prune(now)
+        for (d in listOf("files", "camera")) File(context.cacheDir, d).listFiles()?.forEach { if (now - it.lastModified() > Limits.DEFAULT * DAY) it.deleteRecursively() }
     }
 
     /** Erases every conversation on this phone. */
@@ -1954,6 +2015,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             vault.read(deletedStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
             vault.read(mxStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
             if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
+            // 0.94 brings message limits (section 16): someone who had chats already is told once, on the chat list.
+            val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
+            if (!prefs.contains(io.github.ravenor907.muninn.screens.LIMITS_NOTE))
+                prefs.edit().putBoolean(io.github.ravenor907.muninn.screens.LIMITS_NOTE, _private.value.values.any { it.isNotEmpty() } || groups.all.value.isNotEmpty()).apply()
             prune()
         } catch (_: Exception) {}
     }

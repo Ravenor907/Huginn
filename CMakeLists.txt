@@ -57,8 +57,10 @@ qt_add_executable(huginn
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
+    src/chatlimits.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
+    src/msglimits.cpp src/msglimits.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h

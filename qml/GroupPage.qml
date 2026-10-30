@@ -290,7 +290,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceStrip.width - Theme.px(50)
                     elide: Text.ElideRight
-                    text: Chat.netStatus + " · encrypted"
+                    text: Chat.netStatus + " · encrypted" + (isTour || !exists ? "" : " · " + (Chat.groups, Chat.groupLimit(gid)).days + " days")
                     color: Theme.textSoft
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
@@ -747,6 +747,7 @@ Rectangle {
             group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
         }
         if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
+        if (!isTour) group.push({ name: "Messages", detail: limitDetail(), url: "limit" })
         if (!readOnly) group.push({ name: "Send a picture", detail: "To #" + channel.name, url: "picture" })
         if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
@@ -765,6 +766,7 @@ Rectangle {
             else if (a === "code") showCode()
             else if (a === "members") pickMember()
             else if (a === "pins") openPins()
+            else if (a === "limit") pickGroupLimit()
             else if (a === "picture") pickPicture()
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
@@ -788,6 +790,24 @@ Rectangle {
                         () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
             }
         }
+    }
+    // Cap d1: the group's type and how many days messages stay, the same for everyone. Only admins change it.
+    function limitDetail() {
+        const l = Chat.groupLimit(gid)
+        return l.kindName + " group · messages disappear after " + l.days + " days"
+    }
+    function pickGroupLimit() {
+        const g = gid, l = Chat.groupLimit(g)
+        const older = l.older.length ? "Older apps keep messages until they update: " + l.older.join(", ") : ""
+        if (readOnly || !info.amAdmin) { Ui.say(limitDetail() + (older ? ". " + older + "." : ".")); return }
+        const items = [{ name: "Standard · 7 days", detail: l.kind === "" ? "Now" : "", url: ":7" }]
+        for (const k of ["family", "work"])
+            for (const d of l.choices)
+                items.push({ name: (k === "family" ? "Family" : "Work") + " · " + d + " days", detail: l.kind === k && l.days === d ? "Now" : "", url: k + ":" + d })
+        Ui.pickFrom("Messages in " + info.name, [{ header: older || "The same for everyone in the group", items: items }], a => {
+            const p = a.split(":")
+            tell(Chat.setGroupLimit(g, p[0], Number(p[1])), "Messages in " + info.name + " now disappear after " + p[1] + " days.")
+        })
     }
     function pickMember() {
         Ui.pickFrom("Members of " + info.name, [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.key,

@@ -29,6 +29,7 @@
 #include "transfer.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "msglimits.h"
 #include "richwire.h"
 
 #include <QApplication>
@@ -132,7 +133,8 @@ int main(int argc, char *argv[])
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return selfTested(a && b && c && d);
+        const bool e = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
+        return selfTested(a && b && c && d && e);
     }
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
@@ -196,6 +198,7 @@ int main(int argc, char *argv[])
         return secret;
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
     auto *cs = new CallSignalHooks(&app);

@@ -2,6 +2,14 @@
 
 Newest first. Huginn and Muninn are released together, with the same version number.
 
+## 0.94 (not released)
+
+| | |
+|---|---|
+| **Messages disappear after 7 days** | Every chat, 1:1 and group, deletes messages older than 7 days on every phone and computer: text, photos, voice clips, videos, files, polls and previews. Encrypted backups leave them out too. Chats you already have get the limit the first time 0.94 starts, and the chat list says so once. |
+| **Family and Work keep longer** | A group's admins pick its type: Standard, Family or Work. Family and Work groups can keep messages up to 30 days, the same for everyone. In a 1:1 chat with someone in your Family or Work folder you can pick up to 30 days; if you two pick differently, the shorter one counts. |
+| **Older apps** | Someone on an older version keeps messages until they update; the chat's info says so. Your side still deletes them on time. |
+
 ## 0.93
 
 | | |
