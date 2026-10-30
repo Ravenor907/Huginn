@@ -1429,7 +1429,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg { if (net.post(d, PATH, body) == 200) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
             // "Sent" only: a 200 just means some device answered; "Delivered" comes from their sealed receipt.
         }
-        if (internet(m.peerKey, listOf(body), backupMailbox(m))) { any = true; markSent(m, "internet") }
+        // Honest ticks: "Waiting for their phone" once a relay has stored it ("Delivered" comes from their receipt).
+        if (internet(m.peerKey, listOf(body), backupMailbox(m), stored = { markSent(m, "internet") })) any = true
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
@@ -1450,8 +1451,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 }) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
         }
         val mailbox = backupMailbox(m)
-        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && internet(m.peerKey, parts, mailbox)) {
-            any = true; markSent(m, "internet")
+        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") })) {
+            any = true
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
@@ -1522,9 +1523,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
-    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?): Boolean {
+    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null): Boolean {
         if (mailbox == null) return false
-        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it)) }
+        // [stored]: once a relay has said OK to every one of them.
+        val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
+        val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
+        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok) }
         return true
     }
 

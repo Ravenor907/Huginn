@@ -120,6 +120,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             }
             androidx.compose.runtime.LaunchedEffect(check) { app.power.refresh() }
             Text(away.label, style = Type.small, modifier = Modifier.padding(top = 2.dp))
+            RightAwayRow(app)
             var low by remember { mutableStateOf(app.power.lowBatterySave) }
             ToggleRow("Save more when the battery is low", "Below 30%: phones close by aren't looked for in the background. Below 15%: the connection " +
                 "is checked every 10 minutes instead of 5, but never dropped. Your Always right away list is never held back", low) { low = it; app.power.lowBatterySave = it }
@@ -138,8 +139,6 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
                 } catch (_: Exception) {}
             }
         }
-        Section("Always right away")
-        RightAwayList(app)
         Section("Battery report")
         BatteryReport(app)
         }
@@ -300,11 +299,12 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
 }
 
 /**
- * The "Always right away" list: whose messages a low battery, quiet hours and checking less never hold back.
- * It starts as the Family folder; anyone can be added or taken off (also from a chat's menu).
+ * The "Always right away" list in one row ("Always right away: Family + 2 people"): whose messages a low battery,
+ * quiet hours and checking less never hold back. It starts as the Family folder. Tap to see it, add or take off
+ * anyone (a chat's menu does the same).
  */
 @Composable
-private fun RightAwayList(app: Muninn) {
+private fun RightAwayRow(app: Muninn) {
     val ready by app.ready.collectAsState()
     val ra = app.power.rightAway
     if (!ready || ra == null) return
@@ -313,29 +313,41 @@ private fun RightAwayList(app: Muninn) {
     val contacts by app.chat.contacts.all.collectAsState()
     val groups by app.chat.groups.all.collectAsState()
     val keys = remember(st, folders) { app.power.rightAwayKeys() }
+    val family = remember(folders) { folders.firstOrNull { it.name.equals(io.github.ravenor907.muninn.net.Power.FAMILY, true) }?.keys.orEmpty().toSet() }
     fun name(k: String): String = if (k.startsWith("g:")) groups[k.removePrefix("g:")]?.state?.name ?: "A group" else app.chat.nameOf(k)
+    val extra = keys.count { it !in family }
+    val summary = when {
+        keys.isEmpty() -> "Nobody yet"
+        keys.none { it in family } -> if (extra == 1) "1 person" else "$extra people"
+        extra == 0 -> "Family"
+        else -> "Family + $extra " + if (extra == 1) "person" else "people"
+    }
+    var open by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
-    Panel {
-        Text("Their messages arrive and ring at once, even with a low battery, in quiet hours or after a quiet spell. " +
-            "It starts as your Family folder.", style = Type.small)
-        if (keys.isEmpty()) Text("Nobody yet. Put people in the Family folder, or add them here.", style = Type.small.copy(color = Palette.textMuted),
-            modifier = Modifier.padding(top = 4.dp))
-        keys.sortedBy { name(it).lowercase() }.forEach { k ->
+    Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(top = 10.dp, bottom = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Always right away: $summary", style = Type.normal.copy(color = Palette.text))
+            Text("Their messages arrive and ring at once, even with a low battery, in quiet hours or after a quiet spell", style = Type.small)
+        }
+        Text(if (open) "Hide" else "Change", style = Type.small.copy(color = Palette.accent), modifier = Modifier.padding(start = 8.dp))
+    }
+    if (!open) return
+    if (keys.isEmpty()) Text("Put people in the Family folder, or add them here.", style = Type.small.copy(color = Palette.textMuted))
+    keys.sortedBy { name(it).lowercase() }.forEach { k ->
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(name(k) + if (k in family) " (Family)" else "", style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+            io.github.ravenor907.muninn.ui.IconAction("close", "Take ${name(k)} off", Palette.textMuted, size = 18.dp) { app.power.setRightAway(k, false) }
+        }
+    }
+    MButton(if (adding) "Done adding" else "Add someone", Modifier.fillMaxWidth().padding(top = 6.dp)) { adding = !adding }
+    if (adding) {
+        val others = (contacts.filter { !it.groupOnly }.map { it.chatKey } + groups.filterValues { !it.readOnly }.keys.map { "g:$it" })
+            .filter { it !in keys }.distinct().sortedBy { name(it).lowercase() }
+        if (others.isEmpty()) Text("Everyone is on the list.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        others.forEach { k ->
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(name(k), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-                io.github.ravenor907.muninn.ui.IconAction("close", "Take ${name(k)} off", Palette.textMuted, size = 18.dp) { app.power.setRightAway(k, false) }
-            }
-        }
-        MButton(if (adding) "Done" else "Add someone", Modifier.fillMaxWidth().padding(top = 6.dp)) { adding = !adding }
-        if (adding) {
-            val others = (contacts.filter { !it.groupOnly }.map { it.chatKey } + groups.filterValues { !it.readOnly }.keys.map { "g:$it" })
-                .filter { it !in keys }.distinct().sortedBy { name(it).lowercase() }
-            if (others.isEmpty()) Text("Everyone is on the list.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-            others.forEach { k ->
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(name(k), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-                    MButton("Add", kind = Kind.Accent) { app.power.setRightAway(k, true) }
-                }
+                MButton("Add", kind = Kind.Accent) { app.power.setRightAway(k, true) }
             }
         }
     }

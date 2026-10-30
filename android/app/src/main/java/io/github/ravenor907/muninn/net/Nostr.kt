@@ -294,6 +294,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             _connected.value = live.size
             subscribe(webSocket)
             synchronized(outbox) { outbox.forEach { webSocket.send(it) } }
+            // What was just sent goes to this relay too (relays drop an event they already have).
+            synchronized(recent) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> synchronized(outbox) { if (m !in outbox) webSocket.send(m) } }
+            }
             burst[url]?.let { m -> synchronized(m) { m.forEach { webSocket.send(it) }; m.clear() } }
         }
 
@@ -310,7 +315,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     webSocket.send(JSONArray().put("AUTH").put(ev).toString())
                     subscribe(webSocket)
                 }
-                "OK" -> if (a.optBoolean(2)) synchronized(outbox) { outbox.removeAll { it.contains(a.optString(1)) } }
+                "OK" -> if (a.optBoolean(2)) {
+                    synchronized(outbox) { outbox.removeAll { it.contains(a.optString(1)) } }
+                    stored.remove(a.optString(1))?.let { done -> try { done() } catch (_: Exception) {} }
+                }
             }
         }
 
@@ -364,20 +372,37 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     // ------------------------------------------------------------------ sending
 
-    /** Sends sealed content to someone's mailbox through every relay. Returns how many relays are connected now. */
-    fun publish(mailbox: String, content: String): Int {
+    /**
+     * Sends sealed content to someone's mailbox through the relays open now. Returns how many relays are
+     * connected now. [ok] runs once a relay has said it stored the event (its "OK"), not before.
+     *
+     * Saving battery, nothing extra is opened for it: a message I write opens the conversation window, which
+     * connects every relay, and those sockets get it as they open ([recent]). With no relay open at all, one
+     * short-lived socket to the healthiest relay carries it.
+     */
+    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         val ev = event(KIND, tags, content, Schnorr.newSecret(), System.currentTimeMillis() / 1000 - Random.nextLong(0, 600))
         val msg = JSONArray().put("EVENT").put(ev).toString()
+        if (ok != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = ok }
         synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
+        synchronized(recent) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            recent.addLast(now to msg)
+            while (recent.size > 100 || (recent.isNotEmpty() && now - recent.first().first > RECENT_MS)) recent.removeFirst()
+        }
         var n = 0
         for ((url, ws) in sockets) if (live[url] == true && ws.send(msg)) n++
-        // Saving battery (only a few relays open): still send through every relay, on short-lived sockets.
-        if (keep != null) for (url in relays) if (live[url] != true) openBurst(url, listOf(msg))
+        if (keep != null && n == 0) PowerLogic.pick(relays, health(relays), 1).firstOrNull()?.let { openBurst(it, listOf(msg)) }
         if (sockets.isEmpty()) connect()
         return n
     }
+
+    /** Events sent in the last [RECENT_MS]: a relay that connects meanwhile gets them too, even once another said OK. */
+    private val recent = ArrayDeque<Pair<Long, String>>()
+    /** Event id to what to do once a relay has stored it. */
+    private val stored = ConcurrentHashMap<String, () -> Unit>()
 
     companion object {
         const val KIND = 1059
@@ -386,6 +411,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val WAKE = "wake"
         const val RECONNECT = "reconnect"
         private const val BURST_SECONDS = 20L
+        /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */
+        private const val RECENT_MS = 60_000L
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
 
         /** NIP-01: the event id is the SHA-256 of [0, pubkey, created_at, kind, tags, content] as compact JSON. */
