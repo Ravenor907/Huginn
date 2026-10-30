@@ -42,12 +42,16 @@ class Groups(
         fun deleteBlob(id: String)
         /** Their app said "m1": reactions and edits go to them (docs/protocol-0.6.md, section 11). */
         fun hasM1(k: String): Boolean = false
+        /** Their app said "m2": votes and video messages go to them (section 12). */
+        fun hasM2(k: String): Boolean = false
     }
 
     /** One envelope to one member. [env] is the envelope id (2.3); [id] the logical id it's confirmed by. */
     data class Out(
         val env: String, val to: String, val room: String, val plain: String, val id: String, val g: String, val t: Long,
         val retry: Boolean = true, val photo: String = "", val voice: Int = 0, val ch: String = "", val tries: Int = 0,
+        /** Cap m2, for a gphoto: a video's length, and the album it's in. */
+        val video: Int = 0, val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
     )
 
     /** [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). */
@@ -64,6 +68,9 @@ class Groups(
         val seen: Boolean = false,
         /** Cap m1: the message this one answers, its reactions (who to their latest) and when it was last edited (0: never). */
         val re: String = "", val reactions: Map<String, Rich.Reaction> = emptyMap(), val edited: Long = 0,
+        /** Cap m2: a video message's length, an album (id, place, how many), a poll and its votes, a link preview. */
+        val video: Int = 0, val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
+        val poll: More.Poll? = null, val votes: Map<String, More.Vote> = emptyMap(), val preview: More.Preview? = null,
     )
 
     /** "Raven invited you to Family": nothing changes until it's accepted. */
@@ -289,7 +296,7 @@ class Groups(
     // ------------------------------------------------------------------ messages (3.8, 3.9)
 
     /** [re]: the message this answers (cap m1: "re" in the gmsg; older apps just show the text). */
-    fun sendText(g: String, ch: String, text: String, re: String = ""): Boolean = act {
+    fun sendText(g: String, ch: String, text: String, re: String = "", poll: More.Poll? = null, preview: More.Preview? = null): Boolean = act {
         val t = text.trim()
         if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act false
         val (s, chId) = target(g, ch) ?: return@act false
@@ -297,20 +304,40 @@ class Groups(
         val time = now()
         val to = s.members.map { it.k }.filter { it != me }.toSet()
         val quote = re.takeIf { r -> Proto06.isLogicalId(r) && chats[g].orEmpty().any { it.id == r } } ?: ""
-        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote))
+        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote,
+            poll = poll, preview = preview))
+        // A poll's text says the same for apps without m2; they ignore "poll" and "lp".
         val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time)
-            .apply { if (quote.isNotEmpty()) put("re", quote) }.toString()
+            .apply { if (quote.isNotEmpty()) put("re", quote); poll?.let { put("poll", More.pollJson(it)) }; preview?.let { put("lp", More.previewJson(it)) } }.toString()
         to.forEach { out(it, "gmsg", plain, id, g) }
         true
     }
 
+    /** Cap m2: my vote on a poll in group [g] ([] takes it back), to every member whose app has m2. */
+    fun vote(g: String, msgId: String, choices: List<Int>): Boolean = act {
+        val grp = groups[g] ?: return@act false
+        if (grp.readOnly) return@act false
+        val m = chats[g]?.firstOrNull { it.id == msgId && it.unsent.isEmpty() } ?: return@act false
+        val poll = m.poll ?: return@act false
+        val v = choices.distinct().sorted().let { if (poll.multi) it else it.take(1) }
+        val ts = now()
+        val all = More.vote(m.votes, poll.options.size, me, v, ts) ?: return@act false
+        edit(g, msgId) { it.copy(votes = all) }
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "vote").put("g", g).put("id", id).put("msg", msgId).put("v", org.json.JSONArray(v)).put("ts", ts).toString()
+        grp.state.members.map { it.k }.filter { it != me && host.hasM2(it) }.forEach { out(it, "group", plain, id, g) }
+        true
+    }
+
     /** A photo or voice message already stored as [blob] (Chat seals the pieces per member). */
-    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int): Boolean = act {
+    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean = act {
         val (s, chId) = target(g, ch) ?: return@act false
         val id = Proto06.newLogicalId()
-        val to = s.members.map { it.k }.filter { it != me }.toSet()
-        addMsg(GMsg(id, g, chId, me, host.myName, "", true, now(), photo = blob, voice = voiceMs, state = if (to.isEmpty()) "sent" else "sending", to = to))
-        to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId) }
+        // A video message goes only to members whose app plays it (m2); an album's fields are ignored by older apps.
+        val to = s.members.map { it.k }.filter { it != me && (videoMs == 0 || host.hasM2(it)) }.toSet()
+        addMsg(GMsg(id, g, chId, me, host.myName, "", true, now(), photo = blob, voice = voiceMs, state = if (to.isEmpty()) "sent" else "sending", to = to,
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0))
+        to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId, video = videoMs, album = album) }
         true
     }
 
@@ -412,6 +439,8 @@ class Groups(
             "leave", "sync", "unsend" -> inGroup
             // Cap m1: reactions and edits from someone in the current state.
             "react", "edit" -> grp != null && !grp.readOnly && grp.state.has(from)
+            // Cap m2: votes, likewise.
+            "vote" -> grp != null && !grp.readOnly && grp.state.has(from)
             else -> return 400
         }
         if (!allowed) return 403
@@ -478,6 +507,16 @@ class Groups(
             "react", "edit" -> {
                 if (!Rich.ok("group", p)) return 400
                 takeChange(grp!!, from, fromName, p)
+            }
+            "vote" -> {
+                if (!More.ok("group", p)) return 400
+                val m = chats[g]?.firstOrNull { it.id == p.getString("msg") && it.unsent.isEmpty() }
+                val poll = m?.poll
+                if (m != null && poll != null) {
+                    val a = p.getJSONArray("v")
+                    val v = (0 until a.length()).map { a.getInt(it) }.let { if (poll.multi) it else it.take(1) }
+                    More.vote(m.votes, poll.options.size, from, v, Rich.ts(p))?.let { all -> edit(g, m.id) { it.copy(votes = all) } }
+                }
             }
         }
         // Every group message is confirmed to its sender, so they stop resending it.
@@ -584,7 +623,10 @@ class Groups(
         val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN   // a removed channel's messages show in main
         if (sv < s.v) sendStateBack(g, from) else if (sv > s.v) askSync(g, from, s.v)
         val name = nameIn(s, from, fromName)
-        addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re")))
+        // Cap m2: a poll or link preview; a malformed one is left out and the text shows.
+        val m2 = More.ok("gmsg", p)
+        addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
+            poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null))
         unread.add(g)
         host.arrived(g, if (Rich.mentions(text, host.myName)) "$name mentioned you in ${s.name}" else "$name in ${s.name}", text)
         receipt(from, g, listOf(id), "delivered")
@@ -592,15 +634,17 @@ class Groups(
     }
 
     /** A photo or voice message whose pieces all came in (Chat put it back together and stored it as [blob]). */
-    fun receivedBlob(from: String, fromName: String, g: String, ch: String, gid: String, blob: String, voiceMs: Int): Boolean = act {
+    fun receivedBlob(from: String, fromName: String, g: String, ch: String, gid: String, blob: String, voiceMs: Int,
+                     videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean = act {
         val grp = groups[g]
         if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
         if (deleted.containsKey(gid) || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
         val s = grp.state
         val name = nameIn(s, from, fromName)
-        addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs))
+        addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs,
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0))
         unread.add(g)
-        host.arrived(g, "$name in ${s.name}", if (voiceMs > 0) "Voice message" else "Photo")
+        host.arrived(g, "$name in ${s.name}", when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; album != null -> "Photos"; else -> "Photo" })
         receipt(from, g, listOf(gid), "delivered")
         true
     }
@@ -659,8 +703,10 @@ class Groups(
         queue.add(Out(Proto06.newLogicalId(), to, "greceipt", JSONObject().put("g", g).put("ids", JSONArray(ids)).put("s", s).toString(), "", g, now(), retry = false))
     }
 
-    private fun out(to: String, room: String, plain: String, id: String, g: String, photo: String = "", voice: Int = 0, ch: String = "") {
-        val o = Out(Proto06.envelopeId(id, to), to, room, plain, id, g, now(), photo = photo, voice = voice, ch = ch, tries = 1)
+    private fun out(to: String, room: String, plain: String, id: String, g: String, photo: String = "", voice: Int = 0, ch: String = "",
+                    video: Int = 0, album: Triple<String, Int, Int>? = null) {
+        val o = Out(Proto06.envelopeId(id, to), to, room, plain, id, g, now(), photo = photo, voice = voice, ch = ch, tries = 1,
+            video = video, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0)
         outs.removeAll { it.env == o.env }
         outs.add(o)
         tries[o.env] = 1 to now() + RETRY[0]
@@ -755,7 +801,8 @@ class Groups(
             chats.forEach { (g, l) -> c.put(g, JSONArray().apply { l.forEach { put(msgJson(it)) } }) }
             write(CHATS, c.toString())
             write(OUTS, JSONArray().apply { outs.forEach { put(JSONObject().put("e", it.env).put("to", it.to).put("r", it.room).put("p", it.plain).put("id", it.id)
-                .put("g", it.g).put("t", it.t).put("ph", it.photo).put("vo", it.voice).put("ch", it.ch)) } }.toString())
+                .put("g", it.g).put("t", it.t).put("ph", it.photo).put("vo", it.voice).put("ch", it.ch)
+                .apply { if (it.video > 0) put("vd", it.video); if (it.album.isNotEmpty()) put("al", it.album).put("ai", it.albumAt).put("an", it.albumOf) }) } }.toString())
         } catch (_: Exception) {}
     }
 
@@ -763,6 +810,13 @@ class Groups(
         .put("m", m.mine).put("t", m.time).put("ph", m.photo).put("vo", m.voice).put("u", m.unsent).put("st", m.state)
         .put("to", JSONArray(m.to.toList())).put("dl", JSONArray(m.delivered.toList())).put("rd", JSONArray(m.read.toList())).put("sn", m.seen)
         .apply { if (m.re.isNotEmpty()) put("re", m.re); if (m.reactions.isNotEmpty()) put("rx", Rich.reactionsToJson(m.reactions)); if (m.edited > 0) put("ed", m.edited) }
+        .apply {
+            if (m.video > 0) put("vd", m.video)
+            if (m.album.isNotEmpty()) put("al", m.album).put("ai", m.albumAt).put("an", m.albumOf)
+            m.poll?.let { put("poll", More.pollJson(it)) }
+            if (m.votes.isNotEmpty()) put("vt", More.votesToJson(m.votes))
+            m.preview?.let { put("lp", More.previewJson(it)) }
+        }
 
     private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
 
@@ -792,14 +846,17 @@ class Groups(
                     GMsg(it.getString("id"), it.getString("g"), it.optString("ch", MAIN), it.getString("f"), it.optString("n"), it.optString("x"), it.optBoolean("m"),
                         it.optLong("t"), it.optString("ph"), it.optInt("vo"), it.optString("u"), it.optString("st"),
                         strings(it.optJSONArray("to")), strings(it.optJSONArray("dl")), strings(it.optJSONArray("rd")), it.optBoolean("sn"),
-                        it.optString("re"), Rich.reactionsFromJson(it.optJSONObject("rx")), it.optLong("ed"))
+                        it.optString("re"), Rich.reactionsFromJson(it.optJSONObject("rx")), it.optLong("ed"),
+                        it.optInt("vd"), it.optString("al"), it.optInt("ai"), it.optInt("an"),
+                        More.pollOf(it), More.votesFromJson(it.optJSONObject("vt")), More.previewOf(it))
                 } }
             }
             read(OUTS)?.let { text ->
                 val a = JSONArray(text)
                 for (i in 0 until a.length()) a.getJSONObject(i).let {
                     outs.add(Out(it.getString("e"), it.getString("to"), it.getString("r"), it.optString("p"), it.optString("id"), it.getString("g"), it.optLong("t"),
-                        photo = it.optString("ph"), voice = it.optInt("vo"), ch = it.optString("ch")))
+                        photo = it.optString("ph"), voice = it.optInt("vo"), ch = it.optString("ch"),
+                        video = it.optInt("vd"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an")))
                 }
             }
         } catch (_: Exception) {}

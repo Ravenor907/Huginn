@@ -631,16 +631,26 @@ void Chat::loadFolders()
     const QByteArray raw = m_vault->read(QStringLiteral("folders.json"));
     if (raw.isEmpty()) {
         // First time: three to start with. Rename, delete or add your own.
-        for (const char *n : {"Family", "Work", "Kindred"})
+        for (const char *n : {"Family", "Work", "Folk"})
             m_folders << QVariantMap{{QStringLiteral("id"), QUuid::createUuid().toString(QUuid::Id128).left(12)}, {QStringLiteral("name"), QString::fromLatin1(n)},
                                      {QStringLiteral("keys"), QStringList()}};
         saveFolders();
         return;
     }
     const QJsonObject o = QJsonDocument::fromJson(raw).object();
-    for (const QJsonValue &v : o.value(QStringLiteral("folders")).toArray())
-        m_folders << v.toObject().toVariantMap();
+    bool renamed = false;
+    for (const QJsonValue &v : o.value(QStringLiteral("folders")).toArray()) {
+        QVariantMap f = v.toObject().toVariantMap();
+        // The third starting folder was called Kindred before 0.93: it's Folk now.
+        if (f.value(QStringLiteral("name")).toString() == QLatin1String("Kindred")) {
+            f.insert(QStringLiteral("name"), QStringLiteral("Folk"));
+            renamed = true;
+        }
+        m_folders << f;
+    }
     m_topOrder = o.value(QStringLiteral("top")).toVariant().toStringList();
+    if (renamed)
+        saveFolders();
 }
 
 void Chat::saveFolders()

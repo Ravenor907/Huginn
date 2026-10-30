@@ -5,4 +5,5 @@
     <string name="shortcut_lock_short">Lock now</string>
     <string name="shortcut_lock_long">Lock Muninn now</string>
     <string name="tile_lock">Lock Muninn</string>
+    <string name="tap_card">Muninn: tap phones to add each other</string>
 </resources>

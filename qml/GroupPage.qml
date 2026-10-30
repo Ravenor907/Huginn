@@ -72,7 +72,7 @@ Rectangle {
 
     // ------------------------------------------------------------- what's shown
     readonly property var tourInfo: ({
-        g: gid, name: gid === "tour-family" ? "Family" : gid === "tour-kindred" ? "Kindred" : "Gaming Crew", amAdmin: true, amOwner: true, readOnly: false, count: 6,
+        g: gid, name: gid === "tour-family" ? "Family" : gid === "tour-folk" ? "Folk" : "Gaming Crew", amAdmin: true, amOwner: true, readOnly: false, count: 6,
         channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 1 },
                    { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Lounge", type: "voice", unread: 0 },
                    { id: "r", name: "Raid night", type: "voice", unread: 0 }],

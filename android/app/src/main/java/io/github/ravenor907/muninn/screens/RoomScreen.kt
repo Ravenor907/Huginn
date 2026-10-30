@@ -118,6 +118,26 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                     Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f)).clip(RoundedCornerShape(12.dp)).background(Palette.field),
                     if (hideNames) "Shared screen" else "${sc.name}'s screen")
             }
+            // Group video (up to 4 people, peer to peer only): everyone with a camera on, and my own picture.
+            val vid by io.github.ravenor907.muninn.net.call.RoomVideo.state.collectAsState()
+            val showing = r.people.filter { !it.me && vid.pics[it.key]?.on == true }
+            if (vid.cameraOn || showing.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 2) {
+                    if (vid.cameraOn) RoomSelfView(Modifier.weight(1f).aspectRatio(3f / 4f))
+                    showing.forEach { p ->
+                        val pic = vid.pics[p.key] ?: io.github.ravenor907.muninn.net.call.RoomVideo.Pic()
+                        Box(Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(12.dp)).background(Palette.field)) {
+                            VideoPicture({ io.github.ravenor907.muninn.net.call.RoomVideo.surface(p.key, it) }, pic.width, pic.height, pic.rotation,
+                                Modifier.fillMaxSize(), if (hideNames) "Someone's camera" else "${p.name}'s camera")
+                            Text(if (hideNames) "?" else p.name, style = Type.small.copy(color = Palette.text), modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
+                        }
+                    }
+                }
+                Text("Video goes straight between phones, never through the relay. Anyone who can't connect directly stays on voice.",
+                    style = Type.small.copy(fontSize = 12.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+            }
+            if (vid.note.isNotEmpty()) Text(vid.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             Spacer(Modifier.height(28.dp))
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
                 verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -148,6 +168,21 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             var picking by remember { mutableStateOf(false) }
             MButton(out?.name ?: "Audio", kind = if (out != null && out?.kind != AudioRoute.Kind.EARPIECE) Kind.Accent else Kind.Normal, icon = "audio") { picking = true }
             if (picking) AudioPicker(onDismiss = { picking = false }) { RoomManager.setOutput(it); picking = false }
+            // Group video: up to 4 people.
+            val vid by io.github.ravenor907.muninn.net.call.RoomVideo.state.collectAsState()
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val camAsk = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+                if (ok) io.github.ravenor907.muninn.net.call.RoomVideo.setCamera(true)
+            }
+            if (io.github.ravenor907.muninn.net.call.RoomVideo.allowed(r.people.size) || vid.cameraOn)
+                MButton(if (vid.cameraOn) "Camera off" else "Camera", kind = if (vid.cameraOn) Kind.Accent else Kind.Normal, icon = "video") {
+                    when {
+                        vid.cameraOn -> io.github.ravenor907.muninn.net.call.RoomVideo.setCamera(false)
+                        androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED ->
+                            io.github.ravenor907.muninn.net.call.RoomVideo.setCamera(true)
+                        else -> camAsk.launch(android.Manifest.permission.CAMERA)
+                    }
+                }
             MButton("Leave", kind = Kind.Danger) { RoomManager.leave() }
         }
     }
@@ -172,4 +207,18 @@ private fun Face(name: String, speaking: Boolean, dim: Boolean, size: Int) {
             Text(initial, style = Type.big.copy(fontSize = (size * 0.4).sp, color = if (dim) Palette.textMuted else Palette.goldBright, fontWeight = FontWeight.SemiBold))
         }
     }
+}
+
+/** My camera in the group video grid, mirrored like a mirror; the camera runs only while this shows. */
+@Composable
+private fun RoomSelfView(modifier: Modifier) {
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val view = remember { androidx.camera.view.PreviewView(ctx).apply { implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+        scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER } }
+    androidx.compose.runtime.DisposableEffect(owner) {
+        io.github.ravenor907.muninn.net.call.RoomVideo.bindCamera(owner, view.surfaceProvider)
+        onDispose { io.github.ravenor907.muninn.net.call.RoomVideo.unbindCamera(owner) }
+    }
+    androidx.compose.ui.viewinterop.AndroidView(factory = { view }, modifier = modifier.clip(RoundedCornerShape(12.dp)).semantics { contentDescription = "Your camera" })
 }

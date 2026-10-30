@@ -114,7 +114,17 @@ class Close(private val context: Context, private val identity: Identity) {
         }
     }
 
-    /** Stops looking and being seen; phones already connected stay connected. */
+    /** The refresh button: start looking over from scratch, so phones that came close since are found now. */
+    fun lookAgain() {
+        main.post {
+            if (!running) return@post
+            if (looking) quiet()
+            dutyOn = true
+            look()
+        }
+    }
+
+        /** Stops looking and being seen; phones already connected stay connected. */
     private fun quiet() {
         looking = false
         try { client.stopAdvertising(); client.stopDiscovery() } catch (_: Exception) {}
@@ -141,10 +151,13 @@ class Close(private val context: Context, private val identity: Identity) {
                     android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
                 PERMISSION_TEXT
             }
-            ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_COARSE_LOCATION, ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_FINE_LOCATION -> {
-                _missing.value = listOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)
-                PERMISSION_TEXT
-            }
+            ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_COARSE_LOCATION, ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_FINE_LOCATION ->
+                // Android 13 and newer: Muninn doesn't ask for location at all. Bluetooth (Ble) still finds Huginn and Muninn.
+                if (android.os.Build.VERSION.SDK_INT >= 33) NO_LOCATION_TEXT
+                else {
+                    _missing.value = listOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                    PERMISSION_TEXT
+                }
             ConnectionsStatusCodes.STATUS_BLUETOOTH_ERROR -> "Turn Bluetooth on to find phones close by."
             else -> "Close-by search isn't available on this phone (Google Play services needed)."
         }
@@ -152,8 +165,12 @@ class Close(private val context: Context, private val identity: Identity) {
     }
 
     /** Shown when Android won't ask again: the person has to allow it in Muninn's app settings. */
-    fun blocked() { _error.value = "Close-by chat is off. Tap here, then allow Nearby devices (and Location if listed) in Muninn's permissions." }
+    fun blocked() { _error.value = if (android.os.Build.VERSION.SDK_INT >= 33) "Close-by chat is off. Tap here, then allow Nearby devices in Muninn's permissions."
+        else "Close-by chat is off. Tap here, then allow Nearby devices or Location in Muninn's permissions. Muninn never sees or shares where you are." }
     fun denied() { _error.value = PERMISSION_TEXT }
+
+    /** Android 12 and older: nothing is asked at setup. Close-by starts the first time the person taps this. */
+    fun offer() { if (!running) _error.value = OFFER_TEXT }
 
     private val discovery = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpoint: String, info: DiscoveredEndpointInfo) {
@@ -248,6 +265,9 @@ class Close(private val context: Context, private val identity: Identity) {
     companion object {
         const val SERVICE = "io.github.ravenor907.muninn"
         fun newId() = Random.nextLong()
+        const val OFFER_TEXT = "Tap to find phones close by over Bluetooth, with no internet needed. On this phone Android calls that Location: " +
+            "Muninn never sees or shares where you are."
+        const val NO_LOCATION_TEXT = "Google's close-by search wants Location on this phone, which Muninn doesn't use. Chat over Bluetooth still works."
         const val PERMISSION_TEXT = "Muninn needs the Nearby devices permission to find phones close by. Tap here to allow it."
     }
 }

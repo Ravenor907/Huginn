@@ -41,7 +41,7 @@ object ChatWire {
         // Cap m1: replies, reactions and edits. Typing and active status ("live") stay on v1 so they never move the ratchet.
         "rich", "mx")
     /** Rooms with no id of their own to check against the chat: duplicates are caught with [Seen]. */
-    val SEEN_ROOMS = setOf("receipt", "unsend", "keep", "group", "greceipt", "mx", "live")
+    val SEEN_ROOMS = setOf("receipt", "unsend", "keep", "group", "greceipt", "mx", "live", "intro", "file", "link")
     /** 0.6 group rooms: only ever sent to someone whose app said "g1" (a 0.5 app would answer 400). */
     val GROUP_ROOMS = setOf("group", "gmsg", "gphoto", "greceipt")
     const val DAY = 86_400_000L
@@ -151,9 +151,9 @@ object ChatWire {
 
     const val PREFIX = "MUNINN1:"
 
-    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0): String {
+    fun code(name: String, chatKey: String, mailbox: String, invite: String? = null, expires: Long = 0, once: Boolean = false): String {
         val json = JSONObject().put("n", name).put("k", chatKey).put("p", mailbox)
-            .apply { if (invite != null) put("i", invite).put("x", expires / 1000) }.toString()
+            .apply { if (invite != null) put("i", invite).put("x", expires / 1000); if (once) put("1", true) }.toString()
         return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
     }
 

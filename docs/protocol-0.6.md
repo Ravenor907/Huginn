@@ -64,6 +64,9 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k4` | kids' TV `apps` (7.9): a parent sends an app to the TV. Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
+| `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
+| `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93. |
+| `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -1073,6 +1076,10 @@ send one there, with no `apps` needed.
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
 | `group` | `react` `edit` | 11.5 | yes | a day, until greceipt | Seen | m1 |
+| `mx` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
+| `group` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
+| `photo`, `gphoto` | | pieces with `kind:"video"` (12.2) | yes | as photo | as photo | m2 |
+| `intro` | `intro` `yes` `add` | 13 | v1 (it may go to a non-contact) | no (the relays keep it) | Seen | i1 |
 
 ## 9. Size limits
 
@@ -1227,3 +1234,142 @@ for them.)
 
 Pinned messages, the "New messages" line, the emoji picker, search inside a chat and a chat's photos and voice
 page are local: nothing about them goes on the wire, and the two apps don't need to agree on them.
+
+## 12. Messenger additions (cap `m2`)
+
+Photo albums, video messages, polls and link previews. As in section 11 nothing here is new cryptography; the reference
+`tools/m2_ref.py` writes `tests/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
+refused; running each `votes` case in order gives `result`; `fallback` gives the text; `video` gives `ok`). Muninn checks it in
+`MoreTest`. Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
+only spaces) are those of 11.1; the m2 fields may not contain control characters other than a newline, and one-line fields
+(a question, an option, a title) none at all.
+
+### 12.1 Albums
+
+Photos sent together carry three more clear fields in every piece: `al` (an album id, like a 1:1 message id), `ai` (this
+photo's place, 0 to 9) and `an` (how many, 1 to 10, `ai < an`). Each photo is still its own message with its own id,
+receipts and retries. An app with `m2` shows the photos of one album from one sender side by side, in `ai` order, as they
+arrive; an app without it ignores the fields and shows them one by one. So albums may go to anyone.
+
+### 12.2 Video messages
+
+A piece with `"kind": "video"` and `ms` (1 to 60000) is part of a video message: the joined bytes are an MP4 whose first box
+is `ftyp`, at most 2 MB over the internet (as photos, `INTERNET_PIECES`) and 3.2 MB close by. A video is never in an album.
+Only to someone whose caps include `m2`: an older app would try to read it as a photo and refuse it. The receiver keeps it
+encrypted like a photo and decrypts it only to play it.
+
+### 12.3 Polls
+
+A poll is a `rich` (11.2) or `gmsg` (3.8) message with one more field:
+
+```json
+{"text": "Poll: Pizza or tacos?\n1. Pizza\n2. Tacos", "poll": {"q": "Pizza or tacos?", "a": ["Pizza", "Tacos"], "m": false}}
+```
+
+- `q`: 1 to 200 characters, one line. `a`: 2 to 10 answers, each 1 to 100 characters, one line, no two the same (ignoring
+  case and spaces at the ends). `m`: several options may be chosen (default false).
+- `text` is what an app without `m2` shows: `"Poll: " + q`, then one line per option, `"1. Pizza"` (vectors: `fallback`).
+- A vote: room `mx` `{"t": "vote", "msg": "<poll id>", "v": [0], "ts": ...}` in a 1:1 chat, room `group`
+  `{"t": "vote", "g", "id", "msg", "v", "ts"}` in a group. `v` is the options chosen, sorted, no repeats, `[]` takes the vote
+  back; a single choice poll uses at most one. Each person has one vote per poll: the highest `ts` wins, as reactions do
+  (vectors: `votes`). A vote naming an option the poll doesn't have is ignored. Retried and confirmed like a reaction.
+- Everyone in the chat or group sees the counts and who voted for what. Only to `m2`.
+
+### 12.4 Link previews
+
+A `rich` or `gmsg` message whose text has a web link may carry what it links to:
+
+```json
+{"text": "Look https://example.com", "lp": {"u": "https://example.com", "t": "Example Domain", "d": "...", "i": "<base64 JPEG>"}}
+```
+
+- `u`: the `http://` or `https://` link, at most 2000 characters, no spaces. `t`: the page's title, 1 to 200 characters, one
+  line. `d`: its description, at most 300. `i`: a small JPEG, at most 24000 base64 characters. `d` and `i` may be left out.
+- The sender's phone fetches the page (only when its own Settings › Privacy › Link previews is on) and shrinks the picture.
+  The receiver never fetches anything: no website learns who got the link or when they read it. Tapping the preview asks
+  "Open example.com?" before the browser does.
+- Apps without `m2` ignore `lp` and show the text, so a preview may go to anyone with `m1`.
+
+## 13. Getting in touch through someone you trust (cap `i1`)
+
+Room `intro`, sealed like a private message with v1 (it often goes to someone who isn't a contact yet), sent once on the
+first route that takes it (the relays keep it for the receiver). Limit: 20 per sender per 10 s. Only to `i1`.
+
+| t | sent by, to | fields | taken when |
+|---|---|---|---|
+| `intro` | a contact (the introducer), to each of the two people | `id` (a logical id, 2.3), `k` (the other person's chat key), `n` (their name, 1 to 40 characters), `p` (their mailbox or empty) | it comes from a real contact; nothing happens until the person says yes |
+| `yes` | an introduced person, to the other one | `id` | the receiver holds an introduction with that `id` whose `k` is the sender |
+| `add` | someone in a group, to another member | `g` (the group) | both are members of the receiver's current state of `g` |
+
+- Both said yes (`yes` both ways, or `add` both ways): each phone adds the other as a contact, not verified. An `add`
+  pair is named on both phones by `id = first 32 hex of SHA-256("add|" + g + "|" + the two chat keys sorted, joined by "|")`.
+- Muninn offers `add` for the members of a group called Family (or one in the person's own Family folder) who aren't
+  contacts yet, once their caps include `i1`.
+- Saying no sends nothing.
+
+### 13.5 Checking a contact by pictures (local)
+
+Besides the 6-digit code (0.5), Muninn shows 4 emoji for a pair: byte `i` (0 to 3) of
+`SHA-256(UTF-8("emoji code") || shared key)` picks emoji `byte mod 64` from the list `ChatCrypto.EMOJI` (its order is
+fixed). The same on both phones means nobody is in between. Nothing goes on the wire.
+
+### 13.6 One-time invite links (local)
+
+A contact code may carry `"1": true`: its invite token works once. The first stranger whose message carries it is added
+as a contact at once (no request to accept), and the token is used up; the app that adds such a code says hi straight away.
+
+## 14. Files over the internet (cap `f1`)
+
+### 14.1 Straight between phones
+
+Never through the call relay. Only between two people who trust each other with their addresses (5.8.1).
+
+Room `file`, sealed like a call signal and sent once on every route (5.1); deduped with Seen. Limit: 30 per sender per 10 s.
+
+| t | fields | |
+|---|---|---|
+| `offer` | `id` (logical id), `name` (1 to 200 characters, no `/`, `\` or control characters), `size` (1 byte to 4 GB), `sha` (SHA-256, lowercase hex), `e` (a one-off P-256 public key, base64 SPKI), `c` (candidates, 5.8.2) | the sender's phone, after asking a STUN server from a new UDP socket |
+| `accept` | `id`, `e`, `c` | the receiver's phone, from its own new socket; with Data saver on mobile data only once the person taps Download |
+| `decline` | `id` | the receiver doesn't trust the sender (addresses aren't swapped) |
+
+- Key: `SHA-256(UTF-8("muninn file v1") || ECDH-derived key of the two one-off keys (as ChatCrypto.sharedKey) || UTF-8(id))`.
+- UDP packets: `type (1 byte) || seq (8 bytes, big endian) || AES-256-GCM(payload)`, nonce `dir (4 bytes) || seq`, AAD
+  `type || UTF-8(id)`. `dir` is 0 from the sender, 1 from the receiver. Types: 1 probe, 2 data (`index (4 bytes) || piece`),
+  3 ack (`below (4 bytes) || bits (8 bytes)`: every piece below `below` is in, and bit `b` says piece `below + b` is),
+  4 done.
+- Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
+  comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
+  piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
+  the end, says done, and saves the file in Downloads. 30 s with nothing heard ends it.
+
+### 14.2 Small files over the relays
+
+A file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
+`"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`; the receiver keeps it encrypted like a
+photo and saves it to Downloads when the person taps Save.
+
+
+## 15. Linked devices, companion style (room `link`)
+
+A tablet or second phone (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
+online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn only; Huginn ignores the
+room. Envelopes in room `link` are sealed like private messages and go on every route (LAN, Direct, Nostr); they are
+exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the
+check below.
+
+**Pairing.** The companion shows a link code: `MUNINNL1:` then base64url (no padding) of
+`{"k": chat key, "p": Nostr mailbox, "n": device name, "i": token}`. The token is 128 random bits, good for 10 minutes and
+once. The phone takes the code, keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
+mailbox}`. The companion accepts a `hello` only with its current token, in time; from then on the phone is its phone.
+
+**From the phone:**
+- `{"t": "chat", "peer", "n", "msgs": [{"id", "x", "me", "t"}]}`: a chat's latest 25 messages (each `x` at most 600
+  characters), on pairing and when asked.
+- `{"t": "msg", "peer", "n", "m": {"id", "x", "me", "t"}}`: one message in or out (`x` at most 2000 characters).
+  Photos, voice, video and files go as words ("Photo", "File: name"); the media stays on the phone.
+- `{"t": "unlink"}`.
+
+**From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
+message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "unlink"}`.
+
+Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.

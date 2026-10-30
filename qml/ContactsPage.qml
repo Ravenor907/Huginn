@@ -136,7 +136,7 @@ Rectangle {
         const ids = Chat.foldersOf(p.key)
         const inFolders = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
         const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" },
-                       { name: "Folders", detail: inFolders.length ? "In " + inFolders.join(", ") : "Family, Work, Kindred or your own", url: "folders" }]
+                       { name: "Folders", detail: inFolders.length ? "In " + inFolders.join(", ") : "Family, Work, Folk or your own", url: "folders" }]
         if (!p.verified) items.push({ name: "Check code", detail: "Make sure nobody is in between", url: "code" })
         items.push({ name: "Direct calls: " + Calls.trustText(p.key), detail: Calls.trusted(p.key) ? "Calls skip the relay when they trust you too. A turns it off"
                                                                                                 : "Calls go through the relay; neither of you sees the other's IP. A turns direct on", url: "trust" })

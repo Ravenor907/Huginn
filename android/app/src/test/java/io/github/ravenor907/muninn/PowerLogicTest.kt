@@ -286,4 +286,29 @@ class PowerLogicTest {
         // Fully connected (every relay) ranks above open on screen (three).
         assertTrue(PowerLogic.saves(PowerLogic.plan(phoneAway.copy(plugged = true)), open))
     }
+
+    @Test
+    fun checksLessWhenItsBeenQuiet() {
+        val h = 3_600_000L
+        // Right away: still two relays (calls ring), checked every 5 minutes instead of 2 after 3 quiet hours.
+        assertEquals(PowerLogic.SLOW_PING_MS, PowerLogic.plan(phoneAway.copy(idleMs = 2 * h)).pingMs)
+        val drowsy = PowerLogic.plan(phoneAway.copy(idleMs = 3 * h))
+        assertEquals(2, drowsy.relays)
+        assertEquals(PowerLogic.DROWSY_PING_MS, drowsy.pingMs)
+        // Every 15 minutes: every 30 after 3 hours, every hour after 6.
+        val quarter = phoneAway.copy(check = Check.QUARTER)
+        assertEquals(15L, PowerLogic.everyMinutes(quarter))
+        assertEquals(30L, PowerLogic.everyMinutes(quarter.copy(idleMs = 3 * h)))
+        assertEquals(60L, PowerLogic.everyMinutes(quarter.copy(idleMs = 6 * h)))
+        assertTrue(PowerLogic.plan(quarter.copy(idleMs = 6 * h)).label.contains("every hour for now"))
+        // Every hour and Only when open don't change.
+        assertEquals(60L, PowerLogic.everyMinutes(phoneAway.copy(check = Check.HOUR, idleMs = 9 * h)))
+        assertEquals(0L, PowerLogic.everyMinutes(phoneAway.copy(check = Check.OPEN, idleMs = 9 * h)))
+        // Never while charging, on a Kids' TV, or with the switch off.
+        assertEquals(15L, PowerLogic.everyMinutes(quarter.copy(idleMs = 9 * h, adaptive = false)))
+        assertEquals(0, PowerLogic.drowsy(phoneAway.copy(idleMs = 9 * h, plugged = true)))
+        assertEquals(0, PowerLogic.drowsy(phoneAway.copy(idleMs = 9 * h, kidsTv = true)))
+        // A low battery still wins over a stretched check: below 15% is every hour anyway.
+        assertEquals(60L, PowerLogic.everyMinutes(quarter.copy(battery = 10)))
+    }
 }

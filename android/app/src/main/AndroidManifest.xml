@@ -18,17 +18,23 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- Finding nearby devices: LocalSend's multicast discovery. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Direct connect: a local-only hotspot (Android 13+ asks for nearby Wi-Fi devices, older for location). -->
+    <!-- Direct connect and close by: Android 13+ asks for nearby devices, never for location. Android 12 and older
+         only let an app look for nearby devices with Location, which Muninn asks for the first time it's used,
+         never at setup. Muninn never reads where the phone is. -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" tools:targetApi="33" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="32" />
     <!-- Close by: finding other phones over Bluetooth (Google's Nearby Connections). -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="31" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- Tap phones together to add each other: one phone hands its code to the other over NFC (net/Tap). -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
     <!-- Received files go to Downloads. Android 10 and newer need no permission for that (MediaStore);
          Android 8 and 9 ask for this one the first time a transfer is accepted. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -148,6 +154,18 @@
             </intent-filter>
         </service>
 
+        <!-- Tap phones together: answers only while the Tap to add screen is open, with a code that works once. -->
+        <service
+            android:name=".net.TapCard"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/tap_card" />
+        </service>
         <service
             android:name=".net.MessageService"
             android:exported="false"

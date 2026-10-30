@@ -61,8 +61,11 @@ class Updater(private val context: Context, private val identity: Identity) {
                 url = bestUrl
                 sha = bestSha
                 val newer = best != null && rank(best) > rank(current)
-                _state.value = State(if (newer) "Muninn $best is ready to install" else "Muninn is up to date", best ?: "", false, newer)
-                if (newer && installAfter) download()
+                // Data saver on mobile data: the download waits for Wi-Fi, unless the person taps to get it now.
+                val wait = newer && installAfter && (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() == true
+                _state.value = State(if (!newer) "Muninn is up to date" else if (wait) "Muninn $best is ready. It downloads on Wi-Fi, or tap to get it now"
+                    else "Muninn $best is ready to install", best ?: "", false, newer)
+                if (newer && installAfter && !wait) download()
             } catch (e: Exception) {
                 lastCheck = 0L   // try again next time Muninn opens
                 _state.value = State("Couldn't reach GitHub. Check the connection.")

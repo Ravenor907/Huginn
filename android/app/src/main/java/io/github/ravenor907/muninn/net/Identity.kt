@@ -119,6 +119,10 @@ class Identity(context: Context, private val vault: Vault) {
     var activeStatus: Boolean
         get() = prefs.getBoolean("activeStatus", true)
         set(v) = prefs.edit().putBoolean("activeStatus", v).apply()
+    /** Link previews (cap m2): this phone looks up a link I send and adds its title and picture. Never for links I get. */
+    var linkPreviews: Boolean
+        get() = prefs.getBoolean("linkPreviews", true)
+        set(v) = prefs.edit().putBoolean("linkPreviews", v).apply()
     /** Notifications say only "New message" unless this is on. */
     var showPreview: Boolean
         get() = prefs.getBoolean("showPreview", false)

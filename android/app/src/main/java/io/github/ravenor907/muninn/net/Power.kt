@@ -73,7 +73,7 @@ class Power(private val app: Muninn) {
             ?: if (prefs.getBoolean("stayConnected", true)) PowerLogic.Check.LIVE else PowerLogic.Check.QUARTER
         set(v) {
             prefs.edit().putString("checkFor", v.key).putBoolean("stayConnected", v == PowerLogic.Check.LIVE).apply()
-            followed = null   // the schedule and the Listening service follow at once
+            followed = null; followedEvery = -1L   // the schedule and the Listening service follow at once
             refresh()
         }
 
@@ -96,6 +96,50 @@ class Power(private val app: Muninn) {
         get() = PowerLogic.Check.of(prefs.getString("quietMode", null)) ?: PowerLogic.Check.HOUR
         set(v) { prefs.edit().putString("quietMode", v.key).apply(); refresh() }
 
+    /** Settings › Quiet hours › Also during Do Not Disturb (on unless switched off). */
+    var followDnd: Boolean
+        get() = prefs.getBoolean("followDnd", true)
+        set(v) { prefs.edit().putBoolean("followDnd", v).apply(); refresh() }
+
+    /** Settings › Check less when it's quiet (on unless switched off). */
+    var adaptive: Boolean
+        get() = prefs.getBoolean("adaptiveCheck", true)
+        set(v) { prefs.edit().putBoolean("adaptiveCheck", v).apply(); refresh() }
+
+    /** Settings › Data saver: on mobile data, big files wait until you tap them, and updates wait for Wi-Fi (on unless switched off). */
+    var dataSaver: Boolean
+        get() = prefs.getBoolean("dataSaver", true)
+        set(v) { prefs.edit().putBoolean("dataSaver", v).apply() }
+
+    /** Something arrived or Muninn was opened: wide awake again (Check less when it's quiet starts over). */
+    fun activity() {
+        prefs.edit().putLong("lastActivity", System.currentTimeMillis()).apply()
+        refresh()
+    }
+
+    /** Charging (or a TV, which always is). */
+    fun charging(): Boolean {
+        val battery = try { app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) } catch (_: Exception) { null }
+        return (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0 ||
+            battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) == false ||
+            app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    }
+
+    /** On a network that costs by the byte (mobile data, a hotspot), or Android's Data Saver is on. */
+    fun metered(): Boolean = try {
+        cm.isActiveNetworkMetered || cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+    } catch (_: Exception) { false }
+
+    /** Data saver is on and this network costs: big downloads wait for a tap, or for Wi-Fi. */
+    fun savingData(): Boolean = dataSaver && metered()
+
+    /** Do Not Disturb, Bedtime mode or another quiet mode is on. */
+    private fun dndOn(): Boolean = try {
+        app.getSystemService(android.app.NotificationManager::class.java).currentInterruptionFilter.let {
+            it != android.app.NotificationManager.INTERRUPTION_FILTER_ALL && it != android.app.NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+        }
+    } catch (_: Exception) { false }
+
     /** Settings › Find phones close by in the background (off unless switched on). */
     var closeBy: Boolean
         get() = prefs.getBoolean("closeByBackground", false)
@@ -112,8 +156,8 @@ class Power(private val app: Muninn) {
      * The background inbox check, as often as the mode in use says. "Only when open" chosen by the person
      * checks nothing; quiet hours that use it still wake Muninn hourly, only to see whether they've ended.
      */
-    fun schedule(now: PowerLogic.Check = effective()) {
-        val every = if (now == PowerLogic.Check.OPEN && check != PowerLogic.Check.OPEN) 60L else PowerLogic.checkEveryMinutes(now)
+    fun schedule(now: PowerLogic.Check = effective(), minutes: Long = PowerLogic.everyMinutes(inputs())) {
+        val every = if (now == PowerLogic.Check.OPEN && check != PowerLogic.Check.OPEN) 60L else minutes
         try {
             val wm = WorkManager.getInstance(app)
             if (every == 0L) wm.cancelUniqueWork("inbox")
@@ -124,7 +168,7 @@ class Power(private val app: Muninn) {
 
     fun install() {
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityStarted(a: Activity) { started++; refresh() }
+            override fun onActivityStarted(a: Activity) { started++; activity() }
             override fun onActivityStopped(a: Activity) { started = (started - 1).coerceAtLeast(0); refresh() }
             override fun onActivityCreated(a: Activity, b: Bundle?) {}
             override fun onActivityResumed(a: Activity) {}
@@ -138,6 +182,8 @@ class Power(private val app: Muninn) {
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED); addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
             // The battery level, for saving more when it's low (a cheap check each time it changes).
             addAction(Intent.ACTION_BATTERY_CHANGED)
+            // Do Not Disturb turned on or off: quiet hours follow it.
+            addAction(android.app.NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
         }
         try {
             ContextCompat.registerReceiver(app, object : BroadcastReceiver() {
@@ -183,12 +229,14 @@ class Power(private val app: Muninn) {
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        val quiet = if (quietOn && PowerLogic.inQuiet(quietFrom, quietTo, hour)) quietMode else null
+        val quiet = if ((quietOn && PowerLogic.inQuiet(quietFrom, quietTo, hour)) || (followDnd && dndOn())) quietMode else null
+        val idle = (System.currentTimeMillis() - prefs.getLong("lastActivity", System.currentTimeMillis())).coerceAtLeast(0)
         return PowerLogic.Inputs(
             foreground = started > 0, screenOn = pm.isInteractive, inCall = inCall, kidsTv = kids, plugged = plugged,
             alwaysFull = !saver, batterySaver = pm.isPowerSaveMode, doze = pm.isDeviceIdleMode,
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
             battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),
+            idleMs = if (started > 0) 0 else idle, adaptive = adaptive,
         )
     }
 
@@ -197,10 +245,10 @@ class Power(private val app: Muninn) {
         val i = inputs()
         val next = PowerLogic.plan(i)
         _away.value = PowerLogic.whenAway(i)
-        follow(PowerLogic.effective(i), i.kidsTv)
-        // Quiet hours start and end on the hour: look again then.
+        follow(PowerLogic.effective(i), i.kidsTv, PowerLogic.everyMinutes(i))
+        // Quiet hours start and end on the hour, and Check less when it's quiet steps down hourly: look again then.
         main.removeCallbacks(onTheHour)
-        if (quietOn) main.postDelayed(onTheHour, 3_600_000L - System.currentTimeMillis() % 3_600_000L + 1_000L)
+        main.postDelayed(onTheHour, 3_600_000L - System.currentTimeMillis() % 3_600_000L + 1_000L)
         val now = applied
         if (now == null || !PowerLogic.saves(now, next)) { main.removeCallbacks(later); waiting = null; use(next); return }
         // Saving more: wait a moment, in case the screen comes straight back on.
@@ -265,15 +313,19 @@ class Power(private val app: Muninn) {
 
     private val onTheHour = Runnable { refresh() }
     private var followed: PowerLogic.Check? = null
+    private var followedEvery = -1L
 
     /**
      * The mode in use changed (the person's choice, quiet hours or the battery): the background check runs as
      * often as it says, and the Listening service runs only while it's "Right away".
      */
-    private fun follow(now: PowerLogic.Check, kids: Boolean) {
-        if (now == followed) return
+    private fun follow(now: PowerLogic.Check, kids: Boolean, every: Long) {
+        if (now == followed && every == followedEvery) return
+        val modeChanged = now != followed
         followed = now
-        schedule(now)
+        followedEvery = every
+        schedule(now, every)
+        if (!modeChanged) return
         if (kids) return   // a Kids' TV always listens (KidMode keeps the service)
         if (now == PowerLogic.Check.LIVE) MessageService.start(app) else MessageService.stop(app)
     }

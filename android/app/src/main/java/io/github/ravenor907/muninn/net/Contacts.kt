@@ -116,6 +116,15 @@ class Contacts(context: Context, private val vault: Vault) {
             return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optLong("x") * 1000 } catch (e: Exception) { 0 }
         }
 
+        /** An invite link that works once: whoever adds it is added back at once, no asking (the token is used up). */
+        fun once(link: String): Boolean {
+            val text = unlink(link)
+            val i = text.indexOf(PREFIX)
+            if (i < 0) return false
+            val body = text.substring(i + PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
+            return try { JSONObject(String(java.util.Base64.getUrlDecoder().decode(body))).optBoolean("1") } catch (e: Exception) { false }
+        }
+
         /** Finds a contact code anywhere in pasted text (a whole message is fine). */
         fun parse(link: String): Contact? {
             val text = unlink(link)
@@ -136,7 +145,7 @@ class Contacts(context: Context, private val vault: Vault) {
 
 /**
  * Contact folders (protocol 0.6, section 4): local only, never on the wire. A folder is a name and the
- * chat keys (or "g:" + group id) in it. Family, Work and Kindred are there to start with; all of them can be
+ * chat keys (or "g:" + group id) in it. Family, Work and Folk are there to start with; all of them can be
  * renamed or deleted, and new ones added. Stored through [write] (the vault), so it goes in the backup too.
  * The chat list shows each folder as a section that folds away; a folder's keys are in the order shown there,
  * and [top] is the order of the chats in no folder (the ones never moved go first, newest first).
@@ -155,11 +164,14 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
         if (text == null) return DEFAULTS.map { Folder(newId(), it) }.also { save(it, emptyList()) }
         return try {
             val a = JSONObject(text).getJSONArray("folders")
-            (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
+            val l = (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
                 val k = o.optJSONArray("k")
                 Folder(o.getString("id"), o.getString("n"), if (k == null) emptyList() else (0 until k.length()).map { k.getString(it) },
                     o.optBoolean("c"))
             }
+            // The third starting folder was called Kindred before 0.93: it's Folk now.
+            if (l.none { it.name == OLD_NAME }) l
+            else l.map { if (it.name == OLD_NAME) it.copy(name = "Folk") else it }.also { save(it, loadTop()) }
         } catch (e: Exception) { emptyList() }
     }
 
@@ -239,7 +251,8 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
     }
 
     companion object {
-        val DEFAULTS = listOf("Family", "Work", "Kindred")
+        val DEFAULTS = listOf("Family", "Work", "Folk")
+        private const val OLD_NAME = "Kindred"
         const val MAX_NAME = 24
         /** The section of chats in no folder. */
         const val NONE = ""
@@ -312,5 +325,94 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
 
         /** Whole days left before [since] (when it went in) is deleted for good: at least 1 until it goes. */
         fun daysLeft(since: Long, now: Long): Int = ((KEEP_MS - (now - since) + 86_399_999L) / 86_400_000L).toInt().coerceAtLeast(1)
+    }
+}
+
+/**
+ * Per-chat choices kept on this phone only (never on the wire): muted until a time, archived, and marked unread
+ * by hand. A key is a contact's chat key or "g:" + group id, like [Folders]. Stored through [write] (the vault).
+ * An archived chat comes back to the list when a message arrives, unless it's muted (Messenger does the same).
+ */
+class ChatFlags(private val read: () -> String?, private val write: (String) -> Unit) {
+    data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet(),
+                     /** A color for my bubbles in that chat ([COLORS] names; none is the usual grey). */
+                     val colors: Map<String, String> = emptyMap())
+
+    private val _all = MutableStateFlow(load())
+    val all: StateFlow<State> = _all.asStateFlow()
+
+    private fun load(): State = try {
+        val o = JSONObject(read() ?: return State())
+        val m = o.optJSONObject("muted")
+        fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
+        val c = o.optJSONObject("colors")
+        State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"),
+            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { it in COLORS }.orEmpty())
+    } catch (e: Exception) { State() }
+
+    private fun set(s: State) {
+        _all.value = s
+        try {
+            write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
+                .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>)).toString())
+        } catch (_: Exception) {}
+    }
+
+    /** No notifications from [key] until [until] (ms; [FOREVER] until turned back on). 0 turns it back on. */
+    @Synchronized
+    fun mute(key: String, until: Long) = set(_all.value.let { it.copy(muted = if (until <= 0) it.muted - key else it.muted + (key to until)) })
+
+    fun muted(key: String, now: Long = System.currentTimeMillis()): Boolean = (_all.value.muted[key] ?: 0L) > now
+
+    @Synchronized
+    fun archive(key: String, on: Boolean) = set(_all.value.let { it.copy(archived = if (on) it.archived + key else it.archived - key) })
+
+    fun archived(key: String) = key in _all.value.archived
+
+    /** Mark as unread: the chat keeps its dot until it's opened. */
+    @Synchronized
+    fun markUnread(key: String, on: Boolean) {
+        val s = _all.value
+        if ((key in s.unread) != on) set(s.copy(unread = if (on) s.unread + key else s.unread - key))
+    }
+
+    /** The chat was opened. */
+    fun read(key: String) = markUnread(key, false)
+
+    /** My bubbles' color in [key]'s chat: one of [COLORS], or "" for the usual. Only I see it. */
+    @Synchronized
+    fun color(key: String, name: String) = set(_all.value.let { it.copy(colors = if (name in COLORS) it.colors + (key to name) else it.colors - key) })
+
+    /** A message from [key] arrived: an archived chat comes back unless it's muted. Returns whether to notify. */
+    @Synchronized
+    fun arrived(key: String, now: Long = System.currentTimeMillis()): Boolean {
+        val quiet = muted(key, now)
+        if (!quiet && key in _all.value.archived) archive(key, false)
+        return !quiet
+    }
+
+    /** A chat that's gone (deleted contact, left group) loses its flags. */
+    @Synchronized
+    fun forget(key: String) {
+        val s = _all.value
+        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors) set(State(s.muted - key, s.archived - key, s.unread - key, s.colors - key))
+    }
+
+    companion object {
+        const val FOREVER = Long.MAX_VALUE
+        const val HOUR = 3_600_000L
+        /** Bubble colors to pick from: name to (bubble, dot shown in the picker), as ARGB. */
+        val COLORS = linkedMapOf(
+            "gold" to (0xFF3A3220L to 0xFFE0C27FL), "green" to (0xFF2C3A2CL to 0xFFB6D6B6L), "blue" to (0xFF2D3340L to 0xFFB9C6E0L),
+            "red" to (0xFF3A2724L to 0xFFE6A596L), "purple" to (0xFF33293AL to 0xFFD2BCE0L), "teal" to (0xFF24363AL to 0xFFAED4D8L))
+
+        /** "Muted for 3 hours", "Muted until tomorrow 7:00", "Muted": what the chat says while muted. */
+        fun mutedText(until: Long, now: Long): String {
+            if (until == FOREVER) return "Muted"
+            val left = until - now
+            if (left <= 0) return ""
+            val h = (left + HOUR - 1) / HOUR
+            return if (h <= 1) "Muted for less than an hour" else if (h < 48) "Muted for $h more hours" else "Muted for ${(h + 23) / 24} more days"
+        }
     }
 }

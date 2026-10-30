@@ -53,6 +53,18 @@ object ChatCrypto {
         return "%06d".format(n % 1_000_000)
     }
 
+    /** 64 emoji easy to tell apart and to say out loud ("fox, moon, anchor, balloon"). Their order is part of the protocol (13.5). */
+    val EMOJI = listOf("🦊", "🌙", "⚓", "🎈", "🐢", "🍎", "🚲", "🔑", "🌵", "🐝", "🎸", "🍄", "🚀", "🐙", "🌻", "🧲",
+        "🐘", "🍋", "⛵", "🔔", "🦉", "🍇", "🚂", "🎩", "🐬", "🌽", "🏀", "🪁", "🦋", "🍒", "🛶", "📚",
+        "🐧", "🥕", "🏰", "🎺", "🐳", "🍉", "🚁", "🧩", "🦒", "🥨", "🗿", "🎯", "🐞", "🍓", "🛸", "🧭",
+        "🐿️", "🍍", "🏕️", "🥁", "🦀", "🌶️", "🚜", "🪐", "🦓", "🍩", "⛺", "🎲", "🐌", "🥑", "🗻", "🧸")
+
+    /** The same 4 emoji on both phones of a pair (from their shared key), for checking a contact by eye. */
+    fun emojiCode(key: ByteArray): String {
+        val d = MessageDigest.getInstance("SHA-256").digest("emoji code".toByteArray() + key)
+        return (0 until 4).joinToString(" ") { EMOJI[(d[it].toInt() and 0xff) % EMOJI.size] }
+    }
+
     data class Sealed(val nonce: String, val data: String)
 
     fun seal(key: ByteArray, text: String, nonce: ByteArray = ByteArray(12).also { random.nextBytes(it) }): Sealed {
