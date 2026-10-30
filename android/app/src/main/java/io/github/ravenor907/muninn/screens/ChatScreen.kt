@@ -459,6 +459,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val folders by app.chat.folders.all.collectAsState()
     val topOrder by app.chat.folders.top.collectAsState()
     val trashed by app.chat.trash.all.collectAsState()
+    val intros by app.chat.intros.collectAsState()
     val flagState by app.chat.flags.all.collectAsState()
     var showArchived by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -630,9 +631,11 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
             }
             // Message requests: people who have my code but aren't contacts yet, and group invites. Their own page.
-            if (requests.isNotEmpty() || ginvites.isNotEmpty()) item(key = "requests") {
-                val n = requests.size + ginvites.size
-                PersonRow("Requests", requests.firstOrNull()?.let { "${it.name} wants to chat" } ?: ginvites.firstOrNull()?.let { "Invited to ${it.name}" } ?: "",
+            val pendingIntros = intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
+            if (requests.isNotEmpty() || ginvites.isNotEmpty() || pendingIntros > 0) item(key = "requests") {
+                val n = requests.size + ginvites.size + pendingIntros
+                PersonRow("Requests", requests.firstOrNull()?.let { "${it.name} wants to chat" } ?: ginvites.firstOrNull()?.let { "Invited to ${it.name}" }
+                    ?: "People to get in touch with",
                     "", n, false, { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
                         MIcon("people", Palette.goldBright, 22.dp) } }) { ChatNav.open = "requests" }
             }
@@ -852,6 +855,7 @@ private fun Conversation(app: Muninn, key: String) {
     var folderPick by remember { mutableStateOf(false) }
     var muting by remember { mutableStateOf(false) }
     var coloring by remember { mutableStateOf(false) }
+    var introducing by remember { mutableStateOf(false) }
     var tvSettings by remember { mutableStateOf(false) }
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val isTv = tvs[key]?.disconnecting == false
@@ -1000,6 +1004,8 @@ private fun Conversation(app: Muninn, key: String) {
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
             ChatFlagItems(app, key, name, close, { muting = true }, { coloring = true }) { ChatNav.open = "" }
+            if (c != null) DropdownMenuItem(text = { Text("Introduce $name to…", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
+                onClick = { close(); introducing = true })
             // Direct calls (docs/protocol-0.6.md 5.8.1): on for the Family folder unless switched; off means relay only.
             if (c != null) {
                 val trustText = io.github.ravenor907.muninn.net.call.CallManager.trustText(key)
@@ -1020,6 +1026,7 @@ private fun Conversation(app: Muninn, key: String) {
         if (folderPick) FolderPicker(app, key, name) { folderPick = false }
         if (muting) MuteDialog(app, key, name) { muting = false }
         if (coloring) ColorDialog(app, key) { coloring = false }
+        if (introducing) IntroduceDialog(app, key, name) { introducing = false }
         if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1519,12 +1526,39 @@ private fun RequestsScreen(app: Muninn, back: () -> Unit) {
     BackHandler { back() }
     val requests by app.chat.requests.collectAsState()
     val ginvites by app.chat.groups.pending.collectAsState()
+    val intros by app.chat.intros.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val gs by app.chat.groups.all.collectAsState()
+    val asked = intros.filter { !it.iSaid && !it.declined }
+    val offers = app.chat.familyOffers()
     Column(Modifier.fillMaxSize()) {
         PageBar("Requests")
         Text("People who have your code but aren't contacts yet, and group invites. Nothing from them shows in your chats until you accept.",
             style = Type.small, modifier = Modifier.padding(16.dp))
         LazyColumn(Modifier.weight(1f)) {
-            if (requests.isEmpty() && ginvites.isEmpty()) item { Text("No requests.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            if (requests.isEmpty() && ginvites.isEmpty() && asked.isEmpty() && offers.isEmpty()) item { Text("No requests.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            // Cap i1: introductions, and people in a group asking to be in touch.
+            items(asked, key = { "n" + it.id }) { i ->
+                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    val by = if (i.by.startsWith("g:")) app.chat.groups.group(i.by.removePrefix("g:"))?.state?.name ?: "a group" else app.chat.nameOf(i.by)
+                    Text(if (i.by.startsWith("g:")) "${i.n}, from $by, wants to be in touch" else "$by wants to introduce you to ${i.n}", style = Type.big)
+                    Text(if (i.theySaid) "${i.n} said yes. Say yes too and you're contacts." else "If you both say yes, you can message each other from anywhere.", style = Type.small)
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Yes", kind = Kind.Accent) { app.chat.answerIntro(i.id, true) }
+                        MButton("No thanks") { app.chat.answerIntro(i.id, false) }
+                    }
+                }
+            }
+            items(offers, key = { "f" + it.id }) { o ->
+                Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    val gname = app.chat.groups.group(o.by.removePrefix("g:"))?.state?.name ?: "Family"
+                    Text("Add ${o.n} as a contact?", style = Type.big)
+                    Text("${o.n} is in $gname with you. If they say yes too, you can message each other from anywhere.", style = Type.small)
+                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MButton("Add", kind = Kind.Accent) { app.chat.askToAdd(o.by.removePrefix("g:"), o.k, o.n, o.p); Ui.say("Asked ${o.n}. You're contacts once they say yes.") }
+                        MButton("Not now") { app.chat.dismissOffer(o) }
+                    }
+                }
+            }
             items(requests, key = { "r" + it.peerKey }) { r ->
                 Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
                     Text("${r.name} wants to chat", style = Type.big)
@@ -1600,6 +1634,33 @@ private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> U
         onClick = { close(); app.chat.flags.markUnread(key, true); leave() })
     DropdownMenuItem(text = { Text("Chat color", style = bodyStyle) }, leadingIcon = { MIcon("smile", Palette.accent, 20.dp) },
         onClick = { close(); onColor() })
+}
+
+/** Introduce [key] to another contact: both are asked, and if both say yes they're in touch. */
+@Composable
+private fun IntroduceDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
+    val all by app.chat.contacts.all.collectAsState()
+    val others = all.filter { !it.groupOnly && it.chatKey != key }.sortedBy { it.shown.lowercase() }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = done,
+        containerColor = Palette.panel,
+        title = { Text("Introduce $name to", style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Both are asked first. If both say yes, they can message each other. Nothing else about your chats is shared.", style = Type.small,
+                    modifier = Modifier.padding(bottom = 8.dp))
+                if (others.isEmpty()) Text("No other contacts yet.", style = Type.normal)
+                others.forEach { c ->
+                    Line(c.shown, "", icon = "user") {
+                        val err = app.chat.introduce(key, c.chatKey)
+                        Ui.say(err ?: "Asked $name and ${c.shown}. They're in touch once both say yes.", err != null)
+                        done()
+                    }
+                }
+            }
+        },
+        confirmButton = { MButton("Cancel") { done() } },
+    )
 }
 
 /** Chat color: the color of my bubbles in this chat. Only on this phone; the other person never sees it. */

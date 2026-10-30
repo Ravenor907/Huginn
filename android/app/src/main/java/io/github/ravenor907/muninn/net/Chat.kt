@@ -133,6 +133,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Invites handed out in my codes (token to expiry ms): declared before init, which loads them. */
     private val invites = HashMap<String, Long>()
     private val invitesStore = File(context.filesDir, "invites.json")
+    /** Cap i1: introductions and group members asking to be contacts, until both say yes or one says no. */
+    private val _intros = MutableStateFlow<List<Trust.Intro>>(emptyList())
+    val intros: StateFlow<List<Trust.Intro>> = _intros.asStateFlow()
+    private val introsStore = File(context.filesDir, "intros.json")
     /** The tokens of one-time invite links (inviteLink), still unused. */
     private val once = HashSet<String>()
     private val onceStore = File(context.filesDir, "invites-once.json")
@@ -216,6 +220,118 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         return Contacts.link(ChatWire.code(id.username, id.publicKey, nostr.publicKey, token, until, once = true))
     }
+
+    // ------------------------------------------------------------------ cap i1: introductions (docs/protocol-0.6.md, section 13)
+
+    fun hasI1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(Trust.CAP) == true
+
+    private fun saveIntros() { try { vault.write(introsStore, JSONArray().apply { _intros.value.forEach { put(Trust.toJson(it)) } }.toString()) } catch (_: Exception) {} }
+
+    private fun putIntro(i: Trust.Intro) = synchronized(lock) {
+        _intros.update { l -> l.filterNot { it.id == i.id } + i }
+        saveIntros()
+    }
+
+    /** Introduces two of my contacts to each other. Null when sent, else what to say. */
+    fun introduce(a: String, b: String): String? {
+        val ca = contacts.contact(a) ?: return "Pick two of your contacts."
+        val cb = contacts.contact(b) ?: return "Pick two of your contacts."
+        if (a == b) return "Pick two different people."
+        listOf(ca, cb).firstOrNull { !hasI1(it.chatKey) }?.let { probeCaps(it.chatKey); return "${it.shown} needs a newer Muninn for introductions." }
+        val introId = Proto06.newLogicalId()
+        bg {
+            for ((to, other) in listOf(ca to cb, cb to ca)) {
+                val plain = JSONObject().put("t", "intro").put("id", introId).put("k", other.chatKey).put("n", other.name).put("p", other.mailbox ?: "").toString()
+                deliver(to.chatKey, envelope("intro", to.chatKey, plain, UUID.randomUUID().toString()), to.mailbox)
+            }
+        }
+        return null
+    }
+
+    /** Yes or no to an introduction, or to someone in a group asking to be contacts. */
+    fun answerIntro(introId: String, yes: Boolean) {
+        val i = _intros.value.firstOrNull { it.id == introId } ?: return
+        if (!yes) { putIntro(i.copy(declined = true)); return }
+        val now = i.copy(iSaid = true, declined = false)
+        putIntro(now)
+        bg {
+            val plain = if (i.by.startsWith("g:")) JSONObject().put("t", "add").put("g", i.by.removePrefix("g:")).toString()
+                else JSONObject().put("t", "yes").put("id", i.id).toString()
+            deliver(i.k, envelope("intro", i.k, plain, UUID.randomUUID().toString()), i.p.ifEmpty { contacts.get(i.k)?.mailbox })
+        }
+        if (now.theySaid) introDone(now)
+    }
+
+    /** Someone in group [g] I'm not in touch with yet: ask to be contacts (they say yes on their phone too). */
+    fun askToAdd(g: String, k: String, name: String, mailbox: String) {
+        val id = Trust.groupId(g, this.id.publicKey, k)
+        val i = _intros.value.firstOrNull { it.id == id } ?: Trust.Intro(id, "g:$g", k, name, mailbox, at = System.currentTimeMillis())
+        putIntro(i)
+        answerIntro(id, true)
+    }
+
+    /** Both said yes: contacts on this phone (theirs does the same). */
+    private fun introDone(i: Trust.Intro) {
+        synchronized(lock) { _intros.update { l -> l.filterNot { it.id == i.id } }; saveIntros() }
+        if (isContact(i.k)) return
+        putContact(Contact(i.k, i.n, i.p.ifEmpty { null }, verified = false))
+        notices.tryEmit("You and ${i.n} are in touch now. Check the 4 pictures with them to be sure.")
+    }
+
+    /** Room "intro", already checked (Trust.ok). False: not from someone allowed to send it. */
+    private fun takeIntro(fromKey: String, name: String, mailbox: String?, p: JSONObject): Boolean {
+        val me = id.publicKey
+        when (p.getString("t")) {
+            "intro" -> {
+                val by = contacts.contact(fromKey) ?: return false
+                val k = p.getString("k")
+                if (k == me || isContact(k) || _intros.value.any { it.id == p.getString("id") }) return true
+                putIntro(Trust.Intro(p.getString("id"), fromKey, k, p.getString("n"), p.getString("p"), at = System.currentTimeMillis()))
+                arrivals.tryEmit(Triple(by.shown, "Wants to introduce you to ${p.getString("n")}", fromKey))
+            }
+            "yes" -> {
+                val i = _intros.value.firstOrNull { it.id == p.getString("id") && it.k == fromKey } ?: return isContact(fromKey)
+                val now = i.copy(theySaid = true, p = i.p.ifEmpty { mailbox ?: "" })
+                if (now.iSaid) introDone(now) else putIntro(now)
+            }
+            "add" -> {
+                val g = p.getString("g")
+                val grp = groups.group(g) ?: return false
+                if (grp.readOnly || !grp.state.has(fromKey) || !grp.state.has(me)) return false
+                if (isContact(fromKey)) return true
+                val id = Trust.groupId(g, me, fromKey)
+                val member = grp.state.member(fromKey)
+                val i = _intros.value.firstOrNull { it.id == id }
+                    ?: Trust.Intro(id, "g:$g", fromKey, member?.n?.ifBlank { null } ?: name, mailbox ?: member?.p ?: "", at = System.currentTimeMillis())
+                val now = i.copy(theySaid = true, p = i.p.ifEmpty { mailbox ?: "" })
+                if (now.iSaid) introDone(now) else {
+                    putIntro(now)
+                    if (!i.theySaid) arrivals.tryEmit(Triple(now.n, "From ${grp.state.name}: wants to be in touch", fromKey))
+                }
+            }
+        }
+        return true
+    }
+
+    /**
+     * People in my Family groups (named Family, or in my Family folder) I'm not in touch with yet and haven't been
+     * asked about: offered on Requests as "Add as a contact". (group, key, name, mailbox)
+     */
+    fun familyOffers(): List<Trust.Intro> {
+        val me = id.publicKey
+        val familyFolder = folders.all.value.firstOrNull { it.name.equals("Family", ignoreCase = true) }?.keys.orEmpty()
+        val known = _intros.value.map { it.k }.toSet()
+        return groups.all.value.values.filter { !it.readOnly && (it.state.name.contains("family", ignoreCase = true) || Folders.groupKey(it.g) in familyFolder) }
+            .flatMap { grp -> grp.state.members.filter { it.k != me && !isContact(it.k) && it.k !in known && hasCapsI1(it.k) }
+                .map { Trust.Intro(Trust.groupId(grp.g, me, it.k), "g:${grp.g}", it.k, it.n, it.p) } }
+            .distinctBy { it.k }
+    }
+
+    /** A group peer's app takes "add" only with i1: unknown for group peers, so only ones whose caps said so. */
+    private fun hasCapsI1(k: String) = contacts.get(k)?.caps?.contains(Trust.CAP) == true
+
+    /** Not now to a family offer: kept as declined, so it isn't offered again. */
+    fun dismissOffer(o: Trust.Intro) = putIntro(o.copy(declined = true, at = System.currentTimeMillis()))
 
     /** A one-time invite still good: used up now. */
     private fun useOnce(token: String): Boolean = token.isNotEmpty() && synchronized(invites) {
@@ -551,7 +667,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // a message proved it's really from them, so nobody can use it to block a real contact.
         if (recent.size > 500) recent.clear()
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
-        if (room == "tvconfig" || room == "call" || room == "mx" || room == "live") { if (!groupRate(room, fromKey)) return 429 to "{}" }
+        if (room == "tvconfig" || room == "call" || room == "mx" || room == "live" || room == "intro") { if (!groupRate(room, fromKey)) return 429 to "{}" }
         else if (room != "receipt") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
             if (q.size >= 5) return 429 to "{}"
@@ -686,6 +802,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (!found) { forget(listOf(gone)); held[fromKey]?.remove(gone) }
                 recalls.tryEmit(fromKey)
                 receipt(fromKey, listOf(gone), "unsent", mailbox)
+            }
+            "intro" -> {
+                val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                if (!Trust.ok(p)) return 400 to "{}"
+                if (!takeIntro(fromKey, name, mailbox, p)) return 403 to "{}"
             }
             "keep" -> {
                 if (isContact(fromKey)) return 200 to "{}"
@@ -1525,7 +1646,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** gmsg: 5 in 10 s per sender, like private messages. group: 20 in 10 s. greceipt: not limited (2.4). */
     private fun groupRate(room: String, k: String): Boolean {
-        val (map, max) = when (room) { "gmsg" -> recent to 5; "group", "tvconfig", "mx" -> groupTimes to 20; "call" -> callTimes to 30; "live" -> liveTimes to 30; else -> return true }
+        val (map, max) = when (room) { "gmsg" -> recent to 5; "group", "tvconfig", "mx", "intro" -> groupTimes to 20; "call" -> callTimes to 30; "live" -> liveTimes to 30; else -> return true }
         val now = System.currentTimeMillis()
         if (map.size > 500) map.clear()
         val q = map.getOrPut(k) { ArrayDeque() }
@@ -1745,6 +1866,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
             }
             vault.read(invitesStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
+            vault.read(introsStore)?.let { text -> val a = JSONArray(text); _intros.value = (0 until a.length()).map { Trust.fromJson(a.getJSONObject(it)) } }
             vault.read(onceStore)?.let { text -> val a = JSONArray(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
             vault.read(metStore)?.let { text ->
                 val o = JSONObject(text)

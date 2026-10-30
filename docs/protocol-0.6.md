@@ -65,6 +65,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
+| `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -1077,6 +1078,7 @@ send one there, with no `apps` needed.
 | `mx` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
 | `group` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
 | `photo`, `gphoto` | | pieces with `kind:"video"` (12.2) | yes | as photo | as photo | m2 |
+| `intro` | `intro` `yes` `add` | 13 | v1 (it may go to a non-contact) | no (the relays keep it) | Seen | i1 |
 
 ## 9. Size limits
 
@@ -1286,4 +1288,32 @@ A `rich` or `gmsg` message whose text has a web link may carry what it links to:
   The receiver never fetches anything: no website learns who got the link or when they read it. Tapping the preview asks
   "Open example.com?" before the browser does.
 - Apps without `m2` ignore `lp` and show the text, so a preview may go to anyone with `m1`.
+
+## 13. Getting in touch through someone you trust (cap `i1`)
+
+Room `intro`, sealed like a private message with v1 (it often goes to someone who isn't a contact yet), sent once on the
+first route that takes it (the relays keep it for the receiver). Limit: 20 per sender per 10 s. Only to `i1`.
+
+| t | sent by, to | fields | taken when |
+|---|---|---|---|
+| `intro` | a contact (the introducer), to each of the two people | `id` (a logical id, 2.3), `k` (the other person's chat key), `n` (their name, 1 to 40 characters), `p` (their mailbox or empty) | it comes from a real contact; nothing happens until the person says yes |
+| `yes` | an introduced person, to the other one | `id` | the receiver holds an introduction with that `id` whose `k` is the sender |
+| `add` | someone in a group, to another member | `g` (the group) | both are members of the receiver's current state of `g` |
+
+- Both said yes (`yes` both ways, or `add` both ways): each phone adds the other as a contact, not verified. An `add`
+  pair is named on both phones by `id = first 32 hex of SHA-256("add|" + g + "|" + the two chat keys sorted, joined by "|")`.
+- Muninn offers `add` for the members of a group called Family (or one in the person's own Family folder) who aren't
+  contacts yet, once their caps include `i1`.
+- Saying no sends nothing.
+
+### 13.5 Checking a contact by pictures (local)
+
+Besides the 6-digit code (0.5), Muninn shows 4 emoji for a pair: byte `i` (0 to 3) of
+`SHA-256(UTF-8("emoji code") || shared key)` picks emoji `byte mod 64` from the list `ChatCrypto.EMOJI` (its order is
+fixed). The same on both phones means nobody is in between. Nothing goes on the wire.
+
+### 13.6 One-time invite links (local)
+
+A contact code may carry `"1": true`: its invite token works once. The first stranger whose message carries it is added
+as a contact at once (no request to accept), and the token is used up; the app that adds such a code says hi straight away.
 
