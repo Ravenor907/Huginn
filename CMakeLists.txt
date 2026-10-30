@@ -32,6 +32,8 @@ if(WIN32)
         find_library(VPX_LIBRARY NAMES vpx vpxmd libvpx)
     endif()
     option(HUGINN_WINDOWS_PORTABLE "The CI build for Huginn-Windows.zip (updates itself from GitHub releases)" OFF)
+    # Control Flow Guard checks in everything compiled for Huginn.exe (the linker half is further down).
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/guard:cf>)
 else()
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
     find_package(KF6Prison REQUIRED)
@@ -165,6 +167,9 @@ if(WIN32)
     # Release: no debug info or PDB, unused code dropped, the same bytes for the same source.
     target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Brepro>)
+    # Hardening Windows checks for (tools/check-windows-binary.py fails the build without it): Control Flow
+    # Guard, CET shadow stacks, a random load address anywhere in 64-bit memory, and no running code from data.
+    target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/GUARD:CF /CETCOMPAT /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT>)
 else()
     target_sources(huginn PRIVATE
         src/platform/notify_linux.cpp
