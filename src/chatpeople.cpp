@@ -9,6 +9,7 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QUuid>
 
 namespace {
@@ -112,17 +113,28 @@ void Chat::loadFlags()
     const QJsonObject mu = o.value(QStringLiteral("muted")).toObject();
     for (auto it = mu.begin(); it != mu.end(); ++it)
         m_mutedUntil.insert(it.key(), it.value().toInteger());
+    m_rightAway.clear();
+    for (const QJsonValue &v : o.value(QStringLiteral("rightAway")).toArray())
+        m_rightAway.insert(v.toString());
+    m_chatColors.clear();
+    const QJsonObject co = o.value(QStringLiteral("colors")).toObject();
+    for (auto it = co.begin(); it != co.end(); ++it)
+        m_chatColors.insert(it.key(), it.value().toString());
 }
 
 void Chat::saveFlags()
 {
-    QJsonObject mu;
+    QJsonObject mu, co;
     for (auto it = m_mutedUntil.cbegin(); it != m_mutedUntil.cend(); ++it)
         mu.insert(it.key(), it.value());
+    for (auto it = m_chatColors.cbegin(); it != m_chatColors.cend(); ++it)
+        co.insert(it.key(), it.value());
     const QJsonObject o{{QStringLiteral("pinned"), QJsonArray::fromStringList(m_pinnedChats)},
                         {QStringLiteral("archived"), QJsonArray::fromStringList(QStringList(m_archived.cbegin(), m_archived.cend()))},
                         {QStringLiteral("unread"), QJsonArray::fromStringList(QStringList(m_markedUnread.cbegin(), m_markedUnread.cend()))},
-                        {QStringLiteral("muted"), mu}};
+                        {QStringLiteral("muted"), mu},
+                        {QStringLiteral("rightAway"), QJsonArray::fromStringList(QStringList(m_rightAway.cbegin(), m_rightAway.cend()))},
+                        {QStringLiteral("colors"), co}};
     m_vault->write(kFlags, QJsonDocument(o).toJson(QJsonDocument::Compact));
     Q_EMIT changed();
 }
@@ -179,10 +191,37 @@ void Chat::markUnread(const QString &key, bool on)
     saveFlags();
 }
 
+void Chat::setRightAway(const QString &key, bool on)
+{
+    if (m_rightAway.contains(key) == on)
+        return;
+    if (on)
+        m_rightAway.insert(key);
+    else
+        m_rightAway.remove(key);
+    saveFlags();
+}
+
+void Chat::setChatColor(const QString &key, const QString &color)
+{
+    // "" or a "#RRGGBB" color; anything else is ignored.
+    static const QRegularExpression hex(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
+    if (color.isEmpty())
+        m_chatColors.remove(key);
+    else if (hex.match(color).hasMatch())
+        m_chatColors.insert(key, color);
+    else
+        return;
+    saveFlags();
+}
+
 void Chat::forgetFlags(const QString &key)
 {
-    if (!m_pinnedChats.contains(key) && !m_archived.contains(key) && !m_markedUnread.contains(key) && !m_mutedUntil.contains(key))
+    if (!m_pinnedChats.contains(key) && !m_archived.contains(key) && !m_markedUnread.contains(key) && !m_mutedUntil.contains(key)
+        && !m_rightAway.contains(key) && !m_chatColors.contains(key))
         return;
+    m_rightAway.remove(key);
+    m_chatColors.remove(key);
     m_pinnedChats.removeAll(key);
     m_archived.remove(key);
     m_markedUnread.remove(key);
@@ -197,7 +236,7 @@ bool Chat::notifyFor(const QString &key)
     QString k = key;
     if (k.startsWith(QLatin1String("g:")))
         k = QStringLiteral("g:") + k.mid(2).section(QLatin1Char(':'), 0, 0);
-    if (isMuted(k))
+    if (isMuted(k) && !m_rightAway.contains(k))
         return false;
     if (m_archived.contains(k))
         archiveChat(k, false);

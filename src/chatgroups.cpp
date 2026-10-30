@@ -585,7 +585,7 @@ QVariantMap Chat::parseGroupCode(const QString &text) const
 QString Chat::joinWithCode(const QString &text)
 {
     if (!m_ready)
-        return QStringLiteral("Open Chat and unlock it first.");
+        return QStringLiteral("Open Huginn and unlock it first.");
     const QVariantMap c = parseGroupCode(text);
     if (c.isEmpty())
         return QStringLiteral("That isn't a group code. It starts with MUNINNG1.");

@@ -248,7 +248,13 @@ public:
     Q_INVOKABLE qint64 mutedUntil(const QString &key) const { return m_mutedUntil.value(key, 0); }
     Q_INVOKABLE void markUnread(const QString &key, bool on);
     Q_INVOKABLE bool isMarkedUnread(const QString &key) const { return m_markedUnread.contains(key); }
-    // A message arrived for key: false while that chat is muted; an archived one comes back.
+    // Always right away (as Muninn's list): their messages make a sound and a notification even while muted.
+    Q_INVOKABLE bool isRightAway(const QString &key) const { return m_rightAway.contains(key); }
+    Q_INVOKABLE void setRightAway(const QString &key, bool on);
+    // A color for this chat ("" for the usual, else "#RRGGBB"), only on this computer.
+    Q_INVOKABLE QString chatColor(const QString &key) const { return m_chatColors.value(key); }
+    Q_INVOKABLE void setChatColor(const QString &key, const QString &color);
+    // A message arrived for key: false while that chat is muted (unless Always right away); an archived one comes back.
     bool notifyFor(const QString &key);
 
     // Calls (docs/protocol-0.6.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
@@ -587,6 +593,8 @@ private:
     QStringList m_pinnedChats;                          // chats pinned to the top, in order
     QSet<QString> m_archived, m_markedUnread;
     QHash<QString, qint64> m_mutedUntil;
+    QSet<QString> m_rightAway;
+    QHash<QString, QString> m_chatColors;
     QSet<QString> m_keptBack;
     bool m_moving = false;                           // contacts whose "keep" got my yes back (once each)
     bool m_front = false;

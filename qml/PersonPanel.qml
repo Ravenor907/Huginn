@@ -10,8 +10,7 @@ import Huginn
 // through has() so this screen still works on a build without them:
 //   Chat.callsAllowed / setCallsAllowed, Chat.filesAllowed / setFilesAllowed, Chat.showsActive / setShowsActive
 //   Chat.pinChat, isPinnedChat, archiveChat, isArchived, muteChat (until, ms), isMuted, markUnread, isMarkedUnread
-// Not on Huginn yet (shown, and say so when used): Always right away (Chat.alwaysRightAway /
-// setAlwaysRightAway) and the chat color (Chat.chatColor / setChatColor).
+//   Chat.isRightAway / setRightAway (Always right away), Chat.chatColor / setChatColor (the chat color)
 Item {
     id: panel
     property string key: ""
@@ -38,12 +37,12 @@ Item {
         return Chat[fn].apply(Chat, args || [])
     }
     readonly property var perms: tour ? { always: true, calls: true, files: true, active: true } : (revision, Chat.chats, {
-        always: hook("alwaysRightAway", [key], false), calls: hook("callsAllowed", [key], true),
+        always: hook("isRightAway", [key], false), calls: hook("callsAllowed", [key], true),
         files: hook("filesAllowed", [key], true), active: hook("showsActive", [key], true) })
     readonly property var flags: tour ? { muted: false, archived: false, unread: false, pinned: false, color: "" } : (revision, Chat.chats, {
         muted: hook("isMuted", [key], false), archived: hook("isArchived", [key], false), unread: hook("isMarkedUnread", [key], false),
         pinned: hook("isPinnedChat", [key], false), color: hook("chatColor", [key], "") })
-    readonly property var setters: ({ always: "setAlwaysRightAway", calls: "setCallsAllowed", files: "setFilesAllowed", active: "setShowsActive" })
+    readonly property var setters: ({ always: "setRightAway", calls: "setCallsAllowed", files: "setFilesAllowed", active: "setShowsActive" })
 
     // ------------------------------------------------------------- role: the three starting folders
     readonly property var roles: ["Family", "Work", "Folk", "None"]
@@ -76,7 +75,7 @@ Item {
     function permOn(id) { return !!perms[id] }
     function togglePerm(id) {
         if (tour) return
-        if (!has(setters[id])) { Ui.say("This comes with the next update.", true); return }
+        if (!has(setters[id])) return
         Chat[setters[id]](key, !permOn(id))
         revision++
     }
@@ -101,14 +100,14 @@ Item {
             const k = Object.assign({}, extra); k.keys = next; extra = k
             Ui.say(how === "pin" ? shownName + " is at the top." : "Moved.")
         } else if (how === "mute") {
-            if (!has("muteChat")) { Ui.say("This comes with the next update.", true); return }
+            if (!has("muteChat")) return
             // For good until unmuted (a huge time, as the trust work expects).
             Chat.muteChat(key, flags.muted ? 0 : 8640000000000000)
         } else if (how === "archive") {
-            if (!has("archiveChat")) { Ui.say("This comes with the next update.", true); return }
+            if (!has("archiveChat")) return
             Chat.archiveChat(key, !flags.archived)
         } else if (how === "unread") {
-            if (!has("markUnread")) { Ui.say("This comes with the next update.", true); return }
+            if (!has("markUnread")) return
             Chat.markUnread(key, !flags.unread)
         }
         revision++
@@ -124,7 +123,7 @@ Item {
     readonly property var colors: ["", "#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6"]
     function setColor(c) {
         if (tour) return
-        if (!has("setChatColor")) { Ui.say("This comes with the next update.", true); return }
+        if (!has("setChatColor")) return
         Chat.setChatColor(key, c)
         revision++
     }
