@@ -592,7 +592,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         t.count++
         schedule(t)
         // One envelope for the whole unsend: every retry sends the same bytes.
-        val body = outbox.getOrMake(UNSEND + m.id, stale = stale(m.peerKey)) { listOf(envelope("unsend", m.peerKey, m.id, UUID.randomUUID().toString()).toString()) }
+        val body = outbox.fresh(UNSEND + m.id, stale(m.peerKey)) { listOf(envelope("unsend", m.peerKey, m.id, UUID.randomUUID().toString()).toString()) }
             ?.firstOrNull() ?: return
         closeTo(m.peerKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
         ble.send(m.peerKey, body, strict(m.peerKey))
@@ -1019,7 +1019,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** The photo's sealed pieces: made (and encrypted) once, then the same bytes on every try and route. */
-    private fun pieces(m: Msg): List<String>? = outbox.getOrMake(m.id, stale = stale(m.peerKey)) {
+    private fun pieces(m: Msg): List<String>? = outbox.fresh(m.id, stale(m.peerKey)) {
         val bytes = photo(m.photo) ?: return@getOrMake null
         val parts = Photos.split(bytes)
         seal("photo", m.peerKey, parts.mapIndexed { i, part ->
@@ -1502,7 +1502,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         schedule(t)
         if (m.photo.isNotEmpty()) { attemptPhoto(m, t); return }
         // Sealed once; every try and every route sends these same bytes.
-        val body = outbox.getOrMake(m.id, stale = stale(m.peerKey)) {
+        val body = outbox.fresh(m.id, stale(m.peerKey)) {
             // A reply, poll or link preview goes as "rich" to an app that has m1; the same text without them to any other.
             val rich = (m.re.isNotEmpty() || m.poll != null || m.preview != null) && hasM1(m.peerKey)
             listOf(envelope(if (rich) "rich" else "private", m.peerKey, if (rich) richPayload(m) else m.text, m.id).toString())
@@ -1834,7 +1834,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // A 0.5 app answers 400 to group rooms: only ever to someone whose app said g1 (group peers always can).
         if (!c.groupOnly && "g1" !in c.caps) { probeCaps(o.to); return }
         val bodies = (if (!o.retry) listOf(envelope(o.room, o.to, o.plain, o.env).toString())
-            else outbox.getOrMake(o.env, stale = stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
+            else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
         spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null)
     }
 

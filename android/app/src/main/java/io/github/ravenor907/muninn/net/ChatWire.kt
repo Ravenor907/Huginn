@@ -205,7 +205,9 @@ class Outbox(private val dir: File, private val read: (File) -> String?, private
      * The cached envelopes for [id], or [make]s them once and keeps them. Never two encryptions for one id, unless
      * [stale] says the cached ones were sealed the old way (cap s1: before their app said it seals its clear fields).
      */
-    fun getOrMake(id: String, now: Long = System.currentTimeMillis(), stale: ((String) -> Boolean)? = null, make: () -> List<String>?): List<String>? = synchronized(lock) {
+    fun getOrMake(id: String, now: Long = System.currentTimeMillis(), make: () -> List<String>?): List<String>? = fresh(id, null, now, make)
+
+    fun fresh(id: String, stale: ((String) -> Boolean)?, now: Long = System.currentTimeMillis(), make: () -> List<String>?): List<String>? = synchronized(lock) {
         get(id, now)?.let { e -> if (stale == null || e.isEmpty() || !stale(e[0])) return e; drop(id) }
         val e = make() ?: return null
         memo[id] = now to e
