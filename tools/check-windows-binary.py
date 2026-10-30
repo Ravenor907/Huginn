@@ -10,6 +10,8 @@ Fails (exit 1, with GitHub annotations) when Huginn.exe:
     (ResumeThread, CreateProcess, WinExec, ShellExecute, WriteProcessMemory...). Huginn starts its
     new copy after an update with Qt's QProcess, which lives in Qt6Core.dll, not in Huginn.exe.
   - lacks version details (VERSIONINFO) or an application manifest.
+  - lacks the hardening Windows looks for: Control Flow Guard, CET shadow stack support, a random
+    load address (high entropy, 64-bit) and no running code from data (DEP).
 The other DLLs and EXEs (Qt, OpenSSL, FFmpeg...) are only reported, not failed on.
 """
 import os
@@ -90,6 +92,32 @@ def imports(data):
     return found
 
 
+# DllCharacteristics bits, and the one extended bit (in the debug directory) for CET shadow stacks.
+HARDENING = [(0x0020, "HIGH_ENTROPY_VA"), (0x0040, "DYNAMIC_BASE"), (0x0100, "NX_COMPAT"), (0x4000, "GUARD_CF")]
+EX_CET_COMPAT = 0x01
+DEBUG_TYPE_EX_DLLCHARACTERISTICS = 20
+
+
+def hardening(data):
+    """Names of the hardening flags Huginn.exe is missing (empty when it has them all)."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    # DllCharacteristics sits at the same offset in 32- and 64-bit optional headers.
+    flags, = struct.unpack_from("<H", data, pe + 24 + 70)
+    missing = [name for bit, name in HARDENING if not flags & bit]
+    sections, dirs, _ = pe_sections(data)
+    rva, size = dirs[6]
+    ex = 0
+    if rva:
+        off = rva_to_off(sections, rva)
+        for i in range(size // 28):
+            kind, length, _, raw = struct.unpack_from("<IIII", data, off + 28 * i + 12)
+            if kind == DEBUG_TYPE_EX_DLLCHARACTERISTICS and length >= 4:
+                ex |= struct.unpack_from("<I", data, raw)[0]
+    if not ex & EX_CET_COMPAT:
+        missing.append("CET_COMPAT")
+    return missing
+
+
 def resource_types(data):
     sections, dirs, _ = pe_sections(data)
     rva, _ = dirs[2]
@@ -131,6 +159,7 @@ def main():
                         hits.append("no VERSIONINFO resource")
                     if 24 not in types:
                         hits.append("no application manifest")
+                    hits += ["not built with %s" % name for name in hardening(data)]
                 except (ValueError, struct.error) as e:
                     hits.append("unreadable PE: %s" % e)
             if hits and ours:
@@ -139,7 +168,8 @@ def main():
             elif hits:
                 print("note: %s: %s" % (rel, "; ".join(hits)))
             elif ours:
-                print("Huginn.exe: no script, hidden-window or process-injection traces; has version details and a manifest")
+                print("Huginn.exe: no script, hidden-window or process-injection traces; has version details and a manifest; "
+                      "built with CFG, CET, ASLR (high entropy) and DEP")
     if not os.path.exists(main_exe):
         annotate("error", "Binary check", "No Huginn.exe at the top of " + folder)
         bad = 1

@@ -100,6 +100,8 @@ https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk
 cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
+Every download is signed with the project's own release key, and both apps refuse an update that isn't. Windows may still warn about an unknown publisher the first time: choose **More info**, then **Run anyway**. How to check a download yourself: [Releases and how to check them](docs/releases.md).
+
 Huginn also works with a game controller or TV remote: see [Using Huginn with a controller](docs/controller.md).
 
 ## For developers
@@ -111,16 +113,7 @@ tools/get-fonts.sh
 flatpak-builder --user --install --force-clean build packaging/io.github.ravenor907.Huginn.json
 ```
 
-Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`. The wire protocol is in [docs/protocol-0.6.md](docs/protocol-0.6.md).
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-
-Windows builds (Huginn.exe in Huginn-Windows.zip) are built from this repository by GitHub Actions and signed only after a person approves each release.
-
-- Committers and reviewers: [Ravenor907](https://github.com/Ravenor907)
-- Approvers: [Ravenor907](https://github.com/Ravenor907)
+Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`. The wire protocol is in [docs/protocol-0.6.md](docs/protocol-0.6.md). Found a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Privacy
 

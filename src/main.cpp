@@ -114,6 +114,8 @@ int main(int argc, char *argv[])
     args.addOption(callTest);
     QCommandLineOption wifiTest(QStringLiteral("wifi-selftest"), QStringLiteral("Run on a throwaway profile, receive an encrypted message from a pretend Muninn over the local HTTPS endpoint, raise the call and a notification (for CI), then quit."));
     args.addOption(wifiTest);
+    QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(releaseSigTest);
     args.process(app);
     const bool wifiSelf = args.isSet(wifiTest);
     if (wifiSelf)
@@ -134,6 +136,8 @@ int main(int argc, char *argv[])
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
         return selfTested(a && b && c && d);
     }
+    if (args.isSet(releaseSigTest))
+        return selfTested(Updater::selfTest(args.value(releaseSigTest)));
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
