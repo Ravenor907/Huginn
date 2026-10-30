@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn
 
 import io.github.ravenor907.muninn.net.ChatCrypto
 import io.github.ravenor907.muninn.net.Groups
+import io.github.ravenor907.muninn.net.Limits
 import io.github.ravenor907.muninn.net.Proto06
 import io.github.ravenor907.muninn.net.Rich
 import org.json.JSONObject
@@ -40,7 +41,10 @@ class GroupsTest {
         override fun arrived(g: String, title: String, text: String) {}
         override fun deleteBlob(id: String) {}
         override fun hasM1(k: String) = k !in noM1
+        override fun hasD1(k: String) = k !in noD1
     }
+    /** Phones whose app doesn't have d1 (they can't be in a Family or Work group). */
+    private val noD1 = HashSet<String>()
     /** Phones whose app doesn't have m1 (reactions and edits aren't sent to them). */
     private val noM1 = HashSet<String>()
 
@@ -323,5 +327,44 @@ class GroupsTest {
         val over = s.copy(v = 2, members = Proto06.sortedMembers(s.members + more), sig = "").signedBy(a.keys.private, a.key)
         assertFalse(Proto06.accept(s, over).first)
         assertTrue(Proto06.accept(s, full).first)
+    }
+
+    /** Cap d1 (section 16.2): the type and limit ride in the signed state; old messages go by each group's own limit. */
+    @Test
+    fun groupTypeAndMessageLimit() {
+        val g = family()
+        assertEquals(Limits.DEFAULT, Limits.groupDays(a.state(g)))
+        // Someone's app is older: the group can't become Family yet.
+        noD1.add(c.key)
+        assertNotNull(a.groups.setLimit(g, "family", 30))
+        assertEquals("", a.state(g).kind)
+        noD1.clear()
+        assertNull(a.groups.setLimit(g, "family", 30)); pump()
+        same(g, a, b, c)
+        phones.forEach { assertEquals(30, Limits.groupDays(it.state(g))); assertEquals("family", it.state(g).kind) }
+        // Only admins change it.
+        assertNotNull(c.groups.setLimit(g, "work", 14))
+        // An older app can't be invited into a Family group.
+        val d = a.groups.create("Other", "work")!!
+        assertEquals("work", a.state(d).kind)
+        noD1.add(b.key)
+        assertNotNull(a.groups.invite(d, b.key))
+        noD1.clear()
+        // Messages older than the limit go; newer ones stay.
+        assertTrue(a.groups.sendText(g, Proto06.MAIN, "Old news")); pump()
+        clock += 20 * Limits.DAY
+        assertTrue(a.groups.sendText(g, Proto06.MAIN, "Fresh")); pump()
+        b.groups.pruneOlder { days -> Limits.cutoff(clock, days) }
+        assertEquals(listOf("Old news", "Fresh"), b.groups.messages.value[g].orEmpty().map { it.text })
+        assertNull(a.groups.setLimit(g, "family", 14)); pump()
+        b.groups.pruneOlder { days -> Limits.cutoff(clock, days) }
+        assertEquals(listOf("Fresh"), b.groups.messages.value[g].orEmpty().map { it.text })
+        // A late copy of what went doesn't come back.
+        val old = a.groups.messages.value[g].orEmpty().first { it.text == "Old news" }
+        assertNotNull(b.groups.knownEnvelope(old.id + "-00000000"))
+        // Back to Standard: the fields go and older apps take the state again.
+        assertNull(a.groups.setLimit(g, "", 7)); pump()
+        assertEquals(Limits.DEFAULT, Limits.groupDays(b.state(g)))
+        assertFalse(b.state(g).canonSigned().contains("kind"))
     }
 }

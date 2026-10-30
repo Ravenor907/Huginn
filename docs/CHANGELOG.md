@@ -2,10 +2,21 @@
 
 Newest first. Huginn and Muninn are released together, with the same version number.
 
-## 0.94 (not released yet)
+## 0.94 (not released)
 
 | | |
 |---|---|
+| **Messages on time, without Google** | In the background Muninn now keeps one light connection to the healthiest relay, checked about every 5 minutes and lined up with the phone's other wake-ups, and swaps to another relay at once if it stops answering. It never falls back to checking every 15 minutes or every hour unless you pick that in Settings. |
+| **Always right away** | Your Family folder to start with, and anyone you add (Settings › Notifications, or a chat's menu). A low battery, quiet hours and checking less never hold their messages back. During quiet hours everyone else's messages arrive without a sound. |
+| **Replies come at once** | For about 5 minutes after you send or get a message, Muninn stays fully connected so the conversation flows. |
+| **Catches up instantly** | When you unlock the phone, when it joins a network, and when you open Muninn. |
+| **Honest ticks** | "Delivered" means it reached their phone. Until then it says "Waiting for Anna's phone". In groups, the message's menu shows whose phones have it and whose it's waiting for. |
+| **No more hourly floor** | A very low battery or a long quiet spell now checks the one connection every 10 minutes instead of dropping to hourly checks. |
+| **Unrestricted background use** | The Finish setting up card explains why it helps and asks for it in one tap. |
+| **Battery report shows the connection's cost** | Time on the light connection, checks and wake-ups, reconnects, and a rough share of the battery. |
+| **Messages disappear after 7 days** | Every chat, 1:1 and group, deletes messages older than 7 days on every phone and computer: text, photos, voice clips, videos, files, polls and previews. Encrypted backups leave them out too. Chats you already have get the limit the first time 0.94 starts, and the chat list says so once. |
+| **Family and Work keep longer** | A group's admins pick its type: Standard, Family or Work. Family and Work groups can keep messages up to 30 days, the same for everyone. In a 1:1 chat with someone in your Family or Work folder you can pick up to 30 days; if you two pick differently, the shorter one counts. |
+| **Older apps** | Someone on an older version keeps messages until they update; the chat's info says so. Your side still deletes them on time. |
 | **Huginn looks and feels like Discord on a PC** | Drag the edges between panels to resize them, hide the list or the member list, compact or cozy messages with their own text size, and Dark, True black or Light themes with any accent color (Settings › Appearance). |
 | **Who's around** | A group's member list shows who's online, idle or in a voice room. Click a name for their profile card: Message, Call, Video, a nickname, a note only you see, and their folders. |
 | **Voice panel** | In a voice room on a PC, who you're with, Mute, Deafen and Leave sit at the foot of the list. Push to talk: hold a key you choose (Settings › Calls). |

@@ -74,6 +74,11 @@ class Muninn : Application() {
                 enableLights(true)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
             })
+            // Quiet hours: messages from people not on the "Always right away" list, with no sound or pop-up.
+            createNotificationChannel(NotificationChannel(QUIET, "Messages during quiet hours", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Messages from people not on your Always right away list while quiet hours last. No sound or pop-up."
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
+            })
         }
         // While locked, the internet inbox can still say something arrived, without opening it.
         nostr.onEnvelope = { notify(null, null, "inbox"); false }
@@ -107,9 +112,16 @@ class Muninn : Application() {
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) ->
             power.activity()   // Check less when it's quiet starts over
+            power.talk()       // and the conversation window opens, so the next message comes at once too
             // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
             if (!chat.flags.arrived(key)) return@collect
-            if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) buzz() else notify(name, text, key)
+            if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { buzz(); return@collect }
+            // Quiet hours kept open for the "Always right away" list: everyone else's messages wait quietly.
+            when (power.alert(key)) {
+                io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD -> notify(name, text, key)
+                io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET -> notify(name, text, key, quiet = true)
+                io.github.ravenor907.muninn.net.PowerLogic.Alert.NONE -> {}
+            }
         } }
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
@@ -179,15 +191,15 @@ class Muninn : Application() {
     }
 
         /** Privacy first: unless the person allows previews, a notification says only "New message". */
-    fun notify(name: String?, text: String?, key: String) {
+    fun notify(name: String?, text: String?, key: String, quiet: Boolean = false) {
         // Panic-locked: never a name or text on the notification.
         val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value
         val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).putExtra("chat", key)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
+        val n = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVibrate(BUZZ).setOnlyAlertOnce(key == "inbox")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
             .apply { replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
@@ -236,6 +248,7 @@ class Muninn : Application() {
 
     companion object {
         const val MESSAGES = "raven_messages"
+        const val QUIET = "raven_quiet"
         val BUZZ = longArrayOf(0, 140, 90, 140)
     }
 }

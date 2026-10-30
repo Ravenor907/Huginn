@@ -231,9 +231,10 @@ private fun TvPairing(app: Muninn) {
     LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
 }
 
-private val AGES = longArrayOf(0L, 86_400_000L, 7 * 86_400_000L, 30 * 86_400_000L)
+// Every chat deletes messages after 7 days (cap d1); a day is the only sooner choice.
+private val AGES = longArrayOf(0L, 86_400_000L)
 private fun nextAge(a: Long) = AGES[(AGES.indexOf(a) + 1) % AGES.size]
-private fun ageName(a: Long) = when (a) { 0L -> "Never"; 86_400_000L -> "1 day"; 7 * 86_400_000L -> "1 week"; 30 * 86_400_000L -> "30 days"; else -> "${a / 86_400_000L} days" }
+private fun ageName(a: Long) = if (a in 1 until 7 * 86_400_000L) "1 day" else "7 days"
 
 @Composable
 private fun TvChip(text: String, requester: FocusRequester?, quiet: Boolean = false, onClick: () -> Unit) {

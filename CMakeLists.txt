@@ -32,6 +32,8 @@ if(WIN32)
         find_library(VPX_LIBRARY NAMES vpx vpxmd libvpx)
     endif()
     option(HUGINN_WINDOWS_PORTABLE "The CI build for Huginn-Windows.zip (updates itself from GitHub releases)" OFF)
+    # Control Flow Guard checks in everything compiled for Huginn.exe (the linker half is further down).
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/guard:cf>)
 else()
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network DBus WebSockets Bluetooth Multimedia)
     find_package(KF6Prison REQUIRED)
@@ -58,8 +60,15 @@ qt_add_executable(huginn
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
+    src/chatlimits.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
+    src/morewire.cpp src/morewire.h
+    src/chatmore.cpp
+    src/linkpreview.cpp src/linkpreview.h
+    src/videomsg.cpp src/videomsg.h
+    src/thumbs.cpp src/thumbs.h
+    src/msglimits.cpp src/msglimits.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
     src/photos.cpp src/photos.h
@@ -156,6 +165,9 @@ if(WIN32)
     # Release: no debug info or PDB, unused code dropped, the same bytes for the same source.
     target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DEBUG:NONE /OPT:REF /OPT:ICF /Brepro>)
     target_compile_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Brepro>)
+    # Hardening Windows checks for (tools/check-windows-binary.py fails the build without it): Control Flow
+    # Guard, CET shadow stacks, a random load address anywhere in 64-bit memory, and no running code from data.
+    target_link_options(huginn PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/GUARD:CF /CETCOMPAT /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT>)
 else()
     target_sources(huginn PRIVATE
         src/platform/notify_linux.cpp
@@ -220,6 +232,10 @@ qt_add_qml_module(huginn
         qml/MessageRow.qml
         qml/QuickSwitcher.qml
         qml/StickPointer.qml
+        qml/MoreParts.qml
+        qml/MoreLayer.qml
+        qml/PhotoViewer.qml
+        qml/PollDialog.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -231,7 +247,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher StickPointer)
+                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels (0.94).

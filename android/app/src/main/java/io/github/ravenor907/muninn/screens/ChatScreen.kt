@@ -632,6 +632,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onAllowNearby() }.padding(bottom = 8.dp))
                     // Permissions still missing (microphone, camera, notifications, running in the background).
                     SetupCard(app, Modifier.padding(bottom = 8.dp))
+                    LimitsNote(Modifier.padding(bottom = 8.dp))
                 }
             }
             // Message requests: people who have my code but aren't contacts yet, and group invites. Their own page.
@@ -870,7 +871,8 @@ private fun Conversation(app: Muninn, key: String) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val isTv = tvs[key]?.disconnecting == false
     // What their app speaks isn't known yet (no message since they upgraded): ask once (protocol 0.6, 1.2).
-    LaunchedEffect(key) { app.chat.probeCaps(key) }
+    LaunchedEffect(key) { app.chat.probeCaps(key); app.chat.pruneSoon() }
+    var limits by remember { mutableStateOf(false) }
     val msgs = convos[key].orEmpty()
     var text by remember { mutableStateOf("") }
     val list = rememberLazyListState()
@@ -1024,6 +1026,9 @@ private fun Conversation(app: Muninn, key: String) {
                 onClick = { close(); renaming = true })
             DropdownMenuItem(text = { Text("Folders", style = bodyStyle) }, leadingIcon = { MIcon("folder", Palette.accent, 20.dp) },
                 onClick = { close(); folderPick = true })
+            // Cap d1: how long this chat keeps messages.
+            if (c != null) DropdownMenuItem(text = { Text(io.github.ravenor907.muninn.net.Limits.words(app.chat.chatDays(key)), style = bodyStyle) },
+                leadingIcon = { MIcon("clock", Palette.accent, 20.dp) }, onClick = { close(); limits = true })
             ChatFlagItems(app, key, name, close, { muting = true }, { coloring = true }) { ChatNav.open = "" }
             if (c != null) DropdownMenuItem(text = { Text("Introduce $name to…", style = bodyStyle) }, leadingIcon = { MIcon("people", Palette.accent, 20.dp) },
                 onClick = { close(); introducing = true })
@@ -1047,6 +1052,7 @@ private fun Conversation(app: Muninn, key: String) {
         if (folderPick) FolderPicker(app, key, name) { folderPick = false }
         if (muting) MuteDialog(app, key, name) { muting = false }
         if (coloring) ColorDialog(app, key) { coloring = false }
+        if (limits) ChatLimitDialog(app, key, name) { limits = false }
         if (introducing) IntroduceDialog(app, key, name) { introducing = false }
         if (renaming && c != null) RenameDialog(c) { nick -> if (nick != null) app.chat.rename(key, nick); renaming = false }
         // Their security key changed: say so until the code has been checked.
@@ -1370,11 +1376,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
         m.state == "unsending" -> "Removing from their phone"
         m.unsent.isNotEmpty() -> ""
         m.failed -> "Didn't send"
-        m.state == "read" -> "Read"
-        m.state == "delivered" -> "Delivered"
-        m.state == "sent" -> "Sent"
-        m.state == "sending" -> "Sending"
-        else -> ""
+        // Honest ticks: "Delivered" only once their phone has it, else whose phone it's waiting for.
+        else -> io.github.ravenor907.muninn.net.Ticks.private(m.state, theirName)
     }
     val edited = if (m.edited > 0 && m.unsent.isEmpty()) "(edited)" else ""
     // A group message of mine that someone read: the check mark and the count stand in for "Read by 2".
@@ -1652,6 +1655,15 @@ private fun ChatFlagItems(app: Muninn, key: String, name: String, close: () -> U
     val muted = app.chat.flags.muted(key)
     DropdownMenuItem(text = { Text(if (muted) "Unmute" else "Mute", style = bodyStyle) }, leadingIcon = { MIcon("mute", Palette.accent, 20.dp) },
         onClick = { close(); if (muted) { app.chat.flags.mute(key, 0); Ui.say("$name isn't muted any more.") } else onMute() })
+    // Always right away: a low battery, quiet hours and checking less never hold this chat's messages back.
+    val ra = app.power.isRightAway(key)
+    DropdownMenuItem(text = { Text(if (ra) "Always right away: on" else "Always right away: off", style = bodyStyle) },
+        leadingIcon = { MIcon("clock", Palette.accent, 20.dp) },
+        onClick = {
+            close(); app.power.setRightAway(key, !ra)
+            Ui.say(if (!ra) "$name's messages always arrive and ring right away, even with a low battery or in quiet hours."
+                else "$name's messages follow your battery and quiet hours settings again.")
+        })
     val archived = key in st.archived
     DropdownMenuItem(text = { Text(if (archived) "Unarchive" else "Archive", style = bodyStyle) }, leadingIcon = { MIcon("download", Palette.accent, 20.dp) },
         onClick = {
@@ -1987,14 +1999,16 @@ private fun NoGroup() {
 @Composable
 private fun NewGroup(app: Muninn) {
     var name by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("New group")
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Text("Everyone in a group gets every message, each one sealed separately to them, end to end. Up to ${Proto06.MAX_MEMBERS} people.",
                 style = Type.normal, modifier = Modifier.padding(top = 12.dp))
             Field(name, { name = it.take(Proto06.MAX_NAME) }, "Group name", Modifier.padding(vertical = 10.dp))
-            MButton("Create", Modifier.fillMaxWidth(), Kind.Accent, enabled = name.isNotBlank()) {
-                val g = app.chat.groups.create(name)
+            GroupKindPicker(kind) { kind = it }
+            MButton("Create", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = name.isNotBlank()) {
+                val g = app.chat.groups.create(name, kind)
                 if (g == null) Ui.say("Give the group a name.", true)
                 else {
                     if (ChatNav.wide) ChatNav.space = g
@@ -2087,6 +2101,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     var muting by remember { mutableStateOf(false) }
     var coloring by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
+    LaunchedEffect(g) { app.chat.pruneSoon() }
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); app.chat.flags.read(Folders.groupKey(g)); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
     // While it's on screen, new messages here just buzz; its old notification goes.
@@ -2183,7 +2198,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
-            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
+            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted · ${io.github.ravenor907.muninn.net.Limits.groupDays(s)} days", "shield", Palette.online,
             { GroupAvatar(s.name, others, 40.dp) }, actions = {
                 if (!grp.readOnly && s.members.size > 1) IconAction("call", "Call everyone in ${s.name}", Palette.text) {
                     Ui.sure(Ask("Call everyone in ${s.name}?", "It rings everyone whose app can join. Up to ${RoomLogic.MAX_PEOPLE} people talk at once.", "Call",
@@ -2242,7 +2257,8 @@ private fun GroupConversation(app: Muninn, g: String) {
                     if (i == 0 || dayIndex(msgs[i - 1].time) != dayIndex(gm.time)) DayLabel(gm.time)
                     // Mine: a check mark and how many have read it, circled; before anyone has, "Sending" or "Delivered".
                     if (m.id !in gAlbums.first) Bubble(m, showName = true, photo = if (gm.photo.isNotEmpty()) ({ app.chat.photo(gm.photo) }) else null,
-                        statusText = if (gm.mine) (if (gm.read.isNotEmpty()) "" else Groups.status(gm)) else null,
+                        statusText = if (gm.mine) (if (gm.read.isNotEmpty() || gm.unsent.isNotEmpty()) "" else
+                            io.github.ravenor907.muninn.net.Ticks.group(gm.to, gm.delivered) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }) else null,
                         quote = quoteOf(gm.re), onQuote = { jumpTo(gm.re) }, me = me, groupRead = if (gm.mine) gm.read.size else -1,
                         highlight = matches.getOrNull(matchAt) == i || (!gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username)),
                         onReply = if (grp.readOnly) null else ({ editing = null; replyTo = gm }), onReactions = { sheetFor = gm },
@@ -2313,6 +2329,9 @@ private fun GroupConversation(app: Muninn, g: String) {
             if (shown.isNotEmpty()) add(SheetAction(shown.entries.joinToString(", ") { (k, e) ->
                 "$e " + (if (k == me) "You" else s.member(k)?.let { memberName(app, it) } ?: "Someone") }, "smile") {})
             if (gm.mine) add(SheetAction(Groups.status(gm).ifEmpty { "Sent" }, "check") {})
+            // Per member: whose phones have it and whose it's still waiting for.
+            if (gm.mine && gm.unsent.isEmpty()) io.github.ravenor907.muninn.net.Ticks.groupLines(gm.to, gm.delivered) { k ->
+                s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check") {}) }
             if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",
                     "Unsend removes it from everyone's phone in ${s.name}. They'll see “Message deleted by ${app.identity.username}”.",
@@ -2425,6 +2444,7 @@ private fun GroupSettings(app: Muninn, g: String) {
                     code = app.chat.groups.code(g) ?: run { Ui.say("Only admins can make a group code.", true); null }
                 }
             }
+            GroupLimitPanel(app, g, s, admin)
             Section("Channels")
             s.channels.forEach { c ->
                 Line(if (c.t == "voice") c.n else "# ${c.n}", when {

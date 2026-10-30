@@ -30,6 +30,11 @@
 #include "transfer.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "morewire.h"
+#include "linkpreview.h"
+#include "videomsg.h"
+#include "thumbs.h"
+#include "msglimits.h"
 #include "richwire.h"
 
 #include <QApplication>
@@ -115,6 +120,8 @@ int main(int argc, char *argv[])
     args.addOption(callTest);
     QCommandLineOption wifiTest(QStringLiteral("wifi-selftest"), QStringLiteral("Run on a throwaway profile, receive an encrypted message from a pretend Muninn over the local HTTPS endpoint, raise the call and a notification (for CI), then quit."));
     args.addOption(wifiTest);
+    QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(releaseSigTest);
     args.process(app);
     const bool wifiSelf = args.isSet(wifiTest);
     if (wifiSelf)
@@ -133,8 +140,13 @@ int main(int argc, char *argv[])
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return selfTested(a && b && c && d);
+        const bool e = MoreWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m2-vectors.json")));
+        const bool f = LinkPreview::selfTest();
+        const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g);
     }
+    if (args.isSet(releaseSigTest))
+        return selfTested(Updater::selfTest(args.value(releaseSigTest)));
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
@@ -197,7 +209,9 @@ int main(int argc, char *argv[])
         return secret;
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
+    auto *videos = new VideoMsg(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
     auto *cs = new CallSignalHooks(&app);
     cs->onSend = [chat](const QString &k, const QJsonObject &m) { chat->sendCall(k, m); };
@@ -300,6 +314,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Chat", chat);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Vault", vault);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Voice", voice);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Videos", videos);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
@@ -308,6 +323,7 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
+    engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(chat));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);

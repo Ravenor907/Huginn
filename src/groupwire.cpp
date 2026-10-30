@@ -271,9 +271,23 @@ int GroupWire::length(const QString &s)
 
 QString GroupWire::checkState(const QJsonObject &s)
 {
-    if (!sameFields(s, {QStringLiteral("g"), QStringLiteral("v"), QStringLiteral("owner"), QStringLiteral("by"), QStringLiteral("name"),
-                        QStringLiteral("admins"), QStringLiteral("members"), QStringLiteral("channels"), QStringLiteral("ts"), QStringLiteral("sig")}))
+    // Cap d1 (section 16.2): a Family or Work group also has "kind" and maybe "days".
+    QJsonObject base = s;
+    base.remove(QStringLiteral("kind"));
+    base.remove(QStringLiteral("days"));
+    if (!sameFields(base, {QStringLiteral("g"), QStringLiteral("v"), QStringLiteral("owner"), QStringLiteral("by"), QStringLiteral("name"),
+                           QStringLiteral("admins"), QStringLiteral("members"), QStringLiteral("channels"), QStringLiteral("ts"), QStringLiteral("sig")}))
         return QStringLiteral("fields");
+    if (s.contains(QStringLiteral("kind")) && s.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("family"))
+        && s.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("work")))
+        return QStringLiteral("kind");
+    if (s.contains(QStringLiteral("days"))) {
+        if (!s.contains(QStringLiteral("kind")))
+            return QStringLiteral("days without kind");
+        const qint64 d = isWhole(s.value(QStringLiteral("days"))) ? s.value(QStringLiteral("days")).toInteger() : -1;
+        if (d < 7 || d > 30)
+            return QStringLiteral("days");
+    }
     if (!isGroupId(s.value(QStringLiteral("g")).toString()))
         return QStringLiteral("group id");
     if (!isWhole(s.value(QStringLiteral("v"))) || s.value(QStringLiteral("v")).toInteger() < 1)
