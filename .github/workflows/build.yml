@@ -7,8 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Build jobs only read the repository. Only the release job (and the small job that publishes screenshots,
+# which runs no outside actions) may write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   flatpak:
@@ -18,7 +20,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Fonts
         run: tools/get-fonts.sh
       - name: Version
@@ -31,7 +33,7 @@ jobs:
           echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
           echo "HUGINN_TAG=$tag" >> "$GITHUB_ENV"
           sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" packaging/io.github.ravenor907.Huginn.json
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: .flatpak-builder
           key: fb-${{ hashFiles('packaging/*.json') }}-${{ github.sha }}
@@ -115,19 +117,15 @@ jobs:
           pip install --quiet pillow || exit 0
           mkdir -p tour
           python3 tools/make-banner.py tour/banner.png || true
-      - name: Publish screenshots to the ci-tour branch
+      # The publish-screens job puts them on the ci-tour branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        shell: bash
-        run: |
-          [ -d tour ] || exit 0
-          cd tour
-          git init -q -b ci-tour
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "Screenshot tour for ${GITHUB_SHA::7}" || exit 0
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-tour
-      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-tour
+          path: tour
+          if-no-files-found: ignore
+          include-hidden-files: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: success()
         with:
           name: Huginn.flatpak
@@ -137,12 +135,12 @@ jobs:
     name: Muninn (Android)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4.4.3
       - name: Fonts (same as Huginn)
         run: |
           tools/get-fonts.sh
@@ -247,7 +245,7 @@ jobs:
               print(f"::error title=Muninn.apk too big::{size} bytes, over the {limit} byte (8 MB) limit. Growing past it needs the owner's OK.")
               sys.exit(1)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: muninn-apk
           path: |
@@ -260,8 +258,8 @@ jobs:
     needs: muninn
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: muninn-apk
       - name: Put the debug APK where the script looks
@@ -275,7 +273,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - uses: reactivecircus/android-emulator-runner@v2
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d  # v2.38.0
         with:
           api-level: 34
           target: google_apis
@@ -283,18 +281,14 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: android/ci/screens.sh
-      - name: Publish screenshots to the ci-muninn branch
+      # The publish-screens job puts them on the ci-muninn branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
-        shell: bash
-        run: |
-          [ -d screens ] || exit 0
-          cd screens
-          git init -q -b ci-muninn
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "Muninn screens for ${GITHUB_SHA::7}" || exit 0
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-muninn
+        with:
+          name: ci-muninn
+          path: screens
+          if-no-files-found: ignore
+          include-hidden-files: true
 
   windows:
     name: Windows (portable zip)
@@ -308,7 +302,7 @@ jobs:
       VCPKG_PACKAGES: openssl opus sdl2 libqrencode libvpx
       VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Fonts
         run: tools/get-fonts.sh
       - name: Version
@@ -319,7 +313,7 @@ jobs:
           # Windows file names ignore case, so MSVC would take this file for the C++ <version> header.
           rm VERSION
       - name: Qt 6.10 (same modules as the Flatpak)
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06  # v4.5.0
         with:
           version: "6.10.*"
           host: windows
@@ -341,7 +335,7 @@ jobs:
           if [ $(( ma * 10000 + mi * 100 + pa )) -lt 61002 ]; then
             echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1
           fi
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
         with:
           arch: x64
       - name: vcpkg cache folder
@@ -349,7 +343,7 @@ jobs:
           d="$(cygpath -m "$GITHUB_WORKSPACE")/vcpkg-bincache"
           mkdir -p "$d"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$d" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: vcpkg-bincache
           key: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-${{ github.sha }}
@@ -533,13 +527,13 @@ jobs:
             echo "::notice title=Windows tour::$n screenshots in the huginn-windows-tour artifact; $w warning lines in its log"
           fi
           exit $s
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
           name: huginn-windows-tour
           path: tour-windows
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: Huginn-Windows.zip
           path: Huginn-Windows.zip
@@ -555,8 +549,8 @@ jobs:
       WINEDEBUG: -all
       WINEDLLOVERRIDES: "mscoree,mshtml="
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: Huginn-Windows.zip
       - name: Wine
@@ -624,19 +618,46 @@ jobs:
             echo "::error title=Wine self-test failed: --release-sig-selftest (exit $s)::$(tail -n 10 t.log | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
-      - name: Publish the Wine logs to the ci-wine branch
-        # Only a convenience for reading logs: a failed push must not fail the Wine job or block a release.
+      # The publish-screens job puts them on the ci-wine branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         continue-on-error: true
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        with:
+          name: ci-wine
+          path: wine-logs
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+  publish-screens:
+    # Screenshots and Wine logs onto their ci-* branches. Only a convenience for reading results: it never
+    # blocks a release, and it is the one job besides the release that may write (it runs no outside actions).
+    name: Publish screenshots
+    needs: [flatpak, muninn-screens, wine]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        continue-on-error: true
+        with:
+          pattern: ci-*
+          path: pub
+      - name: Push the ci-tour, ci-muninn and ci-wine branches
+        shell: bash
         run: |
-          [ -d wine-logs ] || exit 0
-          cd wine-logs
-          git init -q -b ci-wine
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "Wine logs for ${GITHUB_SHA::7}" || exit 0
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" ci-wine
+          for b in ci-tour ci-muninn ci-wine; do
+            [ -d "pub/$b" ] || continue
+            (
+              cd "pub/$b"
+              git init -q -b "$b"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add -A
+              git commit -q -m "$b for ${GITHUB_SHA::7}" || exit 0
+              git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "$b" || echo "::warning::Couldn't push $b"
+            )
+          done
 
 
 
@@ -644,7 +665,7 @@ jobs:
     name: Relay Worker tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Relay Worker tests
         run: node relay-worker/test.mjs
 
@@ -660,11 +681,11 @@ jobs:
     environment:
       name: github-pages
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
         with:
           path: site
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4.0.5
   release:
     # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
@@ -679,7 +700,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Version
         id: v
         run: |
@@ -692,15 +713,15 @@ jobs:
           else
             echo "new=1" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         if: steps.v.outputs.new == '1'
         with:
           name: Huginn.flatpak
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         if: steps.v.outputs.new == '1'
         with:
           name: muninn-apk
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         if: steps.v.outputs.new == '1'
         with:
           name: Huginn-Windows.zip
@@ -743,13 +764,13 @@ jobs:
           rm -f "$k"
       - name: Build attestations (gh attestation verify, see docs/releases.md)
         if: steps.v.outputs.new == '1'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: |
             Huginn-Windows.zip
             Huginn.flatpak
             Muninn.apk
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         if: steps.v.outputs.new == '1'
         with:
           tag_name: ${{ steps.v.outputs.tag }}

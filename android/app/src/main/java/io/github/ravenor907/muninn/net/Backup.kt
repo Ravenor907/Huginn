@@ -15,7 +15,7 @@ object Backup {
     const val PREFS_ENTRY = "@prefs.json"
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
-    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "receiveFolder", "recent", "oldToolsGone")
+    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone")
 
     fun fileName(): String = "muninn-backup-${java.time.LocalDate.now()}.mbk"
 

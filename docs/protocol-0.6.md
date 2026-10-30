@@ -1453,3 +1453,42 @@ group's members with older apps keep their messages until they update; the group
 Chats that already exist get their limit on the first run of 0.94: anything older is deleted then, and the chat list
 shows once: "Messages now disappear after 7 days".
 
+
+## 20. Relay envelopes: padding, sending sockets, expiry (0.95)
+
+Three changes to how a sealed envelope travels over the Nostr relays, so a relay learns less about who talks to whom.
+None changes what a receiver must understand, so there is **no cap token**: apps from before 0.95 read these events
+exactly as before. `tools/pad_ref.py` is the reference and writes `tests/pad-vectors.json`; Muninn checks it in
+`SecDataTest`, Huginn in `--nostr-selftest` (the file next to `nostr-vectors.json`).
+
+### 20.1 Padding
+
+The event's `content` is base64 of the outer wrapping `{"e": .., "n": .., "d": ..}` (the throwaway key, the nonce and the
+sealed envelope). From 0.95 the wrapping gets one more field, `"z"`, a string of `0` characters, so that the base64 is
+exactly one of these lengths:
+
+- 1024, 4096, 16384 or 32768 characters, the smallest that fits;
+- above that, the next multiple of 16384.
+
+The steps stay at 16 KB above 32 KB because many relays refuse events over 64 KB: a photo piece (about 42 KB) becomes
+48 KB, never 64 KB.
+
+How: write the wrapping as JSON text `w` (any field order). `base = bytes(w) + 7` (the 7 characters of `,"z":""`).
+`target = bucket(4 * ceil(base / 3)) / 4 * 3`. The new text is `w` without its last `}`, then `,"z":"`, then
+`target - base` zeros, then `"}`. Its base64 is then exactly `bucket` characters. The padding sits outside the seal and
+means nothing; receivers ignore `z` (as they ignore any unknown field), and apps from before 0.95 already did.
+
+### 20.2 Sending sockets
+
+Events are published on short-lived sockets that only send: they never send `REQ` and never answer `AUTH`, so a relay
+can't tie a published event to the mailbox the same app subscribes to (and may sign in as, NIP-42) on its listening
+socket. Every relay gets every event, each on a sending socket of its own, which closes about 20 s after the last event
+given to it. Events still waiting when a relay's listening socket comes back are sent on a new sending socket. The
+retry rules (every relay; again at 1 h and 6 h while not delivered) are unchanged. The relay still sees the internet
+address on both kinds of socket; only a VPN or Tor hides that.
+
+### 20.3 Expiry (NIP-40)
+
+Each event carries `["expiration", "<unix seconds>"]`: the time of sending plus the chat's message limit in days
+(section 16; a group's limit for group messages), so relays that follow NIP-40 drop it once it is gone from the devices
+anyway. Receivers ignore the tag.

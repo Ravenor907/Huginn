@@ -3,6 +3,8 @@
 #include "photos.h"
 
 #include <QBuffer>
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QCoreApplication>
 #include <QImage>
 #include <QNetworkAccessManager>
@@ -31,19 +33,67 @@ QNetworkAccessManager *web()
     return nam;
 }
 
+void fetchChecked(const QString &url, int max, const QString &type, QObject *ctx, std::function<void(const QByteArray &)> done);
+
+// [host] is on the internet: written out, a public address; a name, every address it has is public.
+void checkHost(const QString &host, QObject *ctx, std::function<void(bool)> then)
+{
+    const QHostAddress literal(host);
+    if (!literal.isNull()) {
+        then(LinkPreview::publicAddress(literal));
+        return;
+    }
+    if (host.isEmpty()) {
+        then(false);
+        return;
+    }
+    QHostInfo::lookupHost(host, ctx, [then](const QHostInfo &info) {
+        const QList<QHostAddress> all = info.addresses();
+        bool ok = info.error() == QHostInfo::NoError && !all.isEmpty();
+        for (const QHostAddress &a : all)
+            ok = ok && LinkPreview::publicAddress(a);
+        then(ok);
+    });
+}
+
 // The start of [url] (at most [max] bytes), when it answers with a content type starting [type]; empty otherwise.
+// Only https, and never into this computer's own network: the page, the picture and every redirect.
 void get(const QString &url, int max, const QString &type, QObject *ctx, std::function<void(const QByteArray &)> done)
 {
-    if (!url.startsWith(QLatin1String("https://")) && !url.startsWith(QLatin1String("http://"))) {
+    if (!LinkPreview::allowedUrl(url)) {
         done({});
         return;
     }
+    QPointer<QObject> guard(ctx);
+    checkHost(QUrl(url).host(), ctx, [url, max, type, guard, done](bool ok) {
+        if (!ok || !guard) {
+            done({});
+            return;
+        }
+        fetchChecked(url, max, type, guard, done);
+    });
+}
+
+void fetchChecked(const QString &url, int max, const QString &type, QObject *ctx, std::function<void(const QByteArray &)> done)
+{
     QNetworkRequest req{QUrl(url)};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
     req.setTransferTimeout(6000);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0 (compatible; link preview)"));
     req.setRawHeader("Accept", type.endsWith(QLatin1Char('/')) ? QByteArray("image/*") : type.toLatin1());
     QNetworkReply *r = web()->get(req);
+    QObject::connect(r, &QNetworkReply::redirected, ctx, [r](const QUrl &to) {
+        if (to.scheme() != QLatin1String("https")) {
+            r->abort();
+            return;
+        }
+        checkHost(to.host(), r, [r](bool ok) {
+            if (ok)
+                Q_EMIT r->redirectAllowed();
+            else
+                r->abort();
+        });
+    });
     auto buf = std::make_shared<QByteArray>();
     auto over = std::make_shared<bool>(false);
     auto end = [r, buf, over, type, done] {
@@ -212,6 +262,56 @@ void LinkPreview::fetch(const QString &url, QObject *ctx, std::function<void(con
     });
 }
 
+namespace
+{
+bool v4Public(quint32 a)
+{
+    const int b0 = int(a >> 24), b1 = int((a >> 16) & 0xff), b2 = int((a >> 8) & 0xff);
+    if (b0 == 0 || b0 == 10 || b0 == 127 || b0 >= 224)
+        return false;
+    if ((b0 == 100 && b1 >= 64 && b1 <= 127) || (b0 == 169 && b1 == 254) || (b0 == 172 && b1 >= 16 && b1 <= 31) || (b0 == 192 && b1 == 168))
+        return false;   // carrier-grade NAT, link-local, private
+    if ((b0 == 192 && b1 == 0 && (b2 == 0 || b2 == 2)) || (b0 == 198 && (b1 == 18 || b1 == 19)) || (b0 == 198 && b1 == 51 && b2 == 100)
+        || (b0 == 203 && b1 == 0 && b2 == 113))
+        return false;   // reserved, benchmarking, documentation
+    return true;
+}
+}
+
+bool LinkPreview::publicAddress(const QHostAddress &a)
+{
+    if (a.isNull() || a.isLoopback() || a.isMulticast() || a.isLinkLocal())
+        return false;
+    if (a.protocol() == QAbstractSocket::IPv4Protocol)
+        return v4Public(a.toIPv4Address());
+    const Q_IPV6ADDR b = a.toIPv6Address();
+    bool zeros = true;
+    for (int i = 0; i < 10; ++i)
+        zeros = zeros && b[i] == 0;
+    const quint32 tail = (quint32(b[12]) << 24) | (quint32(b[13]) << 16) | (quint32(b[14]) << 8) | quint32(b[15]);
+    if (zeros && b[10] == 0xff && b[11] == 0xff)
+        return v4Public(tail);   // ::ffff:a.b.c.d
+    if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b)
+        return v4Public(tail);   // 64:ff9b::/96
+    if ((b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0xc0) || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80))
+        return false;   // unique local, old site-local, link-local
+    if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8)
+        return false;   // documentation
+    bool any = false;
+    for (int i = 0; i < 16; ++i)
+        any = any || b[i] != 0;
+    return any;   // :: is no address
+}
+
+bool LinkPreview::allowedUrl(const QString &url)
+{
+    const QUrl u(url);
+    if (!u.isValid() || u.scheme() != QLatin1String("https") || u.host().isEmpty())
+        return false;
+    const QHostAddress literal(u.host());
+    return literal.isNull() || publicAddress(literal);
+}
+
 bool LinkPreview::selfTest()
 {
     QString image;
@@ -226,6 +326,17 @@ bool LinkPreview::selfTest()
     QString img2;
     fromPage(QStringLiteral("https://example.com/a/b"), QStringLiteral("<title>x</title><meta property=\"og:image\" content=\"/p.jpg\">"), &img2);
     const bool resolved = img2 == QLatin1String("https://example.com/p.jpg");
+    // Only the internet, the same lists as Muninn's SecDataTest.
+    bool addresses = true;
+    for (const char *a : {"10.0.0.1", "172.16.5.4", "192.168.1.1", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fd00::1",
+                          "fc12::5", "::ffff:192.168.0.1", "224.0.0.1"})
+        addresses = addresses && !publicAddress(QHostAddress(QString::fromLatin1(a)));
+    for (const char *a : {"1.1.1.1", "93.184.216.34", "2606:4700::1111", "172.32.0.1"})
+        addresses = addresses && publicAddress(QHostAddress(QString::fromLatin1(a)));
+    addresses = addresses && allowedUrl(QStringLiteral("https://example.com/a")) && !allowedUrl(QStringLiteral("http://example.com/a"))
+        && !allowedUrl(QStringLiteral("https://192.168.1.1/admin")) && !allowedUrl(QStringLiteral("https://[fd00::1]/"))
+        && allowedUrl(QStringLiteral("https://1.1.1.1/"));
+    std::printf("link preview addresses: %s\n", addresses ? "passed" : "FAILED");
     std::printf("link preview self-test: %s\n", ok && resolved ? "passed" : "FAILED");
-    return ok && resolved;
+    return ok && resolved && addresses;
 }

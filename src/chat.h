@@ -380,8 +380,9 @@ private:
     QString mailboxOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
     // Sends over the internet: to their mailbox on the relays. False when they have none.
+    // days: how long relays may keep it (0: this chat's message limit).
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
-                      std::function<void()> sent = nullptr);
+                      std::function<void()> sent = nullptr, int days = 0);
     void noteCaps(const QString &key, bool present, const QStringList &caps);
     void loadFolders();
     void saveFolders();

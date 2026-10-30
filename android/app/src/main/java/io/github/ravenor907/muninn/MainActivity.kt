@@ -72,6 +72,7 @@ import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.SettingsNav
 import io.github.ravenor907.muninn.screens.Share
 import io.github.ravenor907.muninn.screens.TransferScreen
+import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.AskDialog
 import io.github.ravenor907.muninn.ui.Brand
 import io.github.ravenor907.muninn.ui.IconAction
@@ -147,6 +148,17 @@ class MainActivity : ComponentActivity() {
     private fun acceptFiles(accept: () -> Unit) {
         if (Received.needsPermission(this)) { afterStorage = accept; storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
         else accept()
+    }
+
+    /** A lock from before 0.95 shorter than new ones may be: suggest a stronger one, once. */
+    private fun suggestStronger() {
+        val prefs = getSharedPreferences("muninn", MODE_PRIVATE)
+        if (!app.vault.weak || prefs.getBoolean("strongerAsked", false)) return
+        prefs.edit().putBoolean("strongerAsked", true).apply()
+        Ui.sure(Ask("Make your lock stronger?", "Your ${if (app.vault.usesPattern) "pattern" else "password"} is shorter than new ones may be. " +
+            "One with at least 6 ${if (app.vault.usesPattern) "dots" else "characters"} is much harder to guess.", "Change it", cancel = "Not now") {
+            show("settings"); SettingsNav.folder = "lockset"
+        })
     }
 
     /** Opens a tab by name (also what CI and older links ask for); anything unknown is the chat list. */
@@ -356,7 +368,7 @@ class MainActivity : ComponentActivity() {
         val ready by app.ready.collectAsState()
         val panic by io.github.ravenor907.muninn.ui.Panic.locked.collectAsState()
         LaunchedEffect(panic) { if (panic) toList() }
-        if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet() } }; return }
+        if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }; return }
         // A lock is required: on first open (or from a version before it was), set one before anything else.
         var locked by remember { mutableStateOf(app.vault.hasPassword || ciSkip) }
         if (!locked) { FirstLock(app) { locked = true }; return }

@@ -711,7 +711,7 @@ void Chat::groupAttempt(const QString &envId)
             });
     }
     if ((!media || !any || o.count >= 2) && bodies.size() <= Photos::kInternetPieces)
-        sendInternet(o.to, bodies, mailboxOf(o.to), sent);
+        sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g));
 }
 
 void Chat::groupRetry()

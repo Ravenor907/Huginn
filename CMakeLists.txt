@@ -121,6 +121,7 @@ target_sources(huginn PRIVATE
     src/platform/singleinstance.cpp src/platform/singleinstance.h
     src/platform/winupdate.cpp src/platform/winupdate.h
     src/platform/winstart.cpp src/platform/winstart.h
+    src/platform/protect.cpp src/platform/protect.h
 )
 if(WIN32)
     target_sources(huginn PRIVATE
@@ -286,6 +287,7 @@ if(WIN32)
         ${QRENCODE_LIBRARY}
         winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
         advapi32   # the Wi-Fi self-test's separate registry key
+        crypt32    # the vault key locked to this Windows account (src/platform/protect.cpp)
     )
     if(TARGET Qt6::DBus)
         target_link_libraries(huginn PRIVATE Qt6::DBus)

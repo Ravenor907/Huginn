@@ -7,6 +7,8 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
+#include <QDBusPendingCall>
+#include <QDBusPendingCallWatcher>
 #endif
 #include <QCoreApplication>
 #include <QDateTime>
@@ -109,11 +111,25 @@ bool System::inFlatpak()
 
 void System::openSteamUrl(const QString &url)
 {
-    QStringList cmd{QStringLiteral("xdg-open"), url};
-    if (inFlatpak())
-        cmd = QStringList{QStringLiteral("flatpak-spawn"), QStringLiteral("--host"), QStringLiteral("xdg-open"), url};
-    QProcess::startDetached(cmd.takeFirst(), cmd);
+#ifndef Q_OS_WIN
+    if (inFlatpak()) {
+        // The desktop's own "open this link" service (the OpenURI portal), not a program started outside the sandbox.
+        QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Desktop"), QStringLiteral("/org/freedesktop/portal/desktop"),
+                                                        QStringLiteral("org.freedesktop.portal.OpenURI"), QStringLiteral("OpenURI"));
+        m << QString() << url << QVariantMap{{QStringLiteral("ask"), false}};
+        auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m), this);
+        connect(w, &QDBusPendingCallWatcher::finished, this, [url](QDBusPendingCallWatcher *w) {
+            // No portal answered (an old desktop session): the host's xdg-open, as before 0.95.
+            if (w->isError())
+                QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("xdg-open"), url});
+            w->deleteLater();
+        });
+        return;
+    }
+#endif
+    QProcess::startDetached(QStringLiteral("xdg-open"), {url});
 }
+
 
 void System::showSteamKeyboard()
 {

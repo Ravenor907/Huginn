@@ -222,7 +222,7 @@ private fun NotifyPage(app: Muninn) {
                 .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
         } catch (_: Exception) {}
     }
-    ToggleRow("Show the message", "Off: only shows who it's from, as “New message”", preview) { preview = it; id.showPreview = it }
+    ToggleRow("Show the message", "Off: only “New message”, not who it's from or what it says", preview) { preview = it; id.showPreview = it }
     PageRow("Sound and vibration", "Uses the phone's settings for Muninn") {
         try {
             ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -664,8 +664,7 @@ private fun LinkedDevices(app: Muninn) {
                     io.github.ravenor907.muninn.screens.Qr(c, 220.dp)
                 }
                 MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
-                    (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
-                        .setPrimaryClip(android.content.ClipData.newPlainText("Muninn link code", c))
+                    io.github.ravenor907.muninn.ui.Clip.copy(ctx, "Muninn link code", c)
                     io.github.ravenor907.muninn.ui.Ui.say("Code copied. Paste it on your phone.")
                 }
                 MButton("Share", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "send") {
