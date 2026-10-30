@@ -40,6 +40,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * keeps the first copy and drops the rest.
      */
     override fun send(contactKey: String, json: String) {
+        if (Move.locked) return
         bg {
             val body = envelope("call", contactKey, json, UUID.randomUUID().toString()).toString()
             close.endpointFor(contactKey)?.let { close.send(it, JSONObject(body).put("t", "msg")) }
@@ -213,7 +214,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (contacts.get(k) == null && ChatWire.keyChangeFor(contacts.all.value, c) == null) contacts.put(c)
         }
         outbox.sweep()
-        net.extraRoute = { method, path, body, _ -> if (method == "POST" && path == PATH) receive(body, "wifi") else null }
+        net.extraRoute = { method, path, body, _ ->
+            when {
+                method == "POST" && path == PATH -> receive(body, "wifi")
+                // Cap x1: moving to or from this device, over the Wi-Fi only.
+                method == "POST" && path == MoveWire.PATH -> Move.handle(body)
+                else -> null
+            }
+        }
         close.onMessage = { _, o -> if (o.optString("t") == "msg") receive(o.toString(), "close") }
         // Huginn close by, over Bluetooth LE (it can't use Nearby): the same envelopes.
         ble.onMessage = { _, json -> receive(json, "close") }
@@ -617,6 +625,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     private fun attemptUnsend(m: Msg) {
+        if (Move.locked) return
         val t = tries.getOrPut(m.id) { Tries(0, 0) }
         t.count++
         t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
@@ -666,6 +675,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     // ------------------------------------------------------------------ receiving
 
     private fun receive(body: String, via: String): Pair<Int, String> {
+        // Moving to another device: nothing comes in here any more (it waits for the new device).
+        if (Move.locked) return 503 to "{}"
         val o = try { JSONObject(body) } catch (e: Exception) { return 400 to "{}" }
         val fromKey = o.optString("fromKey")
         val name = o.optString("fromName").take(40).ifEmpty { "Someone" }
@@ -1511,6 +1522,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         contact(m.peerKey)?.mailbox ?: _met.value[m.peerKey]?.mailbox?.takeIf { m.via == "close" || m.via == "wifi" }
 
     private fun attempt(m: Msg) {
+        // Moving to another device: nothing more is sealed here (the ratchets went with the move).
+        if (Move.locked) return
         val t = tries.getOrPut(m.id) { Tries(0, 0) }
         t.count++
         t.next = System.currentTimeMillis() + RETRY.getOrElse(t.count - 1) { RETRY.last() }
@@ -1615,6 +1628,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Returns the route that took it ("close", "wifi", "internet"), or "" if none could. */
     private fun deliverVia(peerKey: String, body: JSONObject, mailbox: String?): String {
+        if (Move.locked) return ""
         close.endpointFor(peerKey)?.let { close.send(it, JSONObject(body.toString()).put("t", "msg")); return "close" }
         if (ble.send(peerKey, body.toString())) return "close"
         net.devices.value.firstOrNull { it.chatKey == peerKey }?.let { if (net.post(it, PATH, body.toString()) == 200) return "wifi" }
@@ -1624,7 +1638,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
     private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null): Boolean {
-        if (mailbox == null) return false
+        if (mailbox == null || Move.locked) return false
         // [stored]: once a relay has said OK to every one of them.
         val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
@@ -1792,6 +1806,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Seals one group envelope (or a photo's pieces) for its member and sends it on every route. */
     private fun sendGroupOut(o: Groups.Out) {
+        if (Move.locked) return
         val c = contacts.get(o.to) ?: return
         // A 0.5 app answers 400 to group rooms: only ever to someone whose app said g1 (group peers always can).
         if (!c.groupOnly && "g1" !in c.caps) { probeCaps(o.to); return }
@@ -1817,6 +1832,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Every route at once. A photo goes over the internet only when nothing close by took it (or on a later try). */
     private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?) {
+        if (Move.locked) return
         var local = false
         close.endpointFor(k)?.let { ep -> bodies.forEach { close.send(ep, JSONObject(it).put("t", "msg")) }; local = true }
         if (ble.peers.value.any { it.chatKey == k } && bodies.all { ble.send(k, it) }) local = true

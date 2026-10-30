@@ -80,8 +80,8 @@
 <script>
   // The code is after the "#", which browsers never send to the server: only this page sees it.
   var code = decodeURIComponent((location.hash || "").slice(1));
-  // A group invite link (MUNINNG1:) opens the app the same way.
-  var group = code.indexOf("MUNINNG1:") === 0;
+  // A group invite link (MUNINNG1:) or a move code (MUNINNM1:) opens the app the same way.
+  var group = code.indexOf("MUNINNG1:") === 0 || code.indexOf("MUNINNM1:") === 0;
   if (code.indexOf("MUNINN1:") !== 0 && !group) {
     document.getElementById("found").classList.add("hidden");
     document.getElementById("manual").classList.add("hidden");

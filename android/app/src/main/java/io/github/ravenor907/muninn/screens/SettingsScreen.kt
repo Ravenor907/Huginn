@@ -501,7 +501,9 @@ private fun LinkedDevices(app: Muninn) {
             }
         }
     }
-    Section("Link a device to this phone")
+    // Use on both (linked devices, below), or Move here (cap x1).
+    MoveSection(app)
+    Section("Use on both: link a device to this phone")
     Panel {
         Text("On the other device: Settings › Linked devices › Use as a companion. Then copy its code here.", style = Type.small)
         io.github.ravenor907.muninn.ui.Field(pasted, { pasted = it }, "Paste the link code", Modifier.padding(top = 8.dp), single = false)

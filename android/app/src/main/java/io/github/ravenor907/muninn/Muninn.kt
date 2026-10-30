@@ -86,6 +86,8 @@ class Muninn : Application() {
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
         power.install()
+        // Moving to another device (cap x1): one under way goes on, and this device stays locked until it's done.
+        io.github.ravenor907.muninn.net.Move.init(this)
         if (vault.openDefault()) start()
         dropOldTools()
         dropTorFiles()
