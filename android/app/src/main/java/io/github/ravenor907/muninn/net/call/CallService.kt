@@ -151,6 +151,11 @@ object Ringer {
             .setTimeoutAfter(CallLogic.RING_MS + 2_000)
             .build()
         try { NotificationManagerCompat.from(c).notify(RING_ID, n) } catch (_: SecurityException) {}
+        // Allowed to show over other apps (a Kids' TV, or a phone that said yes): open the call screen straight
+        // away, so it doesn't depend on the full-screen calls permission some devices (Google TV) can't grant.
+        if (android.provider.Settings.canDrawOverlays(c)) try {
+            c.startActivity(Intent(c, CallActivity::class.java).setAction(CallActivity.SHOW).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (_: Exception) {}
         sound(c, true)
     }
 
