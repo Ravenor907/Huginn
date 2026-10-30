@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-9C978D?style=for-the-badge&labelColor=101112" alt="GPL-3.0"></a>
 </p>
 
-<h3 align="center">Private messaging for your family.</h3>
+<h3 align="center">Private messaging for the people you care about.</h3>
 
 <p align="center">
   Chats, calls, video and file sharing, end-to-end encrypted.<br>
@@ -31,16 +31,8 @@ These two carry your messages. **Muninn** runs on Android phones, tablets and Go
 - **Calls:** voice and video calls, group calls, and voice rooms people drop in and out of. Group video works for up to 4 people.
 - **Files:** send files to someone across the room or across the country. They go straight from your device to theirs.
 - **Easy to add the people you trust:** share your code or QR, send an invite link that works once, tap phones together, or let someone you both know introduce you.
-- **Kids' TV:** turn a Google TV into a simple screen your kids use to reach the people you approve.
 - **All your screens:** your phone, a tablet or second phone linked to it, and your computer.
-
-## Made for families
-
-Turn a Google TV into a simple screen your kids can use to reach Mom and Dad. No sign-in, no strangers, no ads: big buttons for a TV remote, and only the people a parent approves. Parents set it up and manage it from their own phones.
-
-<p align="center"><img src="docs/panels/05-muninn-tv.png" width="100%" alt="Muninn on Google TV: kids pick who they want to talk to"></p>
-<p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, talk, or send a quick message"></p>
-<p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, apps"></p>
+- **Kids' TV:** turn a Google TV into a simple screen your kids use to reach the people you approve.
 
 ## Private by default
 
@@ -62,6 +54,14 @@ Turn a Google TV into a simple screen your kids can use to reach Mom and Dad. No
 ## Easy on the battery
 
 <p align="center"><img src="docs/panels/08-battery.png" width="100%" alt="Choose how often Muninn checks for messages, quiet hours and a battery report"></p>
+
+## Kids' TV
+
+Muninn can also turn a Google TV into a simple screen your kids can use to reach Mom and Dad. No sign-in, no strangers, no ads: big buttons for a TV remote, and only the people a parent approves. Parents set it up and manage it from their own phones.
+
+<p align="center"><img src="docs/panels/05-muninn-tv.png" width="100%" alt="Muninn on Google TV: kids pick who they want to talk to"></p>
+<p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, talk, or send a quick message"></p>
+<p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, apps"></p>
 
 ## What's new in 0.93
 
