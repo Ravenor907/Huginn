@@ -21,6 +21,8 @@ data class Contact(
     val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null,
     val ratchet: Boolean = false, val nickname: String? = null, val keyChanged: Boolean = false,
     val groupOnly: Boolean = false, val caps: Set<String> = emptySet(), val days: Int = 0, val keep: Int = 0,
+    /** Local only, set on the press-and-hold sheet: no calls or video from them, no files from them, they don't see when I'm active. */
+    val noCalls: Boolean = false, val noFiles: Boolean = false, val hideActive: Boolean = false,
 ) {
     /** What this phone shows for them. */
     val shown: String get() = nickname ?: name
@@ -109,10 +111,12 @@ object ChatWire {
         .put("v", c.verified).put("i", c.invite ?: "").put("r", c.ratchet).put("nick", c.nickname ?: "").put("kc", c.keyChanged)
         .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" "))
         .apply { if (c.days > 0) put("dd", c.days); if (c.keep > 0) put("dk", c.keep) }
+        .apply { if (c.noCalls) put("xc", true); if (c.noFiles) put("xf", true); if (c.hideActive) put("xa", true) }
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
         o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
-        o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"))
+        o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"),
+        o.optBoolean("xc"), o.optBoolean("xf"), o.optBoolean("xa"))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
@@ -121,7 +125,9 @@ object ChatWire {
             invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc,
             // Adding a group peer as a contact just clears groupOnly; a contact never turns into a group peer.
             groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps,
-            days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep)
+            days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep,
+            // What they may do stays as chosen when they're added again.
+            noCalls = old.noCalls || c.noCalls, noFiles = old.noFiles || c.noFiles, hideActive = old.hideActive || c.hideActive)
     }
 
     /**

@@ -997,7 +997,8 @@ private fun Conversation(app: Muninn, key: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(name, 40.dp, 16.sp, online = activeNow) }, actions = {
-            if (c != null) {
+            // Someone met close by can be called too while on the same Wi-Fi.
+            if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
                 IconAction("call", if (callable) "Call $name" else "Calling needs Muninn or Huginn 0.6", if (callable) Palette.text else Palette.textSoft) {
                     if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
