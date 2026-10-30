@@ -201,5 +201,6 @@ private:
     QHash<QString, qint64> m_asked;              // address -> last register sent there (at most one every 10 s)
     QHash<QString, QList<qint64>> m_prompts;     // address -> "wants to send" boxes lately
     bool asking(const QString &ip);
+    void turnedDown(const QString &ip);
     QList<QVariantMap> m_history;   // finished incoming files, newest last
 };

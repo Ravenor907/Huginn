@@ -1533,8 +1533,8 @@ is answered only for members of the current state.
 
 - Wi-Fi: only from addresses on this very home network (a private address inside a subnet of one of the device's
   own private addresses); at most 32 connections at once; a chat envelope body at most 96 KB, any other request
-  2 MB, read as it arrives; an upload never more than the size accepted; at most 3 "wants to send" prompts per
-  address in 10 minutes.
+  2 MB, read as it arrives; an upload never more than the size accepted; after 3 "wants to send" prompts from one
+  address are turned down or left unanswered in 10 minutes, that address waits (429).
 - Nearby files: only as many as the accepted offer named, from that phone, none bigger than its biggest; anything
   else is stopped, not written.
 - The Nearby room: at most 10 messages in 10 seconds from one address or connection, whatever keys it uses.

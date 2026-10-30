@@ -503,18 +503,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
-    /** When each address last asked to send files: at most [PROMPTS] "wants to send" boxes per address in 10 minutes. */
+    /** "Wants to send" boxes turned down (or left unanswered) per address: past [PROMPTS] in 10 minutes, it has to wait. */
     private val prompts = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
-    private fun prompted(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+    private fun mayPrompt(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+        val q = prompts[ip] ?: return true
+        synchronized(q) { while (q.isNotEmpty() && now - q.first() > 600_000) q.removeFirst(); return q.size < PROMPTS }
+    }
+
+    private fun turnedDown(ip: String, now: Long = System.currentTimeMillis()) {
         if (prompts.size > 256) prompts.entries.removeIf { q -> synchronized(q.value) { q.value.all { now - it > 600_000 } } }
         val q = prompts.getOrPut(ip) { ArrayDeque() }
-        synchronized(q) {
-            while (q.isNotEmpty() && now - q.first() > 600_000) q.removeFirst()
-            if (q.size >= PROMPTS) return false
-            q.addLast(now)
-            return true
-        }
+        synchronized(q) { q.addLast(now); while (q.size > PROMPTS) q.removeFirst() }
     }
 
     private fun prepare(text: String, ip: String, out: OutputStream, learn: (JSONObject, String) -> Unit) {
@@ -551,7 +551,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             return
         }
         // Asking again and again from one address would keep a box up for a minute each time: past a few, wait.
-        if (!prompted(ip)) { reply(out, 429); return }
+        if (!mayPrompt(ip)) { reply(out, 429); return }
         synchronized(decision) {
             pendingFiles = map; pendingFrom = alias; pendingIp = ip; answer = null
             val names = map.values.map { it.name.substringAfterLast('/') }.sorted()
@@ -562,6 +562,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             _request.value = null
             pendingFiles = null
             if (!yes) {
+                turnedDown(ip)
                 if (answer == null) messages.tryEmit(false to "No answer in a minute, so the files from $alias were turned down.")
                 reply(out, 403)
                 return

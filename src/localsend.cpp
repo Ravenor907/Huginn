@@ -87,6 +87,7 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
     m_requestTimer.setInterval(60000);
     connect(&m_requestTimer, &QTimer::timeout, this, [this] {
         if (m_pending.socket) {
+            turnedDown(m_pending.ip);
             reply(m_pending.socket, 403);
             Q_EMIT finished(false, QStringLiteral("No answer in a minute, so the files from %1 were turned down.").arg(m_pending.from));
         }
@@ -152,6 +153,17 @@ bool LocalSend::provenFor(const QString &chatKey) const
         if (d.proven && d.chatKey == chatKey)
             return true;
     return false;
+}
+
+void LocalSend::turnedDown(const QString &ip)
+{
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (m_prompts.size() > 256)
+        m_prompts.removeIf([t](const QHash<QString, QList<qint64>>::iterator it) { return it.value().isEmpty() || t - it.value().last() > 600000; });
+    QList<qint64> &q = m_prompts[ip];
+    q << t;
+    while (q.size() > 3)
+        q.removeFirst();
 }
 
 bool LocalSend::asking(const QString &ip)
@@ -725,16 +737,14 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     }
     if (path == kApi + QStringLiteral("/prepare-upload")) {
         if (m_session.active || m_pending.socket) { reply(s, 409); return; }
-        // Asking again and again from one address would keep a box up for a minute each time: past 3 in 10 minutes, wait.
+        // Asking again and again from one address would keep a box up for a minute each time: after 3 turned down (or
+        // left unanswered) in 10 minutes, it has to wait.
         {
             QList<qint64> &q = m_prompts[ip];
             const qint64 t = QDateTime::currentMSecsSinceEpoch();
             while (!q.isEmpty() && t - q.first() > 600000)
                 q.removeFirst();
             if (q.size() >= 3) { reply(s, 429); return; }
-            q << t;
-            if (m_prompts.size() > 256)
-                m_prompts.removeIf([t](const QHash<QString, QList<qint64>>::iterator it) { return it.value().isEmpty() || t - it.value().last() > 600000; });
         }
         const QJsonObject from = body.value(QStringLiteral("info")).toObject();
         const QJsonObject files = body.value(QStringLiteral("files")).toObject();
@@ -826,8 +836,10 @@ void LocalSend::accept()
 
 void LocalSend::decline()
 {
-    if (m_pending.socket)
+    if (m_pending.socket) {
+        turnedDown(m_pending.ip);
         reply(m_pending.socket, 403);
+    }
     m_requestTimer.stop();
     m_pending = {};
     Q_EMIT requestChanged();
