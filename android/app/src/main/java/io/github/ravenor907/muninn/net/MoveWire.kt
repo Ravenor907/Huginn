@@ -36,7 +36,31 @@ object MoveWire {
     fun code(c: Code): String = PREFIX + b64url(JSONObject().put("v", 1).put("a", JSONArray(c.a)).put("e", c.e).put("s", b64url(c.s))
         .put("n", c.n).put("app", c.app).toString().toByteArray())
 
-    /** A move code anywhere in [text], or null. */
+    /** An IPv4 literal on a home network: 10/8, 172.16/12, 192.168/16, or link-local 169.254/16. Never a name. */
+    fun lanIp(ip: String): Boolean {
+        val p = ip.split('.')
+        if (p.size != 4 || p.any { it.isEmpty() || it.length > 3 || !it.all(Char::isDigit) || it.toInt() > 255 }) return false
+        val (a, b) = p[0].toInt() to p[1].toInt()
+        return a == 10 || (a == 172 && b in 16..31) || (a == 192 && b == 168) || (a == 169 && b == 254)
+    }
+
+    /** "ip:port" with [lanIp] and a real port. */
+    fun lanAddr(addr: String): Boolean {
+        val i = addr.lastIndexOf(':')
+        if (i < 0) return false
+        val port = addr.substring(i + 1).toIntOrNull() ?: return false
+        return lanIp(addr.substring(0, i)) && port in 1..65535
+    }
+
+    /** [ip] is on the same network as this device's address [mine] with [prefix] bits. */
+    fun sameNetwork(ip: String, mine: String, prefix: Int): Boolean {
+        if (!lanIp(ip) || !lanIp(mine) || prefix !in 8..32) return false
+        fun n(s: String) = s.split('.').fold(0L) { acc, x -> (acc shl 8) or x.toLong() }
+        val mask = (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+        return (n(ip) and mask) == (n(mine) and mask)
+    }
+
+    /** A move code anywhere in [text], or null. Only home-network addresses are kept; none left, no code. */
     fun parse(text: String): Code? {
         val i = text.indexOf(PREFIX)
         if (i < 0) return null
@@ -44,7 +68,7 @@ object MoveWire {
         return try {
             val o = JSONObject(String(Base64.getUrlDecoder().decode(body)))
             val a = o.getJSONArray("a")
-            val c = Code((0 until minOf(a.length(), 8)).map { a.getString(it) }, o.getString("e"), Base64.getUrlDecoder().decode(o.getString("s")),
+            val c = Code((0 until minOf(a.length(), 8)).map { a.getString(it) }.filter { lanAddr(it) }, o.getString("e"), Base64.getUrlDecoder().decode(o.getString("s")),
                 o.optString("n").take(40).ifBlank { "your other device" }, o.getString("app"))
             ChatCrypto.publicFrom(c.e)
             if (o.optInt("v") != 1 || c.s.size != 16 || c.a.isEmpty() || c.app !in setOf("muninn", "huginn")) null else c

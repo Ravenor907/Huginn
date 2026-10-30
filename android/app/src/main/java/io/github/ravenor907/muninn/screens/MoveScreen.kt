@@ -31,12 +31,11 @@ import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** A move code that came in from a scan (MainActivity), waiting for the person to say yes. */
-object MoveUi { val code = MutableStateFlow<String?>(null) }
+/** Said wherever a move is about to start. */
+const val MOVE_WARNING = "Only continue if the other device is yours and in front of you."
 
 /**
  * Two ways to use another device, on the code screen: "Use on both" (linked devices, as before) and "Move here"
@@ -46,7 +45,14 @@ object MoveUi { val code = MutableStateFlow<String?>(null) }
 fun MoveSection(app: Muninn) {
     var showing by remember { mutableStateOf(false) }
     var pasted by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    fun takeIt(text: String) {
+        scope.launch {
+            val err = withContext(Dispatchers.IO) { Move.take(app, text) }
+            if (err != null) Ui.say(err, true) else pasted = ""
+        }
+    }
     Section("Move here")
     Panel {
         Text("Moving to a new phone, tablet or computer? Everything comes here: you, your contacts, groups and chats, straight over your home Wi-Fi. " +
@@ -55,15 +61,12 @@ fun MoveSection(app: Muninn) {
     }
     Section("Move from this device")
     Panel {
-        Text("On the new device, open Move here and copy its code here. Both must be on the same Wi-Fi.", style = Type.small)
-        Field(pasted, { pasted = it }, "Paste the move code", Modifier.padding(top = 8.dp), single = false)
-        MButton("Next", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) {
-            val text = pasted
-            scope.launch {
-                val err = withContext(Dispatchers.IO) { Move.take(app, text) }
-                if (err != null) Ui.say(err, true) else pasted = ""
-            }
-        }
+        Text("On the new device, open Move here, then scan its code or paste it here. Both must be on the same Wi-Fi.", style = Type.small)
+        Text(MOVE_WARNING, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+        if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp)) { code -> scanning = false; takeIt(code) }
+        else MButton("Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "qr") { scanning = true }
+        Field(pasted, { pasted = it }, "Or paste the move code", Modifier.padding(top = 8.dp), single = false)
+        MButton("Next", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) { takeIt(pasted) }
     }
     if (showing) MoveHereDialog(app) { showing = false }
 }
@@ -90,8 +93,9 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
                     else -> {
                         Text("On your old device: Settings › Linked devices › Move from this device, and paste this code (or scan it). Keep both on the same Wi-Fi.",
                             style = Type.small)
-                        Box(Modifier.padding(vertical = 10.dp)) { Qr(io.github.ravenor907.muninn.net.Contacts.link(code), 220.dp) }
-                        MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
+                        if (code.isEmpty()) Text("Connect to your home Wi-Fi first: moving only works there.", style = Type.normal.copy(color = Palette.danger))
+                        else Box(Modifier.padding(vertical = 10.dp)) { Qr(code, 220.dp) }
+                        if (code.isNotEmpty()) MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
                             (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
                                 .setPrimaryClip(android.content.ClipData.newPlainText("Move code", code))
                             Ui.say("Code copied.")
@@ -114,19 +118,22 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
 @Composable
 fun MoveCover(app: Muninn): Boolean {
     val out by Move.outgoing.collectAsState()
-    val pending by MoveUi.code.collectAsState()
+    val ask by Move.linkAsk.collectAsState()
+    var unlocking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    pending?.let { c ->
-        AlertDialog(onDismissRequest = { MoveUi.code.value = null }, containerColor = Palette.panel,
-            title = { Text("Move everything to another device?", style = Type.big) },
-            text = { Text("You, your contacts, groups and chats go to the device that showed this code. This one is then locked out.", style = Type.normal) },
-            confirmButton = { MButton("Next", kind = Kind.Accent) {
-                MoveUi.code.value = null
-                scope.launch { withContext(Dispatchers.IO) { Move.take(app, c) }?.let { Ui.say(it, true) } }
-            } },
-            dismissButton = { MButton("Cancel") { MoveUi.code.value = null } })
+    ask?.let { name ->
+        AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
+            title = { Text("Link $name?", style = Type.big) },
+            text = { Text("$name, the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.", style = Type.normal) },
+            confirmButton = { MButton("Link", kind = Kind.Accent) { Move.answerLink(app, true) } },
+            dismissButton = { MButton("Don't link") { Move.answerLink(app, false) } })
     }
     val o = out ?: return false
+    if (unlocking) {
+        // Stopping a move needs the person's own password or pattern.
+        LockScreen(app) { ok -> unlocking = false; if (ok) Move.abort(app) }
+        return true
+    }
     when (o.state) {
         "checking" -> {
             AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
@@ -134,19 +141,22 @@ fun MoveCover(app: Muninn): Boolean {
                 text = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Check these are the same on both screens, then tap They match on both:", style = Type.normal)
                     Text(o.emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
-                    Text("This device is then locked out: it can't send, read or receive as you.", style = Type.small)
+                    Text(MOVE_WARNING, style = Type.normal.copy(color = Palette.danger))
+                    Text("This device is then locked out: it can't send, read or receive as you.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
                 } },
                 confirmButton = { MButton("They match", kind = Kind.Accent) { scope.launch { withContext(Dispatchers.IO) { Move.go(app) }?.let { Ui.say(it, true) } } } },
                 dismissButton = { MButton("Cancel") { Move.cancelOut(app) } })
             return false
         }
         "moving" -> Cover("Moving to ${o.to}", if (o.of > 0) "${o.sent} of ${o.of} parts there. ${o.note}" else o.note.ifEmpty { "Getting ready…" },
-            "Keep both on the same Wi-Fi. This device stays locked until the move is done.") {}
+            "Keep both on the same Wi-Fi. This device stays locked until the move is done, or an hour without the other device.") {
+            MButton("Stop moving", Modifier.fillMaxWidth().padding(top = 16.dp)) { unlocking = true }
+        }
         "moved" -> Cover("Moved to ${o.to}", "You, your contacts and chats are on ${o.to} now. Nothing of yours is left here.", "") {
-            MButton("Use as a linked device", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent) {
+            if (o.canLink) MButton("Use as a linked device", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent) {
                 scope.launch {
                     val err = withContext(Dispatchers.IO) { Move.becomeLinked(app) }
-                    Ui.say(err ?: "Linked. Your chats show up here in a moment.", err != null)
+                    Ui.say(err ?: "Asked ${o.to}. Say yes there, and your chats show up here.", err != null)
                 }
             }
             MButton("Start fresh", Modifier.fillMaxWidth().padding(top = 8.dp)) { Move.startFresh(app) }

@@ -1087,27 +1087,30 @@ automatic gain are not affected. Vectors: `tv.configs.cfg5` (`nr` 1) and step 8 
 ### 7.11 A parent reconnects after a wipe (`k6`)
 
 A parent whose phone was wiped or reinstalled has a new chat key, so the TV no longer knows them. All messages are in
-room `tvconfig`; reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-vectors.json`.
+room `tvconfig`, and the TV and the parents send them on every route at once, the internet included, so nobody nearby
+can stand in the way. Reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-vectors.json`.
 
-1. On the TV, holding OK on the remote for 5 seconds on "Connect a parent" shows a **Connect a parent** code: the TV's
-   contact code with `"tv": 2` and a fresh invite (an hour). A child can't open it by pressing around.
-2. The parent's phone adds the TV from it and sends `{"t":"rejoin","n":<name>}`, with the invite in the envelope.
-   The TV takes it only with a live invite, from someone who isn't a parent, and keeps them as the **joiner** (key,
-   name, the mailbox of the envelope).
-3. The TV sends every parent `{"t":"ask","k":<joiner key>,"n":<name>}`. A parent's phone that manages the TV answers
-   `{"t":"here","k"}` by itself and asks its person to approve with one tap. Approve sends `{"t":"approve","k"}`.
-4. On `approve` from a parent the TV answers that parent `{"t":"swap","k","n","p","gone":[...]}`: `gone` is every
-   parent that never said `here`, minus the approver (vectors: `gone`). The approver's phone signs the next config
-   with the joiner added as parent and `gone` taken off as parents and from the list; the TV takes it as any config.
-5. If no parent says `here` within 2 minutes, nobody is left: the TV sends the joiner `{"t":"orphan","cfg":<its signed
-   config>}`. The joiner's phone checks it (7.2, signed by its `by`, for this TV) and signs the next version with
-   itself as the only parent and the same people, messages and settings. The TV takes that one config from the joiner
-   with the joiner as the only parent (as in pairing, 7.1 step 3).
-6. A config that lists the joiner ends it. Old parents not in the new config are removed from the TV, like anyone
-   taken off its list (7.2).
+1. On the TV, holding OK on the remote for 5 seconds on "Connect a parent" shows a code: the TV's contact code (no
+   invite) with `"tv": 2` and `"r"`, a token of its own (16 random bytes as hex, an hour, once). A child can't open it by
+   pressing around.
+2. The parent's phone adds the TV from it and sends `{"t":"rejoin","n":<name>,"r":<token>}`. The TV takes it only with
+   that token, in time, once, from someone who isn't a parent, and keeps them as the **joiner** (key, name, mailbox of the
+   envelope, when). One joiner at a time.
+3. The TV warns every parent: `{"t":"ask","k":<joiner key>,"n":<name>}`, again every 6 hours. While a joiner waits the
+   TV shows a banner that says so. A parent's phone asks its person: **Approve** sends `{"t":"approve","k"}`, **Block**
+   sends `{"t":"block","k"}`.
+4. `approve` from a parent: the TV answers that parent `{"t":"swap","k","n","p"}` and the parent's phone signs the next
+   config with the joiner added as a parent. Nobody is taken off.
+5. `block` from any parent ends it: the TV forgets the joiner and tells them `{"t":"blocked"}`.
+6. If no parent blocks within 24 hours of `rejoin` (vectors: `due`), the TV sends the joiner `{"t":"orphan","cfg":<its
+   signed config>}` (again every 6 hours until it answers). The joiner's phone takes it only for a TV it asked, checks it
+   (7.2, signed by its `by`, for this TV) and signs the next version with itself as the only parent and the same people,
+   messages and settings. The TV takes that one config from the joiner with the joiner as the only parent (as in
+   pairing, 7.1 step 3). This takeover is the only path that removes parents.
+7. A config that lists the joiner ends it.
 
-Well-formed (reference `tv_ok`): exactly the fields above, keys are base64 text, names 1 to 40 characters, `p` empty or
-64 hex, `gone` a list of text, `cfg` an object.
+Well-formed (reference `tv_ok`): exactly the fields above, keys are base64 text, names 1 to 40 characters, `r` 16 to 64
+characters, `p` empty or 64 hex, `cfg` an object.
 
 ## 8. Message types
 
@@ -1441,6 +1444,12 @@ message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again)
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
 
+**Checking the pair (0.95).** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
+the person taps "They match" on each. Until then the phone sends nothing (`chat`, `msg`) and takes nothing (`send`,
+`sync`) from that companion, and the companion shows nothing from the phone; on "They match" the companion sends `sync`.
+Devices linked before 0.95 stay as they were. While a phone's chats are mirrored anywhere, its chat list says "Mirrored
+to [name]".
+
 ## 16. Message limits (cap `d1`)
 
 Messages don't stay forever. Every chat, 1:1 and group, has a **limit in days**: messages older than that are deleted on
@@ -1567,6 +1576,13 @@ K = SHA-256("huginn-muninn move v1" || ECDH x of the two one-off keys || s || SH
 
 and both show the 4 emoji of K (13.5). Nothing is moved until the person taps "They match" on both.
 
+**Only on the home network.** `a` may only hold IPv4 literals in 10/8, 172.16/12, 192.168/16 or link-local 169.254/16
+with a port (vectors: `lan`); anything else (a name, a public address) is dropped when the code is read, and a code with
+none left isn't a move code. The old device also only uses addresses on its own network (its own address and prefix,
+vectors: `sameNetwork`). A move code is only taken when it is scanned or pasted inside the Move screen, never from a link
+or the add page, and that screen says "Only continue if the other device is yours and in front of you." The hello's `n`
+is the device's or person's chat name, never a computer's host name.
+
 ### 18.2 Messages
 
 JSON `POST /api/huginn/v1/move` to `a`, on the port Wi-Fi messages use (HTTPS with any certificate, or HTTP: everything
@@ -1592,11 +1608,15 @@ believes a status whose `m` checks out, so nobody else on the Wi-Fi can tell it 
 2. The new device keeps the parts as they came. With all of them and its person's "They match", it checks `h`, takes
    everything in, marks itself `done` and starts again as you.
 3. On `done` the old device erases everything (keys, contacts, chats) and shows "Moved to [name]", with **Use as a
-   linked device** (it starts fresh and sends `link` with its new link code, 15; the new device links it at once) or
-   **Start fresh**.
-4. Interrupted (Wi-Fi gone, an app closed): both keep their side (outside the vault, which a move replaces) and go on
-   where they stopped; parts already there aren't sent again. The old device stays locked until `done`. Moving back is
-   the same thing the other way.
+   linked device** (it starts fresh and sends `link` with its new link code, 15) or **Start fresh**.
+4. Interrupted (Wi-Fi gone, an app closed): both keep their side and go on where they stopped; parts already there aren't
+   sent again. K, the one-off keys and the payload are kept in each app's vault (the parts on the new device stay sealed
+   with K until they're taken in); only what is shown before the vault opens is kept outside it. The old device stays
+   locked until `done`, unless its person stops it with their own password or pattern, or an hour passes with no
+   checked status from the new device: then it is theirs again, as before. Moving back is the same thing the other way.
+5. `link` is taken only within 10 minutes of `done`, and only after the new device's person says yes to "Link [name]?";
+   the new device keeps its `done` state (with when) in the vault it just took in. The old device keeps K only for those
+   10 minutes (Start fresh, the time running out or Erase all drop it).
 
 ### 18.4 The payload
 
@@ -1620,6 +1640,11 @@ Set on the press-and-hold sheet, kept in the encrypted contacts, never on the wi
 1:1 `offer` or a group `vring` from them is dropped), files allowed (off: their room `file` and `kind:"file"` pieces are
 dropped), and whether they see my active status (off: no `active` goes to them). Pin, archive, mute and mark unread
 are kept per chat beside them.
+
+A new key that carries an existing contact's mailbox (from nearby, Keep in touch, an invite link, an introduction or a
+group) is never a quiet key change: it becomes a request that says "says it replaces [name]", and only the person's
+accept (or a code they scanned or pasted themselves) replaces the key. The local ids of group members' `add` requests
+(13) are kept apart from introducers' ids, and a match needs the group and the person too.
 
 Keep in touch (0.5): a `keep` yes from someone who is already a contact is answered with this device's own yes, once,
 so the side still waiting becomes a contact too. Two people who both said yes are contacts at once, not verified; the 4

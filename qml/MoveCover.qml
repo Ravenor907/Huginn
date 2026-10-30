@@ -45,8 +45,8 @@ Rectangle {
             color: Theme.textSoft
             font.pixelSize: Theme.px(17)
             text: cover.away
-                ? (out.state === "checking" ? "Check these are the same on both screens, then choose They match on both. This computer is then locked out: it can't send, read or receive as you."
-                   : out.state === "moving" ? (out.of > 0 ? out.sent + " of " + out.of + " parts there. " : "") + (out.note || "Keep both on the same Wi-Fi. This computer stays locked until the move is done.")
+                ? (out.state === "checking" ? "Check these are the same on both screens, then choose They match on both. Only continue if the other device is yours and in front of you. This computer is then locked out: it can't send, read or receive as you."
+                   : out.state === "moving" ? (out.of > 0 ? out.sent + " of " + out.of + " parts there. " : "") + (out.note || "Keep both on the same Wi-Fi. This computer stays locked until the move is done, or an hour without the other device.")
                    : "You, your contacts and chats are on " + out.to + " now. Nothing of yours is left here.")
                 : (inc.state === "done" ? "Everything is here. Huginn opens again in a moment as you."
                    : "Check these are the same on both screens. " + (inc.of > 0 ? inc.have + " of " + inc.of + " parts here." : "")
@@ -61,9 +61,16 @@ Rectangle {
                 onClicked: cover.away ? Mover.go() : Mover.confirmHere()
             }
             HButton {
-                visible: cover.away && out.state === "moved"
+                visible: cover.away && out.state === "moved" && out.canLink
                 text: "Use as a linked device"; kind: "accent"
                 onClicked: Mover.becomeLinked()
+            }
+            HButton {
+                visible: cover.away && out.state === "moving"
+                text: "Stop moving"
+                // Needs the person's own password.
+                onClicked: Ui.ask("Stop moving", "Type your Huginn password. This computer is then yours again, as it was.", "", "Stop",
+                                  t => { if (!Mover.abort(t)) Ui.say("That isn't your password.", true) }, true)
             }
             HButton {
                 visible: cover.away && out.state === "moved"
@@ -80,5 +87,26 @@ Rectangle {
     Connections {
         target: Mover
         function onNotice(text, bad) { Ui.say(text, bad) }
+        function onChanged() {
+            if (Mover.linkAsk !== "" && cover.asked !== Mover.linkAsk) {
+                cover.asked = Mover.linkAsk
+                Ui.sure("Link " + Mover.linkAsk + "?", Mover.linkAsk + ", the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.",
+                        "Link", () => { cover.asked = ""; Mover.answerLink(true) }, false, false, () => { cover.asked = ""; Mover.answerLink(false) })
+            }
+        }
+    }
+    property string asked: ""
+    property string checking: ""
+    // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
+    Connections {
+        target: Linked
+        function onChanged() {
+            const u = Linked.unchecked()
+            if (!u.length || u[0].key === cover.checking) return
+            const d = u[0]
+            cover.checking = d.key
+            Ui.sure("Check the link with " + d.name, "These must be the same on both screens:\n\n" + d.emoji + "\n\nNothing is mirrored until you choose They match.",
+                    "They match", () => { cover.checking = ""; Linked.confirm(d.key) }, false, false, () => { cover.checking = ""; Linked.unlink(d.key) })
+        }
     }
 }

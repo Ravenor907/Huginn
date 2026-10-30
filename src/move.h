@@ -22,6 +22,11 @@ extern const char kPrefix[];   // "MUNINNM1:"
 extern const char kPath[];     // "/api/huginn/v1/move"
 const int kPart = 512 * 1024;
 struct Code { QStringList a; QString e; QByteArray s; QString n, app; };
+// An IPv4 literal on a home network (10/8, 172.16/12, 192.168/16, link-local 169.254/16), "ip:port" with one, and
+// whether ip is on the same network as mine with prefix bits. A move only ever goes to those (18.1).
+bool lanIp(const QString &ip);
+bool lanAddr(const QString &addr);
+bool sameNetwork(const QString &ip, const QString &mine, int prefix);
 QString code(const Code &c);
 bool parse(const QString &text, Code *c);
 // K = SHA-256(info || ECDH x || secret || SHA-256(new one-off key) || SHA-256(old one-off key)).
@@ -47,11 +52,14 @@ class Move : public QObject
     // On the old device: state "", "checking", "moving", "moved"; the emoji, where it goes, parts, a note.
     Q_PROPERTY(QVariantMap outgoing READ outgoing NOTIFY changed)
     Q_PROPERTY(bool locked READ locked NOTIFY changed)
+    // On the new device: the old one asks to become a linked device ("Link [name]?"), or "".
+    Q_PROPERTY(QString linkAsk READ linkAsk NOTIFY changed)
 public:
     Move(Chat *chat, Vault *vault, Link *link, LocalSend *net, QObject *parent = nullptr);
     QVariantMap incoming() const { return m_in; }
     QVariantMap outgoing() const { return m_out; }
     bool locked() const { return m_locked; }
+    QString linkAsk() const { return m_linkAsk; }
 
     // The new device: the code to show (the same while a move to here is under way), They match, Cancel.
     Q_INVOKABLE QString showCode();
@@ -64,6 +72,10 @@ public:
     // After "Moved to [name]": become a linked device of the new one, or start fresh.
     Q_INVOKABLE void becomeLinked();
     Q_INVOKABLE void startFresh();
+    // Stop a move under way with the person's own password or pattern: false when it isn't theirs.
+    Q_INVOKABLE bool abort(const QString &secret);
+    // "Link [name]?" answered on the new device.
+    Q_INVOKABLE void answerLink(bool yes);
 
     // POST kPath on this computer's Wi-Fi port: status code and the answer.
     QPair<int, QByteArray> handle(const QByteArray &body);
@@ -79,6 +91,8 @@ private:
     void tick();
     void finishIfReady();
     void finishMoved();
+    void stopMoving(const QString &note);
+    static QList<QPair<QString, int>> mine();
     QStringList missing() const;
     QString partsDir() const;
     QJsonObject load(const QString &k) const;
@@ -95,4 +109,8 @@ private:
     QVariantMap m_in, m_out;
     bool m_locked = false, m_busy = false;
     QByteArray m_blob;   // the old device's payload while it moves
+    QTimer m_linkTimer;
+    QByteArray m_movedK; // after a move, for 10 minutes only, in memory
+    QString m_movedAddr, m_movedTo, m_linkCode, m_linkAsk;
+    qint64 m_lastHeard = 0;
 };

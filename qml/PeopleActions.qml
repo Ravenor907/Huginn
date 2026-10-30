@@ -103,10 +103,11 @@ QtObject {
                                        { header: "Move to another device", items: move }], a => {
             if (a === "movehere") {
                 const code = Mover.showCode()
+                if (code === "") { Ui.say("Connect to your home network first: moving only works there.", true); return }
                 Chat.copyText(code)
                 Ui.sure("Move code copied", "On your old device: Settings › Linked devices › Move from this device, and paste it. Keep both on the same Wi-Fi. Both screens then show the same 4 emoji.\n\n" + code, "Done", () => {}, false, false)
             } else if (a === "moveaway") {
-                Ui.ask("Move from this computer", "Paste the code the new device shows (it starts with MUNINNM1)", "", "Next", t => Mover.take(t))
+                Ui.ask("Move from this computer", "Paste the code the new device shows (it starts with MUNINNM1). Only continue if the other device is yours and in front of you.", "", "Next", t => Mover.take(t))
             } else if (a === "code") {
                 const code = Linked.newCode()
                 Chat.copyText(code)
@@ -114,7 +115,7 @@ QtObject {
             } else if (a === "link") {
                 Ui.ask("Link a device", "Paste the code it shows (it starts with MUNINNL1)", "", "Link", t => {
                     const r = Linked.link(t)
-                    Ui.say(r === "" ? "Linked. It shows this computer's chats while Huginn is open." : r, r !== "")
+                    Ui.say(r === "" ? "Now check the 4 emoji on both screens." : r, r !== "")
                 })
             } else if (a === "ph") {
                 Ui.sure("Unlink " + ph.name + "?", "Its chats leave this computer. Link again any time with a new code.", "Unlink", () => Linked.unlink(ph.key), false, true)

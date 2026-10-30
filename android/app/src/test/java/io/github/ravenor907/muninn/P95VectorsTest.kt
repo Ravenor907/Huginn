@@ -54,6 +54,10 @@ class P95VectorsTest {
         }
         assertArrayEquals(blob, MoveWire.pack(entries))
         assertEquals(m.getString("sha"), MoveWire.sha256Hex(blob))
+        val lan = m.getJSONArray("lan")
+        for (i in 0 until lan.length()) assertEquals(lan.getJSONArray(i).getString(0), lan.getJSONArray(i).getBoolean(1), MoveWire.lanAddr(lan.getJSONArray(i).getString(0)))
+        val nets = m.getJSONArray("sameNetwork")
+        for (i in 0 until nets.length()) nets.getJSONArray(i).let { c -> assertEquals(c.toString(), c.getBoolean(3), MoveWire.sameNetwork(c.getString(0), c.getString(1), c.getInt(2))) }
         val counts = m.getJSONArray("partCounts")
         for (i in 0 until counts.length()) assertEquals(counts.getJSONArray(i).getInt(1), MoveWire.parts(counts.getJSONArray(i).getLong(0)))
     }
@@ -103,11 +107,10 @@ class P95VectorsTest {
         for (i in 0 until good.length()) assertTrue(good.get(i).toString(), TvReconnect.ok(good.getJSONObject(i)))
         val bad = t.getJSONArray("refuse")
         for (i in 0 until bad.length()) assertFalse(bad.get(i).toString(), TvReconnect.ok(bad.getJSONObject(i)))
-        val gone = t.getJSONArray("gone")
-        for (i in 0 until gone.length()) {
-            val c = gone.getJSONArray(i)
-            fun list(j: Int) = c.getJSONArray(j).let { a -> (0 until a.length()).map { a.getString(it) } }
-            assertEquals(list(3), TvReconnect.gone(list(0), list(1), c.getString(2)))
+        val due = t.getJSONArray("due")
+        for (i in 0 until due.length()) {
+            val c = due.getJSONArray(i)
+            assertEquals(c.toString(), c.getBoolean(3), TvReconnect.takeoverDue(c.getLong(0), c.getLong(1), c.getBoolean(2)))
         }
     }
 }

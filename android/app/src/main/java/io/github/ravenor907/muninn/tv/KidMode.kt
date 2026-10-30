@@ -212,7 +212,7 @@ object KidTv {
         val me = app.identity.publicKey
         val s = _state.value
         // k6: a parent reconnecting after a wipe (TvReconnect).
-        if (s.parents.isNotEmpty()) TvReconnect.onTv(app, fromKey, mailbox, o, inviteOk, s.parents, s.cfg?.raw)?.let { return it }
+        if (s.parents.isNotEmpty()) TvReconnect.onTv(app, fromKey, mailbox, o, s.parents, s.cfg?.raw)?.let { return it }
         when (o.optString("t")) {
             "config" -> {
                 val new = o.optJSONObject("cfg") ?: return false
@@ -221,7 +221,7 @@ object KidTv {
                     if (!inviteOk || new.opt("by") != fromKey) return false
                     listOf(fromKey)
                 } else if (TvReconnect.orphanFrom(fromKey) && new.opt("by") == fromKey) {
-                    // k6: no parent was left to approve; the one who scanned "Connect a parent" signs for themselves.
+                    // k6: 24 hours and no parent blocked it; the one who scanned "Connect a parent" signs for themselves.
                     listOf(fromKey)
                 } else s.parents
                 val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)
@@ -378,6 +378,7 @@ object Tv : TvHandler {
         TvUpdate.start(app)
         TvStorage.start(app)
         KidTv.askParents(app)
+        TvReconnect.load(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

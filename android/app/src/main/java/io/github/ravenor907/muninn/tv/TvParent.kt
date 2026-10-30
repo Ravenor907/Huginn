@@ -189,18 +189,14 @@ object TvParent {
         return null
     }
 
-    /**
-     * k6: [person] looks after the TV again (another parent approved), and [gone] (their old, wiped key: the parents
-     * that didn't answer) is taken off the TV, as a parent and from its list.
-     */
-    fun swapParent(tvKey: String, person: TvPerson, gone: Set<String>) = change(tvKey) { t ->
-        t.copy(parents = (t.parents - gone + person.k).distinct(), sharedWith = t.sharedWith - gone,
-            reach = (t.reach - gone + person.k).distinct().take(TvRules.MAX_CONTACTS - 1),
-            others = t.others.filter { it.k !in gone && it.k != person.k } + person)
+    /** k6: another parent approved [person] (a reconnect): they look after the TV too. Nobody is taken off. */
+    fun addParentBack(tvKey: String, person: TvPerson) = change(tvKey) { t ->
+        t.copy(parents = (t.parents + person.k).distinct(), reach = (t.reach + person.k).distinct().take(TvRules.MAX_CONTACTS - 1),
+            others = t.others.filter { it.k != person.k } + person)
     }
 
     /**
-     * k6: nobody else was left to approve, so this phone takes the TV over from its own signed config [cfg]: the next
+     * k6: 24 hours went by and no parent blocked it, so this phone takes the TV over from its own signed config [cfg]: the next
      * config lists only this phone as parent (the old parents go), with the same people, messages and settings.
      */
     fun takeOver(app: Muninn, tvKey: String, cfg: TvConfig) {

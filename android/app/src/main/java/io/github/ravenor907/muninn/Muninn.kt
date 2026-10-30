@@ -126,6 +126,7 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        io.github.ravenor907.muninn.net.Move.ready(this)
         // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
         chat.foreground(visible)
         power.ready()

@@ -213,16 +213,15 @@ class MainActivity : ComponentActivity() {
             // A group invite link (cap j1) comes as muninn://add/MUNINNG1:CODE.
             d.scheme == "muninn" && d.host == "add" ->
                 d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let {
-                    if (it.startsWith(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX) || it.startsWith(io.github.ravenor907.muninn.net.MoveWire.PREFIX)) it
+                    if (it.startsWith(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) it
                     else io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
             d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString()).replace("MUNINNG1%3A", io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)
                 .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) &&
-                    (it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) || it.contains(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX) ||
-                        it.contains(io.github.ravenor907.muninn.net.MoveWire.PREFIX)) }
+                    (it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) || it.contains(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) }
             else -> null
         } ?: return
-        // A move code (cap x1) asks first, over everything else.
-        if (io.github.ravenor907.muninn.net.MoveWire.parse(code) != null) { io.github.ravenor907.muninn.screens.MoveUi.code.value = code; return }
+        // A move code (cap x1) is only ever taken inside the Move screen, never from a link.
+        if (code.contains(io.github.ravenor907.muninn.net.MoveWire.PREFIX)) return
         ChatNav.incoming = code
         tab = "chat"; ChatNav.open = "add"; intentChose = true
     }
@@ -444,6 +443,8 @@ class MainActivity : ComponentActivity() {
                 ?: app.chat.groups.all.value.keys.firstOrNull()?.let { ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(it) }
         }
         if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.HoldSheet(app, ChatNav.hold, ChatNav.holdMoves) { ChatNav.hold = ""; ChatNav.holdMoves = null }
+        // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
+        io.github.ravenor907.muninn.screens.LinkCheck()
         ask?.let { AskDialog(it) }
     }
 

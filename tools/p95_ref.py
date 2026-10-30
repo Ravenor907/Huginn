@@ -5,7 +5,7 @@ apps check (tests/p95-vectors.json). Run it to write the vectors; it checks ever
  - x1 (18): moving to another device. The key from the two one-off keys and the secret in the QR, the 4 emoji, the hello
    and status checks, a sealed part, the sealed link code, and the payload's layout.
  - j1 (17): a link's id, whether a link still lets someone in, and "mi" in a group state.
- - k6 (7.11): which Kids' TV reconnect messages are well-formed.
+ - k6 (7.11): which Kids' TV reconnect messages are well-formed, and when the new phone takes over (24 hours, nobody blocked).
 """
 import base64, hashlib, hmac, json, os, struct
 
@@ -83,6 +83,26 @@ def unpack(blob):
     return out
 
 
+def lan_ip(ip):
+    """An IPv4 literal on a home network: 10/8, 172.16/12, 192.168/16 or link-local 169.254/16. Never a name."""
+    p = ip.split(".")
+    if len(p) != 4 or any(not x.isdigit() or len(x) > 3 or int(x) > 255 for x in p): return False
+    a, b = int(p[0]), int(p[1])
+    return a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 169 and b == 254)
+
+
+def lan_addr(addr):
+    ip, _, port = addr.rpartition(":")
+    return lan_ip(ip) and port.isdigit() and 1 <= int(port) <= 65535
+
+
+def same_network(ip, mine, prefix):
+    if not lan_ip(ip) or not lan_ip(mine) or not 8 <= prefix <= 32: return False
+    n = lambda s: int.from_bytes(bytes(int(x) for x in s.split(".")), "big")
+    mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+    return n(ip) & mask == n(mine) & mask
+
+
 def move_code(o): return MOVE_PREFIX + b64url(json.dumps(o, separators=(",", ":")).encode())
 
 
@@ -110,24 +130,26 @@ def link_ok(x, mx, uses, off, maker_in, maker_may, now):
 
 # ------------------------------------------------------------------ k6: Kids' TV reconnect
 
+WAIT_MS = 24 * 3_600_000
+
+
 def tv_ok(o):
     def key(f): return isinstance(o.get(f), str) and 0 < len(o[f]) <= 200 and len(b64d(o[f])) > 0
     def name(f): return isinstance(o.get(f), str) and o[f].strip() != "" and len(o[f]) <= 40
     try:
         t, keys = o["t"], set(o)
-        if t == "rejoin": return keys == {"t", "n"} and name("n")
+        if t == "rejoin": return keys == {"t", "n", "r"} and name("n") and isinstance(o["r"], str) and 16 <= len(o["r"]) <= 64
         if t == "ask": return keys == {"t", "k", "n"} and key("k") and name("n")
-        if t in ("here", "approve"): return keys == {"t", "k"} and key("k")
-        if t == "swap":
-            return keys == {"t", "k", "n", "p", "gone"} and key("k") and name("n") and isinstance(o["p"], str) and len(o["p"]) in (0, 64) \
-                and isinstance(o["gone"], list) and all(isinstance(g, str) for g in o["gone"])
+        if t in ("approve", "block"): return keys == {"t", "k"} and key("k")
+        if t == "swap": return keys == {"t", "k", "n", "p"} and key("k") and name("n") and isinstance(o["p"], str) and len(o["p"]) in (0, 64)
         if t == "orphan": return keys == {"t", "cfg"} and isinstance(o["cfg"], dict)
+        if t == "blocked": return keys == {"t"}
         return False
     except Exception:
         return False
 
 
-def tv_gone(parents, here, approver): return sorted(p for p in parents if p not in here and p != approver)
+def takeover_due(at, now, blocked): return (not blocked) and now - at >= WAIT_MS
 
 
 # ------------------------------------------------------------------ vectors
@@ -160,6 +182,12 @@ def build():
             "nonce": b64(nonce), "part0": seal(k, nonce, blob, part_aad(0, n, h)), "aad0": part_aad(0, n, h),
             "link": seal(k, nonce, b"MUNINNL1:abc", "move|link"), "linkText": "MUNINNL1:abc",
             "partCounts": [[0, 1], [1, 1], [PART, 1], [PART + 1, 2], [3 * PART, 3]],
+            # Addresses a move may go to: home networks only, never a name or a public address (18.1).
+            "lan": [[a, lan_addr(a)] for a in ("192.168.1.20:53317", "10.0.0.5:53317", "172.16.4.1:53317", "172.31.255.1:1", "169.254.3.9:53317",
+                                                "172.32.0.1:53317", "8.8.8.8:53317", "100.64.0.1:53317", "evil.example:53317", "192.168.1.20",
+                                                "192.168.1.256:53317", "192.168.1.20:70000", "::1:53317")],
+            "sameNetwork": [[a, b, n, same_network(a, b, n)] for a, b, n in (("192.168.1.20", "192.168.1.7", 24, ), ("192.168.2.20", "192.168.1.7", 24),
+                                                                              ("10.1.2.3", "10.9.9.9", 8), ("192.168.1.20", "192.168.1.7", 4))],
         },
         "links": {
             "ids": [[t, link_id(t)] for t in ("AAAAAAAAAAAAAAAAAAAAAA", "q83vEjRWeJAAAAAAAAAAAA")],
@@ -175,12 +203,15 @@ def build():
             )],
         },
         "tv": {
-            "good": [{"t": "rejoin", "n": "Mom"}, {"t": "ask", "k": "QUJD", "n": "Mom"}, {"t": "here", "k": "QUJD"}, {"t": "approve", "k": "QUJD"},
-                     {"t": "swap", "k": "QUJD", "n": "Mom", "p": "", "gone": ["REVG"]}, {"t": "orphan", "cfg": {"v": 1}}],
-            "refuse": [{"t": "rejoin"}, {"t": "rejoin", "n": ""}, {"t": "ask", "k": "QUJD"}, {"t": "here", "k": "QUJD", "x": 1},
-                       {"t": "swap", "k": "QUJD", "n": "Mom", "p": "abc", "gone": []}, {"t": "orphan", "cfg": "x"}, {"t": "other"}],
-            # parents, here, approver, gone
-            "gone": [[["A", "B", "C"], ["A"], "A", ["B", "C"]], [["A", "B"], ["A", "B"], "B", []], [["A", "B", "C"], ["C"], "A", ["B"]]],
+            "good": [{"t": "rejoin", "n": "Mom", "r": "0123456789abcdef0123456789abcdef"}, {"t": "ask", "k": "QUJD", "n": "Mom"},
+                     {"t": "approve", "k": "QUJD"}, {"t": "block", "k": "QUJD"}, {"t": "swap", "k": "QUJD", "n": "Mom", "p": ""},
+                     {"t": "orphan", "cfg": {"v": 1}}, {"t": "blocked"}],
+            "refuse": [{"t": "rejoin", "n": "Mom"}, {"t": "rejoin", "n": "", "r": "0123456789abcdef"}, {"t": "rejoin", "n": "Mom", "r": "short"},
+                       {"t": "ask", "k": "QUJD"}, {"t": "approve", "k": "QUJD", "x": 1}, {"t": "here", "k": "QUJD"},
+                       {"t": "swap", "k": "QUJD", "n": "Mom", "p": "abc"}, {"t": "swap", "k": "QUJD", "n": "Mom", "p": "", "gone": []},
+                       {"t": "orphan", "cfg": "x"}, {"t": "other"}],
+            # asked at, now, blocked, takes over
+            "due": [[0, WAIT_MS - 1, False, False], [0, WAIT_MS, False, True], [0, 3 * WAIT_MS, True, False]],
         },
     }
 
@@ -206,6 +237,8 @@ def verify(v):
         assert not isinstance(e, AssertionError)
     assert open_sealed(k, m["link"], "move|link").decode() == m["linkText"]
     for size, n in m["partCounts"]: assert parts(size) == n
+    for a, ok in m["lan"]: assert lan_addr(a) == ok, a
+    for a, b, n, ok in m["sameNetwork"]: assert same_network(a, b, n) == ok
     for t, i in v["links"]["ids"]: assert link_id(t) == i
     for c in v["links"]["ok"]: assert link_ok(*c[:7]) == c[7]
     # "mi" in a group state: only ever true (17.1).
@@ -218,7 +251,7 @@ def verify(v):
             pass
     for o in v["tv"]["good"]: assert tv_ok(o), o
     for o in v["tv"]["refuse"]: assert not tv_ok(o), o
-    for parents, here, approver, gone in v["tv"]["gone"]: assert tv_gone(parents, here, approver) == gone
+    for at, now, blocked, due in v["tv"]["due"]: assert takeover_due(at, now, blocked) == due
     return True
 
 

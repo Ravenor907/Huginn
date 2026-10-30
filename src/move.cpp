@@ -8,6 +8,7 @@
 #include "trust.h"
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -34,6 +35,8 @@ namespace
 {
 const QByteArray kInfo = QByteArrayLiteral("huginn-muninn move v1");
 const QString kLinkAad = QStringLiteral("move|link");
+const qint64 kLinkMs = 10 * 60 * 1000;
+const qint64 kGiveUpMs = 60 * 60 * 1000;
 const QString kCommon = QStringLiteral("@move.json");
 
 QByteArray sha(const QByteArray &b) { return QCryptographicHash::hash(b, QCryptographicHash::Sha256); }
@@ -162,6 +165,45 @@ QString words(const QVariantMap &m, const QString &text)
 
 // ------------------------------------------------------------------ the wire
 
+bool MoveWire::lanIp(const QString &ip)
+{
+    const QStringList p = ip.split(QLatin1Char('.'));
+    if (p.size() != 4)
+        return false;
+    for (const QString &x : p) {
+        bool ok = false;
+        const int v = x.toInt(&ok);
+        if (!ok || x.isEmpty() || x.size() > 3 || v < 0 || v > 255 || x.at(0) == QLatin1Char('+') || x.at(0) == QLatin1Char('-'))
+            return false;
+    }
+    const int a = p.at(0).toInt(), b = p.at(1).toInt();
+    return a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) || (a == 169 && b == 254);
+}
+
+bool MoveWire::lanAddr(const QString &addr)
+{
+    const int i = int(addr.lastIndexOf(QLatin1Char(':')));
+    if (i < 0)
+        return false;
+    bool ok = false;
+    const int port = addr.mid(i + 1).toInt(&ok);
+    return ok && port >= 1 && port <= 65535 && lanIp(addr.left(i));
+}
+
+bool MoveWire::sameNetwork(const QString &ip, const QString &mine, int prefix)
+{
+    if (!lanIp(ip) || !lanIp(mine) || prefix < 8 || prefix > 32)
+        return false;
+    auto n = [](const QString &s) {
+        quint32 v = 0;
+        for (const QString &x : s.split(QLatin1Char('.')))
+            v = (v << 8) | quint32(x.toInt());
+        return v;
+    };
+    const quint32 mask = prefix == 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> prefix);
+    return (n(ip) & mask) == (n(mine) & mask);
+}
+
 QString MoveWire::code(const Code &c)
 {
     const QJsonObject o{{QStringLiteral("v"), 1}, {QStringLiteral("a"), QJsonArray::fromStringList(c.a)}, {QStringLiteral("e"), c.e},
@@ -183,8 +225,9 @@ bool MoveWire::parse(const QString &text, Code *c)
     }
     const QJsonObject o = QJsonDocument::fromJson(b64urlD(body)).object();
     c->a.clear();
+    // Only home-network addresses (18.1): never a name or a public address.
     for (const QJsonValue &v : o.value(QStringLiteral("a")).toArray())
-        if (c->a.size() < 8)
+        if (c->a.size() < 8 && lanAddr(v.toString()))
             c->a << v.toString();
     c->e = jstr(o, "e");
     c->s = b64urlD(jstr(o, "s"));
@@ -339,6 +382,12 @@ bool MoveWire::selfTest(const QString &vectorsPath)
     check(QString::fromUtf8(open(k, jstr(m, "link"), kLinkAad, &ok)) == jstr(m, "linkText") && ok, QStringLiteral("sealed link code"));
     for (const QJsonValue &x : m.value(QStringLiteral("partCounts")).toArray())
         check(parts(x.toArray().at(0).toInteger()) == x.toArray().at(1).toInt(), QStringLiteral("part count"));
+    for (const QJsonValue &x : m.value(QStringLiteral("lan")).toArray())
+        check(lanAddr(x.toArray().at(0).toString()) == x.toArray().at(1).toBool(), QStringLiteral("home address ") + x.toArray().at(0).toString());
+    for (const QJsonValue &x : m.value(QStringLiteral("sameNetwork")).toArray()) {
+        const QJsonArray a = x.toArray();
+        check(sameNetwork(a.at(0).toString(), a.at(1).toString(), a.at(2).toInt()) == a.at(3).toBool(), QStringLiteral("same network ") + a.at(0).toString());
+    }
     // Cap j1: link ids and whether a link lets someone in (section 17).
     const QJsonObject l = v.value(QStringLiteral("links")).toObject();
     for (const QJsonValue &x : l.value(QStringLiteral("ids")).toArray())
@@ -376,24 +425,51 @@ Move::Move(Chat *chat, Vault *vault, Link *link, LocalSend *net, QObject *parent
 {
     m_timer.setInterval(1500);
     connect(&m_timer, &QTimer::timeout, this, &Move::tick);
+    // After a move, K is kept only in memory for 10 minutes ("Use as a linked device"), then dropped.
+    m_linkTimer.setSingleShot(true);
+    m_linkTimer.setInterval(int(kLinkMs));
+    connect(&m_linkTimer, &QTimer::timeout, this, [this] { m_movedK.clear(); publish(); });
     const QJsonObject out = load(QStringLiteral("out"));
     if (jstr(out, "state") == QLatin1String("moving")) {
         // Moving was under way when Huginn closed: still locked, and it goes on.
         m_locked = true;
         m_chat->setMoving(true);
+        m_lastHeard = QDateTime::currentMSecsSinceEpoch();
         m_timer.start();
     }
     publish();
 }
 
-QJsonObject Move::load(const QString &k) const { return QJsonDocument::fromJson(m_settings.value(QStringLiteral("move/") + k).toByteArray()).object(); }
+// The secrets (K, the one-off keys) are kept in the vault ("move.json"); QSettings only mirrors what's shown before it opens.
+QJsonObject Move::load(const QString &k) const
+{
+    if (!m_vault->locked()) {
+        const QJsonObject all = QJsonDocument::fromJson(m_vault->read(QStringLiteral("move.json"))).object();
+        if (all.contains(k))
+            return all.value(k).toObject();
+    }
+    return QJsonDocument::fromJson(m_settings.value(QStringLiteral("move/") + k).toByteArray()).object();
+}
 
 void Move::store(const QString &k, const QJsonObject &o)
 {
+    if (!m_vault->locked()) {
+        QJsonObject all = QJsonDocument::fromJson(m_vault->read(QStringLiteral("move.json"))).object();
+        if (o.isEmpty())
+            all.remove(k);
+        else
+            all.insert(k, o);
+        if (all.isEmpty())
+            m_vault->remove(QStringLiteral("move.json"));
+        else
+            m_vault->write(QStringLiteral("move.json"), compact(all));
+    }
     if (o.isEmpty())
         m_settings.remove(QStringLiteral("move/") + k);
     else
-        m_settings.setValue(QStringLiteral("move/") + k, compact(o));
+        m_settings.setValue(QStringLiteral("move/") + k, compact({{QStringLiteral("state"), o.value(QStringLiteral("state"))}, {QStringLiteral("to"), o.value(QStringLiteral("to"))},
+                                                                    {QStringLiteral("from"), o.value(QStringLiteral("from"))}, {QStringLiteral("emoji"), o.value(QStringLiteral("emoji"))},
+                                                                    {QStringLiteral("at"), o.value(QStringLiteral("at"))}}));
     m_settings.sync();
     publish();
 }
@@ -408,7 +484,8 @@ void Move::publish()
     const QString note = m_out.value(QStringLiteral("note")).toString();
     const int sent = m_out.value(QStringLiteral("sent")).toInt();
     m_out = {{QStringLiteral("state"), jstr(o, "state")}, {QStringLiteral("emoji"), jstr(o, "emoji")}, {QStringLiteral("to"), jstr(o, "to")},
-             {QStringLiteral("sent"), sent}, {QStringLiteral("of"), o.value(QStringLiteral("n")).toInt()}, {QStringLiteral("note"), note}};
+             {QStringLiteral("sent"), sent}, {QStringLiteral("of"), o.value(QStringLiteral("n")).toInt()}, {QStringLiteral("note"), note},
+             {QStringLiteral("canLink"), !m_movedK.isEmpty()}};
     Q_EMIT changed();
 }
 
@@ -437,13 +514,10 @@ QString Move::showCode()
     for (char &c : secret)
         c = char(QRandomGenerator::system()->bounded(256));
     QStringList addrs;
-    for (const QHostAddress &a : QNetworkInterface::allAddresses())
-        if (a.protocol() == QAbstractSocket::IPv4Protocol && !a.isLoopback()
-            && ((a.toIPv4Address() >> 24) == 10 || (a.toIPv4Address() >> 20) == 0xAC1 || (a.toIPv4Address() >> 16) == 0xC0A8))
-            addrs << a.toString() + QStringLiteral(":53317");
-    if (addrs.isEmpty())
-        addrs << QStringLiteral("0.0.0.0:53317");
-    const QString c = MoveWire::code({addrs, b64(kp.publicDer), secret, QSysInfo::machineHostName().left(40), QStringLiteral("huginn")});
+    for (const auto &[ip, prefix] : mine())
+        addrs << ip + QStringLiteral(":53317");
+    // Never the computer's name: the person's own chat name.
+    const QString c = addrs.isEmpty() ? QString() : MoveWire::code({addrs, b64(kp.publicDer), secret, m_chat->username().left(40), QStringLiteral("huginn")});
     QDir(partsDir()).removeRecursively();
     // The Wi-Fi side must be up to be reached.
     if (!m_net->running())
@@ -471,12 +545,17 @@ void Move::cancelHere()
 
 QPair<int, QByteArray> Move::handle(const QByteArray &body)
 {
+    if (!m_chat->ready() || m_vault->locked())
+        return {503, "{}"};
     const QJsonObject p = QJsonDocument::fromJson(body).object();
     QJsonObject s = load(QStringLiteral("in"));
     if (s.isEmpty())
         return {404, "{}"};
     const QString t = jstr(p, "t");
     const QByteArray k = b64d(jstr(s, "k"));
+    const bool done = jstr(s, "state") == QLatin1String("done");
+    if (done && (t == QLatin1String("hello") || t == QLatin1String("part")))
+        return {409, "{}"};
     if (t == QLatin1String("hello")) {
         const QString e = jstr(p, "e");
         if (s.contains(QStringLiteral("old")) && jstr(s, "old") != e && jstr(s, "state") != QLatin1String("shown"))
@@ -544,16 +623,19 @@ QPair<int, QByteArray> Move::handle(const QByteArray &body)
         return {200, compact({{QStringLiteral("state"), st}, {QStringLiteral("missing"), m}, {QStringLiteral("m"), MoveWire::mac(k, QStringLiteral("status|") + st + QLatin1Char('|') + h)}})};
     }
     if (t == QLatin1String("link")) {
+        // Only right after the move (10 minutes), and only once the person says yes to "Link [name]?".
+        if (!done || QDateTime::currentMSecsSinceEpoch() - s.value(QStringLiteral("at")).toInteger() > kLinkMs) {
+            store(QStringLiteral("in"), {});
+            return {403, "{}"};
+        }
         bool ok = false;
         const QString code = QString::fromUtf8(MoveWire::open(k, jstr(p, "d"), kLinkAad, &ok));
         if (!ok)
             return {403, "{}"};
-        if (!m_chat->ready())
-            return {503, "{}"};
-        const QString err = m_link->link(code);
-        if (err.isEmpty())
-            store(QStringLiteral("in"), {});
-        return {err.isEmpty() ? 200 : 400, "{}"};
+        m_linkCode = code;
+        m_linkAsk = jstr(s, "from").isEmpty() ? QStringLiteral("your old device") : jstr(s, "from");
+        Q_EMIT changed();
+        return {200, "{}"};
     }
     return {400, "{}"};
 }
@@ -594,9 +676,16 @@ void Move::finishIfReady()
         return;
     }
     m_busy = true;
-    // Done before restarting: the old device asks again and gets "done" from the restarted Huginn.
+    // Done, and when: kept in the restored vault, so the old device hears "done" and may ask to link for 10 minutes.
     s.insert(QStringLiteral("state"), QStringLiteral("done"));
+    s.insert(QStringLiteral("at"), QDateTime::currentMSecsSinceEpoch());
     store(QStringLiteral("in"), s);
+    Vault::Files kept;
+    for (const auto &e : files)
+        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin"))
+            kept.push_back(e);
+    kept.emplace_back(QStringLiteral("move.json"), compact({{QStringLiteral("in"), s}}));
+    files = kept;
     QDir(partsDir()).removeRecursively();
     if (!m_vault->takeEverything(files, &error)) {
         s.insert(QStringLiteral("state"), QStringLiteral("receiving"));
@@ -631,13 +720,25 @@ void Move::take(const QString &text)
 {
     MoveWire::Code c;
     if (!MoveWire::parse(text, &c)) {
-        Q_EMIT notice(QStringLiteral("That isn't a move code. On the new device: Move here."), true);
+        Q_EMIT notice(QStringLiteral("That isn't a move code from a device on your Wi-Fi. On the new device: Move here."), true);
         return;
     }
+    // Only addresses on this computer's own network.
+    QStringList addrs;
+    const auto nets = this->mine();
+    for (const QString &a : std::as_const(c.a))
+        for (const auto &[ip, prefix] : nets)
+            if (MoveWire::sameNetwork(a.section(QLatin1Char(':'), 0, 0), ip, prefix) && !addrs.contains(a))
+                addrs << a;
+    if (addrs.isEmpty()) {
+        Q_EMIT notice(QStringLiteral("%1 isn't on the same Wi-Fi as this computer. Moving only works on your own network.").arg(c.n), true);
+        return;
+    }
+    c.a = addrs;
     const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
     const QString mine = b64(kp.publicDer);
     const QByteArray k = MoveWire::key(kp.privateDer, c.e, c.s, c.e, mine);
-    const QJsonObject hello{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("e"), mine}, {QStringLiteral("n"), QSysInfo::machineHostName().left(40)},
+    const QJsonObject hello{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("e"), mine}, {QStringLiteral("n"), m_chat->username().left(40)},
                             {QStringLiteral("app"), QStringLiteral("huginn")}, {QStringLiteral("m"), MoveWire::mac(k, QStringLiteral("hello|") + mine)}};
     auto left = std::make_shared<int>(int(c.a.size()));
     auto found = std::make_shared<bool>(false);
@@ -673,15 +774,19 @@ void Move::go()
         Q_EMIT notice(QStringLiteral("Couldn't gather your chats. Unlock Chat and try again."), true);
         return;
     }
-    const QByteArray blob = MoveWire::pack(entries);
-    const QByteArray k = b64d(jstr(o, "k"));
-    // Kept sealed with K until the move is done, so an interrupted one goes on after a restart.
-    m_vault->write(QStringLiteral("move-out.bin"), MoveWire::seal(k, blob, QStringLiteral("move|out")).toLatin1());
+    Vault::Files keep;
+    for (const auto &e : entries)
+        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin"))
+            keep.push_back(e);
+    const QByteArray blob = MoveWire::pack(keep);
+    // Kept in the vault until the move is done, so an interrupted one goes on after a restart.
+    m_vault->write(QStringLiteral("move-out.bin"), blob);
     o.insert(QStringLiteral("state"), QStringLiteral("moving"));
     o.insert(QStringLiteral("h"), QString::fromLatin1(sha(blob).toHex()));
     o.insert(QStringLiteral("n"), MoveWire::parts(blob.size()));
     store(QStringLiteral("out"), o);
     m_blob = blob;
+    m_lastHeard = QDateTime::currentMSecsSinceEpoch();
     m_timer.start();
 }
 
@@ -707,9 +812,8 @@ void Move::tick()
         // After a restart: the payload comes back from the vault once it's open.
         if (m_vault->locked())
             return;
-        bool ok = false;
-        m_blob = MoveWire::open(k, QString::fromLatin1(m_vault->read(QStringLiteral("move-out.bin"))), QStringLiteral("move|out"), &ok);
-        if (!ok)
+        m_blob = m_vault->read(QStringLiteral("move-out.bin"));
+        if (m_blob.isEmpty())
             return;
     }
     m_busy = true;
@@ -721,10 +825,15 @@ void Move::tick()
                                           || (st == QLatin1String("need") && MoveWire::same(jstr(j, "m"), MoveWire::mac(k, QStringLiteral("status|need|")))));
         if (!good) {
             m_busy = false;
+            if (QDateTime::currentMSecsSinceEpoch() - m_lastHeard > kGiveUpMs) {
+                stopMoving(QStringLiteral("%1 wasn't heard from for an hour, so moving stopped. This computer is yours again.").arg(jstr(o, "to")));
+                return;
+            }
             m_out.insert(QStringLiteral("note"), QStringLiteral("Waiting for %1 on the Wi-Fi…").arg(jstr(o, "to")));
             Q_EMIT changed();
             return;
         }
+        m_lastHeard = QDateTime::currentMSecsSinceEpoch();
         if (st == QLatin1String("done")) {
             finishMoved();
             return;
@@ -776,10 +885,15 @@ void Move::finishMoved()
     const QJsonObject o = load(QStringLiteral("out"));
     m_timer.stop();
     m_vault->remove(QStringLiteral("move-out.bin"));
+    // Only what becoming a linked device needs, in memory for 10 minutes: where the new device is and K.
+    m_movedK = b64d(jstr(o, "k"));
+    m_movedAddr = jstr(o, "addr");
+    m_movedTo = jstr(o, "to");
+    m_linkTimer.start();
+    m_vault->remove(QStringLiteral("move.json"));
     m_vault->eraseAll();
-    // Only what becoming a linked device needs: where the new device is and K (to seal the link code).
-    store(QStringLiteral("out"), {{QStringLiteral("state"), QStringLiteral("moved")}, {QStringLiteral("to"), jstr(o, "to")}, {QStringLiteral("addr"), jstr(o, "addr")},
-                                  {QStringLiteral("all"), o.value(QStringLiteral("all"))}, {QStringLiteral("k"), jstr(o, "k")}});
+    m_settings.setValue(QStringLiteral("move/out"), compact({{QStringLiteral("state"), QStringLiteral("moved")}, {QStringLiteral("to"), m_movedTo}}));
+    m_settings.sync();
     m_blob.clear();
     m_locked = false;
     m_busy = false;
@@ -787,26 +901,82 @@ void Move::finishMoved()
     publish();
 }
 
+void Move::stopMoving(const QString &note)
+{
+    m_timer.stop();
+    m_vault->remove(QStringLiteral("move-out.bin"));
+    m_blob.clear();
+    m_locked = false;
+    m_busy = false;
+    m_chat->setMoving(false);
+    store(QStringLiteral("out"), {});
+    Q_EMIT notice(note, false);
+}
+
+bool Move::abort(const QString &secret)
+{
+    // Stopping a move under way needs the person's own password or pattern.
+    if (!m_locked || !m_vault->unlock(secret))
+        return false;
+    stopMoving(QStringLiteral("Moving stopped. This computer is yours again."));
+    return true;
+}
+
+void Move::answerLink(bool yes)
+{
+    const QString code = m_linkCode;
+    m_linkCode.clear();
+    m_linkAsk.clear();
+    if (yes && !code.isEmpty()) {
+        const QString err = m_link->link(code, true);
+        if (!err.isEmpty())
+            Q_EMIT notice(err, true);
+    }
+    store(QStringLiteral("in"), {});
+}
+
 void Move::becomeLinked()
 {
-    const QJsonObject o = load(QStringLiteral("out"));
+    if (m_movedK.isEmpty()) {
+        Q_EMIT notice(QStringLiteral("That was more than 10 minutes ago. Link it from Linked devices instead."), true);
+        return;
+    }
     if (!m_chat->ready()) {
         Q_EMIT notice(QStringLiteral("Set up Huginn's lock first, then tap this again."), true);
         return;
     }
     const QString code = m_link->newCode();
-    const QJsonObject body{{QStringLiteral("t"), QStringLiteral("link")}, {QStringLiteral("d"), MoveWire::seal(b64d(jstr(o, "k")), code.toUtf8(), kLinkAad)}};
-    post(jstr(o, "addr"), body, [this, o](int c, const QByteArray &) {
+    const QJsonObject body{{QStringLiteral("t"), QStringLiteral("link")}, {QStringLiteral("d"), MoveWire::seal(m_movedK, code.toUtf8(), kLinkAad)}};
+    const QString to = m_movedTo;
+    post(m_movedAddr, body, [this, to](int c, const QByteArray &) {
         if (c == 200) {
             startFresh();
-            Q_EMIT notice(QStringLiteral("Linked. Your chats show up here in a moment."), false);
+            Q_EMIT notice(QStringLiteral("Asked %1. Say yes there, and your chats show up here.").arg(to), false);
         } else {
-            Q_EMIT notice(QStringLiteral("Couldn't reach %1. Open it on the same Wi-Fi and try again.").arg(jstr(o, "to")), true);
+            Q_EMIT notice(QStringLiteral("Couldn't reach %1. Open it on the same Wi-Fi and try again.").arg(to), true);
         }
     });
 }
 
-void Move::startFresh() { store(QStringLiteral("out"), {}); }
+void Move::startFresh()
+{
+    m_movedK.clear();
+    m_linkTimer.stop();
+    store(QStringLiteral("out"), {});
+}
+
+QList<QPair<QString, int>> Move::mine()
+{
+    QList<QPair<QString, int>> out;
+    for (const QNetworkInterface &nif : QNetworkInterface::allInterfaces()) {
+        if (!(nif.flags() & QNetworkInterface::IsUp) || (nif.flags() & QNetworkInterface::IsLoopBack))
+            continue;
+        for (const QNetworkAddressEntry &e : nif.addressEntries())
+            if (e.ip().protocol() == QAbstractSocket::IPv4Protocol && MoveWire::lanIp(e.ip().toString()))
+                out << qMakePair(e.ip().toString(), e.prefixLength());
+    }
+    return out;
+}
 
 // ------------------------------------------------------------------ between Huginn and Muninn (18.4)
 

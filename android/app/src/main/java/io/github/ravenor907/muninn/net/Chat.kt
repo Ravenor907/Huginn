@@ -53,6 +53,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     override fun sendTvRoom(peerKey: String, plain: String) {
         bg { deliver(peerKey, envelope("tvconfig", peerKey, plain, UUID.randomUUID().toString()), contacts.get(peerKey)?.mailbox) }
     }
+    override fun sendTvRoomEverywhere(peerKey: String, plain: String) {
+        bg { spread(peerKey, listOf(envelope("tvconfig", peerKey, plain, UUID.randomUUID().toString()).toString()), false, 2, contacts.get(peerKey)?.mailbox) }
+    }
 
     data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long,
                    val failed: Boolean = false, val via: String = "",
@@ -85,7 +88,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    val verified: Boolean = false,
                    /** What their app speaks, from their authentic envelopes (empty until one came). */
                    val caps: Set<String> = emptySet())
-    data class Request(val peerKey: String, val name: String, val code: String, val mailbox: String?, val viaInternet: Boolean)
+    /** [replaces]: they say they're this contact with a new security key (they carry that contact's mailbox): warned, never silent. */
+    data class Request(val peerKey: String, val name: String, val code: String, val mailbox: String?, val viaInternet: Boolean, val replaces: String = "")
 
     private val _nearby = MutableStateFlow<List<Msg>>(emptyList())
     val nearby: StateFlow<List<Msg>> = _nearby.asStateFlow()
@@ -215,6 +219,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun write(name: String, text: String) { try { vault.write(File(context.filesDir, name), text) } catch (_: Exception) {} }
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun days(peer: String) = chatDays(peer)
+            override fun emoji(key: String) = try { emojiWith(key) } catch (e: Exception) { "" }
         }
         Link.load()
         // Devices trusted before contacts existed become contacts.
@@ -327,11 +332,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Someone in group [g] I'm not in touch with yet: ask to be contacts (they say yes on their phone too). */
     fun askToAdd(g: String, k: String, name: String, mailbox: String) {
-        val id = Trust.groupId(g, this.id.publicKey, k)
-        val i = _intros.value.firstOrNull { it.id == id } ?: Trust.Intro(id, "g:$g", k, name, mailbox, at = System.currentTimeMillis())
+        val id = addId(g, this.id.publicKey, k)
+        val i = _intros.value.firstOrNull { it.id == id && it.by == "g:$g" && it.k == k } ?: Trust.Intro(id, "g:$g", k, name, mailbox, at = System.currentTimeMillis())
         putIntro(i)
         answerIntro(id, true)
     }
+
+    /**
+     * The local id of a group member's "add" (13): kept apart from introductions' ids (an introducer picks those), so
+     * nobody can plant one that a later "add" would match (sec M5).
+     */
+    private fun addId(g: String, a: String, b: String) = "add:" + Trust.groupId(g, a, b)
 
     /** Both said yes: contacts on this phone (theirs does the same). */
     private fun introDone(i: Trust.Intro) {
@@ -353,7 +364,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 arrivals.tryEmit(Triple(by.shown, "Wants to introduce you to ${p.getString("n")}", fromKey))
             }
             "yes" -> {
-                val i = _intros.value.firstOrNull { it.id == p.getString("id") && it.k == fromKey } ?: return isContact(fromKey)
+                val i = _intros.value.firstOrNull { it.id == p.getString("id") && it.k == fromKey && !it.by.startsWith("g:") } ?: return isContact(fromKey)
                 val now = i.copy(theySaid = true, p = i.p.ifEmpty { mailbox ?: "" })
                 if (now.iSaid) introDone(now) else putIntro(now)
             }
@@ -362,9 +373,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val grp = groups.group(g) ?: return false
                 if (grp.readOnly || !grp.state.has(fromKey) || !grp.state.has(me)) return false
                 if (isContact(fromKey)) return true
-                val id = Trust.groupId(g, me, fromKey)
+                val id = addId(g, me, fromKey)
                 val member = grp.state.member(fromKey)
-                val i = _intros.value.firstOrNull { it.id == id }
+                val i = _intros.value.firstOrNull { it.id == id && it.by == "g:$g" && it.k == fromKey }
                     ?: Trust.Intro(id, "g:$g", fromKey, member?.n?.ifBlank { null } ?: name, mailbox ?: member?.p ?: "", at = System.currentTimeMillis())
                 val now = i.copy(theySaid = true, p = i.p.ifEmpty { mailbox ?: "" })
                 if (now.iSaid) introDone(now) else {
@@ -386,7 +397,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val known = _intros.value.map { it.k }.toSet()
         return groups.all.value.values.filter { !it.readOnly && (it.state.name.contains("family", ignoreCase = true) || Folders.groupKey(it.g) in familyFolder) }
             .flatMap { grp -> grp.state.members.filter { it.k != me && !isContact(it.k) && it.k !in known && hasCapsI1(it.k) }
-                .map { Trust.Intro(Trust.groupId(grp.g, me, it.k), "g:${grp.g}", it.k, it.n, it.p) } }
+                .map { Trust.Intro(addId(grp.g, me, it.k), "g:${grp.g}", it.k, it.n, it.p) } }
             .distinctBy { it.k }
     }
 
@@ -852,6 +863,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else if (fromKey in id.muted()) {
                     return 200 to "{}"
+                } else if (ChatWire.keyChangeFor(contacts.all.value, Contact(fromKey, name, mailbox, false)) != null) {
+                    // A new key with a contact's inbox: maybe that contact with a new security key, maybe not. Never
+                    // taken on quietly (not even close by): held until the person accepts, and warned (as Huginn does).
+                    held.getOrPut(fromKey) { java.util.Collections.synchronizedMap(LinkedHashMap()) }.putIfAbsent(msgId, msg)
+                    askReplace(Contact(fromKey, name, mailbox, false), via == "internet")
                 } else if (via != "internet" && !id.visibleNearby) {
                     // Hidden from people nearby: only contacts get through close by or on the Wi-Fi.
                     return 403 to "{}"
@@ -979,7 +995,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     fun acceptRequest(r: Request) {
-        putContact(Contact(r.peerKey, r.name, r.mailbox, verified = !r.viaInternet))
+        // Accepting is the person's own say-so, also for "says it replaces" (they saw the warning).
+        putContact(Contact(r.peerKey, r.name, r.mailbox, verified = !r.viaInternet && r.replaces.isEmpty()), confirmed = true)
         _requests.update { l -> l.filterNot { it.peerKey == r.peerKey } }
         held.remove(r.peerKey)?.let { m ->
             val list = synchronized(m) { m.values.toList() }
@@ -1151,7 +1168,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         held.remove(r.peerKey)
     }
 
-    fun addContact(c: Contact) = putContact(c)
+    /** A code the person scanned, pasted or tapped themselves (the add screen warns about a key change first). */
+    fun addContact(c: Contact) = putContact(c, confirmed = true)
 
     /** The contact [c] would replace, if adding it changes someone's security key (for a warning before adding). */
     fun keyChangeFor(c: Contact): Contact? = ChatWire.keyChangeFor(contacts.all.value, c)
@@ -1168,11 +1186,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * taken silently. The contact (and chat, and nickname) stays, now unverified, the ratchet starts
      * over, and both a notice and a line in the chat say so until the code is checked.
      */
-    private fun putContact(c: Contact) {
+    private fun putContact(c: Contact, confirmed: Boolean = false) {
+        val old = ChatWire.keyChangeFor(contacts.all.value, c)
+        // A key change only with the person's own say-so (a code they took, a request they accepted): otherwise a
+        // warned request that says who it claims to replace.
+        if (old != null && !confirmed) { askReplace(c, true); return }
         // Adding someone in the trash again brings them back.
         trash.drop(c.chatKey)
         val was = contacts.contact(c.chatKey)
-        val old = ChatWire.keyChangeFor(contacts.all.value, c)
         if (old == null) { contacts.put(c); if (was == null) sayHello(c.chatKey); return }
         val now = ChatWire.afterKeyChange(old, c)
         contacts.replaceKey(old.chatKey, now)
@@ -1181,6 +1202,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         moveChat(old.chatKey, c.chatKey)
         notices.tryEmit(ChatWire.keyChangedText(now.shown))
         sayHello(c.chatKey)
+    }
+
+    /** Someone claims to be a contact with a new key: a request, with a warning, until the person decides. */
+    private fun askReplace(c: Contact, viaInternet: Boolean) {
+        val old = ChatWire.keyChangeFor(contacts.all.value, c) ?: return
+        synchronized(lock) { if (_met.value.containsKey(c.chatKey)) { _met.update { it - c.chatKey }; saveMet() } }
+        var isNew = false
+        _requests.update { list -> if (list.any { it.peerKey == c.chatKey }) list
+            else { isNew = true; list + Request(c.chatKey, c.name, ChatCrypto.pairingCode(sharedKey(c.chatKey)), c.mailbox, viaInternet, replaces = old.chatKey) } }
+        if (isNew) {
+            notices.tryEmit("Someone says they're ${old.shown} with a new security key. Check with them before accepting.")
+            arrivals.tryEmit(Triple(old.shown, "Says their security key changed", c.chatKey))
+        }
     }
 
     /**
