@@ -294,6 +294,8 @@ Window {
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
+    // Moving to another device (cap x1): over everything while it's under way.
+    MoveCover { anchors.fill: parent }
     // The right stick's mouse pointer, over everything.
     StickPointer {
         id: stick

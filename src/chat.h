@@ -333,6 +333,9 @@ public:
     Q_INVOKABLE void dismissLimitsNote();
     // Before a backup: nothing past a chat's limit goes in it.
     void pruneNow() { prune(); }
+    // Moving to another device (cap x1, move.cpp): nothing is sealed, sent or taken in while true.
+    void setMoving(bool on) { m_moving = on; }
+    bool moving() const { return m_moving; }
     // Caps i1 and f1 and linked devices live in their own classes (trust.*, filelink.*, link.*), made in main.cpp.
     void setExtras(Trust *trust, FileLink *files, Link *link) { m_trust = trust; m_files = files; m_linked = link; }
 
@@ -355,6 +358,7 @@ private:
     friend class Trust;
     friend class FileLink;
     friend class Link;
+    friend class Move;   // moving to another device reads and locks everything (move.cpp)
     Trust *m_trust = nullptr;
     FileLink *m_files = nullptr;
     Link *m_linked = nullptr;
@@ -581,7 +585,8 @@ private:
     QStringList m_pinnedChats;                          // chats pinned to the top, in order
     QSet<QString> m_archived, m_markedUnread;
     QHash<QString, qint64> m_mutedUntil;
-    QSet<QString> m_keptBack;                           // contacts whose "keep" got my yes back (once each)
+    QSet<QString> m_keptBack;
+    bool m_moving = false;                           // contacts whose "keep" got my yes back (once each)
     bool m_front = false;
     qint64 m_activeSent = 0;
     struct Tries { int count = 0; qint64 next = 0; };

@@ -589,7 +589,7 @@ QString Chat::netStatus() const
 
 bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent)
 {
-    if (bodies.isEmpty() || mailbox.isEmpty())
+    if (bodies.isEmpty() || mailbox.isEmpty() || m_moving)
         return false;
     for (const QByteArray &b : bodies)
         m_nostr->publish(mailbox, wrap(key, b));
@@ -637,7 +637,7 @@ void Chat::probeCaps(const QString &key)
 
 void Chat::sendCall(const QString &key, const QJsonObject &msg)
 {
-    if (!m_ready || key.isEmpty() || isBlocked(key) || isTrashed(key))
+    if (!m_ready || key.isEmpty() || isBlocked(key) || isTrashed(key) || m_moving)
         return;
     // Sealed once (a ratchet message moves the session on) and the same copy sent on every
     // route at once: the other side keeps the first and drops the rest. Never kept for resending.
@@ -1196,6 +1196,9 @@ void Chat::noteCapable(const QString &key, bool capable)
 
 int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
 {
+    // Moving to another device: nothing comes in here any more (it waits for the new device).
+    if (m_moving)
+        return 503;
     const QString fromKey = o.value(QStringLiteral("fromKey")).toString();
     QString name = o.value(QStringLiteral("fromName")).toString().left(40);
     if (name.isEmpty())
@@ -1863,6 +1866,8 @@ void Chat::post(const QString &base, const QByteArray &body, std::function<void(
 
 QString Chat::deliver(const QString &key, const QJsonObject &body, const QString &mailbox)
 {
+    if (m_moving)   // moving to another device: nothing more is sealed here
+        return QString();
     const QByteArray json = compact(body);
     if (m_ble->send(key, json))
         return QStringLiteral("bluetooth");
@@ -1948,6 +1953,8 @@ QString Chat::sendPrivateWith(const QString &key, const QString &text, const QSt
 // side keeps the first copy. Until "delivered" comes back it's sent again after 5 s, then less often.
 void Chat::attempt(const QString &key, const QString &id)
 {
+    if (m_moving)   // moving to another device: nothing more is sealed here
+        return;
     QVariantMap m;
     for (const QVariant &v : m_private.value(key))
         if (str(v.toMap(), "id") == id)
@@ -2162,6 +2169,8 @@ void Chat::unsend(const QString &key, const QString &id)
 
 void Chat::attemptUnsend(const QString &key, const QString &id)
 {
+    if (m_moving)   // moving to another device: nothing more is sealed here
+        return;
     Tries &t = m_tries[id];
     t.count++;
     t.next = now() + retryDelay(t.count);

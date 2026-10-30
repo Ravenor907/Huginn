@@ -97,8 +97,18 @@ QtObject {
         else items.push({ name: "Use as a companion", detail: "Show a code for your phone: Settings › Linked devices there. Its chats then show here", url: "code" })
         items.push({ name: "Link a device", detail: "Paste the code another device shows, and it mirrors this computer's chats", url: "link" })
         Linked.companions.forEach(c => items.push({ name: "Unlink " + c.name, detail: "It mirrors this computer's chats", url: "u:" + c.key }))
-        Ui.pickFrom("Linked devices", [{ header: "Contacts see nothing new: messages still come from and go to the phone", items: items }], a => {
-            if (a === "code") {
+        // Cap x1: everything moves here instead, and the old device is locked out.
+        const move = [{ name: "Move here", detail: "You, your contacts, groups and chats come to this computer over the Wi-Fi. The old device is locked out", url: "movehere" },
+                      { name: "Move from this computer", detail: "Paste the code the new device shows (it starts with MUNINNM1)", url: "moveaway" }]
+        Ui.pickFrom("Linked devices", [{ header: "Use on both: contacts see nothing new, messages still come from and go to the phone", items: items },
+                                       { header: "Move to another device", items: move }], a => {
+            if (a === "movehere") {
+                const code = Mover.showCode()
+                Chat.copyText(code)
+                Ui.sure("Move code copied", "On your old device: Settings › Linked devices › Move from this device, and paste it. Keep both on the same Wi-Fi. Both screens then show the same 4 emoji.\n\n" + code, "Done", () => {}, false, false)
+            } else if (a === "moveaway") {
+                Ui.ask("Move from this computer", "Paste the code the new device shows (it starts with MUNINNM1)", "", "Next", t => Mover.take(t))
+            } else if (a === "code") {
                 const code = Linked.newCode()
                 Chat.copyText(code)
                 Ui.sure("Link code copied", "Paste it on your phone in Settings › Linked devices within 10 minutes. It works once.\n\n" + code, "Done", () => {}, false, false)

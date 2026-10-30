@@ -658,6 +658,8 @@ void Chat::sendControl(const QString &g, const QString &to, QJsonObject msg)
 
 void Chat::queueGroup(const QString &g, const QString &to, const QString &room, const QString &logical, const QByteArray &plain)
 {
+    if (m_moving)
+        return;
     if (to.isEmpty() || to == myKey())
         return;
     const QString envId = GroupWire::envelopeId(logical, to);
@@ -683,6 +685,8 @@ void Chat::queueGroupBodies(const QString &g, const QString &to, const QString &
 
 void Chat::groupAttempt(const QString &envId)
 {
+    if (m_moving)
+        return;
     const auto it = m_gout.find(envId);
     if (it == m_gout.end())
         return;

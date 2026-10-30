@@ -63,6 +63,7 @@ qt_add_executable(huginn
     src/chatlimits.cpp
     src/chatpeople.cpp
     src/grouplinks.cpp
+    src/move.cpp src/move.h
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
     src/morewire.cpp src/morewire.h
@@ -209,6 +210,7 @@ qt_add_qml_module(huginn
         qml/Segmented.qml
         qml/TextPrompt.qml
         qml/ConfirmDialog.qml
+        qml/MoveCover.qml
         qml/Toast.qml
         qml/ListPicker.qml
         qml/Rail.qml
