@@ -114,7 +114,7 @@ object Proto06 {
      * What this app says it speaks, next to the old cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 t1 v1 m1 m2 i1 f1"
+    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 t1 v1 m1 m2 i1 f1 d1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
 
     // ------------------------------------------------------------------ group state (3.2, 3.3)
@@ -125,12 +125,16 @@ object Proto06 {
     data class State(
         val g: String, val v: Long, val owner: String, val by: String, val name: String,
         val admins: List<String>, val members: List<Member>, val channels: List<Channel>, val ts: Long, val sig: String = "",
+        /** Cap d1 (section 16.2): "family" or "work", empty for a Standard group; [days] 0 when it has none (7). */
+        val kind: String = "", val days: Int = 0,
     ) {
         private fun tree(withSig: Boolean): Map<String, Any> = LinkedHashMap<String, Any>().apply {
             put("g", g); put("v", v); put("owner", owner); put("by", by); put("name", name); put("admins", admins)
             put("members", members.map { mapOf("k" to it.k, "n" to it.n, "p" to it.p) })
             put("channels", channels.map { mapOf("id" to it.id, "n" to it.n, "t" to it.t) })
             put("ts", ts)
+            if (kind.isNotEmpty()) put("kind", kind)
+            if (days > 0) put("days", days)
             if (withSig) put("sig", sig)
         }
         fun canonUnsigned() = canon(tree(false))
@@ -157,10 +161,13 @@ object Proto06 {
     private fun fields(o: JSONObject, need: Set<String>, what: String) { if (o.keys().asSequence().toSet() != need) throw Refused(what) }
 
     private val STATE_FIELDS = setOf("g", "v", "owner", "by", "name", "admins", "members", "channels", "ts", "sig")
+    /** Cap d1: a Family or Work group's type and limit (section 16.2). */
+    private val LIMIT_FIELDS = setOf("kind", "days")
 
     /** Reads a state exactly as it came. Throws [Refused] on wrong fields or types (shape and limits: [check]). */
     fun parseState(o: JSONObject): State {
-        fields(o, STATE_FIELDS, "fields")
+        val have = o.keys().asSequence().toSet()
+        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS).containsAll(have)) throw Refused("fields")
         val admins = arr(o, "admins").let { a -> (0 until a.length()).map { a.opt(it) as? String ?: throw Refused("admins") } }
         val members = arr(o, "members").let { a -> (0 until a.length()).map {
             val m = a.opt(it) as? JSONObject ?: throw Refused("member fields")
@@ -172,7 +179,10 @@ object Proto06 {
             fields(c, setOf("id", "n", "t"), "channel fields")
             Channel(str(c, "id"), str(c, "n"), str(c, "t"))
         } }
-        return State(str(o, "g"), int(o, "v"), str(o, "owner"), str(o, "by"), str(o, "name"), admins, members, channels, int(o, "ts"), str(o, "sig"))
+        val kind = if (o.has("kind")) str(o, "kind").also { if (it.isEmpty()) throw Refused("kind") } else ""
+        val days = if (o.has("days")) int(o, "days").also { if (it !in 1..Limits.LONGEST) throw Refused("days") }.toInt() else 0
+        return State(str(o, "g"), int(o, "v"), str(o, "owner"), str(o, "by"), str(o, "name"), admins, members, channels, int(o, "ts"), str(o, "sig"),
+            kind, days)
     }
 
     /** Shape and limits (reference check_state); throws [Refused]. Does not check the signature. */
@@ -200,6 +210,8 @@ object Proto06 {
             if (c.id != MAIN && lenB64url(c.id) != 8) throw Refused("channel id")
             checkText(c.n, MAX_CHANNEL_NAME)
         }
+        if (s.kind.isNotEmpty() && s.kind !in Limits.KINDS) throw Refused("kind")
+        if (s.days != 0 && (s.kind.isEmpty() || s.days !in Limits.DEFAULT..Limits.LONGEST)) throw Refused("days")
         if (s.canonSigned().toByteArray(Charsets.UTF_8).size > MAX_STATE_BYTES) throw Refused("too big")
     }
 

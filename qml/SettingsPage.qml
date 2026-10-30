@@ -33,11 +33,13 @@ Rectangle {
         case "Privacy": return [
             { kind: "button", key: "contacts", title: "Contacts", note: "Everyone you're in touch with or met close by. Block, unblock or remove people here", label: "Open" },
             { kind: "button", key: "linked", title: "Linked devices", note: Linked.phone.key ? "Showing " + Linked.phone.name + "'s chats" : Linked.companions.length ? Linked.companions.length + " linked" : "Show your phone's chats here, or this computer's on another device", label: "Open" },
-            { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after", note: "Applies to both sides of every chat on this computer",
-              options: [{ value: "0", label: "Never" }, { value: "86400000", label: "Day" }, { value: "604800000", label: "Week" }, { value: "2592000000", label: "Month" }] },
+            { kind: "segmented", key: "deleteAfter", chat: true, title: "Delete messages after",
+              note: "Chats keep messages for 7 days, or up to 30 in Family and Work groups and with people in your Family or Work folder. A day deletes sooner on this computer",
+              options: [{ value: "0", label: "The chat's limit" }, { value: "86400000", label: "A day" }] },
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
             { kind: "toggle", key: "showPreview", chat: true, title: "Show message text in notifications", note: "Off: notifications only say “New message”" },
-            { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" }
+            { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" },
+            { kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: "A link you send shows its page's title and picture, looked up on this computer. Previews you get never visit the site. Off: links go as plain text" }
         ]
         case "Lock": return [
             { kind: "button", key: "changeLock", title: "Chat lock", note: "Chat opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is encrypted with it", label: "Change", enabled: Vault.exists },

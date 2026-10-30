@@ -26,7 +26,8 @@ object Link {
     data class Device(val key: String, val mailbox: String, val name: String)
     /** One mirrored message on the companion. */
     data class M(val id: String, val text: String, val mine: Boolean, val time: Long)
-    data class MirrorChat(val peer: String, val name: String, val msgs: List<M>)
+    /** [days]: the chat's message limit on the phone (cap d1): the companion deletes after it too. */
+    data class MirrorChat(val peer: String, val name: String, val msgs: List<M>, val days: Int = Limits.DEFAULT)
 
     interface Host {
         fun myKey(): String
@@ -41,6 +42,8 @@ object Link {
         fun read(name: String): String?
         fun write(name: String, text: String)
         fun notice(text: String)
+        /** How many days the phone keeps its chat with [peer] (docs/protocol-0.6.md section 16). */
+        fun days(peer: String): Int = Limits.DEFAULT
     }
 
     @Volatile var host: Host? = null
@@ -128,7 +131,7 @@ object Link {
         for ((peer, chat) in h.chats()) {
             // Kept well under the 64 KB an envelope may be: long messages are cut here (the phone has them whole).
             val msgs = JSONArray().apply { chat.second.takeLast(CHAT_MSGS).forEach { put(mJson(it).put("x", text(it).take(600))) } }
-            val json = JSONObject().put("t", "chat").put("peer", peer).put("n", chat.first).put("msgs", msgs).toString()
+            val json = JSONObject().put("t", "chat").put("peer", peer).put("n", chat.first).put("msgs", msgs).put("d", h.days(peer)).toString()
             to.forEach { h.send(it, json) }
         }
     }
@@ -137,7 +140,7 @@ object Link {
     fun onMessage(peer: String, name: String, m: Chat.Msg) {
         val h = host ?: return
         if (_companions.value.isEmpty()) return
-        val json = JSONObject().put("t", "msg").put("peer", peer).put("n", name).put("m", mJson(m)).toString()
+        val json = JSONObject().put("t", "msg").put("peer", peer).put("n", name).put("m", mJson(m)).put("d", h.days(peer)).toString()
         _companions.value.forEach { h.send(it, json) }
     }
 
@@ -176,15 +179,16 @@ object Link {
                 save()
             }
             ph != null && t == "chat" -> {
-                val c = MirrorChat(p.optString("peer"), p.optString("n").take(40), msgsOf(p.optJSONArray("msgs")))
-                if (c.peer.isNotEmpty()) { _mirror.value = _mirror.value + (c.peer to c); saveMirror() }
+                val c = MirrorChat(p.optString("peer"), p.optString("n").take(40), msgsOf(p.optJSONArray("msgs")), daysOf(p))
+                if (c.peer.isNotEmpty()) { _mirror.value = _mirror.value + (c.peer to c); saveMirror(); prune() }
             }
             ph != null && t == "msg" -> {
                 val peer = p.optString("peer")
                 val m = p.optJSONObject("m")?.let { mOf(it) } ?: return true
                 val old = _mirror.value[peer]
                 val list = (old?.msgs.orEmpty().filterNot { it.id == m.id } + m).sortedBy { it.time }.takeLast(200)
-                _mirror.value = _mirror.value + (peer to MirrorChat(peer, p.optString("n").ifBlank { old?.name ?: "Someone" }.take(40), list))
+                _mirror.value = _mirror.value + (peer to MirrorChat(peer, p.optString("n").ifBlank { old?.name ?: "Someone" }.take(40), list,
+                    if (p.has("d")) daysOf(p) else old?.days ?: Limits.DEFAULT))
                 saveMirror()
                 if (!m.mine) h.notice("${p.optString("n")}: ${m.text.take(60)}")
             }
@@ -216,7 +220,16 @@ object Link {
     private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"))
     private fun mOf(o: JSONObject) = M(o.optString("id"), o.optString("x"), o.optBoolean("me"), o.optLong("t"))
     private fun msgsOf(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).map { mOf(a.getJSONObject(it)) }
-    private fun chatJson(c: MirrorChat) = JSONObject().put("peer", c.peer).put("n", c.name)
+    private fun daysOf(o: JSONObject) = o.optInt("d", Limits.DEFAULT).coerceIn(Limits.DEFAULT, Limits.LONGEST)
+
+    /** On a companion: messages past each chat's limit go, as on the phone. */
+    fun prune(now: Long = System.currentTimeMillis()) {
+        val old = _mirror.value
+        val kept = old.mapValues { (_, c) -> c.copy(msgs = c.msgs.filter { it.time >= Limits.cutoff(now, c.days) }) }
+        if (kept.values.sumOf { it.msgs.size } != old.values.sumOf { it.msgs.size }) { _mirror.value = kept; saveMirror() }
+    }
+
+    private fun chatJson(c: MirrorChat) = JSONObject().put("peer", c.peer).put("n", c.name).put("d", c.days)
         .put("msgs", JSONArray().apply { c.msgs.forEach { put(JSONObject().put("id", it.id).put("x", it.text).put("me", it.mine).put("t", it.time)) } })
-    private fun chatOf(o: JSONObject) = MirrorChat(o.optString("peer"), o.optString("n"), msgsOf(o.optJSONArray("msgs")))
+    private fun chatOf(o: JSONObject) = MirrorChat(o.optString("peer"), o.optString("n"), msgsOf(o.optJSONArray("msgs")), daysOf(o))
 }

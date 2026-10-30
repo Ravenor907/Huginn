@@ -28,12 +28,13 @@ class PowerLogicTest {
     }
 
     @Test
-    fun screenOffKeepsTwoRelaysWithOneSlowCheck() {
+    fun screenOffKeepsOneLightConnection() {
         val p = PowerLogic.plan(phoneAway)
         assertEquals(Why.SCREEN_OFF, p.why)
-        assertEquals(2, p.relays)
-        // Every two minutes, so a dead socket is found (and calls ring again) within about two minutes.
-        assertEquals(120_000L, p.pingMs)
+        // One relay socket, not two, checked about every 5 minutes (just under typical mobile network timeouts).
+        assertEquals(1, p.relays)
+        assertEquals(300_000L, p.pingMs)
+        assertTrue(PowerLogic.PING_WINDOW_MS in 1..PowerLogic.AWAY_PING_MS / 4)
         // Close-by scanning and Wi-Fi discovery rest unless switched on or sharing files.
         assertEquals(Radio.OFF, p.radio)
         assertEquals(Radio.OFF, p.wifi)
@@ -46,7 +47,7 @@ class PowerLogicTest {
     fun backgroundWithScreenOnScansOnlyWhenAsked() {
         val p = PowerLogic.plan(phoneAway.copy(screenOn = true))
         assertEquals(Why.BACKGROUND, p.why)
-        assertEquals(2, p.relays)
+        assertEquals(1, p.relays)
         assertEquals(Radio.OFF, p.radio)
         assertEquals(Radio.FULL, PowerLogic.plan(phoneAway.copy(screenOn = true, closeBy = true)).radio)
     }
@@ -60,20 +61,20 @@ class PowerLogicTest {
     @Test
     fun batterySaverSavesLikeTheScreenOffButCallsStillRing() {
         for (screen in listOf(false, true)) for (wifi in listOf(false, true)) {
-            // Screen on with Muninn in the background, or screen off: two relays, the slow check, radios low.
+            // Screen on with Muninn in the background, or screen off: one relay, the 5-minute check, radios low.
             val p = PowerLogic.plan(phoneAway.copy(screenOn = screen, onWifi = wifi, batterySaver = true))
             assertEquals(Why.BATTERY_SAVER, p.why)
-            assertEquals(PowerLogic.SAVING_RELAYS, p.relays)
-            assertEquals(PowerLogic.SLOW_PING_MS, p.pingMs)
+            assertEquals(PowerLogic.AWAY_RELAYS, p.relays)
+            assertEquals(PowerLogic.AWAY_PING_MS, p.pingMs)
             assertEquals(Radio.OFF, p.radio)
             assertEquals(Radio.OFF, p.wifi)
             assertEquals(Radio.LOW, PowerLogic.plan(phoneAway.copy(screenOn = screen, onWifi = wifi, batterySaver = true, closeBy = true)).radio)
         }
-        assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, unrestricted = true)).relays)
+        assertEquals(1, PowerLogic.plan(phoneAway.copy(batterySaver = true, unrestricted = true)).relays)
         // Battery Saver and Doze without the exemption: Android cuts the network, so no live sockets.
         assertEquals(Why.DOZE, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).why)
         assertEquals(0, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).relays)
-        assertEquals(2, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true, unrestricted = true)).relays)
+        assertEquals(1, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true, unrestricted = true)).relays)
         // Open on screen it still works normally.
         assertEquals(PowerLogic.OPEN_RELAYS, PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
     }
@@ -84,7 +85,7 @@ class PowerLogicTest {
         assertEquals(0, PowerLogic.plan(phoneAway.copy(doze = true)).relays)
         val allowed = PowerLogic.plan(phoneAway.copy(doze = true, unrestricted = true))
         assertEquals(Why.SCREEN_OFF, allowed.why)
-        assertEquals(2, allowed.relays)
+        assertEquals(1, allowed.relays)
     }
 
     @Test
@@ -189,8 +190,10 @@ class PowerLogicTest {
         assertFalse(PowerLogic.dead(probedAt = 1_000, heardAt = 1_100, openedAt = 0, now = 1_000 + a))    // answered
         assertFalse(PowerLogic.dead(probedAt = 1_000, heardAt = 0, openedAt = 1_500, now = 1_000 + a))    // opened after the check
         assertFalse(PowerLogic.dead(probedAt = 0, heardAt = 0, openedAt = 0, now = a))                    // never asked
-        // A dead socket is found within one check period plus the answer time.
-        assertTrue(PowerLogic.SLOW_PING_MS + a <= 135_000L)
+        // A dead socket is found within one check period plus the answer time: under 5 minutes and a bit.
+        assertTrue(PowerLogic.AWAY_PING_MS + a <= 310_000L)
+        // A very low battery or a quiet spell: still found within about 10 minutes, never an hour.
+        assertTrue(PowerLogic.LONG_PING_MS + a <= 610_000L)
     }
 
     @Test
@@ -240,23 +243,49 @@ class PowerLogicTest {
     }
 
     @Test
-    fun aLowBatterySavesMoreUntilCharged() {
-        val away = phoneAway.copy(check = Check.LIVE)
-        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 30)))
-        assertEquals(Check.QUARTER, PowerLogic.effective(away.copy(battery = 29)))
-        assertEquals(Check.HOUR, PowerLogic.effective(away.copy(battery = 14)))
-        // Charging, or switched off: the person's own choice.
-        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 5, plugged = true)))
-        assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = 5, lowBatterySave = false)))
-        // Never less saving than the person chose.
+    fun aLowBatteryNeverDropsTheConnection() {
+        val away = phoneAway.copy(check = Check.LIVE, closeBy = true)
+        // The mode stays "Right away" at any level: no hourly (or 15-minute) floor any more.
+        for (b in listOf(100, 30, 29, 15, 14, 5, 1)) {
+            assertEquals(Check.LIVE, PowerLogic.effective(away.copy(battery = b)))
+            val p = PowerLogic.plan(away.copy(battery = b))
+            assertEquals(Why.SCREEN_OFF, p.why)
+            assertEquals(1, p.relays)
+        }
+        // Below 30%: close-by scanning rests. Below 15%: the connection is checked every 10 minutes.
+        assertEquals(Radio.LOW, PowerLogic.plan(away.copy(battery = 30)).radio)
+        assertEquals(Radio.OFF, PowerLogic.plan(away.copy(battery = 29)).radio)
+        assertEquals(PowerLogic.AWAY_PING_MS, PowerLogic.plan(away.copy(battery = 15)).pingMs)
+        val low = PowerLogic.plan(away.copy(battery = 14))
+        assertEquals(PowerLogic.LONG_PING_MS, low.pingMs)
+        assertTrue(low.label.contains("checked every 10 minutes"))
+        assertEquals(1, PowerLogic.low(away.copy(battery = 29)))
+        assertEquals(2, PowerLogic.low(away.copy(battery = 14)))
+        // Charging, or switched off: nothing saved for the battery.
+        assertEquals(0, PowerLogic.low(away.copy(battery = 5, plugged = true)))
+        assertEquals(0, PowerLogic.low(away.copy(battery = 5, lowBatterySave = false)))
+        assertEquals(PowerLogic.AWAY_PING_MS, PowerLogic.plan(away.copy(battery = 5, lowBatterySave = false)).pingMs)
+        // Someone on the Always right away list: the 5-minute check stays, however low the battery.
+        assertEquals(PowerLogic.AWAY_PING_MS, PowerLogic.plan(away.copy(battery = 5, rightAway = true)).pingMs)
+        // The person's own choice still wins when it saves more.
         assertEquals(Check.OPEN, PowerLogic.effective(away.copy(battery = 20, check = Check.OPEN)))
-        val p = PowerLogic.plan(away.copy(battery = 20))
-        assertEquals(Why.EVERY_15, p.why)
-        assertEquals(0, p.relays)
-        assertTrue(p.label.endsWith("(the battery is low)"))
+        assertEquals(Why.EVERY_15, PowerLogic.plan(away.copy(battery = 20, check = Check.QUARTER)).why)
         // Open or in a call it still connects fully.
         assertEquals(Why.OPEN, PowerLogic.plan(away.copy(battery = 5, foreground = true, screenOn = true)).why)
         assertEquals(Why.CALL, PowerLogic.plan(away.copy(battery = 5, inCall = true)).why)
+    }
+
+    @Test
+    fun noHourlyFloorWithRightAway() {
+        val h = 3_600_000L
+        // Any battery, any quiet spell, Battery Saver or not: one live connection checked at most every 10 minutes.
+        for (b in listOf(100, 25, 10)) for (idle in listOf(0L, 4 * h, 12 * h)) for (saver in listOf(false, true)) for (ra in listOf(false, true)) {
+            val p = PowerLogic.plan(phoneAway.copy(battery = b, idleMs = idle, batterySaver = saver, rightAway = ra))
+            assertEquals(1, p.relays)
+            assertTrue(p.pingMs <= PowerLogic.LONG_PING_MS)
+            if (ra) assertEquals(PowerLogic.AWAY_PING_MS, p.pingMs)
+            assertEquals(15L, PowerLogic.everyMinutes(phoneAway.copy(battery = b, idleMs = idle, rightAway = ra)))
+        }
     }
 
     @Test
@@ -273,8 +302,41 @@ class PowerLogicTest {
         assertEquals(Why.EVERY_HOUR, PowerLogic.plan(phoneAway.copy(quiet = Check.HOUR)).why)
         // The battery being low too: whichever saves most.
         assertEquals(Check.OPEN, PowerLogic.effective(phoneAway.copy(quiet = Check.OPEN, battery = 10)))
+        // The battery being low doesn't save more than quiet hours do.
+        assertEquals(Check.HOUR, PowerLogic.effective(phoneAway.copy(quiet = Check.HOUR, battery = 10)))
         // A Kids' TV ignores both.
         assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(quiet = Check.OPEN, battery = 5, kidsTv = true)).why)
+    }
+
+    @Test
+    fun quietHoursKeepTheConnectionForTheRightAwayList() {
+        for (q in listOf(Check.HOUR, Check.OPEN)) {
+            val i = phoneAway.copy(quiet = q, rightAway = true)
+            assertTrue(PowerLogic.quietHeld(i))
+            assertEquals(Check.LIVE, PowerLogic.effective(i))
+            val p = PowerLogic.plan(i)
+            assertEquals(Why.SCREEN_OFF, p.why)
+            assertEquals(1, p.relays)
+            assertEquals(PowerLogic.AWAY_PING_MS, p.pingMs)
+            assertTrue(p.label.contains("only people on your Always right away list ring"))
+            // Their messages ring; everyone else's arrive quietly ("Every hour") or wait for Muninn ("Only when open").
+            assertEquals(PowerLogic.Alert.LOUD, PowerLogic.alert(i, fromRightAway = true))
+            assertEquals(if (q == Check.OPEN) PowerLogic.Alert.NONE else PowerLogic.Alert.QUIET, PowerLogic.alert(i, fromRightAway = false))
+            // A Kids' TV always rings.
+            assertEquals(PowerLogic.Alert.LOUD, PowerLogic.alert(i.copy(kidsTv = true), fromRightAway = false))
+        }
+        // Nobody on the list: quiet hours use their own mode, as before, and whatever arrives notifies as usual.
+        val none = phoneAway.copy(quiet = Check.HOUR)
+        assertFalse(PowerLogic.quietHeld(none))
+        assertEquals(Why.EVERY_HOUR, PowerLogic.plan(none).why)
+        assertEquals(PowerLogic.Alert.LOUD, PowerLogic.alert(none, fromRightAway = false))
+        // Outside quiet hours everything rings.
+        assertEquals(PowerLogic.Alert.LOUD, PowerLogic.alert(phoneAway.copy(rightAway = true), fromRightAway = false))
+        // The person chose a scheduled check: kept as it is, list or not.
+        val quarter = phoneAway.copy(check = Check.QUARTER, quiet = Check.HOUR, rightAway = true)
+        assertFalse(PowerLogic.quietHeld(quarter))
+        assertEquals(Check.HOUR, PowerLogic.effective(quarter))
+        assertEquals(Why.EVERY_HOUR, PowerLogic.plan(quarter).why)
     }
 
     @Test
@@ -290,11 +352,16 @@ class PowerLogicTest {
     @Test
     fun checksLessWhenItsBeenQuiet() {
         val h = 3_600_000L
-        // Right away: still two relays (calls ring), checked every 5 minutes instead of 2 after 3 quiet hours.
-        assertEquals(PowerLogic.SLOW_PING_MS, PowerLogic.plan(phoneAway.copy(idleMs = 2 * h)).pingMs)
+        // Right away: still one relay (calls ring), checked every 10 minutes instead of 5 after 3 quiet hours.
+        assertEquals(PowerLogic.AWAY_PING_MS, PowerLogic.plan(phoneAway.copy(idleMs = 2 * h)).pingMs)
         val drowsy = PowerLogic.plan(phoneAway.copy(idleMs = 3 * h))
-        assertEquals(2, drowsy.relays)
-        assertEquals(PowerLogic.DROWSY_PING_MS, drowsy.pingMs)
+        assertEquals(1, drowsy.relays)
+        assertEquals(PowerLogic.LONG_PING_MS, drowsy.pingMs)
+        assertTrue(drowsy.label.contains("for now"))
+        // Never longer: not an hour, however long it's been.
+        assertEquals(PowerLogic.LONG_PING_MS, PowerLogic.plan(phoneAway.copy(idleMs = 30 * h)).pingMs)
+        // The Always right away list keeps the 5-minute check.
+        assertEquals(PowerLogic.AWAY_PING_MS, PowerLogic.plan(phoneAway.copy(idleMs = 30 * h, rightAway = true)).pingMs)
         // Every 15 minutes: every 30 after 3 hours, every hour after 6.
         val quarter = phoneAway.copy(check = Check.QUARTER)
         assertEquals(15L, PowerLogic.everyMinutes(quarter))
@@ -308,7 +375,82 @@ class PowerLogicTest {
         assertEquals(15L, PowerLogic.everyMinutes(quarter.copy(idleMs = 9 * h, adaptive = false)))
         assertEquals(0, PowerLogic.drowsy(phoneAway.copy(idleMs = 9 * h, plugged = true)))
         assertEquals(0, PowerLogic.drowsy(phoneAway.copy(idleMs = 9 * h, kidsTv = true)))
-        // A low battery still wins over a stretched check: below 15% is every hour anyway.
-        assertEquals(60L, PowerLogic.everyMinutes(quarter.copy(battery = 10)))
+        // A low battery doesn't stretch the person's own 15 minutes.
+        assertEquals(15L, PowerLogic.everyMinutes(quarter.copy(battery = 10)))
+    }
+
+    @Test
+    fun aConversationIsFullyConnectedForAFewMinutes() {
+        assertTrue(PowerLogic.talking(0))
+        assertTrue(PowerLogic.talking(PowerLogic.TALK_MS - 1))
+        assertFalse(PowerLogic.talking(PowerLogic.TALK_MS))
+        assertFalse(PowerLogic.talking(-1))
+        assertEquals(5 * 60_000L, PowerLogic.TALK_MS)
+        val p = PowerLogic.plan(phoneAway.copy(talking = true))
+        assertEquals(Why.TALKING, p.why)
+        assertTrue(p.full)
+        // A quick check, on an alarm (longer than the timer-only check) so it still runs while the phone sleeps.
+        assertEquals(PowerLogic.TALK_PING_MS, p.pingMs)
+        assertTrue(p.pingMs > PowerLogic.FAST_PING_MS && p.pingMs < PowerLogic.AWAY_PING_MS)
+        assertEquals(Radio.OFF, p.radio)
+        assertEquals(Radio.OFF, p.wifi)
+        // With a low battery, Battery Saver or after a quiet spell too.
+        for (i in listOf(phoneAway.copy(battery = 5), phoneAway.copy(batterySaver = true), phoneAway.copy(idleMs = 9 * 3_600_000L)))
+            assertEquals(Why.TALKING, PowerLogic.plan(i.copy(talking = true)).why)
+        // Not when the person chose scheduled checks, nor when Android cuts the network anyway.
+        assertEquals(Why.EVERY_15, PowerLogic.plan(phoneAway.copy(talking = true, check = Check.QUARTER)).why)
+        assertEquals(Why.DOZE, PowerLogic.plan(phoneAway.copy(talking = true, doze = true)).why)
+        // Open, it's the open plan; the Settings line is about after the conversation.
+        assertEquals(Why.OPEN, PowerLogic.plan(Inputs(foreground = true, screenOn = true, talking = true)).why)
+        assertEquals(Why.SCREEN_OFF, PowerLogic.whenAway(Inputs(foreground = true, screenOn = true, talking = true)).why)
+        // When it ends, back to one connection after the short wait.
+        assertTrue(PowerLogic.saves(p, PowerLogic.plan(phoneAway)))
+        assertFalse(PowerLogic.saves(PowerLogic.plan(phoneAway), p))
+    }
+
+    @Test
+    fun theRightAwayListStartsAsFamily() {
+        val family = listOf("anna", "g:home")
+        assertEquals(setOf("anna", "g:home"), PowerLogic.rightAway(family, emptySet(), emptySet()))
+        assertEquals(setOf("anna", "g:home", "bo"), PowerLogic.rightAway(family, setOf("bo"), emptySet()))
+        assertEquals(setOf("g:home"), PowerLogic.rightAway(family, emptySet(), setOf("anna")))
+        // It follows the folder: someone new in Family is on it, someone moved out is off it (unless added).
+        assertEquals(setOf("cy"), PowerLogic.rightAway(listOf("cy"), emptySet(), emptySet()))
+        // Adding and taking off.
+        var a = emptySet<String>(); var r = emptySet<String>()
+        PowerLogic.setRightAway("bo", true, inFamily = false, added = a, removed = r).let { a = it.first; r = it.second }
+        assertEquals(setOf("bo"), a); assertEquals(emptySet<String>(), r)
+        PowerLogic.setRightAway("anna", false, inFamily = true, added = a, removed = r).let { a = it.first; r = it.second }
+        assertEquals(setOf("anna"), r)
+        assertEquals(setOf("g:home", "bo"), PowerLogic.rightAway(family, a, r))
+        PowerLogic.setRightAway("anna", true, inFamily = true, added = a, removed = r).let { a = it.first; r = it.second }
+        assertEquals(emptySet<String>(), r)
+        assertFalse("anna" in a)   // Family already has her
+        PowerLogic.setRightAway("bo", false, inFamily = false, added = a, removed = r).let { a = it.first; r = it.second }
+        assertEquals(emptySet<String>(), a); assertEquals(emptySet<String>(), r)
+        assertEquals(setOf("anna", "g:home"), PowerLogic.rightAway(family, a, r))
+    }
+
+    @Test
+    fun aSingleRelayFailsOverAtOnce() {
+        assertEquals(1, PowerLogic.swapAfter(1))
+        assertEquals(2, PowerLogic.swapAfter(3))
+        assertEquals(2, PowerLogic.swapAfter(null))
+        // After one failure the healthiest other relay is picked.
+        val h = mapOf("wss://a" to Health(failures = 1, live = false), "wss://b" to Health(connectMs = 400))
+        assertEquals(listOf("wss://b"), PowerLogic.pick(relays, h, 1))
+    }
+
+    @Test
+    fun theConnectionsCostIsEstimated() {
+        val h = 3_600_000L
+        assertEquals(0.0, PowerLogic.costPercent(0, 0, 0, 0), 1e-9)
+        // A whole day on the one light connection, waking every 5 minutes: a few percent at most.
+        val day = PowerLogic.costPercent(0, 24 * h, (24 * h / PowerLogic.AWAY_PING_MS).toInt(), 10)
+        assertTrue(day > 0.5 && day < 5.0)
+        // Fully connected costs much more than the light connection, and each wake-up or reconnect adds.
+        assertTrue(PowerLogic.costPercent(h, 0, 0, 0) > 10 * PowerLogic.costPercent(0, h, 0, 0))
+        assertTrue(PowerLogic.costPercent(0, h, 13, 0) > PowerLogic.costPercent(0, h, 12, 0))
+        assertTrue(PowerLogic.costPercent(0, h, 12, 2) > PowerLogic.costPercent(0, h, 12, 1))
     }
 }

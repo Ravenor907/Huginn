@@ -67,6 +67,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
 | `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93, Huginn from 0.94. |
 | `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
+| `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn from 0.94. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -191,7 +192,7 @@ signatures apart from each other.
 
 A state is well-formed only if all of these hold (reference `check_state`):
 
-- exactly these members, no others; `v` >= 1; `ts` is the signer's clock in ms (shown, never trusted).
+- exactly these members, no others (plus `kind` and `days` for a Family or Work group, cap `d1`, section 16.2); `v` >= 1; `ts` is the signer's clock in ms (shown, never trusted).
 - `name` 1 to 40 characters (code points), not only spaces.
 - `members` sorted by `k` (byte order of the base64 text), unique, 1 to 50 entries. `n` at most 40
   characters. `p` is empty or 64 lowercase hex (Nostr mailbox).
@@ -1245,7 +1246,7 @@ page are local: nothing about them goes on the wire, and the two apps don't need
 Photo albums, video messages, polls and link previews. As in section 11 nothing here is new cryptography; the reference
 `tools/m2_ref.py` writes `tests/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
 refused; running each `votes` case in order gives `result`; `fallback` gives the text; `video` gives `ok`). Muninn checks it in
-`MoreTest`. Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
+`MoreTest`, Huginn in its chat self-test (`MoreWire::selfTest`). Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
 only spaces) are those of 11.1; the m2 fields may not contain control characters other than a newline, and one-line fields
 (a question, an option, a title) none at all.
 
@@ -1368,9 +1369,10 @@ once. The phone takes the code, keeps the companion, and sends `{"t": "hello", "
 mailbox}`. The companion accepts a `hello` only with its current token, in time; from then on the phone is its phone.
 
 **From the phone:**
-- `{"t": "chat", "peer", "n", "msgs": [{"id", "x", "me", "t"}]}`: a chat's latest 25 messages (each `x` at most 600
+- `{"t": "chat", "peer", "n", "msgs": [{"id", "x", "me", "t"}], "d"}`: a chat's latest 25 messages (each `x` at most 600
   characters), on pairing and when asked.
-- `{"t": "msg", "peer", "n", "m": {"id", "x", "me", "t"}}`: one message in or out (`x` at most 2000 characters).
+- `{"t": "msg", "peer", "n", "m": {"id", "x", "me", "t"}, "d"}`: one message in or out (`x` at most 2000 characters).
+  `d` (0.94) is the chat's message limit in days (section 16): the companion deletes older messages too.
   Photos, voice, video and files go as words ("Photo", "File: name"); the media stays on the phone.
 - `{"t": "unlink"}`.
 
@@ -1378,3 +1380,61 @@ mailbox}`. The companion accepts a `hello` only with its current token, in time;
 message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "unlink"}`.
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
+
+## 16. Message limits (cap `d1`)
+
+Messages don't stay forever. Every chat, 1:1 and group, has a **limit in days**: messages older than that are deleted on
+every device, with everything that belongs to them (photos, voice clips, videos, files, album photos, poll votes, link
+previews, cached copies), and an encrypted backup never holds anything past it. The limit is **7 days** unless a Family or
+Work group, or two people who keep each other in their Family or Work folder, choose longer, **at most 30**.
+`tools/d1_ref.py` is the reference and writes `tests/d1-vectors.json`; Muninn checks it in `LimitsTest`, Huginn in
+`--chat-selftest` (the file next to `chat-vectors.json`).
+
+### 16.1 What counts
+
+- A message's age is its time on the device (when it was sent or arrived there). One exactly at the limit stays
+  (vectors: `sweep`). Apps delete at least every few minutes while running, when a chat opens, and when they start.
+- Deleting is local: nothing goes on the wire. Ids of deleted messages are kept as for a delete (two days), so a late
+  copy isn't shown again. Receipts, retries and the ratchet are untouched: a sealed copy still waiting for "delivered"
+  is dropped with its message (it is long past the Outbox's one day anyway).
+- Each app's own "delete sooner" setting (Muninn: Day) may only make it shorter. Kids' TV keeps 7 days and its storage
+  trimming (7.7).
+
+### 16.2 Groups: the type and limit in the signed state
+
+A group has a **type**: Standard, Family or Work. The state (3.2) gets two optional fields:
+
+```json
+{"g": "...", "v": 5, ..., "kind": "family", "days": 30}
+```
+
+- `kind`: `"family"` or `"work"`. Left out: a Standard group.
+- `days`: 7 to 30, only next to `kind`. Left out: 7.
+- A Standard group's state has neither field, so it is exactly the state an app without `d1` takes.
+- The limit (vectors: `states`, `days`) is the same for everyone in the group. Only an admin changes it, by signing the
+  next state as for any change (3.4, `op` hint `"limit"`); a group can be made with a type from the start.
+
+An app without `d1` refuses a state with `kind` (3.2 "exactly these fields"). So an admin's app makes a group Family or
+Work only when the caps of every other member include `d1`, invites or adds to a Family or Work group only people whose
+caps include `d1` (others: "Needs Muninn or Huginn 0.94"), and moving back to Standard needs nobody's update. A Standard
+group's members with older apps keep their messages until they update; the group's info says so.
+
+### 16.3 1:1 chats: `days` in the envelope
+
+- Each person picks a limit per contact in their **Family or Work folder**: 7 to 30 days. For everyone else it is 7
+  (vectors: `mine`).
+- Every envelope to a contact whose caps include `d1` carries a clear field `"days": <my limit for them>`, next to
+  `caps`. Only to `d1`.
+- The receiver takes `days` from **authentic** envelopes (after they open, like `caps`) whose caps include `d1`, when it
+  is an integer 7 to 30; anything else is ignored and the value kept before stays (vectors: `envelope`). Until a
+  value comes, it counts as 7.
+- The chat's limit is the **shorter** of the two (vectors: `pair`). After changing it, an app sends that contact an
+  empty receipt (`{"ids": [], "s": "delivered"}`, room `receipt`), so the new `days` reaches them at once.
+- A contact without `d1` has an older app: this side deletes after its own limit anyway, and the chat's info says
+  "Their app keeps messages until it updates".
+
+### 16.4 Starting 0.94
+
+Chats that already exist get their limit on the first run of 0.94: anything older is deleted then, and the chat list
+shows once: "Messages now disappear after 7 days".
+

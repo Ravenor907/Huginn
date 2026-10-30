@@ -57,8 +57,15 @@ qt_add_executable(huginn
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
     src/chatgroups.cpp
+    src/chatlimits.cpp
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
+    src/morewire.cpp src/morewire.h
+    src/chatmore.cpp
+    src/linkpreview.cpp src/linkpreview.h
+    src/videomsg.cpp src/videomsg.h
+    src/thumbs.cpp src/thumbs.h
+    src/msglimits.cpp src/msglimits.h
     src/trust.cpp src/trust.h
     src/filelink.cpp src/filelink.h
     src/link.cpp src/link.h
@@ -216,6 +223,10 @@ qt_add_qml_module(huginn
         qml/MessageRow.qml
         qml/QuickSwitcher.qml
         qml/StickPointer.qml
+        qml/MoreParts.qml
+        qml/MoreLayer.qml
+        qml/PhotoViewer.qml
+        qml/PollDialog.qml
         qml/PeopleActions.qml
         qml/FileStrip.qml
         qml/MirrorPanel.qml
@@ -230,7 +241,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher StickPointer PeopleActions FileStrip MirrorPanel)
+                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
