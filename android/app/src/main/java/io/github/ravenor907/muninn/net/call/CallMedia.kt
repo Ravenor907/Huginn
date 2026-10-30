@@ -90,6 +90,8 @@ class CallMedia(
 
     /** Both apps speak c2: receiver reports, Opus at 24 or 32 kbps (16 in a [room]), video. */
     @Volatile var c2 = false; private set
+    /** Group video (rooms): video goes only on Wi-Fi or Direct, never through the relay. */
+    @Volatile var videoNoRelay = false
     @Volatile var room = false; private set
     fun setC2(on: Boolean, inRoom: Boolean) { c2 = on; room = inRoom }
     @Volatile var peerLoss = 0; private set
@@ -381,7 +383,8 @@ class CallMedia(
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
         val rest = only == null && freeFresh(now)
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest)) when (dst.kind) {
-            CallLogic.Kind.RELAY -> turn?.send(dst.addr, p)
+            // Group video goes peer to peer only, never through the relay (it stays on voice there).
+            CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.send(dst.addr, p)
             CallLogic.Kind.WIFI, CallLogic.Kind.DIRECT -> try { lan?.send(DatagramPacket(p, p.size, dst.addr)) } catch (_: Exception) {}
             else -> {}
         }

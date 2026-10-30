@@ -211,6 +211,7 @@ object RoomManager {
         RoomAudio.stop()
         medias.clear(); speaking.clear()
         screenView.stop(); sharer = ""; _screen.value = null
+        RoomVideo.reset()
         busy = false
         _room.value = null
         app?.let { RoomService.stop(it) }
@@ -322,6 +323,8 @@ object RoomManager {
         val sorted = listOf(people.first()) + people.drop(1).sortedBy { it.name.lowercase() }
         val title = if (RoomLogic.isGroupCall(ch)) "Group call" else st?.channel(ch)?.n ?: "Voice room"
         _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note)
+        // Group video goes to the people in the room whose call is up.
+        app?.let { a -> RoomVideo.peers(a, peers.mapNotNull { (k, p) -> p.s.mediaNow?.let { k to it } }.toMap(), sorted.size) }
         bumpPresence()
         app?.let { RoomService.update(it) }
     }
@@ -338,10 +341,13 @@ object RoomManager {
                     override fun onSpeaking(peer: Boolean) {}
                     override fun onDirect(live: Boolean) = s.mediaDirect(live)
                     // Screen share (5.8.7): Muninn shows it; sharing is Huginn's.
-                    override fun onPeerVideo(camera: Boolean, screen: Boolean) { exec.execute { pickSharer() } }
+                    override fun onPeerVideo(camera: Boolean, screen: Boolean) { exec.execute { pickSharer() }; RoomVideo.peerCamera(s.peerKey, camera) }
                     override fun onVideoFrame(stream: Int, data: ByteArray, key: Boolean, rotation: Int) {
                         if (stream == VideoWire.SCREEN && s.peerKey == sharer) screenView.frame(data, key, rotation)
+                        // Group video: each person's camera, peer to peer.
+                        if (stream == VideoWire.CAMERA) RoomVideo.frame(s.peerKey, data, key, rotation)
                     }
+                    override fun onKeyframeWanted(stream: Int) { if (stream == VideoWire.CAMERA) RoomVideo.keyWanted(s.peerKey) }
                 }).also { it.externalAudio = true; it.muted = muted; medias[s.callId] = it }
             override fun changed(s: CallSession) {
                 // Muted before the pair's call was up: tell them once it is.
