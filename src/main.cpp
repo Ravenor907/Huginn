@@ -28,6 +28,7 @@
 #include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
+#include "livelist.h"
 #include "updater.h"
 #include "wifiselftest.h"
 #include "morewire.h"
@@ -75,18 +76,6 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
     if (s_previous)
         s_previous(type, ctx, msg);
 }
-}
-
-// 0.6 ran Tor: its data folder and this computer's onion key (in the chat folder) are no longer
-// used. Gone once; after that there is nothing left to find.
-static void dropTorFiles()
-{
-    const QString data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (data.isEmpty())
-        return;
-    QDir(data + QStringLiteral("/tor")).removeRecursively();
-    for (const char *f : {"/chat/tor-onion.key", "/chat/tor-onion.key.damaged"})
-        QFile::remove(data + QLatin1String(f));
 }
 
 int main(int argc, char *argv[])
@@ -168,8 +157,6 @@ int main(int argc, char *argv[])
         Platform::noStartLog();
         return 0;
     }
-    if (!quiet)
-        dropTorFiles();
     Platform::startStep(QStringLiteral("single instance claimed"));
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
@@ -182,7 +169,7 @@ int main(int argc, char *argv[])
     auto *settings = new Settings(&app);
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
-    auto *transfer = new TransferServer(settings, &app);
+    auto *transfer = new Transfer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
     Chat *chat = nullptr;
@@ -265,7 +252,7 @@ int main(int argc, char *argv[])
             if (t - last > 5 * 60000) {
                 last = t;
                 sound->play();
-                Q_EMIT chat->notice(QStringLiteral("New message. Open Chat and unlock it to read."));
+                Q_EMIT chat->notice(QStringLiteral("New message. Unlock Huginn to read it."));
             }
             return false;
         };
@@ -316,6 +303,7 @@ int main(int argc, char *argv[])
     QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
     auto *talkKey = new TalkKey(settings, rooms, &app);
 
+    qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);

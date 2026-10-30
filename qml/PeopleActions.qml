@@ -48,7 +48,7 @@ QtObject {
     // A link that works for one person: copied, for any app or email.
     function inviteLink() {
         const link = Trust.inviteLink(24)
-        if (link === "") { Ui.say("Unlock Chat first.", true); return }
+        if (link === "") { Ui.say("Unlock Huginn first.", true); return }
         Chat.copyText(link)
         Ui.say("One-time invite link copied. The first person to use it within a day is added straight away.")
     }
@@ -60,9 +60,8 @@ QtObject {
     // ------------------------------------------------------------- f1: files over the internet
 
     function sendFile(k) {
-        const sections = System.sendableFiles(15)
-        if (!sections.length) { Ui.say("No files found in Downloads, Documents, Pictures, Videos or Music. You can also drop one on the chat.", true); return }
-        Ui.pickFrom("Send a file to " + Chat.nameOf(k), sections, url => sendUrl(k, url))
+        if (Ui.main && Ui.main.touring) return
+        System.pickFiles().forEach(p => sendUrl(k, p))
     }
     function sendUrl(k, url) {
         const path = Chat.localPath(url)
@@ -90,7 +89,7 @@ QtObject {
     // ------------------------------------------------------------- linked devices (section 15)
 
     function linkedDevices() {
-        if (!Chat.ready) { Ui.say("Open Chat and unlock it first.", true); return }
+        if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
         const items = []
         const ph = Linked.phone
         if (ph.key) items.push({ name: "Linked to " + ph.name, detail: "Its chats show in Direct messages while it's online. Choose to unlink", url: "ph" })

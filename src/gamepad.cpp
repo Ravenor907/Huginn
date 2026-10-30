@@ -57,7 +57,7 @@ Gamepad::Gamepad(QObject *parent)
         }
     }
     connect(&m_poll, &QTimer::timeout, this, &Gamepad::poll);
-    m_poll.start(10);
+    m_poll.start(pollInterval());
 
     m_repeat.setSingleShot(false);
     connect(&m_repeat, &QTimer::timeout, this, [this] {
@@ -78,6 +78,12 @@ Gamepad::~Gamepad()
         SDL_Quit();
 }
 
+// Read the controller often only while one is plugged in; otherwise just look for one now and then.
+int Gamepad::pollInterval() const
+{
+    return m_pad ? 10 : 1000;
+}
+
 void Gamepad::open(int index)
 {
     if (m_pad)
@@ -94,6 +100,7 @@ void Gamepad::open(int index)
     default:
         m_style = QStringLiteral("xbox");
     }
+    m_poll.setInterval(pollInterval());
     Q_EMIT connectedChanged();
 }
 
@@ -144,6 +151,7 @@ void Gamepad::poll()
                 Q_EMIT connectedChanged();
                 for (int i = 0; i < SDL_NumJoysticks(); ++i)
                     if (SDL_IsGameController(i)) { open(i); break; }
+                m_poll.setInterval(pollInterval());
             }
             break;
         case SDL_CONTROLLERBUTTONDOWN: {

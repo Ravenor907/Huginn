@@ -2,8 +2,10 @@ import QtQuick
 import QtQuick.Window
 import Huginn
 
-// The window: the rail on the left, the open section beside it (its own list and main columns),
-// and on a handheld the button hints along the bottom. Overlays sit on top.
+// The window: a slim top bar with search, the rail on the left, the open section beside it (its own
+// list and main columns), and you with your voice controls at the bottom left. A controller's button
+// legend shows along the bottom only after Select (View) is pressed. Overlays sit on top. A portrait
+// window shows one column at a time, like Muninn on a phone.
 Window {
     id: app
     width: System.tourDir.length > 0 ? 1920 : 1280
@@ -13,18 +15,15 @@ Window {
     title: "Huginn"
     color: Theme.ground
 
-    // ------------------------------------------------------------- layout density
-    // Automatic: the desktop density for a wide window when no controller is in use (Desktop Mode
-    // with a mouse and keyboard); handheld sizes otherwise. Game Mode always gets handheld sizes.
     readonly property bool touring: System.tourDir.length > 0
-    property bool tourDesktop: false
-    property bool padInUse: Gamepad.connected
-    readonly property bool wide: width >= 1100
-    readonly property bool desktopLayout: touring ? tourDesktop
-        : Settings.layout === "desktop" ? true
-        : Settings.layout === "handheld" ? false
-        : !System.gameMode && wide && !padInUse
-    Binding { target: System; property: "desktop"; value: app.desktopLayout }
+    // A controller is being used (its wording and focus rings); a mouse or keyboard turns it off.
+    property bool padInUse: false
+    // The controller's button legend: Select (View) shows it, Select again or any other button hides it.
+    property bool legend: false
+    // Taller than wide: one column at a time.
+    readonly property bool portrait: height > width
+    Binding { target: Ui; property: "portrait"; value: app.portrait }
+    Binding { target: Ui; property: "windowWidth"; value: app.width }
 
     // ------------------------------------------------------------- the rail
     // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
@@ -38,9 +37,11 @@ Window {
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
      .concat([
         { id: "newgroup", kind: "add", label: "New group", action: true },
+        { id: "contacts", kind: "icon", icon: "people", label: "Contacts", bottom: true },
         { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
         { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
-        { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
+        // Settings lives in your panel at the bottom left (the valknut); the controller still reaches it here.
+        { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true, hidden: true },
         { id: "exit", kind: "icon", icon: "power", label: "Exit Huginn", bottom: true, action: true }
     ])
     // LB steps through the sections and groups (New group and Exit are reached with the D-pad).
@@ -51,8 +52,8 @@ Window {
     property var pageArgs: ({})
     property string focusZone: "content"     // "rail" or "content"
     property int railIndex: 0
-    // The rail item for the page on screen (Contacts belongs to Settings).
-    readonly property string section: pageName === "contacts" ? "settings" : pageName
+    // The rail item for the page on screen.
+    readonly property string section: pageName
 
     function openPage(name, args) {
         if (name === "chat") name = "dms"
@@ -76,16 +77,16 @@ Window {
         openPage(e.id, {})
     }
     function newGroup() {
-        if (Vault.screenLocked || !Vault.exists) { Ui.say("Open Direct messages and unlock Chat first.", true); openPage("dms", {}); return }
-        Ui.ask("New group", "A name everyone in it sees, like Family or Folk. You can change it later.", "", "Make it", t => {
-            // Cap d1: Family and Work groups can keep messages up to 30 days (set later under Messages).
-            Ui.pickFrom("What kind of group?", [{ header: "Messages disappear after 7 days; Family and Work admins can make it up to 30", items: [
-                { name: "Standard", url: "standard" }, { name: "Family", url: "family" }, { name: "Work", url: "work" }] }], kind => {
-                const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
-                if (g === "") { Ui.say("Give the group a name.", true); return }
-                openPage("g:" + g, {})
-            })
-        }, false, true)
+        if (Vault.screenLocked || !Vault.exists) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
+        // Family and Work groups can keep messages up to 30 days (set later under Messages).
+        Ui.askWith("New group", "Give it the name everyone in it sees, like Family or Folk. You can change it later.", "", "Make the group",
+                   [{ value: "family", label: "Family" }, { value: "work", label: "Work" }, { value: "standard", label: "Standard" }], "family",
+                   "Type. Messages disappear after 7 days; Family and Work admins can make it up to 30", (t, kind) => {
+            const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
+            if (g === "") { Ui.say("Give the group a name.", true); return }
+            openPage("g:" + g, {})
+        })
+        prompt.label = "Group name"
     }
     function stepSection(dir) {
         const i = cycle.indexOf(section)
@@ -97,10 +98,9 @@ Window {
         focusZone = "rail"
         keys.forceActiveFocus()
     }
-    // Back out of a page: Contacts goes back to Settings, everything else to the rail.
+    // Back out of a page: to the rail.
     function closePage() {
-        if (pageName === "contacts") openPage("settings", { section: "Privacy", row: 0 })
-        else focusRail()
+        focusRail()
         keys.forceActiveFocus()
     }
     function restoreFocus() { keys.forceActiveFocus() }
@@ -109,14 +109,27 @@ Window {
         if (LocalSend.busy)
             Ui.sure("Exit while this runs?", LocalSend.status + " Closing now stops it partway.", "Exit anyway", () => Qt.quit(), true, true)
         else
-            Ui.sure("Exit Huginn?", System.gameMode ? "You'll land back in Steam." : "Messages wait for you until you open Huginn again.", "Exit", () => Qt.quit(), false, false)
+            Ui.sure("Exit Huginn?", "Messages wait for you until you open Huginn again.", "Exit", () => Qt.quit(), false, false)
+    }
+
+    // The slim bar along the top: the raven, search (Ctrl+K) and the shortcuts (Ctrl+/).
+    TopBar {
+        id: topBar
+        opacity: app.privacyCovered ? 0 : 1
+        width: parent.width
+        onSearch: if (!app.touring) switcher.open()
+        onShortcuts: shortcutsPanel.open()
     }
 
     Rail {
         id: rail
+        z: 4   // its labels show over the page
         opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
-        anchors.top: parent.top
-        anchors.bottom: voicePanel.visible ? voicePanel.top : hints.visible ? hints.top : parent.bottom
+        // Portrait: only beside the list, not over an open conversation.
+        visible: !app.portrait || app.pageList
+        anchors.top: topBar.bottom
+        anchors.bottom: hints.visible ? hints.top : parent.bottom
+        anchors.bottomMargin: voicePanel.visible ? voicePanel.height + Theme.px(16) : 0
         anchors.left: parent.left
         items: app.railItems
         current: app.section
@@ -128,9 +141,9 @@ Window {
     Loader {
         id: pageLoader
         opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
-        anchors.top: parent.top
+        anchors.top: topBar.bottom
         anchors.bottom: roomBar.visible ? roomBar.top : hints.visible ? hints.top : parent.bottom
-        anchors.left: rail.right
+        anchors.left: rail.visible ? rail.right : parent.left
         anchors.right: parent.right
         source: {
             if (app.pageName.startsWith("g:")) return "GroupPage.qml"
@@ -151,7 +164,7 @@ Window {
         id: roomBar
         opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.bottom: hints.visible ? hints.top : parent.bottom
-        anchors.left: voicePanel.visible ? voicePanel.right : rail.right
+        anchors.left: voicePanel.visible ? voicePanel.right : rail.visible ? rail.right : parent.left
         anchors.right: parent.right
         // On the desktop the voice panel has the controls; a shared screen still shows above here.
         docked: voicePanel.visible
@@ -162,48 +175,39 @@ Window {
     readonly property bool pageList: { const p = pageLoader.item; return !(p && p.listHidden === true) }
     readonly property bool pageMembers: { const p = pageLoader.item; return !!(p && p.membersVisible === true) }
     property bool tourVoice: false
-    // In a voice room on the desktop: the voice panel at the foot of the rail and the list column.
+    // You and your voice controls, at the bottom left under the rail and the list (wide windows).
     VoicePanel {
         id: voicePanel
         tour: app.tourVoice
         roomBar: roomBar
-        visible: shown && Theme.desktop && app.pageList && !app.privacyCovered
-        anchors.left: parent.left
+        visible: app.pageList && !app.privacyCovered
+        anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
         anchors.bottom: hints.visible ? hints.top : parent.bottom
-        width: rail.width + Theme.listWidth
+        anchors.bottomMargin: Theme.px(8)
+        width: rail.width + Theme.listWidth - Theme.px(16)
         z: 2
     }
-    Binding { target: Ui; property: "dock"; value: voicePanel.visible ? voicePanel.height : 0 }
-    // Drag the edges between the rail, the list, the conversation and the member list.
+    Binding { target: Ui; property: "dock"; value: voicePanel.visible ? voicePanel.height + Theme.px(16) : 0 }
+    // Drag the edges between the list, the conversation and the member list.
     Splitter {
-        anchors.top: parent.top; anchors.bottom: rail.bottom
-        x: rail.width - width / 2
-        z: 3
-        visible: Theme.desktop && !app.privacyCovered
-        label: "rail"
-        value: Ui.railW; minimum: 64; maximum: 120; fallback: 83
-        onMoved: v => Ui.railW = v
-        onDone: v => Settings.railWidth = v
-    }
-    Splitter {
-        anchors.top: parent.top; anchors.bottom: pageLoader.bottom
+        anchors.top: topBar.bottom; anchors.bottom: pageLoader.bottom
         anchors.bottomMargin: Ui.dock
         x: rail.width + Theme.listWidth - width / 2
         z: 3
-        visible: Theme.desktop && app.pageList && !app.privacyCovered
+        visible: !app.portrait && app.pageList && !app.privacyCovered
         label: "list"
-        value: Ui.listW; minimum: 200; maximum: 480; fallback: 270
+        value: Ui.listW; minimum: 200; maximum: 360; fallback: 240
         onMoved: v => Ui.listW = v
         onDone: v => Settings.listWidth = v
     }
     Splitter {
-        anchors.top: parent.top; anchors.bottom: pageLoader.bottom
+        anchors.top: topBar.bottom; anchors.bottom: pageLoader.bottom
         x: app.width - Theme.memberWidth - width / 2
         z: 3
-        visible: Theme.desktop && app.pageMembers && !app.privacyCovered
+        visible: !app.portrait && app.pageMembers && !app.privacyCovered
         label: "member list"
         direction: -1
-        value: Ui.memberW; minimum: 180; maximum: 400; fallback: 230
+        value: Ui.memberW; minimum: 200; maximum: 360; fallback: 240
         onMoved: v => Ui.memberW = v
         onDone: v => Settings.memberWidth = v
     }
@@ -231,13 +235,15 @@ Window {
         return t !== undefined && clock - t < 1800000 ? "idle" : "offline"
     }
 
-    // Handheld: the buttons and what they do, along the bottom like the mockups.
+    // A controller's buttons and what they do, along the bottom: hidden until Select (View) is
+    // pressed. It also shows sending and receiving progress while files move.
     PromptBar {
         id: hints
         anchors.bottom: parent.bottom
         z: callPage.visible || incomingCall.visible ? 38 : 0   // the call's buttons stay on show over it
         width: parent.width
-        visible: !Theme.desktop || LocalSend.busy
+        visible: (app.legend && Gamepad.connected) || LocalSend.busy
+        showKeys: app.legend && Gamepad.connected
         status: incomingCall.visible ? incomingCall.status : callPage.visible ? callPage.status
               : app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
         prompts: {
@@ -267,26 +273,33 @@ Window {
     readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
     Shortcut { sequence: "Ctrl+/"; context: Qt.ApplicationShortcut; enabled: app.keysOn
                onActivated: shortcutsPanel.visible ? shortcutsPanel.close() : shortcutsPanel.open() }
-    Shortcut { sequence: "Ctrl+Shift+L"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Theme.desktop; onActivated: app.togglePane("list") }
-    Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Theme.desktop; onActivated: app.togglePane("members") }
+    Shortcut { sequence: "Ctrl+Shift+L"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("list") }
+    Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("members") }
+    // Panic lock from the keyboard (a controller holds L3 and R3).
+    Shortcut { sequence: "Ctrl+Shift+Q"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Vault.panicLock; onActivated: Vault.panic() }
     Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn && (Rooms.inRoom || Calls.inCall)
                onActivated: Rooms.inRoom ? Rooms.toggleMute() : Calls.toggleMute() }
     Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.toggleDeafen() }
     Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
-    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(1) }
-    Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(-1) }
-    Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.messageSize(0) }
-    Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", { section: "Appearance", row: 0 }) }
+    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(1) }
+    Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(-1) }
+    Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(0) }
+    Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", {}) }
     function showShortcuts() { shortcutsPanel.open() }
-    readonly property var messageSizes: ["85", "100", "115", "130", "150"]
-    function messageSize(dir) {
-        if (dir === 0) { Settings.messageSize = "100"; return }
-        const i = Math.max(0, messageSizes.indexOf(Settings.messageSize))
-        Settings.messageSize = messageSizes[Math.max(0, Math.min(messageSizes.length - 1, i + dir))]
-        Ui.say("Message text: " + Settings.messageSize + "%")
+    // Size of everything, like a web browser's zoom; saved at once.
+    readonly property var sizes: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200]
+    function stepSize(dir) {
+        const now = Number(Settings.uiSize) || 100
+        let next = 100
+        if (dir > 0) next = sizes.find(v => v > now) || 200
+        else if (dir < 0) next = sizes.slice().reverse().find(v => v < now) || 50
+        Settings.uiSize = String(next)
+        Ui.say("Size: " + next + "%")
     }
     // A click on a name: their profile card (under the lists it can open).
     ProfileCard { id: profileCard; z: 24 }
+    // Right click or hold on a person: their role, what they can do and where their chat sits.
+    PersonPanel { id: personPanel; z: 24 }
     // Ctrl+/: every keyboard shortcut.
     ShortcutsPanel { id: shortcutsPanel; z: 27 }
     TextPrompt { id: prompt; z: 30 }
@@ -365,6 +378,7 @@ Window {
         Ui.toast = toast
         Ui.picker = picker
         Ui.profile = profileCard
+        Ui.person = personPanel
         if (touring) tour.start()
     }
 
@@ -420,8 +434,9 @@ Window {
             if (picker.visible) picker.close()
             if (switcher.visible) switcher.close()
             if (profileCard.visible) profileCard.close()
+            if (personPanel.visible) personPanel.close()
             if (shortcutsPanel.visible) shortcutsPanel.close()
-            Ui.say("Chat locked.")
+            Ui.say("Huginn locked.")
         }
     }
     Connections {
@@ -448,6 +463,7 @@ Window {
         if (picker.visible) return picker
         if (switcher.visible) return switcher
         if (shortcutsPanel.visible) return shortcutsPanel
+        if (personPanel.visible) return personPanel
         if (profileCard.visible) return profileCard
         return null
     }
@@ -467,6 +483,9 @@ Window {
     property bool lbHeld: false
     property bool lbUsed: false
     function press(b) {
+        // Select (View) shows or hides the button legend; any other button hides it and does its job.
+        if (b === "back") { legend = !legend; return }
+        legend = false
         const o = overlay()
         if (o) { if (o.handleButton) o.handleButton(b); return }
         const p = page()
@@ -503,14 +522,14 @@ Window {
         target: Gamepad
         function onPressed(button) {
             app.padInUse = true
-            if (app.isPointerButton(button)) stick.press(button)
+            if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
             else app.press(button)
         }
         function onReleased(button) {
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
         }
-        function onConnectedChanged() { if (!Gamepad.connected) { app.lbHeld = false; stick.hide(true) } }
+        function onConnectedChanged() { if (!Gamepad.connected) { app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
     }
 
     // ------------------------------------------------------------- left stick: scroll
@@ -562,7 +581,7 @@ Window {
         id: keys
         anchors.fill: parent
         focus: true
-        // A mouse in use: Automatic switches to the desktop density.
+        // A mouse in use: the controller's wording and focus rings go.
         // Moving it over the columns also puts the focus back on them (clicks there act on the page).
         HoverHandler {
             onPointChanged: {
@@ -588,8 +607,11 @@ Window {
                 event.accepted = true
                 return
             }
-            const b = map[event.key]
+            // In a call, Space mutes (a controller's X still turns the camera on and off).
+            const b = event.key === Qt.Key_Space && callPage.visible && !incomingCall.visible ? "a" : map[event.key]
             if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
+            // A key that isn't a controller stand-in still puts the legend away.
+            else app.legend = false
         }
         Keys.onReleased: event => {
             if (event.isAutoRepeat) return
@@ -607,6 +629,7 @@ Window {
         property int step: 0
         property string savedTheme: "dark"
         property string savedDensity: "cozy"
+        property string savedSize: "100"
         readonly property var steps: [
             { page: "dms", file: "00-direct-messages" },
             { page: "dms", zone: "messages", file: "01-conversation" },
@@ -614,40 +637,49 @@ Window {
             { page: "files", file: "03-files" },
             { page: "calls", file: "04-calls" },
             { page: "settings", file: "05-settings" },
-            { page: "settings", section: "Nearby and sharing", file: "06-settings-chat" },
+            { page: "settings", section: "lock", file: "06-settings-lock" },
             { page: "contacts", file: "07-contacts" },
             { page: "dms", picker: true, file: "08-options" },
             { page: "dms", prompt: true, file: "09-write" },
             { page: "dms", hold: true, file: "10-confirm" },
-            { page: "dms", zone: "messages", desktop: true, file: "11-desktop" },
-            { page: "settings", desktop: true, file: "12-desktop-settings" },
+            { page: "dms", zone: "messages", newGroup: true, file: "11-new-group" },
+            { page: "settings", section: "look", file: "12-look" },
             { page: "g:tour-crew", file: "13-group" },
-            { page: "g:tour-crew", zone: "messages", desktop: true, file: "14-desktop-group" },
+            { page: "g:tour-crew", zone: "messages", file: "14-group-messages" },
             { page: "g:tour-crew", zone: "channels", groupOptions: true, file: "15-group-options" },
             { page: "g:tour-crew", zone: "channels", voice: true, file: "16-voice-room" },
             { page: "dms", folders: true, file: "17-folders" },
-            { page: "dms", rail: true, desktop: true, file: "18-desktop-rail" },
-            // The desktop panels (0.94): the voice panel and member statuses, a profile card, the
-            // shortcuts, Settings › Appearance, and the light theme with compact messages.
-            { page: "g:tour-crew", zone: "messages", desktop: true, voicePanel: true, file: "19-desktop-voice-members" },
-            { page: "g:tour-crew", zone: "members", desktop: true, profile: true, file: "20-profile-card" },
-            { page: "dms", zone: "messages", desktop: true, shortcuts: true, file: "21-shortcuts" },
-            { page: "settings", section: "Appearance", desktop: true, file: "22-appearance" },
-            { page: "g:tour-crew", zone: "messages", desktop: true, theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
-            { page: "dms", zone: "messages", desktop: true, theme: "black", file: "24-true-black" }
+            { page: "dms", zone: "messages", person: true, file: "18-person-panel" },
+            { page: "g:tour-crew", zone: "messages", voicePanel: true, file: "19-voice-members" },
+            { page: "g:tour-crew", zone: "members", profile: true, file: "20-profile-card" },
+            { page: "dms", zone: "messages", shortcuts: true, file: "21-shortcuts" },
+            { page: "settings", section: "more", file: "22-more-settings" },
+            { page: "g:tour-crew", zone: "messages", theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
+            { page: "dms", zone: "messages", theme: "black", file: "24-true-black" },
+            { page: "g:tour-crew", zone: "messages", theme: "metal", density: "spacious", file: "25-brushed-metal" },
+            { page: "g:tour-crew", zone: "messages", size: "150", file: "26-size-150" },
+            { page: "dms", zone: "messages", portrait: true, file: "27-portrait" },
+            { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
+            { page: "dms", changeLock: true, file: "29-lock" }
         ]
         interval: 1500
         repeat: true
         onTriggered: {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
-            profileCard.visible = false; shortcutsPanel.visible = false
-            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density }
-            if (step >= steps.length) { Settings.theme = savedTheme; Settings.density = savedDensity; stop(); System.tourFinished(); return }
+            profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
+            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density; savedSize = Settings.uiSize }
+            if (step >= steps.length) {
+                Settings.theme = savedTheme; Settings.density = savedDensity; Settings.uiSize = savedSize
+                app.width = 1920; app.height = 1080
+                stop(); System.tourFinished(); return
+            }
             const s = steps[step]
             // The look changes once the new page is in (not while the old one is being taken down).
-            const theme = s.theme || savedTheme, density = s.density || savedDensity
-            Qt.callLater(() => { Settings.theme = theme; Settings.density = density })
+            const theme = s.theme || savedTheme, density = s.density || savedDensity, size = s.size || savedSize
+            Qt.callLater(() => { Settings.theme = theme; Settings.density = density; Settings.uiSize = size })
+            // A portrait window: the one-column layout.
+            if (s.portrait) { app.width = 900; app.height = 1200 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
             const args = { tour: true }
             if (s.section) args.section = s.section
@@ -655,7 +687,7 @@ Window {
             if (s.groupOptions) args.groupOptions = true
             if (s.voice) args.voice = true
             if (s.folders) args.folders = true
-            app.tourDesktop = !!s.desktop
+            if (s.changeLock) args.changeLock = true
             app.openPage(s.page, args)
             if (s.rail) app.focusRail()
             if (s.picker) picker.openList("Message", [{ header: "", items: [{ name: "Unsend", detail: "Removes it from both sides", url: "unsend" }, { name: "Delete for me", detail: "Only on this computer", url: "delete" }] },
@@ -663,7 +695,9 @@ Window {
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Chat.username, "", "Send", null, false, true)
             if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
-            if (s.hold) confirm.open("Erase everything in Chat?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
+            if (s.person) personPanel.show("tour", "Mira", { tour: true })
+            if (s.newGroup) app.newGroup()
+            if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }
     }

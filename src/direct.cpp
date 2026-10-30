@@ -108,8 +108,8 @@ void Direct::start()
         const QDBusMessage r = w->reply();
         if (r.type() == QDBusMessage::ErrorMessage || r.arguments().size() < 2) {
             m_error = r.errorName().contains(QLatin1String("PermissionDenied")) || r.errorName().contains(QLatin1String("NotAuthorized"))
-                ? QStringLiteral("SteamOS didn't allow Huginn to make a hotspot. Try once from Desktop Mode.")
-                : QStringLiteral("The handheld couldn't start Direct connect: %1").arg(r.errorMessage());
+                ? QStringLiteral("This computer didn't allow Huginn to make its own Wi-Fi. Try once from the desktop, not Game Mode.")
+                : QStringLiteral("This computer couldn't start Direct connect: %1").arg(r.errorMessage());
             m_ssid.clear();
             m_password.clear();
         } else {

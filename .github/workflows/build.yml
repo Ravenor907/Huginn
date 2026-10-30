@@ -59,9 +59,8 @@ jobs:
       - name: Download size (Huginn.flatpak)
         shell: bash
         run: |
-          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (4,048,728 bytes) plus 5%. Growing
-          # past it needs the owner's OK.
-          limit=4251165
+          # The 0.95 size (4,199,464 bytes) plus 5%. Growing past it needs the owner's OK.
+          limit=4409437
           size=$(stat -c %s Huginn.flatpak)
           echo "::notice title=Huginn.flatpak::$size bytes (limit $limit)"
           if [ "$size" -gt "$limit" ]; then echo "::error title=Huginn.flatpak too big::$size bytes, over the $limit byte limit."; exit 1; fi
@@ -391,6 +390,11 @@ jobs:
           Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$out/platforms/"
           # OpenSSL (chat crypto and Qt's TLS), Opus (calls), libvpx (video), SDL2 (controllers), libqrencode (QR codes)
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
+          # Not needed to run: the Direct3D 12 shader compiler (Huginn draws with Direct3D 11 or OpenGL),
+          # QML debugging plugins, and vcpkg's pkgconf build tool.
+          Remove-Item -Force "$out/dxcompiler.dll", "$out/dxil.dll" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$out/qmltooling" -ErrorAction SilentlyContinue
+          Get-ChildItem $out -Filter "pkgconf*.dll" | Remove-Item -Force
           # The Visual C++ runtime, so nothing has to be installed first
           $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
@@ -438,9 +442,8 @@ jobs:
           $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
           $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
-          # TODO(n95-desktop): lower this after trimming. Today it is the 0.94 size (45,245,253 bytes) plus 5%. Growing
-          # past it needs the owner's OK.
-          $limit = 47507516
+          # The trimmed 0.95 size (37,989,814 bytes) plus 5%. Growing past it needs the owner's OK.
+          $limit = 39889305
           $size = (Get-Item Huginn-Windows.zip).Length
           if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip too big::$size bytes, over the $limit byte limit."; exit 1 }
           Remove-Item -Recurse -Force dist/Huginn

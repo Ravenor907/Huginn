@@ -13,7 +13,7 @@ Rectangle {
     visible: false
     width: Theme.px(360)
     height: Math.min(Theme.px(320), grid.contentHeight + quickRow.height + Theme.px(24))
-    radius: Theme.px(10)
+    radius: Theme.radius
     color: Theme.panel
     border.color: Theme.lineStrong
     z: 20
@@ -90,7 +90,7 @@ Rectangle {
         boundsBehavior: Flickable.StopAtBounds
         delegate: Rectangle {
             readonly property bool on: picker.pad && picker.cur === picker.quickCount + index
-            width: grid.cellWidth - Theme.px(2); height: width; radius: Theme.px(6)
+            width: grid.cellWidth - Theme.px(2); height: width; radius: Theme.radius
             color: on ? Theme.focusFill : eHover.hovered ? Theme.raised : "transparent"
             border.width: on ? Theme.focusWidth : 0
             border.color: Theme.accent
