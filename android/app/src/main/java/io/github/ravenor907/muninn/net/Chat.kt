@@ -1701,6 +1701,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun hasM1(k: String) = this@Chat.hasM1(k)
         override fun hasM2(k: String) = this@Chat.hasM2(k)
         override fun hasD1(k: String) = this@Chat.hasD1(k) || envCaps[k]?.contains(Limits.CAP) == true
+        override fun hasJ1(k: String) = Proto06.J1 in capsOf(k) || envCaps[k]?.contains(Proto06.J1) == true
     }
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */

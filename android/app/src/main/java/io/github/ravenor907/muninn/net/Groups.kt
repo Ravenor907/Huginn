@@ -46,7 +46,17 @@ class Groups(
         fun hasM2(k: String): Boolean = false
         /** Their app said "d1": it takes a Family or Work group's state (section 16.2). */
         fun hasD1(k: String): Boolean = false
+        /** Their app said "j1": invite links and "Members can invite" (section 17). */
+        fun hasJ1(k: String): Boolean = false
     }
+
+    /**
+     * Cap j1: an invite link as the group's screens show it. [id] names it (the token stays with whoever counts it);
+     * [x] when it stops working (ms, 0 never), [max] how many may join by it (0 no limit), [counter] the admin who
+     * counts and takes the joins. [link] is the link itself, only on the phone that made it.
+     */
+    data class LinkInfo(val id: String, val g: String, val by: String, val byName: String, val x: Long, val max: Int, val uses: Int,
+                        val counter: String, val link: String = "")
 
     /** One envelope to one member. [env] is the envelope id (2.3); [id] the logical id it's confirmed by. */
     data class Out(
@@ -92,11 +102,22 @@ class Groups(
             "join", "add" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
             // Cap d1: a = "family", "work" or "" (Standard), b = the days.
             "limit" -> Limits.withLimit(s, a, b.toIntOrNull() ?: Limits.DEFAULT).takeIf { it != s }
+            // Cap j1: a = "on" lets members make invite links.
+            "invites" -> s.copy(mi = a == "on").takeIf { it != s }
             else -> null
         }
     }
 
     private data class Token(val i: String, val g: String, val x: Long, val multi: Boolean)
+    /** Cap j1, on the admin who counts a link: its token, who made it, expiry (ms, 0 never), max uses (0 no limit), uses, revoked. */
+    private data class LinkRec(val i: String, val g: String, val by: String, val x: Long, val max: Int, val uses: Int = 0, val off: Boolean = false)
+    private val links = ArrayList<LinkRec>()
+    /** The lists the counting admins sent (group to links), and the links this phone made (id to link). */
+    private val linkLists = HashMap<String, List<LinkInfo>>()
+    private val madeLinks = HashMap<String, String>()
+    private val _links = MutableStateFlow<Map<String, List<LinkInfo>>>(emptyMap())
+    /** For the screens: each group's active links (admins see all, members their own). */
+    val linksByGroup: StateFlow<Map<String, List<LinkInfo>>> = _links.asStateFlow()
     private data class Held(val from: String, val name: String, val plain: JSONObject)
 
     private val lock = Any()
@@ -175,6 +196,9 @@ class Groups(
     /** Cap d1: the group's type ("family", "work" or "" for Standard) and how many days messages stay (7 to 30). */
     fun setLimit(g: String, kind: String, days: Int) = change(g, Change("limit", kind.takeIf { it in Limits.KINDS } ?: "", days.toString()))
 
+    /** Cap j1: "Members can invite" on or off (an admin's signed change). */
+    fun setMembersInvite(g: String, on: Boolean) = change(g, Change("invites", if (on) "on" else ""))
+
     /** Null when done (or nothing to do), else why not, in words for the person. */
     private fun change(g: String, c: Change): String? = act { changeLocked(g, c) }
 
@@ -190,6 +214,13 @@ class Groups(
         // An app without d1 refuses a Family or Work group's state (section 16.2).
         if ((c.op == "join" || c.op == "add") && cur.kind.isNotEmpty() && !host.hasD1(c.a))
             return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} Muninn or Huginn 0.94 to be in a ${Limits.kindName(cur.kind)} group."
+        // An app without j1 refuses a state with "Members can invite" on (section 17.1).
+        if ((c.op == "join" || c.op == "add") && cur.mi && !host.hasJ1(c.a))
+            return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} Muninn or Huginn 0.95 to join, because members can invite in ${cur.name}."
+        if (c.op == "invites" && c.a == "on" && !cur.mi) {
+            val old = cur.members.filter { it.k != me && !host.hasJ1(it.k) }
+            if (old.isNotEmpty()) return "Everyone needs Muninn or Huginn 0.95 first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
+        }
         if (c.op == "limit" && c.a.isNotEmpty() && cur.kind.isEmpty()) {
             val old = cur.members.filter { it.k != me && !host.hasD1(it.k) }
             if (old.isNotEmpty()) return "Everyone needs Muninn or Huginn 0.94 first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
@@ -445,7 +476,10 @@ class Groups(
         val inGroup = grp != null && (grp.state.has(from) || grp.history.any { it.has(from) })
         val allowed = when (t) {
             "invite" -> host.isContact(from)
-            "join" -> liveToken(p.optString("inv"), g) != null
+            "join" -> liveToken(p.optString("inv"), g) != null || liveLink(p.optString("inv"), g) != null
+            // Cap j1: links (17.2).
+            "link", "linkoff" -> grp != null && !grp.readOnly && grp.state.has(from)
+            "links" -> grp != null && grp.state.isAdmin(from)
             "decline" -> host.isContact(from) || inGroup
             "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from") ||
                 // Cap m1: a contact put me straight in (op "add"), no invite to accept.
@@ -470,17 +504,52 @@ class Groups(
                 }
             }
             "join" -> {
-                val tok = liveToken(p.optString("inv"), g)!!
+                val tok = liveToken(p.optString("inv"), g)
+                val lnk = if (tok == null) liveLink(p.optString("inv"), g) else null
                 val cur = grp?.state
                 if (grp == null || cur == null || grp.readOnly || !cur.isAdmin(me)) return 200
-                if (!tok.multi) tokens.remove(tok)
+                if (tok != null && !tok.multi) tokens.remove(tok)
                 val n = clean(p.optString("n"), Proto06.MAX_NAME).ifBlank { clean(fromName, Proto06.MAX_NAME) }.ifBlank { "Someone" }
                 val mb = p.optString("p").takeIf { Proto06.isMailbox(it) } ?: envMailbox?.takeIf { Proto06.isMailbox(it) } ?: ""
                 if (!host.isContact(from)) host.peer(from, n, mb)
                 if (cur.has(from)) {
                     val rid = Proto06.newLogicalId()
                     out(from, "group", JSONObject().put("t", "state").put("g", g).put("id", rid).put("op", "join").put("state", cur.json()).toString(), rid, g)
-                } else changeLocked(g, Change("join", from, n, mb))?.let { host.notice(it) }
+                } else {
+                    val why = changeLocked(g, Change("join", from, n, mb))
+                    if (why != null) host.notice(why)
+                    // Cap j1: one more use, counted only here (this admin is the link's only counter).
+                    else if (lnk != null && groups[g]?.state?.has(from) == true) {
+                        links.replaceAll { if (it.i == lnk.i) it.copy(uses = it.uses + 1) else it }
+                        sendLinks(g)
+                    }
+                }
+            }
+            "link" -> {
+                // A member (or another admin) made a link that names this phone as its counter.
+                val cur = grp!!.state
+                if (!cur.isAdmin(me) || !(cur.isAdmin(from) || cur.mi)) return 403
+                val inv = p.optString("inv"); val x = p.optLong("lx", -1); val max = p.optInt("max", -1)
+                if (Proto06.lenB64url(inv) != 16 || x < 0 || max !in 0..Proto06.MAX_LINK_USES) return 400
+                if (links.none { it.i == inv }) links.add(LinkRec(inv, g, from, x, max))
+                sendLinks(g)
+            }
+            "linkoff" -> {
+                val lid = p.optString("lid")
+                val cur = grp!!.state
+                val rec = links.firstOrNull { it.g == g && Proto06.linkId(it.i) == lid }
+                if (rec != null && (rec.by == from || cur.isAdmin(from))) {
+                    links.replaceAll { if (it.i == rec.i) it.copy(off = true) else it }
+                    sendLinks(g)
+                }
+            }
+            "links" -> {
+                val a = p.optJSONArray("list") ?: return 400
+                val got = try { (0 until minOf(a.length(), Proto06.MAX_LINKS)).map { a.getJSONObject(it) }.map {
+                    LinkInfo(it.getString("lid"), g, it.getString("by"), nameIn(grp!!.state, it.getString("by"), "Someone"), it.getLong("x"), it.getInt("max"),
+                        it.getInt("uses"), from, madeLinks[it.getString("lid")] ?: "")
+                } } catch (e: Exception) { return 400 }
+                linkLists[g] = linkLists[g].orEmpty().filter { it.counter != from } + got
             }
             "decline" -> tokens.removeAll { it.i == p.optString("inv") && it.g == g && !it.multi }
             "state" -> {
@@ -540,6 +609,82 @@ class Groups(
 
     private fun liveToken(inv: String, g: String): Token? =
         tokens.firstOrNull { it.i == inv && it.g == g && it.x * 1000 > now() }
+
+    /**
+     * Cap j1 (17.3): a link this phone counts that still lets someone in: not revoked, not expired, uses left, and
+     * its maker still in the group and allowed to invite (an admin, or "Members can invite" on).
+     */
+    private fun liveLink(inv: String, g: String): LinkRec? {
+        val rec = links.firstOrNull { it.i == inv && it.g == g } ?: return null
+        val s = groups[g]?.state ?: return null
+        return rec.takeIf { Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || s.mi, now()) }
+    }
+
+    /** The links this phone counts for [g], to every admin and to each link's maker (their own), with j1. */
+    private fun sendLinks(g: String) {
+        val s = groups[g]?.state ?: return
+        val mine = links.filter { it.g == g && Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || s.mi, now()) }
+        fun json(l: List<LinkRec>) = JSONArray().apply { l.forEach { put(JSONObject().put("lid", Proto06.linkId(it.i)).put("by", it.by).put("x", it.x)
+            .put("max", it.max).put("uses", it.uses)) } }
+        linkLists[g] = linkLists[g].orEmpty().filter { it.counter != me } + mine.map {
+            LinkInfo(Proto06.linkId(it.i), g, it.by, nameIn(s, it.by, "Someone"), it.x, it.max, it.uses, me, madeLinks[Proto06.linkId(it.i)] ?: "") }
+        val to = (s.admins + mine.map { it.by }).toSet().filter { it != me && s.has(it) && host.hasJ1(it) }
+        for (k in to) {
+            val list = if (s.isAdmin(k)) mine else mine.filter { it.by == k }
+            val id = Proto06.newLogicalId()
+            out(k, "group", JSONObject().put("t", "links").put("g", g).put("id", id).put("list", json(list)).toString(), id, g)
+        }
+    }
+
+    /**
+     * Cap j1: a new invite link for [g], good for [ttlMs] (0 never) and [maxUses] people (0 no limit). An admin's link
+     * is counted on their own phone; a member's (only with "Members can invite" on) by the owner's phone. Returns
+     * (link, null) or (null, why not).
+     */
+    fun createLink(g: String, ttlMs: Long, maxUses: Int): Pair<String?, String?> = act {
+        val grp = groups[g] ?: return@act null to "That group isn't here any more."
+        val s = grp.state
+        if (grp.readOnly) return@act null to "You're not in ${s.name} any more."
+        if (!s.isAdmin(me) && !s.mi) return@act null to "Only admins can make invite links in ${s.name}."
+        if (ttlMs < 0 || maxUses !in 0..Proto06.MAX_LINK_USES) return@act null to "Pick how long and how many people."
+        val counter = if (s.isAdmin(me)) me else s.owner
+        if (counter != me && !host.hasJ1(counter)) return@act null to "${nameIn(s, counter, "The owner")} needs Muninn or Huginn 0.95 first."
+        val token = Proto06.newToken()
+        val x = if (ttlMs == 0L) 0L else now() + ttlMs
+        val codeX = if (x == 0L) now() / 1000 + Proto06.NEVER_S else x / 1000
+        val cm = s.member(counter)
+        val link = Proto06.link(Proto06.Code(g, s.name, counter, cm?.n ?: "", cm?.p ?: "", token, codeX))
+        madeLinks[Proto06.linkId(token)] = link
+        if (counter == me) { links.add(LinkRec(token, g, me, x, maxUses)); sendLinks(g) }
+        else {
+            val id = Proto06.newLogicalId()
+            out(counter, "group", JSONObject().put("t", "link").put("g", g).put("id", id).put("inv", token).put("lx", x).put("max", maxUses).toString(), id, g)
+            linkLists[g] = linkLists[g].orEmpty() + LinkInfo(Proto06.linkId(token), g, me, nameIn(s, me, host.myName), x, maxUses, 0, counter, link)
+        }
+        link to null
+    }
+
+    /** Cap j1: stops a link working. Admins may revoke any link, members their own. Null when done, else why not. */
+    fun revokeLink(g: String, id: String): String? = act {
+        val grp = groups[g] ?: return@act "That group isn't here any more."
+        val info = linkLists[g].orEmpty().firstOrNull { it.id == id } ?: return@act null
+        if (info.by != me && !grp.state.isAdmin(me)) return@act "Only admins can stop someone else's link."
+        if (info.counter == me) {
+            links.replaceAll { if (it.g == g && Proto06.linkId(it.i) == id) it.copy(off = true) else it }
+            sendLinks(g)
+        } else {
+            val mid = Proto06.newLogicalId()
+            out(info.counter, "group", JSONObject().put("t", "linkoff").put("g", g).put("id", mid).put("lid", id).toString(), mid, g)
+            linkLists[g] = linkLists[g].orEmpty().filter { it.id != id }
+        }
+        null
+    }
+
+    /** Cap j1: the group's active links, as the screens show them. */
+    fun links(g: String): List<LinkInfo> = synchronized(lock) {
+        val s = groups[g]?.state
+        linkLists[g].orEmpty().filter { (it.x == 0L || it.x > now()) && (it.max == 0 || it.uses < it.max) && (s == null || s.isAdmin(me) || it.by == me) }
+    }
 
     /** Applies 3.3 to an incoming state. [op]: its hint; "add" from a contact puts me straight in (cap m1). */
     private fun takeState(from: String, s: State, op: String = "") {
@@ -767,6 +912,8 @@ class Groups(
         val t = now()
         deleted.entries.removeIf { t - it.value > 2 * DAY }
         tokens.removeAll { it.x * 1000 < t }
+        // Cap j1: links done for a day (expired, used up or revoked) are forgotten.
+        links.removeAll { it.off || (it.x != 0L && it.x < t - DAY) || (it.max != 0 && it.uses >= it.max) }
         invites.removeAll { it.x * 1000 < t }
         asked.entries.removeIf { t - it.value > 10 * 60_000 }
         answered.entries.removeIf { t - it.value > 10 * 60_000 }
@@ -799,6 +946,7 @@ class Groups(
     /** Erase all. */
     fun clear() = act {
         groups.clear(); chats.clear(); outs.clear(); tokens.clear(); invites.clear(); joining.clear(); last.clear()
+        links.clear(); linkLists.clear(); madeLinks.clear()
         deleted.clear(); unread.clear(); held.clear(); tries.clear()
     }
 
@@ -806,6 +954,7 @@ class Groups(
         _groups.value = LinkedHashMap(groups)
         _chats.value = HashMap(chats)
         _invites.value = invites.toList()
+        _links.value = groups.keys.associateWith { g -> linkLists[g].orEmpty().filter { (it.x == 0L || it.x > now()) && (it.max == 0 || it.uses < it.max) } }
         _unread.value = unread.toSet()
     }
 
@@ -824,6 +973,11 @@ class Groups(
             o.put("last", JSONObject().apply { last.forEach { (g, c) -> put(g, JSONObject().put("op", c.op).put("a", c.a).put("b", c.b).put("c", c.c).put("v", c.v)) } })
             o.put("deleted", JSONObject().apply { deleted.forEach { (k, t) -> put(k, t) } })
             o.put("unread", JSONArray(unread.toList()))
+            o.put("links", JSONArray().apply { links.forEach { put(JSONObject().put("i", it.i).put("g", it.g).put("by", it.by).put("x", it.x)
+                .put("max", it.max).put("uses", it.uses).put("off", it.off)) } })
+            o.put("made", JSONObject().apply { madeLinks.forEach { (k, v) -> put(k, v) } })
+            o.put("lists", JSONObject().apply { linkLists.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { put(JSONObject().put("id", it.id)
+                .put("by", it.by).put("bn", it.byName).put("x", it.x).put("max", it.max).put("uses", it.uses).put("c", it.counter)) } }) } })
             write(FILE, o.toString())
             val c = JSONObject()
             chats.forEach { (g, l) -> c.put(g, JSONArray().apply { l.forEach { put(msgJson(it)) } }) }
@@ -867,6 +1021,12 @@ class Groups(
                     last[g] = Change(c.getString("op"), c.optString("a"), c.optString("b"), c.optString("c"), c.optLong("v")) } } }
                 o.optJSONObject("deleted")?.let { j -> j.keys().forEach { deleted[it] = j.optLong(it) } }
                 unread.addAll(strings(o.optJSONArray("unread")))
+                o.optJSONObject("made")?.let { j -> j.keys().forEach { madeLinks[it] = j.getString(it) } }
+                o.optJSONArray("links")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let {
+                    links.add(LinkRec(it.getString("i"), it.getString("g"), it.getString("by"), it.optLong("x"), it.optInt("max"), it.optInt("uses"), it.optBoolean("off"))) } }
+                o.optJSONObject("lists")?.let { j -> j.keys().forEach { g -> val a = j.getJSONArray(g); linkLists[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {
+                    LinkInfo(it.getString("id"), g, it.getString("by"), it.optString("bn"), it.optLong("x"), it.optInt("max"), it.optInt("uses"), it.getString("c"),
+                        madeLinks[it.getString("id")] ?: "") } } }
             }
             read(CHATS)?.let { text ->
                 val o = JSONObject(text)

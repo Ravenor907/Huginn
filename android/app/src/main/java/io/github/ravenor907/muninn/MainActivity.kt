@@ -202,10 +202,13 @@ class MainActivity : ComponentActivity() {
     private fun openAdd(i: Intent?) {
         val d = i?.data ?: return
         val code = when {
+            // A group invite link (cap j1) comes as muninn://add/MUNINNG1:CODE.
             d.scheme == "muninn" && d.host == "add" ->
-                d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
-            d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString())
-                .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) && it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) }
+                d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let {
+                    if (it.startsWith(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) it else io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
+            d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString()).replace("MUNINNG1%3A", io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)
+                .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) &&
+                    (it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) || it.contains(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) }
             else -> null
         } ?: return
         ChatNav.incoming = code

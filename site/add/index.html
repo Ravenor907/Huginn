@@ -80,13 +80,15 @@
 <script>
   // The code is after the "#", which browsers never send to the server: only this page sees it.
   var code = decodeURIComponent((location.hash || "").slice(1));
-  if (code.indexOf("MUNINN1:") !== 0) {
+  // A group invite link (MUNINNG1:) opens the app the same way.
+  var group = code.indexOf("MUNINNG1:") === 0;
+  if (code.indexOf("MUNINN1:") !== 0 && !group) {
     document.getElementById("found").classList.add("hidden");
     document.getElementById("manual").classList.add("hidden");
     document.getElementById("none").classList.remove("hidden");
   } else {
     document.getElementById("code").textContent = code;
-    var body = code.slice("MUNINN1:".length);
+    var body = group ? code : code.slice("MUNINN1:".length);
     var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
     document.getElementById("open").href = /Android/i.test(navigator.userAgent)
       ? "intent://add/" + body + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
