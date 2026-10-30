@@ -202,7 +202,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             if (ws == null) { open(url); continue }
             if (live[url] != true) continue
             if (PowerLogic.silent(before, heardAt[url] ?: 0L) && (openedAt[url] ?: 0L) < before) { replace(url, ws); continue }
-            val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("since", System.currentTimeMillis() / 1000).put("limit", 0)
+            val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", System.currentTimeMillis() / 1000).put("limit", 0)   // only my mailbox: never anyone else's traffic
             ws.send(JSONArray().put("REQ").put(PROBE).put(filter).toString())
         }
         probedAt = now
@@ -376,9 +376,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      * Sends sealed content to someone's mailbox through the relays open now. Returns how many relays are
      * connected now. [ok] runs once a relay has said it stored the event (its "OK"), not before.
      *
-     * Saving battery, nothing extra is opened for it: a message I write opens the conversation window, which
-     * connects every relay, and those sockets get it as they open ([recent]). With no relay open at all, one
-     * short-lived socket to the healthiest relay carries it.
+     * Saving battery, relays not open now get it through a short-lived socket each, so it reaches whichever
+     * relay the other phone listens on. Sockets that connect within [RECENT_MS] get it too ([recent]).
      */
     fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
@@ -394,7 +393,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }
         var n = 0
         for ((url, ws) in sockets) if (live[url] == true && ws.send(msg)) n++
-        if (keep != null && n == 0) PowerLogic.pick(relays, health(relays), 1).firstOrNull()?.let { openBurst(it, listOf(msg)) }
+        // Every relay gets it: the other phone may be listening on just one, and not one of mine. Relays
+        // not open now get a short-lived socket that closes again after [BURST_SECONDS].
+        if (keep != null) for (url in relays) if (live[url] != true) openBurst(url, listOf(msg))
         if (sockets.isEmpty()) connect()
         return n
     }
