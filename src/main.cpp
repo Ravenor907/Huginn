@@ -25,6 +25,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include "settings.h"
+#include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
 #include "updater.h"
@@ -310,6 +311,10 @@ int main(int argc, char *argv[])
     QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
     QObject::connect(calls, &CallManager::changed, system, awake);
     QObject::connect(rooms, &RoomManager::changed, system, awake);
+    // Push to talk (Settings › Calls): the key is watched only while Huginn is in front.
+    rooms->setPushToTalk(settings->pushToTalk());
+    QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
+    auto *talkKey = new TalkKey(settings, rooms, &app);
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
@@ -328,6 +333,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);

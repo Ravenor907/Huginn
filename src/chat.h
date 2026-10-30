@@ -176,6 +176,9 @@ public:
     Q_INVOKABLE QString nicknameOf(const QString &key) const;
     // Only on this computer, never sent. Empty goes back to their own name.
     Q_INVOKABLE void setNickname(const QString &key, const QString &nick);
+    // A note about someone (Huginn's profile card), only on this computer, never sent.
+    Q_INVOKABLE QString noteOf(const QString &key) const;
+    Q_INVOKABLE void setNote(const QString &key, const QString &note);
     // An existing contact a code may be a new security key for, so the screen can ask before
     // replacing it: {key, name, sameInbox} (sameInbox: their inbox, so it can only be them or
     // someone pretending), or empty when there's none.

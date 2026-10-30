@@ -12,7 +12,7 @@ Rectangle {
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "list", "messages" or "side" (a thread or the pins)
+    property string zone: Theme.listShown ? "list" : "messages"   // "list", "messages" or "side" (a thread or the pins)
     // A person being dragged with the mouse (from which section), and where they'd land: the line
     // (in the list's content), the section, and whether that's onto a folder's header.
     property string dragKey: ""
@@ -189,11 +189,15 @@ Rectangle {
     }
 
     // ============================================================= middle column: the list
+    // The desktop can hide it (Ctrl+Shift+L); the controller still opens it with Left.
+    readonly property bool listHidden: !middle.visible
     Rectangle {
         id: middle
+        visible: Theme.listShown || page.zone === "list" || lock.visible
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(270)
+        anchors.bottomMargin: Ui.dock
+        width: visible ? Theme.listWidth : 0
         color: Theme.column
 
         PageHeader {
@@ -535,6 +539,8 @@ Rectangle {
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
             }
+            // The desktop: show or hide the list of conversations.
+            PaneToggle { which: "list" }
             // Pinned messages of this chat (only on this computer).
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
