@@ -46,7 +46,7 @@ object Link {
         /** How many days the phone keeps its chat with [peer] (docs/protocol-0.6.md section 16). */
         fun days(peer: String): Int = Limits.DEFAULT
         /** The 4 emoji for this device and [key] (13.5): the same on both screens means nobody is in between. */
-        fun emoji(key: String): String = 
+        fun emoji(key: String): String = ""
     }
 
     @Volatile var host: Host? = null
