@@ -2,7 +2,7 @@
 
 Newest first. Huginn and Muninn are released together, with the same version number.
 
-## 0.94 (not released)
+## 0.94
 
 | | |
 |---|---|
@@ -22,6 +22,8 @@ Newest first. Huginn and Muninn are released together, with the same version num
 | **Voice panel** | In a voice room on a PC, who you're with, Mute, Deafen and Leave sit at the foot of the list. Push to talk: hold a key you choose (Settings › Calls). |
 | **Unread and mentions** | Groups and channels show a dot for anything new and a number for @mentions of you. Fold a group's Text or Voice category away. |
 | **Keyboard shortcuts** | Ctrl+/ lists them all. |
+| **Huginn catches up** | On a PC: albums, video messages, polls, link previews and the Shared page; invite links, introductions, the Family group offer and the 4 matching emoji; files of up to 4 GB over the internet; and Linked devices, both as your phone's companion and as the phone others link to. |
+| **Signed updates** | Every download is signed with the project's own key, and both apps refuse an update that isn't. Huginn.exe also gets extra Windows protections (Control Flow Guard, CET). |
 
 ## 0.93
 
