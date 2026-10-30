@@ -37,6 +37,7 @@ void noStartLog() {}
 #include <windows.h>
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #ifndef HUGINN_VERSION
@@ -100,6 +101,31 @@ LONG WINAPI crashed(EXCEPTION_POINTERS *e)
                   e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul, name,
                   static_cast<unsigned long long>(reinterpret_cast<quintptr>(at) - reinterpret_cast<quintptr>(mod)));
     writeLine(line);
+    // The calls that led there (module+offset each), unwound from the crash's own registers.
+    if (e && e->ContextRecord) {
+        CONTEXT c = *e->ContextRecord;
+        for (int i = 0; i < 32 && c.Rip; ++i) {
+            HMODULE m = nullptr;
+            char mname[MAX_PATH] = "?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(c.Rip), &m))
+                GetModuleFileNameA(m, mname, MAX_PATH);
+            const char *base = std::strrchr(mname, '\\');
+            std::snprintf(line, sizeof line, "  at %s+0x%llx", base ? base + 1 : mname,
+                          static_cast<unsigned long long>(c.Rip - reinterpret_cast<quintptr>(m)));
+            writeLine(line);
+            DWORD64 imageBase = 0;
+            PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
+            if (!fn) {
+                // A leaf function: the return address is on top of the stack.
+                c.Rip = *reinterpret_cast<DWORD64 *>(c.Rsp);
+                c.Rsp += 8;
+                continue;
+            }
+            void *handlerData = nullptr;
+            DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, fn, &c, &handlerData, &frame, nullptr);
+        }
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 

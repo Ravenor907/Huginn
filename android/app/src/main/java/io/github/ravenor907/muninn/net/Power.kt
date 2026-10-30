@@ -117,6 +117,64 @@ class Power(private val app: Muninn) {
         refresh()
     }
 
+    // ------------------------------------------------------------------ Always right away, conversations, catching up
+
+    /** The "Always right away" list; null until the vault is open. */
+    var rightAway: RightAway? = null
+        private set
+
+    /** The Family folder's chats: the list starts as these and follows the folder. */
+    private fun family(): List<String> = try {
+        if (!app.ready.value) emptyList() else app.chat.folders.all.value.firstOrNull { it.name.equals(FAMILY, true) }?.keys.orEmpty()
+    } catch (_: Exception) { emptyList() }
+
+    /** The chats (contact keys, or "g:" and a group id) on the "Always right away" list now. */
+    fun rightAwayKeys(): Set<String> = rightAway?.keys(family()).orEmpty()
+
+    fun isRightAway(key: String): Boolean = key in rightAwayKeys()
+
+    /** Puts [key] on the "Always right away" list, or takes it off. */
+    fun setRightAway(key: String, on: Boolean) { rightAway?.set(key, on, key in family()) }
+
+    /** When a message was last sent or received (elapsed time, so it counts while the phone sleeps); -1: not yet. */
+    @Volatile private var talkedAt = -1L
+
+    /** A message went or came: every relay for a few minutes, so the reply arrives at once (the conversation window). */
+    fun talk() {
+        talkedAt = android.os.SystemClock.elapsedRealtime()
+        main.removeCallbacks(talkOver)
+        main.postDelayed(talkOver, PowerLogic.TALK_MS + 1_000L)
+        refresh()
+    }
+
+    private val talkOver = Runnable { refresh() }
+
+    private fun talking(): Boolean = talkedAt >= 0 && PowerLogic.talking(android.os.SystemClock.elapsedRealtime() - talkedAt)
+
+    private var caughtUpAt = 0L
+
+    /**
+     * Unlocked, back on a network, or Muninn opened: ask for what's waiting at once instead of at the next
+     * check. Dead connections are found and replaced within seconds; with nothing live, the inbox is read now.
+     * [opened]: Muninn itself was opened, which catches up even with "Only when open".
+     */
+    fun catchUp(opened: Boolean = false) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { catchUp(opened) }; return }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - caughtUpAt < CATCH_UP_GAP_MS) return
+        if (!opened && check == PowerLogic.Check.OPEN) return
+        caughtUpAt = now
+        try {
+            app.nostr.reconnectNow()
+            if (!app.nostr.listening()) app.nostr.checkInbox()
+            // Anything of mine still waiting goes again now, so their phone says "Delivered" sooner.
+            if (app.ready.value) app.chat.retryAllNow()
+        } catch (_: Exception) {}
+    }
+
+    /** How a message from [key] that just arrived is shown (see [PowerLogic.alert]). */
+    fun alert(key: String): PowerLogic.Alert = PowerLogic.alert(inputs(), isRightAway(key))
+
     /** Charging (or a TV, which always is). */
     fun charging(): Boolean {
         val battery = try { app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) } catch (_: Exception) { null }
@@ -167,8 +225,11 @@ class Power(private val app: Muninn) {
     }
 
     fun install() {
+        // The battery report counts the connection's checks, wake-ups and reconnects. An alarm that woke the
+        // phone also looks whether the conversation window has ended (a timer alone stops while it sleeps).
+        app.nostr.counted = { kind -> countNet(kind); if (kind == Nostr.WAKE) main.post { refresh() } }
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityStarted(a: Activity) { started++; activity() }
+            override fun onActivityStarted(a: Activity) { started++; activity(); catchUp(opened = true) }
             override fun onActivityStopped(a: Activity) { started = (started - 1).coerceAtLeast(0); refresh() }
             override fun onActivityCreated(a: Activity, b: Bundle?) {}
             override fun onActivityResumed(a: Activity) {}
@@ -184,16 +245,21 @@ class Power(private val app: Muninn) {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             // Do Not Disturb turned on or off: quiet hours follow it.
             addAction(android.app.NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
+            // Unlocked: catch up at once.
+            addAction(Intent.ACTION_USER_PRESENT)
         }
         try {
             ContextCompat.registerReceiver(app, object : BroadcastReceiver() {
-                override fun onReceive(c: Context?, i: Intent?) { refresh() }
+                override fun onReceive(c: Context?, i: Intent?) {
+                    if (i?.action == Intent.ACTION_USER_PRESENT) catchUp()
+                    refresh()
+                }
             }, f, ContextCompat.RECEIVER_NOT_EXPORTED)
         } catch (_: Exception) {}
         // Network changes: reconnect to the relays at once, and know whether this is Wi-Fi.
         try {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) { app.nostr.reconnectNow() }
+                override fun onAvailable(network: Network) { app.nostr.reconnectNow(); caughtUpAt = 0L; catchUp() }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     val w = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
                     if (w != onWifi) { onWifi = w; main.post { refresh() } }
@@ -216,6 +282,17 @@ class Power(private val app: Muninn) {
                 .collect { sharing = it; refresh() }
         }
         scope.launch { filesOpen.collect { refresh() } }
+        // The "Always right away" list: whether anyone is on it is kept outside the vault too, so the connection
+        // stays right while Muninn is locked.
+        val ra = RightAway({ app.vault.read(java.io.File(app.filesDir, "rightaway.json")) },
+            { app.vault.write(java.io.File(app.filesDir, "rightaway.json"), it) })
+        rightAway = ra
+        scope.launch {
+            combine(app.chat.folders.all, ra.all) { _, _ -> rightAwayKeys().isNotEmpty() }
+                .collect { if (it != prefs.getBoolean(RIGHT_AWAY_ANY, false)) prefs.edit().putBoolean(RIGHT_AWAY_ANY, it).apply(); refresh() }
+        }
+        // A message sent from this phone opens the conversation window (one that arrives does so in Muninn).
+        scope.launch { app.chat.sends.collect { talk() } }
         applied?.let { radios(it) }
     }
 
@@ -237,6 +314,7 @@ class Power(private val app: Muninn) {
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
             battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),
             idleMs = if (started > 0) 0 else idle, adaptive = adaptive,
+            rightAway = prefs.getBoolean(RIGHT_AWAY_ANY, false), talking = talking(),
         )
     }
 
@@ -258,16 +336,21 @@ class Power(private val app: Muninn) {
     // ------------------------------------------------------------------ battery report (Settings)
 
     /**
-     * Today so far: time fully connected, time saving (two relays), and resting (nothing live, so nothing
-     * running: the rest of the day); background checks made; data Muninn has used since the phone started.
+     * Today so far: time open on screen or charging (costs the connection nothing worth counting), fully connected
+     * in the background (a conversation, a call, Battery saver off), on the one light connection, and resting
+     * (nothing live: the rest of the day); the connection's checks, the wake-ups among them and reconnects;
+     * background inbox checks; a rough share of the battery; data Muninn has used since the phone started.
      */
-    data class Report(val connectedMs: Long, val savingMs: Long, val restingMs: Long, val checks: Int, val dataBytes: Long?)
+    data class Report(val openMs: Long, val connectedMs: Long, val savingMs: Long, val restingMs: Long, val checks: Int,
+                      val pings: Int, val wakeups: Int, val reconnects: Int, val costPercent: Double, val dataBytes: Long?)
 
     private var countedSince = System.currentTimeMillis()
     private var countedKind = -1
 
+    /** 0 fully connected in the background, 1 the one light connection, 2 nothing live, 3 open on screen or charging. */
     private fun kindOf(p: PowerLogic.Plan): Int = when {
         p.relays == 0 -> 2
+        p.why == PowerLogic.Why.OPEN || p.why == PowerLogic.Why.PLUGGED || p.why == PowerLogic.Why.KIDS_TV -> 3
         p.why == PowerLogic.Why.SCREEN_OFF || p.why == PowerLogic.Why.BACKGROUND || p.why == PowerLogic.Why.BATTERY_SAVER -> 1
         else -> 0
     }
@@ -279,13 +362,15 @@ class Power(private val app: Muninn) {
         val newDay = prefs.getString("reportDay", "") != today
         if (newDay) {
             e.putString("reportDay", today).putInt("reportChecks", 0)
+            for (k in NET_KEYS) e.putInt(k, 0)
             countedSince = maxOf(countedSince, midnight(now))
         }
         var connected = if (newDay) 0L else prefs.getLong("reportConnected", 0)
         var saving = if (newDay) 0L else prefs.getLong("reportSaving", 0)
+        var open = if (newDay) 0L else prefs.getLong("reportOpen", 0)
         val spent = (now - countedSince).coerceAtLeast(0)
-        when (countedKind) { 0 -> connected += spent; 1 -> saving += spent }
-        e.putLong("reportConnected", connected).putLong("reportSaving", saving).apply()
+        when (countedKind) { 0 -> connected += spent; 1 -> saving += spent; 3 -> open += spent }
+        e.putLong("reportConnected", connected).putLong("reportSaving", saving).putLong("reportOpen", open).apply()
         countedSince = now; countedKind = next
     }
 
@@ -299,16 +384,27 @@ class Power(private val app: Muninn) {
         prefs.edit().putInt("reportChecks", prefs.getInt("reportChecks", 0) + 1).apply()
     }
 
+    /** The connection checked its relays, an alarm woke the phone for it, or it connected again ([Nostr.counted]). */
+    @Synchronized private fun countNet(kind: String) {
+        val key = when (kind) { Nostr.PING -> NET_KEYS[0]; Nostr.WAKE -> NET_KEYS[1]; else -> NET_KEYS[2] }
+        count(System.currentTimeMillis(), countedKind)   // a new day starts the counts over
+        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).apply()
+    }
+
     fun report(): Report {
         val now = System.currentTimeMillis()
         count(now, countedKind)
         val connected = prefs.getLong("reportConnected", 0)
         val saving = prefs.getLong("reportSaving", 0)
+        val open = prefs.getLong("reportOpen", 0)
+        val wakeups = prefs.getInt(NET_KEYS[1], 0)
+        val reconnects = prefs.getInt(NET_KEYS[2], 0)
         val uid = android.os.Process.myUid()
         val rx = android.net.TrafficStats.getUidRxBytes(uid)
         val tx = android.net.TrafficStats.getUidTxBytes(uid)
         val data = if (rx < 0 || tx < 0) null else rx + tx
-        return Report(connected, saving, (now - midnight(now) - connected - saving).coerceAtLeast(0), prefs.getInt("reportChecks", 0), data)
+        return Report(open, connected, saving, (now - midnight(now) - open - connected - saving).coerceAtLeast(0), prefs.getInt("reportChecks", 0),
+            prefs.getInt(NET_KEYS[0], 0), wakeups, reconnects, PowerLogic.costPercent(connected, saving, wakeups, reconnects), data)
     }
 
     private val onTheHour = Runnable { refresh() }
@@ -344,6 +440,15 @@ class Power(private val app: Muninn) {
             WorkManager.getInstance(app).enqueueUniqueWork("inbox-now", ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<InboxWorker>().setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
         } catch (_: Exception) {}
+    }
+
+    companion object {
+        /** The starting folder the "Always right away" list follows. */
+        const val FAMILY = "Family"
+        private const val RIGHT_AWAY_ANY = "rightAwayAny"
+        /** Unlocking over and over doesn't catch up each time. */
+        private const val CATCH_UP_GAP_MS = 20_000L
+        private val NET_KEYS = listOf("reportPings", "reportWakeups", "reportReconnects")
     }
 
     private fun radios(p: PowerLogic.Plan) {

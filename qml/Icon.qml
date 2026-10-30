@@ -49,7 +49,16 @@ Item {
         "thread": "M4 5h16v10H9l-5 4z M8 9h8 M8 12h5",
         "search": "M11 4a7 7 0 1 0 0.01 0 M20 20l-3.5-3.5",
         "close": "M5 5l14 14 M19 5L5 19",
-        "down": "M5 9l7 7 7-7"
+        "down": "M5 9l7 7 7-7",
+        // The desktop panels (0.94).
+        "sidebar": "M3 5h18v14H3z M9 5v14",
+        "headphones": "M4 16v-4a8 8 0 0 1 16 0v4 M4 14h3v6H4z M17 14h3v6h-3z",
+        "deafened": "M4 16v-4a8 8 0 0 1 16 0v4 M4 14h3v6H4z M17 14h3v6h-3z M3 3l18 18",
+        "micoff": "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3 M3 3l18 18",
+        "video": "M3 7h12v10H3z M15 11l6-3v8l-6-3z",
+        "keyboard": "M3 7h18v10H3z M6.5 10.5h1 M10 10.5h1 M13.5 10.5h1 M17 10.5h1 M7 14h10",
+        "moon": "M19 14.5A8 8 0 1 1 9.5 5a6.5 6.5 0 0 0 9.5 9.5z",
+        "screen": "M3 5h18v11H3z M8 20h8 M12 16v4"
     })
 
     Shape {

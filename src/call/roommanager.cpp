@@ -297,10 +297,46 @@ void RoomManager::leave()
 
 void RoomManager::toggleMute()
 {
+    // Unmuting while deafened turns both off, like taking the headphones back off.
+    if (m_muted && m_deaf) {
+        m_deaf = false;
+        m_mutedByDeaf = false;
+    }
     m_muted = !m_muted;
     for (const Peer &p : std::as_const(m_peers))
         if (p.s)
             p.s->setMuted(m_muted);
+    Q_EMIT changed();
+}
+
+void RoomManager::toggleDeafen()
+{
+    m_deaf = !m_deaf;
+    if (m_deaf && !m_muted) {
+        toggleMute();
+        m_mutedByDeaf = true;
+    } else if (!m_deaf && m_mutedByDeaf) {
+        m_mutedByDeaf = false;
+        if (m_muted)
+            toggleMute();
+    }
+    Q_EMIT changed();
+}
+
+void RoomManager::setPushToTalk(bool on)
+{
+    if (on == m_ptt)
+        return;
+    m_ptt = on;
+    m_talking = false;
+    Q_EMIT changed();
+}
+
+void RoomManager::setTalking(bool on)
+{
+    if (on == m_talking)
+        return;
+    m_talking = on;
     Q_EMIT changed();
 }
 
@@ -449,6 +485,9 @@ void RoomManager::mix(qint16 *pcm)
         for (int i = 0; i < AudioDsp::kFrame; ++i)
             acc[i] += one[i];
     }
+    // Deafened: every frame is still taken (so the buffers keep pace), and none is played.
+    if (m_deaf)
+        std::fill(acc, acc + AudioDsp::kFrame, 0);
     for (int i = 0; i < AudioDsp::kFrame; ++i)
         pcm[i] = qint16(std::clamp(acc[i], -32768, 32767));
 }
@@ -458,8 +497,13 @@ void RoomManager::onMic(const QByteArray &pcm)
     if (pcm.size() != AudioDsp::kFrame * 2)
         return;
     const qint16 *frame = reinterpret_cast<const qint16 *>(pcm.constData());
+    // Push to talk with the key up: silence goes out instead (no mute message on every press).
+    static const qint16 silence[AudioDsp::kFrame] = {};
+    const bool held = !m_ptt || m_talking;
+    if (!held)
+        frame = silence;
     const bool was = m_mySpeaking.on();
-    if (m_mySpeaking.frame(m_muted ? -100.0 : AudioDsp::levelDb(frame, AudioDsp::kFrame)) != was)
+    if (m_mySpeaking.frame(m_muted || !held ? -100.0 : AudioDsp::levelDb(frame, AudioDsp::kFrame)) != was)
         Q_EMIT changed();
     // Every peer's media gets every frame, muted or not, so their timestamps keep pace; muted
     // media sends no audio (5.5).

@@ -6,6 +6,7 @@
 #include <QString>
 #include <QTimer>
 #include <QVariant>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -79,6 +80,8 @@ public:
     QString backupFolder() const;
     // Writes huginn-backup-YYYY-MM-DD.mbk to Documents. Answers with done("backup", ok, message).
     Q_INVOKABLE void backup(const QString &password);
+    // Called first: Chat drops what is past each chat's message limit, so the backup never holds it.
+    std::function<void()> beforeBackup;
     // The .mbk files in Documents, newest first: [{ name, detail, url }] (url is the full path).
     Q_INVOKABLE QVariantList backups() const;
     // Checks the password and reads the backup into memory; done("open", ok, message). Nothing

@@ -46,7 +46,7 @@ Rectangle {
 
     function setArgs(a) {
         tour = !!a.tour
-        zone = a.zone || "channels"
+        zone = a.zone || (Theme.listShown || a.voice ? "channels" : "messages")
         sel = -1
         viewing = ""
         shownCode = ""
@@ -73,7 +73,7 @@ Rectangle {
     // ------------------------------------------------------------- what's shown
     readonly property var tourInfo: ({
         g: gid, name: gid === "tour-family" ? "Family" : gid === "tour-folk" ? "Folk" : "Gaming Crew", amAdmin: true, amOwner: true, readOnly: false, count: 6,
-        channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 1 },
+        channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 2, mentions: 1 },
                    { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Lounge", type: "voice", unread: 0 },
                    { id: "r", name: "Raid night", type: "voice", unread: 0 }],
         members: [{ key: "me", name: Chat.username, owner: true, admin: true, me: true, contact: false, route: "" },
@@ -89,18 +89,27 @@ Rectangle {
     readonly property var channels: info.channels || []
     readonly property var members: info.members || []
     readonly property var channel: channels.find(c => c.id === channelId) || { id: "main", name: "general", type: "text" }
-    // The channel column: headers, then text channels, then voice rooms.
+    // The channel column: the TEXT category, then VOICE (voice rooms and group calls). A click (or A)
+    // on a category folds it away, keeping only the open channel, the room you're in and rooms with
+    // people in them; a folded category adds up its unread messages and mentions.
+    property var folded: ({})
+    function foldCat(cat) { const f = Object.assign({}, folded); f[gid + "/" + cat] = !f[gid + "/" + cat]; folded = f }
     readonly property var rows: {
-        const out = [{ kind: "header", text: "TEXT" }]
-        channels.filter(c => c.type === "text").forEach(c => out.push(Object.assign({ kind: "channel" }, c)))
-        const voice = channels.filter(c => c.type === "voice")
+        const out = []
+        const add = (cat, text, list) => {
+            const shut = !!folded[gid + "/" + cat]
+            const kept = shut ? list.filter(c => c.id === channelId && cat === "text" || (cat === "voice" && (Rooms.isIn(gid, c.id) || roomPeople(c.id).length > 0))) : list
+            out.push({ kind: "header", text: text, cat: cat, folded: shut,
+                       unread: shut ? list.filter(c => kept.indexOf(c) < 0).reduce((n, c) => n + (c.unread || 0), 0) : 0,
+                       mentions: shut ? list.filter(c => kept.indexOf(c) < 0).reduce((n, c) => n + (c.mentions || 0), 0) : 0 })
+            kept.forEach(c => out.push(c))
+        }
+        add("text", "TEXT", channels.filter(c => c.type === "text").map(c => Object.assign({ kind: "channel" }, c)))
+        const voice = channels.filter(c => c.type === "voice").map(c => Object.assign({ kind: "channel" }, c))
         // Group calls going on in this group show with the voice rooms, while anyone is in them.
         const calls = isTour || locked ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
-        if (voice.length || calls.length) {
-            out.push({ kind: "header", text: "VOICE" })
-            voice.forEach(c => out.push(Object.assign({ kind: "channel" }, c)))
-            calls.forEach(c => out.push({ kind: "channel", type: "voice", id: c.ch, name: "Group call", unread: 0, call: true }))
-        }
+        calls.forEach(c => voice.push({ kind: "channel", type: "voice", id: c.ch, name: "Group call", unread: 0, call: true }))
+        if (voice.length) add("voice", "VOICE", voice)
         return out
     }
     // Who's in a voice room or group call right now: [{name, speaking}] (the tour shows how it looks).
@@ -137,7 +146,7 @@ Rectangle {
         if (m.receipt) return " · " + m.receipt
         return m.state === "sent" ? " · Sent" : m.state === "sending" ? " · Sending" : ""
     }
-    function selectable(i) { return rows[i] && rows[i].kind === "channel" }
+    function selectable(i) { return !!rows[i] && (rows[i].kind === "channel" || rows[i].kind === "header") }
 
     onChatKeyChanged: {
         sel = -1; replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; if (side === "thread") side = ""
@@ -158,11 +167,16 @@ Rectangle {
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
 
     // ============================================================= channel column
+    // The desktop can hide the channel list (Ctrl+Shift+L); the controller still opens it with Left.
+    readonly property bool listHidden: !chanCol.visible
+    readonly property bool membersVisible: memberCol.visible
     Rectangle {
         id: chanCol
+        visible: Theme.listShown || page.zone === "channels"
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(260)
+        anchors.bottomMargin: Ui.dock
+        width: visible ? Theme.listWidth : 0
         color: Theme.column
 
         PageHeader { id: chanHead; width: parent.width; title: page.locked ? "Locked" : (page.info.name || "Group") }
@@ -190,15 +204,43 @@ Rectangle {
                 readonly property bool here: !header && (voice ? Rooms.inRoom && Rooms.group === page.gid && Rooms.room === modelData.id : modelData.id === page.channelId)
                 readonly property var people: header ? [] : page.roomPeople(modelData.id)
                 width: chanList.width
-                height: header ? Theme.px(index === 0 ? 26 : 40) : Theme.px(Theme.desktop ? 40 : 48) + (people.length ? Theme.px(36) : 0)
-                Text {
+                height: header ? Theme.px(index === 0 ? 30 : 42) : Theme.px(Theme.desktop ? 40 : 48) + (people.length ? Theme.px(36) : 0)
+                // A category: its name, a fold arrow, and what a folded one hides that's new.
+                Rectangle {
                     visible: rowItem.header
                     anchors.bottom: parent.bottom
-                    anchors.bottomMargin: Theme.px(6)
-                    x: Theme.px(10)
-                    text: modelData.text || ""
-                    color: Theme.textMuted
-                    font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
+                    width: parent.width
+                    height: Theme.px(28)
+                    radius: Theme.px(6)
+                    color: rowItem.on ? Theme.tile : "transparent"
+                    border.width: rowItem.on ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: (modelData.cat === "voice" ? "Voice rooms" : "Text channels") + (modelData.folded ? ", folded" : "")
+                    Accessible.onPressAction: page.foldCat(modelData.cat)
+                    Icon {
+                        id: foldIcon
+                        x: Theme.px(4)
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "down"; size: Theme.px(12); lineWidth: 2
+                        rotation: modelData.folded ? -90 : 0
+                        color: catHover.hovered ? Theme.text : Theme.textMuted
+                    }
+                    Text {
+                        anchors.left: foldIcon.right; anchors.leftMargin: Theme.px(4)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.text || ""
+                        color: catHover.hovered ? Theme.text : Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
+                    }
+                    CountBadge {
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        unread: modelData.unread || 0
+                        mentions: modelData.mentions || 0
+                    }
+                    HoverHandler { id: catHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: { page.zone = "channels"; page.chRow = index; page.foldCat(modelData.cat) } }
                 }
                 Rectangle {
                     id: chanTile
@@ -228,13 +270,13 @@ Rectangle {
                         color: rowItem.on || rowItem.here || modelData.unread > 0 ? Theme.text : Theme.textSoft
                         font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread > 0 ? Font.Bold : Font.Normal
                     }
-                    Rectangle {
+                    // Unread: a dot; @mentions of me: how many, like Discord.
+                    CountBadge {
                         id: unreadDot
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Theme.px(8); height: width; radius: width / 2
-                        color: Theme.accent
-                        visible: modelData.unread > 0
+                        unread: rowItem.header ? 0 : modelData.unread || 0
+                        mentions: rowItem.header ? 0 : modelData.mentions || 0
                     }
                     HoverHandler { id: chanHover }
                     TapHandler { onTapped: { page.zone = "channels"; page.chRow = index; page.openRow() } }
@@ -290,7 +332,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceStrip.width - Theme.px(50)
                     elide: Text.ElideRight
-                    text: Chat.netStatus + " · encrypted"
+                    text: Chat.netStatus + " · encrypted" + (isTour || !exists ? "" : " · " + (Chat.groups, Chat.groupLimit(gid)).days + " days")
                     color: Theme.textSoft
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
@@ -321,6 +363,9 @@ Rectangle {
                 fontSize: 15
                 onClicked: page.side = page.side === "pins" ? "" : "pins"
             }
+            // The desktop: show or hide the channel list and the member list.
+            PaneToggle { which: "list" }
+            PaneToggle { which: "members"; visible: Theme.desktop && page.membersFit && !page.locked && page.exists }
         }
 
         Item {
@@ -529,86 +574,47 @@ Rectangle {
         }
     }
 
+    component CountBadge: Rectangle {
+        property int unread: 0
+        property int mentions: 0
+        visible: unread > 0 || mentions > 0
+        width: mentions > 0 ? Math.max(height, countText.implicitWidth + Theme.px(10)) : Theme.px(8)
+        height: mentions > 0 ? Theme.px(18) : Theme.px(8)
+        radius: height / 2
+        color: mentions > 0 ? Theme.danger : Theme.accent
+        Accessible.role: Accessible.StaticText
+        Accessible.name: mentions > 0 ? mentions + (mentions === 1 ? " mention" : " mentions") : unread + " unread"
+        Text {
+            id: countText
+            visible: parent.mentions > 0
+            anchors.centerIn: parent
+            text: parent.mentions > 99 ? "99+" : String(parent.mentions)
+            color: Theme.ground
+            font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold
+        }
+    }
+
     // ============================================================= member column (folds away when narrow)
-    Rectangle {
+    // Who's in a voice room, online, idle or neither (MemberList.qml). The desktop can hide it
+    // (Ctrl+Shift+U); the controller still reaches it with Right.
+    MemberList {
         id: memberCol
-        visible: page.membersFit && !page.locked && page.exists && !sidePanel.visible
+        host: page
+        visible: page.membersFit && !page.locked && page.exists && !sidePanel.visible && (Theme.membersShown || page.zone === "members")
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(230)
-        color: Theme.column
-        readonly property var admins: page.members.filter(m => m.admin)
-        readonly property var rest: page.members.filter(m => !m.admin)
-        // Rows in the order they're drawn, for the controller.
-        readonly property var ordered: admins.concat(rest)
-
-        Flickable {
-            id: memFlick
-            anchors.fill: parent
-            anchors.topMargin: Theme.px(18)
-            anchors.leftMargin: Theme.px(14)
-            anchors.rightMargin: Theme.px(10)
-            contentHeight: memCol.implicitHeight
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            Column {
-                id: memCol
-                width: parent.width
-                spacing: Theme.px(4)
-                MemberHeader { text: "ADMINS · " + memberCol.admins.length }
-                Repeater { model: memberCol.admins; MemberRow { person: modelData; at: index } }
-                Item { width: 1; height: Theme.px(8) }
-                MemberHeader { visible: memberCol.rest.length > 0; text: "MEMBERS · " + memberCol.rest.length }
-                Repeater { model: memberCol.rest; MemberRow { person: modelData; at: memberCol.admins.length + index } }
-            }
-        }
+        width: Theme.memberWidth
     }
-    component MemberHeader: Text {
-        color: Theme.textMuted
-        bottomPadding: Theme.px(4)
-        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
-    }
-    component MemberRow: Rectangle {
-        id: mr
-        property var person: ({})
-        property int at: 0
-        readonly property bool on: page.active && page.zone === "members" && page.memRow === at
-        readonly property bool reachable: !!person.me || (person.route || "") !== ""
-        width: memCol.width
-        height: Theme.px(42)
-        radius: Theme.px(8)
-        color: on ? Theme.tile : memHover.hovered ? Theme.raised : "transparent"
-        border.width: on ? Theme.focusWidth : 0
-        border.color: Theme.accent
-        Accessible.role: Accessible.ListItem
-        Accessible.name: (person.name || "") + (person.owner ? ", owner" : person.admin ? ", admin" : "")
-        Rectangle {
-            id: mface
-            anchors.left: parent.left; anchors.leftMargin: Theme.px(6)
-            anchors.verticalCenter: parent.verticalCenter
-            width: Theme.px(32); height: width; radius: width / 2
-            color: mr.reachable ? Theme.avatar(mr.person.name, mr.person.me).bg : Theme.raised
-            Text { anchors.centerIn: parent; text: page.initial(mr.person.name); color: mr.reachable ? Theme.avatar(mr.person.name, mr.person.me).fg : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
-        }
-        Text {
-            anchors.left: mface.right; anchors.leftMargin: Theme.px(10)
-            anchors.right: crown.left; anchors.rightMargin: Theme.px(4)
-            anchors.verticalCenter: parent.verticalCenter
-            elide: Text.ElideRight
-            text: (mr.person.name || "") + (mr.person.me ? " (you)" : "")
-            color: mr.reachable ? Theme.text : Theme.textMuted
-            font.family: Theme.body; font.pixelSize: Theme.fs(15)
-        }
-        Icon {
-            id: crown
-            visible: !!mr.person.owner
-            anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
-            anchors.verticalCenter: parent.verticalCenter
-            name: "crown"; size: Theme.px(15); color: Theme.accent
-        }
-        HoverHandler { id: memHover }
-        TapHandler { onTapped: { page.zone = "members"; page.memRow = mr.at; page.memberOptions(mr.person) } }
+    // A member's profile card, with what an admin can do with them behind Group options.
+    function showMember(m) {
+        if (!m) return
+        const status = memberCol.statusOf(m)
+        const extra = { group: info.name, admin: !!m.admin, owner: !!m.owner, room: status === "voice" ? memberCol.voiceIn[m.me ? "me" : m.key] : "" }
+        if (isTour) { extra.tour = true; extra.status = status }
+        else if (!m.me && !readOnly) extra.g = gid   // "Add as a contact" (cap i1) for someone who isn't one yet
+        else if (!m.me && !readOnly && info.amAdmin) extra.more = () => page.memberOptions(m)
+        Ui.showProfile(m.me ? "me" : m.key, m.name, extra)
     }
 
     // ============================================================= the group code
@@ -647,6 +653,7 @@ Rectangle {
     function tell(result, done) { if (result === "") { if (done) Ui.say(done) } else Ui.say(result, true) }
     function openRow() {
         const r = rows[chRow]
+        if (r && r.kind === "header") { foldCat(r.cat); return }
         if (!r || r.kind !== "channel") return
         if (r.type === "voice") { roomAction(r); return }
         channelId = r.id
@@ -659,10 +666,12 @@ Rectangle {
         if (Rooms.isIn(gid, r.id)) {
             Ui.pickFrom(r.name, [{ header: Rooms.statusText, items: [
                 { name: Rooms.muted ? "Unmute" : "Mute", url: "mute" },
+                { name: Rooms.deafened ? "Undeafen" : "Deafen", detail: "Deafened, you hear nobody and you're muted", url: "deafen" },
                 { name: Rooms.sharing ? "Stop sharing your screen" : "Share your screen", detail: Rooms.canShare ? "Everyone in the room sees it, encrypted to each" : "Not in this build", url: "share" },
                 { name: "Output: " + Rooms.outputName, detail: "Choose again for the next one", url: "output" },
                 { name: "Leave " + r.name, detail: "You stop hearing and being heard", url: "leave" }] }], a => {
                 if (a === "mute") Rooms.toggleMute()
+                else if (a === "deafen") Rooms.toggleDeafen()
                 else if (a === "share" && Rooms.canShare) Rooms.toggleShare()
                 else if (a === "output") Rooms.nextOutput()
                 else if (a === "leave") Rooms.leave()
@@ -699,16 +708,10 @@ Rectangle {
         Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "Encrypted for everyone in " + info.name, "", "Send",
                t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" }, false, true)
     }
+    // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
     function pickPicture() {
         if (readOnly || isTour) return
-        const pics = Chat.recentPictures()
-        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
-        const key = chatKey
-        Ui.pickFrom("Send a picture to #" + channel.name + " (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-            Ui.pickFrom("Send this picture", [{ header: "", items: [
-                { name: "Send", detail: "Quick anywhere", url: "normal" },
-                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi", url: "hd" }] }],
-                q => { if (Chat.sendPhoto(key, path, q === "hd")) Ui.say("Sending the picture.") }))
+        more.attach()
     }
     function showCode() {
         if (isTour) return
@@ -747,7 +750,9 @@ Rectangle {
             group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
         }
         if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
-        if (!readOnly) group.push({ name: "Send a picture", detail: "To #" + channel.name, url: "picture" })
+        if (!isTour) group.push({ name: "Messages", detail: limitDetail(), url: "limit" })
+        if (!readOnly) group.push({ name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" })
+        if (!isTour) chans.push({ name: "Shared in #" + channel.name, detail: "Photos, videos and links", url: "shared" })
         if (readOnly) group.push({ name: "Delete from Huginn", detail: "Its messages and photos on this device", url: "forget" })
         else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
         return [{ header: "Calls", items: calls }, { header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
@@ -765,6 +770,8 @@ Rectangle {
             else if (a === "code") showCode()
             else if (a === "members") pickMember()
             else if (a === "pins") openPins()
+            else if (a === "shared") more.openShared()
+            else if (a === "limit") pickGroupLimit()
             else if (a === "picture") pickPicture()
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
@@ -789,6 +796,24 @@ Rectangle {
             }
         }
     }
+    // Cap d1: the group's type and how many days messages stay, the same for everyone. Only admins change it.
+    function limitDetail() {
+        const l = Chat.groupLimit(gid)
+        return l.kindName + " group · messages disappear after " + l.days + " days"
+    }
+    function pickGroupLimit() {
+        const g = gid, l = Chat.groupLimit(g)
+        const older = l.older.length ? "Older apps keep messages until they update: " + l.older.join(", ") : ""
+        if (readOnly || !info.amAdmin) { Ui.say(limitDetail() + (older ? ". " + older + "." : ".")); return }
+        const items = [{ name: "Standard · 7 days", detail: l.kind === "" ? "Now" : "", url: ":7" }]
+        for (const k of ["family", "work"])
+            for (const d of l.choices)
+                items.push({ name: (k === "family" ? "Family" : "Work") + " · " + d + " days", detail: l.kind === k && l.days === d ? "Now" : "", url: k + ":" + d })
+        Ui.pickFrom("Messages in " + info.name, [{ header: older || "The same for everyone in the group", items: items }], a => {
+            const p = a.split(":")
+            tell(Chat.setGroupLimit(g, p[0], Number(p[1])), "Messages in " + info.name + " now disappear after " + p[1] + " days.")
+        })
+    }
     function pickMember() {
         Ui.pickFrom("Members of " + info.name, [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.key,
             detail: m.owner ? "Owner" : m.admin ? "Admin" : m.contact ? "Contact" : "In this group" })) }],
@@ -798,6 +823,7 @@ Rectangle {
         if (!m || isTour) return
         const items = []
         if (m.contact && !m.me) items.push({ name: "Message", detail: "Your direct chat", url: "dm" })
+        if (!m.contact && !m.me && !readOnly) items.push({ name: "Add as a contact", detail: "They're asked too; once both say yes you can message directly", url: "add" })
         if (!readOnly && !m.me && info.amAdmin) {
             if (!m.admin) items.push({ name: "Make admin", detail: "They can invite, remove and change the group too", url: "admin" })
             else if (info.amOwner && !m.owner) items.push({ name: "Take admin away", url: "unadmin" })
@@ -808,6 +834,7 @@ Rectangle {
         const g = gid
         Ui.pickFrom(m.name, [{ header: m.owner ? "Owner" : m.admin ? "Admin" : "", items: items }], a => {
             if (a === "dm") Ui.openPage("dms", { open: m.key })
+            else if (a === "add") PeopleActions.askToAdd(g, m)
             else if (a === "admin") tell(Chat.setAdmin(g, m.key, true), m.name + " is an admin now.")
             else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin anymore.")
             else if (a === "owner") Ui.sure("Hand " + info.name + " to " + m.name + "?", "They become the owner. You stay an admin, and can leave after.", "Hand it over", () => tell(Chat.handOver(g, m.key), m.name + " owns the group now."), false, true)
@@ -922,22 +949,7 @@ Rectangle {
         Chat.setPinned(chatKey, id, on)
         Ui.say(on ? "Pinned. Pins are only on this computer." : "Unpinned.")
     }
-    function dropFiles(urls) {
-        const others = []
-        let pics = 0
-        for (let i = 0; i < urls.length; i++) {
-            const path = Chat.localPath(urls[i])
-            if (path === "") continue
-            if (Chat.isPicture(path)) { if (Chat.sendPhoto(chatKey, path, false)) pics++ }
-            else others.push(urls[i])
-        }
-        if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
-        if (others.length) {
-            Transfer.share(others)
-            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
-            Ui.openPage("files", {})
-        }
-    }
+    function dropFiles(urls) { more.dropFiles(urls) }
     function pickReaction(m) {
         const g = gid, id = m.id
         const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
@@ -956,7 +968,7 @@ Rectangle {
         if (i >= 0 && i < rows.length) chRow = i
     }
     // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
-    function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : zone === "members" ? memFlick : chanList }
+    function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : zone === "members" ? memberCol.flick : chanList }
     // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
     function boxButton(box, b) {
@@ -971,7 +983,7 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" },
-                       { name: "Send a picture", detail: "To #" + channel.name, url: "picture" }]
+                       { name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" }]
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
@@ -1005,6 +1017,7 @@ Rectangle {
             if (b === "a") { Ui.openPage("dms", {}); return true }
             return false
         }
+        if (more.busy) return more.handleButton(b)
         if (shownCode !== "") {
             if (b === "a") { Chat.copyText(shownCode); Ui.say("Code copied. It works for an hour.") }
             else if (b === "x") showCode()
@@ -1034,7 +1047,7 @@ Rectangle {
         case "right":
             if (zone === "channels") zone = "messages"
             else if (zone === "messages" && sidePanel.visible) { const n = sideMsgs().length; zone = "side"; sideSel = !n ? -1 : side === "thread" ? n - 1 : 0 }
-            else if (zone === "messages" && memberCol.visible && memCount > 0) { zone = "members"; memRow = Math.min(memRow, memCount - 1) }
+            else if (zone === "messages" && page.membersFit && !sidePanel.visible && memCount > 0) { zone = "members"; memRow = Math.min(memRow, memCount - 1) }
             return true
         case "left":
             if (zone === "channels") return false
@@ -1043,7 +1056,7 @@ Rectangle {
             return true
         case "a":
             if (zone === "channels") openRow()
-            else if (zone === "members") memberOptions(memberCol.ordered[memRow])
+            else if (zone === "members") showMember(memberCol.ordered[memRow])
             else write()
             return true
         case "x":
@@ -1076,5 +1089,15 @@ Rectangle {
             if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (!page.locked && !page.isTour && page.gid !== "") Chat.markGroupRead(page.gid, page.channelId) }
             else Vault.away()
         }
+    }
+
+    // Cap m2: albums full size, video messages, the camera, polls and the Shared page.
+    property alias more: moreLayer
+    MoreLayer {
+        id: moreLayer
+        visible: !page.locked
+        where: page.locked || page.readOnly || page.isTour || page.gid === "" ? "" : page.chatKey
+        title: "#" + (page.channel.name || "")
+        tour: page.isTour
     }
 }

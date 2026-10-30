@@ -43,6 +43,7 @@ These two carry your messages. **Muninn** runs on Android phones, tablets and Go
 - **Works with or without the internet.** Close by, your devices talk over Wi-Fi and Bluetooth. Apart, sealed messages travel through free public relays that can't see who sent them or what they say.
 - **Your address stays yours.** Calls with people you haven't chosen to trust go through a relay, so they never see your IP address.
 - **Locked on your device.** A pattern or password opens the app, and everything it keeps is encrypted. Panic lock locks it all in a moment.
+- **Messages don't stay forever.** Chats delete messages, photos, voice clips, videos and files after 7 days on every device, and backups leave them out. Family and Work groups, and people in your Family or Work folder, can keep them up to 30 days.
 - **Free and open.** GPL-3.0, no ads, no analytics, no tracking.
 
 ## On every screen you have
@@ -63,25 +64,28 @@ Muninn can also turn a Google TV into a simple screen your kids can use to reach
 <p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, talk, or send a quick message"></p>
 <p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, apps"></p>
 
-## What's new in 0.93
+## What's new in 0.94
 
 | | |
 |---|---|
-| **Albums and a camera inside the app** | Pick several photos at once and they arrive as one album. Take photos with Muninn's own camera, with a front/back flip, without the picture landing in your gallery. |
-| **Video messages** | Record up to a minute, watch it back, then choose Send or Discard. Nothing is sent until you tap Send. |
-| **Polls** | Ask a question with up to 10 answers, in a chat or a group, and see who voted for what. |
-| **Link previews** | A link shows its title and picture. Your phone makes the preview, so the other person's phone never visits the site. Turn it off under Settings › Privacy. |
-| **Shared photos, videos and links** | Every chat has a page with everything that's been shared in it. |
-| **Requests in their own list** | People who have your code but aren't contacts yet, introductions and group invites wait under Requests until you say yes. |
-| **Easier to add the people you trust** | Invite links that work once, introductions ("Mom wants to introduce you to Grandma", and you both say yes), an offer to add the people in your Family group, tapping phones together, and 4 matching emoji to check it's really them. |
-| **Files over the internet** | Send a file of up to 4 GB straight to a contact's phone, wherever they are. Small files can also go in pieces through the free relays. Files never go through our server. |
-| **Group video** | Turn on the camera in a voice room with up to 4 people. Video goes straight between phones; anyone who can't connect directly stays on voice. |
-| **Linked devices** | Use your chats on a tablet or second phone. It shows your phone's chats and sends through it while your phone is on and online. |
-| **Mute, archive and mark as unread** | Hold a chat for the options. Rename people from the chat list too, and give each chat its own color. |
-| **Refresh buttons** | Check for new messages, or look for phones nearby again, with one tap. |
-| **Kinder to your battery** | Follow Do Not Disturb, check less when nothing has happened for a while, a mobile data saver, and backups and Kids' TV updates only while charging. |
-| **Folk** | The third starting folder is now called Folk. |
-| **No location prompt** | Muninn no longer asks for location on Android 13 and newer. Older phones are asked only when you turn on Nearby. |
+| **Messages on time, without Google** | In the background Muninn now keeps one light connection to the healthiest relay, checked about every 5 minutes and lined up with the phone's other wake-ups, and swaps to another relay at once if it stops answering. It never falls back to checking every 15 minutes or every hour unless you pick that in Settings. |
+| **Always right away** | Your Family folder to start with, and anyone you add (Settings › Notifications, or a chat's menu). A low battery, quiet hours and checking less never hold their messages back. During quiet hours everyone else's messages arrive without a sound. |
+| **Replies come at once** | For about 5 minutes after you send or get a message, Muninn stays fully connected so the conversation flows. |
+| **Catches up instantly** | When you unlock the phone, when it joins a network, and when you open Muninn. |
+| **Honest ticks** | "Delivered" means it reached their phone. Until then it says "Waiting for Anna's phone". In groups, the message's menu shows whose phones have it and whose it's waiting for. |
+| **No more hourly floor** | A very low battery or a long quiet spell now checks the one connection every 10 minutes instead of dropping to hourly checks. |
+| **Unrestricted background use** | The Finish setting up card explains why it helps and asks for it in one tap. |
+| **Battery report shows the connection's cost** | Time on the light connection, checks and wake-ups, reconnects, and a rough share of the battery. |
+| **Messages disappear after 7 days** | Every chat, 1:1 and group, deletes messages older than 7 days on every phone and computer: text, photos, voice clips, videos, files, polls and previews. Encrypted backups leave them out too. Chats you already have get the limit the first time 0.94 starts, and the chat list says so once. |
+| **Family and Work keep longer** | A group's admins pick its type: Standard, Family or Work. Family and Work groups can keep messages up to 30 days, the same for everyone. In a 1:1 chat with someone in your Family or Work folder you can pick up to 30 days; if you two pick differently, the shorter one counts. |
+| **Older apps** | Someone on an older version keeps messages until they update; the chat's info says so. Your side still deletes them on time. |
+| **Huginn looks and feels like Discord on a PC** | Drag the edges between panels to resize them, hide the list or the member list, compact or cozy messages with their own text size, and Dark, True black or Light themes with any accent color (Settings › Appearance). |
+| **Who's around** | A group's member list shows who's online, idle or in a voice room. Click a name for their profile card: Message, Call, Video, a nickname, a note only you see, and their folders. |
+| **Voice panel** | In a voice room on a PC, who you're with, Mute, Deafen and Leave sit at the foot of the list. Push to talk: hold a key you choose (Settings › Calls). |
+| **Unread and mentions** | Groups and channels show a dot for anything new and a number for @mentions of you. Fold a group's Text or Voice category away. |
+| **Keyboard shortcuts** | Ctrl+/ lists them all. |
+| **Huginn catches up** | On a PC: albums, video messages, polls, link previews and the Shared page; invite links, introductions, the Family group offer and the 4 matching emoji; files of up to 4 GB over the internet; and Linked devices, both as your phone's companion and as the phone others link to. |
+| **Signed updates** | Every download is signed with the project's own key, and both apps refuse an update that isn't. Huginn.exe also gets extra Windows protections (Control Flow Guard, CET). |
 
 Every earlier release is in [What changed](docs/CHANGELOG.md).
 
@@ -100,6 +104,8 @@ https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk
 cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
+Every download is signed with the project's own release key, and both apps refuse an update that isn't. Windows may still warn about an unknown publisher the first time: choose **More info**, then **Run anyway**. How to check a download yourself: [Releases and how to check them](docs/releases.md).
+
 Huginn also works with a game controller or TV remote: see [Using Huginn with a controller](docs/controller.md).
 
 ## For developers
@@ -111,22 +117,14 @@ tools/get-fonts.sh
 flatpak-builder --user --install --force-clean build packaging/io.github.ravenor907.Huginn.json
 ```
 
-Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`. The wire protocol is in [docs/protocol-0.6.md](docs/protocol-0.6.md).
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-
-Windows builds (Huginn.exe in Huginn-Windows.zip) are built from this repository by GitHub Actions and signed only after a person approves each release.
-
-- Committers and reviewers: [Ravenor907](https://github.com/Ravenor907)
-- Approvers: [Ravenor907](https://github.com/Ravenor907)
+Windows builds with CMake, Qt 6.10 and vcpkg (see the Windows job in `.github/workflows/build.yml`). Muninn builds with Gradle from `android/`. The wire protocol is in [docs/protocol-0.6.md](docs/protocol-0.6.md). Found a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Privacy
 
 Huginn and Muninn collect nothing about you: no accounts, no analytics, no ads, no tracking. This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. What leaves your device, and only to do what you asked:
 
 - **Messages, photos and voice clips** are end-to-end encrypted and sealed before they reach the public Nostr relays that carry them. Relays see only a sealed mailbox id and the IP address that connects to them.
+- **How long messages stay**: 7 days, or up to 30 in Family and Work chats, then they are deleted on every device. Each app tells the other how long it keeps a chat, next to the list of features it understands.
 - **Calls** go through the Cloudflare call relay ([Cloudflare privacy policy](https://www.cloudflare.com/privacypolicy/)), or straight between devices for contacts you trust. Audio and video are end-to-end encrypted. The relay login service keeps no logs.
 - **Updates** are downloaded from GitHub ([GitHub privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement)).
 - **Files over the internet** go straight between the two devices, end-to-end encrypted. To find a direct path, each device asks a public STUN server (Cloudflare's) for its own internet address; the file itself never goes through it. Small files that can't go straight travel in sealed pieces through the Nostr relays.

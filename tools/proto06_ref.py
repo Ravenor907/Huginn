@@ -111,7 +111,13 @@ def verify(pub_b64, domain, obj):
 def check_state(s):
     """Shape and limits; raises ValueError. Does not check the signature."""
     need = {"g", "v", "owner", "by", "name", "admins", "members", "channels", "ts", "sig"}
-    if set(s) != need: raise ValueError("fields")
+    # Cap d1 (section 16): "kind" and "days" may be there too, only for a Family or Work group.
+    if not need <= set(s) <= need | {"kind", "days"}: raise ValueError("fields")
+    if "kind" in s and s["kind"] not in ("family", "work"): raise ValueError("kind")
+    if "days" in s:
+        d = s["days"]
+        if "kind" not in s: raise ValueError("days without kind")
+        if not isinstance(d, int) or isinstance(d, bool) or not 7 <= d <= 30: raise ValueError("days")
     if len(b64url_d(s["g"])) != 16 or len(s["g"]) != 22: raise ValueError("group id")
     if not isinstance(s["v"], int) or isinstance(s["v"], bool) or s["v"] < 1: raise ValueError("version")
     check_text(s["name"], MAX_NAME)

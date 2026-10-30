@@ -44,6 +44,8 @@ class Groups(
         fun hasM1(k: String): Boolean = false
         /** Their app said "m2": votes and video messages go to them (section 12). */
         fun hasM2(k: String): Boolean = false
+        /** Their app said "d1": it takes a Family or Work group's state (section 16.2). */
+        fun hasD1(k: String): Boolean = false
     }
 
     /** One envelope to one member. [env] is the envelope id (2.3); [id] the logical id it's confirmed by. */
@@ -88,6 +90,8 @@ class Groups(
             "owner" -> if (!s.has(a) || a == s.owner) null else s.copy(owner = a, admins = (s.admins + a).toSortedSet().toList())
             "remove", "leave" -> if (!s.has(a) || a == s.owner) null else s.copy(members = s.members.filter { it.k != a }, admins = s.admins - a)
             "join", "add" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
+            // Cap d1: a = "family", "work" or "" (Standard), b = the days.
+            "limit" -> Limits.withLimit(s, a, b.toIntOrNull() ?: Limits.DEFAULT).takeIf { it != s }
             else -> null
         }
     }
@@ -149,12 +153,12 @@ class Groups(
     // ------------------------------------------------------------------ making and changing groups
 
     /** A new group: me as owner, only admin and only member, the main channel. Nothing is sent. */
-    fun create(name: String): String? = act {
+    fun create(name: String, kind: String = "", days: Int = Limits.DEFAULT): String? = act {
         val n = clean(name, Proto06.MAX_NAME)
         if (n.isBlank()) return@act null
         val g = Proto06.newGroupId()
-        val s = State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
-            listOf(Channel(MAIN, "general", "text")), now()).signedBy(keys.private, me)
+        val s = Limits.withLimit(State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
+            listOf(Channel(MAIN, "general", "text")), now()), kind.takeIf { it in Limits.KINDS } ?: "", days).signedBy(keys.private, me)
         Proto06.check(s)
         groups[g] = Group(s)
         g
@@ -168,6 +172,8 @@ class Groups(
     fun setAdmin(g: String, k: String, on: Boolean) = change(g, Change(if (on) "admin" else "unadmin", k))
     fun handOver(g: String, k: String) = change(g, Change("owner", k))
     fun remove(g: String, k: String) = change(g, Change("remove", k))
+    /** Cap d1: the group's type ("family", "work" or "" for Standard) and how many days messages stay (7 to 30). */
+    fun setLimit(g: String, kind: String, days: Int) = change(g, Change("limit", kind.takeIf { it in Limits.KINDS } ?: "", days.toString()))
 
     /** Null when done (or nothing to do), else why not, in words for the person. */
     private fun change(g: String, c: Change): String? = act { changeLocked(g, c) }
@@ -181,6 +187,13 @@ class Groups(
         if ((c.op == "rename" && c.b.isBlank()) || (c.op == "addch" && c.b.isBlank())) return "Give it a name."
         if (c.op == "addch" && cur.channels.size >= Proto06.MAX_CHANNELS) return "A group has at most ${Proto06.MAX_CHANNELS} channels."
         if ((c.op == "join" || c.op == "add") && cur.members.size >= Proto06.MAX_MEMBERS) return "${cur.name} is full (${Proto06.MAX_MEMBERS} people)."
+        // An app without d1 refuses a Family or Work group's state (section 16.2).
+        if ((c.op == "join" || c.op == "add") && cur.kind.isNotEmpty() && !host.hasD1(c.a))
+            return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} Muninn or Huginn 0.94 to be in a ${Limits.kindName(cur.kind)} group."
+        if (c.op == "limit" && c.a.isNotEmpty() && cur.kind.isEmpty()) {
+            val old = cur.members.filter { it.k != me && !host.hasD1(it.k) }
+            if (old.isNotEmpty()) return "Everyone needs Muninn or Huginn 0.94 first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
+        }
         val changed = c.applyTo(cur) ?: return null
         val next = try {
             changed.copy(v = cur.v + 1, ts = now()).signedBy(keys.private, me).also { Proto06.check(it) }
@@ -207,6 +220,7 @@ class Groups(
         if (grp.readOnly || !s.isAdmin(me)) return@act "Only admins can invite people."
         if (s.has(k)) return@act null
         if (s.members.size >= Proto06.MAX_MEMBERS) return@act "${s.name} is full (${Proto06.MAX_MEMBERS} people)."
+        if (s.kind.isNotEmpty() && !host.hasD1(k)) return@act "They need Muninn or Huginn 0.94 to be in a ${Limits.kindName(s.kind)} group."
         val t = Token(Proto06.newToken(), g, now() / 1000 + Proto06.CODE_MS / 1000, false)
         tokens.add(t)
         val id = Proto06.newLogicalId()
@@ -758,13 +772,27 @@ class Groups(
         answered.entries.removeIf { t - it.value > 10 * 60_000 }
     }
 
-    /** Messages older than [cutoff] go (the "Delete messages after" setting). */
-    fun pruneOlder(cutoff: Long) = act {
-        for (g in chats.keys.toList()) {
-            val (old, keep) = chats[g]!!.partition { it.time < cutoff }
-            if (old.isEmpty()) continue
-            old.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo) }
-            chats[g] = keep
+    /**
+     * Messages past each group's limit go (cap d1, section 16), with their photos, voice, videos, votes and previews.
+     * [cutoff] gives the oldest time that stays for a limit in days (the "delete sooner" setting may make it later).
+     * Their ids are kept as deleted, so a late copy doesn't come back. Nothing if nothing is that old.
+     */
+    fun pruneOlder(cutoff: (Int) -> Long) {
+        val due = synchronized(lock) {
+            chats.any { (g, l) -> val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT); l.any { it.time < c } }
+        }
+        if (!due) return
+        act {
+            val t = now()
+            for (g in chats.keys.toList()) {
+                val c = cutoff(groups[g]?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT)
+                val (old, keep) = chats[g]!!.partition { it.time < c }
+                if (old.isEmpty()) continue
+                old.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo); deleted[it.id] = t }
+                val ids = old.map { it.id }.toSet()
+                outs.removeAll { (it.g == g && it.id in ids).also { x -> if (x) host.drop(it.env) } }
+                chats[g] = keep
+            }
         }
     }
 

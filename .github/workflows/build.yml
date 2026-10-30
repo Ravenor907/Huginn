@@ -98,6 +98,7 @@ jobs:
           run timeout 150 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --wifi-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --release-sig-selftest "$PWD/tests/release-sig-vectors.json"
           exit $bad
       - name: Draw the project banner (both ravens)
         if: always()
@@ -171,6 +172,20 @@ jobs:
           else
             echo "No release key here: the release APK is signed with the test key."
           fi
+      - name: A file signed like a release, with a throwaway key (ReleaseSigTest checks it)
+        run: |
+          t="$RUNNER_TEMP/release-sig"; mkdir -p "$t"
+          openssl genpkey -algorithm ed25519 -out "$t/k.pem"
+          head -c 300000 /dev/urandom > "$t/test.bin"
+          openssl pkeyutl -sign -inkey "$t/k.pem" -rawin -in "$t/test.bin" -out "$t/test.bin.sig"
+          openssl pkey -in "$t/k.pem" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n' > "$t/test.pub.hex"
+          rm "$t/k.pem"
+          echo "RELEASE_SIG_CI=$t" >> "$GITHUB_ENV"
+          # Both apps carry the project's public key (docs/release-key.pem); they must carry the same one.
+          key=$(openssl pkey -pubin -in docs/release-key.pem -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+          for f in src/updater.cpp android/app/src/main/java/io/github/ravenor907/muninn/update/Updater.kt; do
+            grep -q "\"$key\"" "$f" || { echo "::error title=Release key::$f doesn't carry the key in docs/release-key.pem ($key)"; exit 1; }
+          done
       - name: Unit tests and APKs
         working-directory: android
         env:
@@ -265,8 +280,6 @@ jobs:
     env:
       VCPKG_PACKAGES: openssl opus sdl2 libqrencode libvpx
       VCPKG_DEFAULT_TRIPLET: x64-windows
-      # Code signing through SignPath (docs/windows-signing.md): only once its secrets are set, and only on main.
-      SIGNPATH_ON: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
       - name: Fonts
@@ -386,36 +399,6 @@ jobs:
           echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
       - name: Nothing in Huginn.exe that looks like malware (scripts, hidden windows, suspended processes)
         run: python tools/check-windows-binary.py dist/Huginn
-      # Optional code signing (docs/windows-signing.md). Skipped until the SignPath secrets exist.
-      - name: Hand the folder to SignPath
-        id: unsigned
-        if: env.SIGNPATH_ON == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: huginn-windows-unsigned
-          path: dist/Huginn
-      - name: Sign Huginn.exe (SignPath Foundation)
-        if: env.SIGNPATH_ON == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Huginn-Muninn' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_SLUG || 'huginn-windows' }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: dist/Huginn-signed
-      - name: Use the signed files
-        if: env.SIGNPATH_ON == 'true'
-        shell: pwsh
-        run: |
-          if (-not (Test-Path dist/Huginn-signed/Huginn.exe)) { Write-Output "::error title=Signing::SignPath gave back no Huginn.exe"; exit 1 }
-          Remove-Item -Recurse -Force dist/Huginn
-          Move-Item dist/Huginn-signed dist/Huginn
-          $sig = Get-AuthenticodeSignature dist/Huginn/Huginn.exe
-          Write-Output "::notice title=Signed::Huginn.exe: $($sig.Status) by $($sig.SignerCertificate.Subject)"
-          if ($sig.Status -ne 'Valid') { exit 1 }
       - name: Zip it, then unpack the zip and test exactly what ships
         shell: pwsh
         run: |
@@ -474,6 +457,24 @@ jobs:
           run timeout 150 "$h" --wifi-selftest
           run "$h" --backup-selftest
           run "$h" --call-selftest tests/proto06-vectors.json
+          run "$h" --release-sig-selftest tests/release-sig-vectors.json
+          # A file signed the way the release job signs (openssl, Ed25519 over the raw bytes) with a throwaway key.
+          t="$RUNNER_TEMP/release-sig"; mkdir -p "$t"
+          openssl genpkey -algorithm ed25519 -out "$t/k.pem"
+          head -c 200000 /dev/urandom > "$t/test.bin"
+          openssl pkeyutl -sign -inkey "$t/k.pem" -rawin -in "$t/test.bin" -out "$t/test.bin.sig"
+          openssl pkey -in "$t/k.pem" -pubout -outform DER | tail -c 32 > "$t/test.pub"
+          python - "$t" > tests/release-sig-fresh.json <<'PY'
+          import json, os, sys
+          t = sys.argv[1]
+          rd = lambda n: open(os.path.join(t, n), "rb").read()
+          pub, msg, sig = rd("test.pub").hex(), rd("test.bin"), rd("test.bin.sig").hex()
+          bad = bytearray(msg); bad[777] ^= 1
+          print(json.dumps({"cases": [
+              {"name": "openssl, throwaway key", "public": pub, "message": msg.hex(), "signature": sig, "valid": True},
+              {"name": "openssl, file changed", "public": pub, "message": bytes(bad).hex(), "signature": sig, "valid": False}]}))
+          PY
+          run "$h" --release-sig-selftest tests/release-sig-fresh.json
           if [ -f dist/Huginn/Huginn-start.log ] && [ $bad -ne 0 ]; then
             e=$(tail -n 30 dist/Huginn/Huginn-start.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=Huginn-start.log::$e"
@@ -575,6 +576,18 @@ jobs:
           start env QT_QPA_PLATFORM=offscreen wine "$h" -platform offscreen
           start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
           exit $bad
+      - name: Update signature self-test under Wine
+        # After the start test: run just before it, this quick self-test left the Wine prefix in a state that
+        # made the next start on the virtual X screen crash in Qt's text layout (Wine prefix state, not Huginn).
+        run: |
+          wineserver -k 2>/dev/null || true
+          timeout 300 wine dist/Huginn/Huginn.exe --release-sig-selftest tests/release-sig-vectors.json > t.log 2>&1 || s=$?
+          cat t.log
+          wineserver -k 2>/dev/null || true
+          if [ "${s:-0}" -ne 0 ]; then
+            echo "::error title=Wine self-test failed: --release-sig-selftest (exit $s)::$(tail -n 10 t.log | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
       - name: Publish the Wine logs to the ci-wine branch
         # Only a convenience for reading logs: a failed push must not fail the Wine job or block a release.
         continue-on-error: true
@@ -624,6 +637,11 @@ jobs:
     needs: [flatpak, muninn, muninn-screens, windows, wine, relay]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # GitHub build attestations: proof each download was built here, from this commit.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - name: Version
@@ -656,6 +674,45 @@ jobs:
           for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
             if [ -f "$f" ]; then sha256sum "$f" > "$f.sha256"; cat "$f.sha256"; fi
           done
+      - name: Sign every download with the project's release key (each app refuses an update without it)
+        if: steps.v.outputs.new == '1'
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          # <file>.sig is the Ed25519 signature of the file's raw bytes (docs/releases.md). Never ship unsigned:
+          # Huginn and Muninn 0.94 and newer would refuse the update anyway.
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error title=Release signing key missing::Add the secret RELEASE_SIGNING_KEY (Settings > Secrets and variables > Actions), then re-run this job. Nothing was released."
+            exit 1
+          fi
+          k="$RUNNER_TEMP/release-key.pem"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" | tr -d '\r' > "$k"
+          if ! openssl pkey -in "$k" -pubout -outform DER > "$RUNNER_TEMP/release-pub.der" 2>/dev/null; then
+            rm -f "$k"
+            echo "::error title=Release signing key unreadable::RELEASE_SIGNING_KEY isn't a whole Ed25519 private key (PEM). Paste it again, BEGIN and END lines included."
+            exit 1
+          fi
+          # It must be the private half of the key both apps carry (docs/release-key.pem).
+          if ! openssl pkey -pubin -in docs/release-key.pem -outform DER | cmp -s - "$RUNNER_TEMP/release-pub.der"; then
+            rm -f "$k"
+            echo "::error title=Wrong release signing key::RELEASE_SIGNING_KEY doesn't match docs/release-key.pem, so the apps would refuse this release."
+            exit 1
+          fi
+          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
+            [ -f "$f" ] || continue
+            openssl pkeyutl -sign -inkey "$k" -rawin -in "$f" -out "$f.sig"
+            openssl pkeyutl -verify -pubin -inkey docs/release-key.pem -rawin -in "$f" -sigfile "$f.sig" \
+              || { rm -f "$k"; echo "::error title=Signing failed::$f.sig doesn't check out"; exit 1; }
+          done
+          rm -f "$k"
+      - name: Build attestations (gh attestation verify, see docs/releases.md)
+        if: steps.v.outputs.new == '1'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            Huginn-Windows.zip
+            Huginn.flatpak
+            Muninn.apk
       - uses: softprops/action-gh-release@v2
         if: steps.v.outputs.new == '1'
         with:
@@ -665,10 +722,13 @@ jobs:
           files: |
             Huginn.flatpak
             Huginn.flatpak.sha256
+            Huginn.flatpak.sig
             Huginn-Windows.zip
             Huginn-Windows.zip.sha256
+            Huginn-Windows.zip.sig
             Muninn.apk
             Muninn.apk.sha256
+            Muninn.apk.sig
           fail_on_unmatched_files: false
           prerelease: false
           make_latest: true
@@ -677,4 +737,5 @@ jobs:
             **Huginn** (Linux and SteamOS): Huginn.flatpak. Installed copies update themselves at launch.
             **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
-            Code signing policy and privacy: https://github.com/Ravenor907/Huginn-Muninn#code-signing-policy
+            Every file is signed with the project's release key (the .sig beside it) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/docs/releases.md
+            Privacy: https://github.com/Ravenor907/Huginn-Muninn#privacy

@@ -12,7 +12,7 @@ Rectangle {
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
     property int row: 0
-    property string zone: "list"      // "list", "messages" or "side" (a thread or the pins)
+    property string zone: Theme.listShown ? "list" : "messages"   // "list", "messages" or "side" (a thread or the pins)
     // A person being dragged with the mouse (from which section), and where they'd land: the line
     // (in the list's content), the section, and whether that's onto a folder's header.
     property string dragKey: ""
@@ -79,6 +79,9 @@ Rectangle {
                                                   detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
+        // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
+        PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true }, e)))
+        if (Linked.phone.key) out.push({ kind: "mirror", name: Linked.phone.name + "'s chats", detail: "Your linked phone, while it's online" })
         const chats = Chat.chats, byKey = {}
         chats.forEach(c => byKey[c.key] = c)
         const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route, section: section })
@@ -167,7 +170,15 @@ Rectangle {
         // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
         if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
     }
-    Component.onCompleted: Vault.back()   // away more than a minute: locked again
+    Component.onCompleted: { Vault.back(); showLimitsNote() }   // away more than a minute: locked again
+    // 0.94 (cap d1): told once, on the chat list, that messages don't stay forever any more.
+    function showLimitsNote() {
+        if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
+        Chat.dismissLimitsNote()
+        Ui.sure("Messages now disappear after 7 days", "Every chat deletes messages, pictures and voice clips older than its limit, on every device. "
+                + "Family and Work groups, and people in your Family or Work folder, can keep them up to 30 days.", "Got it", () => {})
+    }
+    Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
     Connections {
         target: Qt.application
@@ -178,11 +189,15 @@ Rectangle {
     }
 
     // ============================================================= middle column: the list
+    // The desktop can hide it (Ctrl+Shift+L); the controller still opens it with Left.
+    readonly property bool listHidden: !middle.visible
     Rectangle {
         id: middle
+        visible: Theme.listShown || page.zone === "list" || lock.visible
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Theme.px(270)
+        anchors.bottomMargin: Ui.dock
+        width: visible ? Theme.listWidth : 0
         color: Theme.column
 
         PageHeader {
@@ -524,6 +539,8 @@ Rectangle {
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
             }
+            // The desktop: show or hide the list of conversations.
+            PaneToggle { which: "list" }
             // Pinned messages of this chat (only on this computer).
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
@@ -578,10 +595,17 @@ Rectangle {
                 }
             }
 
+            // Files going straight to or from them (cap f1).
+            FileStrip {
+                id: fileStrip
+                peer: page.tour ? "" : page.openKey
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
+            }
             ListView {
                 id: list
                 anchors.top: keep.visible ? keep.bottom : parent.top
-                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: fileStrip.visible ? fileStrip.top : parent.bottom
                 anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: Theme.px(6)
@@ -676,7 +700,7 @@ Rectangle {
                             onJump: page.jumpTo(modelData.re)
                         }
                         Image {
-                            visible: !!modelData.photo && !modelData.voice && !modelData.unsent
+                            visible: !!modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album
                             width: Theme.px(280); height: Theme.px(170)
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
@@ -696,13 +720,15 @@ Rectangle {
                             }
                         }
                         Text {
-                            visible: !modelData.photo || !!modelData.unsent
+                            visible: (!modelData.photo || !!modelData.unsent) && !(modelData.pollView && !modelData.unsent)
                             width: parent.width; wrapMode: Text.Wrap
                             textFormat: Text.PlainText
                             text: modelData.unsent ? (modelData.mine ? "Message deleted by you" : "Message deleted by " + modelData.unsent) : (modelData.text || "")
                             font.italic: !!modelData.unsent
                             color: modelData.unsent ? Theme.textFaint : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
                         }
+                        // Cap m2: an album, a video message, a poll or a link preview.
+                        MoreParts { width: parent.width; host: page; m: modelData; where: page.openKey }
                         Reactions {
                             width: parent.width
                             list: modelData.rxList || []
@@ -751,7 +777,7 @@ Rectangle {
                             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
                             if (button === Qt.RightButton) page.options()
-                            else if (modelData.photo && !modelData.voice && !modelData.unsent) page.viewing = modelData.photo
+                            else if (modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album) page.viewing = modelData.photo
                         }
                     }
                     TapHandler {
@@ -1005,7 +1031,7 @@ Rectangle {
             if (c.expired) { Ui.say("That code has expired (they last an hour). Ask them for a new one.", true); return }
             const r = Chat.replaces(t)
             const added = () => { Ui.say(c.name + " added. Say hi: they'll get it wherever they are."); openKey = c.key; zone = "messages" }
-            if (!r.key) { Chat.addContact(t); added(); return }
+            if (!r.key) { Chat.addContact(t); PeopleActions.added(t, c.key); added(); return }
             // A contact with this inbox or name already has another security key: never replaced quietly.
             if (r.sameInbox) {
                 Ui.sure(r.name + "'s security key changed?", "This code has " + r.name + "'s inbox but a different security key. Use it only if you've checked with them "
@@ -1027,19 +1053,24 @@ Rectangle {
         Ui.ask("Rename " + Chat.realNameOf(k), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(k), "Save",
                t => { Chat.setNickname(k, t); Ui.say(t.trim() === "" ? "Back to " + Chat.realNameOf(k) + "." : "Renamed to " + Chat.nameOf(k) + ".") }, false, true)
     }
-    function checkCode(k) {
-        const n = Chat.nameOf(k)
-        Ui.sure("Check it's really " + n, "Code: " + Chat.codeWith(k) + "\n\nAsk them to open your chat and tap Check code. If their screen shows the same code, nobody is in between.",
-                "It matches", () => Chat.verify(k))
+    function checkCode(k) { PeopleActions.checkCode(k) }
+    // Cap f1 and i1 additions to a 1:1 chat's options.
+    function moreItems() {
+        if (openKey === "" || !Chat.isContact(openKey)) return []
+        return [{ name: "Send a file", detail: "Straight to them over the internet, up to 4 GB", url: "file" },
+                { name: "Introduce to someone", detail: "Two of your contacts meet, if both say yes", url: "introduce" }]
     }
     function conversationItems() {
         const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs Muninn or Huginn 0.6", url: "call" }]
         if (Calls.canVideo(openKey)) items.push({ name: "Video call", detail: "Encrypted, 480p through the relay to save data", url: "video" })
         items.push(
-                       { name: "Send a picture", detail: "Location and camera details are removed", url: "picture" },
+                       { name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" },
+                       { name: "Shared photos, videos and links", detail: "Everything sent in this chat", url: "shared" },
                        { name: "Rename", detail: "A name only you see. Now: " + openName, url: "rename" },
                        { name: "Folders", detail: folderNames(openKey), url: "folders" },
                        { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
+        moreItems().forEach(i => items.push(i))
+        if (Chat.isContact(openKey)) items.push({ name: "Messages", detail: "Disappear after " + Chat.chatDays(openKey) + " days", url: "limit" })
         if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
         return items
     }
@@ -1057,7 +1088,22 @@ Rectangle {
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
+            else if (a === "file") PeopleActions.sendFile(k)
+            else if (a === "introduce") PeopleActions.introduce(k)
+            else if (a === "shared") more.openShared()
+            else if (a === "limit") pickLimit(k)
         })
+    }
+    // Cap d1: how long this chat keeps messages. My choice only for someone in my Family or Work folder; the shorter one counts.
+    function pickLimit(k) {
+        const l = Chat.limitInfo(k), n = Chat.nameOf(k)
+        const note = l.older ? n + "'s app is older: it keeps messages until it updates" : l.d1 ? n + " keeps them " + l.theirs + " days. The shorter one counts" : ""
+        if (!l.close) {
+            Ui.say("Messages disappear after " + l.days + " days. Put " + n + " in your Family or Work folder to keep them up to 30." + (note ? " " + note + "." : ""))
+            return
+        }
+        Ui.pickFrom("Keep messages with " + n, [{ header: note, items: l.choices.map(d => ({ name: d + " days", detail: d === l.mine ? "Your choice now" : "", url: String(d) })) }],
+                    d => { Chat.setKeep(k, Number(d)); Ui.say("Messages with " + n + " now disappear after " + Chat.chatDays(k) + " days.") })
     }
     // ------------------------------------------------------------- folders (only on this computer)
     function folderNames(k) {
@@ -1107,7 +1153,9 @@ Rectangle {
         if (e.kind === "chat") { personOptions(e); return }
         if (e.kind === "folder") { folderOptions(e); return }
         if (e.kind === "trash") { openTrash(); return }
-        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" }] }], a => { if (a === "folder") newFolder("") })
+        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" },
+                                                             { name: "One-time invite link", detail: "Works for the first person who uses it, within a day", url: "once" }] }],
+                    a => { if (a === "folder") newFolder(""); else if (a === "once") PeopleActions.inviteLink() })
     }
     function personOptions(e) {
         const k = e.key, section = e.section, keys = sectionKeys(section), at = keys.indexOf(k)
@@ -1270,20 +1318,13 @@ Rectangle {
             Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
             return
         case "stranger": Chat.meet(e.key, e.name); openKey = e.key; zone = "messages"; return
+        case "intro": PeopleActions.answer(e); return
+        case "mirror": mirror.open(); return
         default: openKey = e.key; zone = "messages"
         }
     }
-    function pickPicture() {
-        if (openKey === "") { Ui.say("Pictures go to one person. Open a chat first.", true); return }
-        const pics = Chat.recentPictures()
-        if (!pics.length) { Ui.say("No pictures found. Steam screenshots and the Pictures folder show up here.", true); return }
-        const k = openKey
-        Ui.pickFrom("Send a picture (location and camera details are removed)", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-            Ui.pickFrom("Send this picture", [{ header: "", items: [
-                { name: "Send", detail: "Quick anywhere", url: "normal" },
-                { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
-                q => { if (Chat.sendPhoto(k, path, q === "hd")) Ui.say("Sending the picture.") }))
-    }
+    // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
+    function pickPicture() { more.attach() }
     // A controller: the quick reactions in a list (the emoji panel needs a pointer).
     function pickReaction(m) {
         const k = openKey, id = m.id
@@ -1315,7 +1356,8 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
+        if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", detail: m.file, url: "savefile" })
+        else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", url: "play" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it from both sides; they'll see “Message deleted by " + Chat.username + "”", url: "unsend" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
@@ -1343,8 +1385,12 @@ Rectangle {
             else if (a === "code") checkCode(k)
             else if (a === "folders") pickFolders(k)
             else if (a === "pins") openPins()
+            else if (a === "shared") more.openShared()
             else if (a === "call") startCall()
             else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
+            else if (a === "savefile") PeopleActions.saveFile(k, m)
+            else if (a === "file") PeopleActions.sendFile(k)
+            else if (a === "introduce") PeopleActions.introduce(k)
         })
     }
 
@@ -1436,22 +1482,7 @@ Rectangle {
         newFrom = -1
     }
     // Dropped files: pictures go in the chat; anything else goes to Files, ready to send over the Wi-Fi.
-    function dropFiles(urls) {
-        const others = []
-        let pics = 0
-        for (let i = 0; i < urls.length; i++) {
-            const path = Chat.localPath(urls[i])
-            if (path === "") continue
-            if (Chat.isPicture(path)) { if (Chat.sendPhoto(openKey, path, false)) pics++ }
-            else others.push(urls[i])
-        }
-        if (pics) Ui.say(pics === 1 ? "Sending the picture." : "Sending " + pics + " pictures.")
-        if (others.length) {
-            Transfer.share(others)
-            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
-            Ui.openPage("files", {})
-        }
-    }
+    function dropFiles(urls) { more.dropFiles(urls) }
 
     // The list the left stick scrolls when the pointer isn't showing: the one with the focus.
     function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : listPane }
@@ -1469,13 +1500,14 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: "Pick one with the D-pad", url: "emoji" }]
-        if (openKey !== "") items.push({ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" })
+        if (openKey !== "") items.push({ name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
             else if (a === "picture") pickPicture()
+            else if (a === "file") PeopleActions.sendFile(openKey)
             else if (a === "cancel") box.cancelBanner()
             else if (a === "leave") box.leave()
         })
@@ -1501,6 +1533,8 @@ Rectangle {
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
         if (lock.visible) return lock.handleButton(b)
+        if (mirror.visible) return mirror.handleButton(b)
+        if (more.busy) return more.handleButton(b)
         if (showCode) {
             if (b === "a") { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") }
             else if (b === "x") Chat.newLink()
@@ -1557,8 +1591,20 @@ Rectangle {
         if (b === "y" && Voice.recording && openKey !== "") Voice.finish(openKey)
         return true
     }
+    // A linked phone's chats, over everything (companion side of linked devices).
+    MirrorPanel { id: mirror; anchors.fill: parent; z: 20 }
     Connections {
         target: Voice
         function onErrorChanged() { if (Voice.error !== "") Ui.say(Voice.error, true) }
+    }
+
+    // Cap m2: albums full size, video messages, the camera, polls and the Shared page.
+    property alias more: moreLayer
+    MoreLayer {
+        id: moreLayer
+        visible: !lock.visible
+        where: page.locked ? "" : page.openKey
+        title: page.openName
+        tour: page.tour
     }
 }

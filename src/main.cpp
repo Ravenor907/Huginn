@@ -25,11 +25,20 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include "settings.h"
+#include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "morewire.h"
+#include "linkpreview.h"
+#include "videomsg.h"
+#include "thumbs.h"
+#include "msglimits.h"
 #include "richwire.h"
+#include "filelink.h"
+#include "link.h"
+#include "trust.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -114,6 +123,8 @@ int main(int argc, char *argv[])
     args.addOption(callTest);
     QCommandLineOption wifiTest(QStringLiteral("wifi-selftest"), QStringLiteral("Run on a throwaway profile, receive an encrypted message from a pretend Muninn over the local HTTPS endpoint, raise the call and a notification (for CI), then quit."));
     args.addOption(wifiTest);
+    QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
+    args.addOption(releaseSigTest);
     args.process(app);
     const bool wifiSelf = args.isSet(wifiTest);
     if (wifiSelf)
@@ -132,8 +143,14 @@ int main(int argc, char *argv[])
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
         const bool d = RichWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m1-vectors.json")));
-        return selfTested(a && b && c && d);
+        const bool e = MoreWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("m2-vectors.json")));
+        const bool f = LinkPreview::selfTest();
+        const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
+        const bool h = Trust::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("i1f1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h);
     }
+    if (args.isSet(releaseSigTest))
+        return selfTested(Updater::selfTest(args.value(releaseSigTest)));
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
@@ -196,7 +213,9 @@ int main(int argc, char *argv[])
         return secret;
     }, &app);
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
+    auto *videos = new VideoMsg(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
     auto *cs = new CallSignalHooks(&app);
     cs->onSend = [chat](const QString &k, const QJsonObject &m) { chat->sendCall(k, m); };
@@ -225,6 +244,13 @@ int main(int argc, char *argv[])
     rooms->lacksRooms = [chat](const QString &k) { return chat->lacksRooms(k); };
     rooms->memberName = [chat](const QString &g, const QString &k) { return chat->groupMemberName(g, k); };
     calls->busyElsewhere = [rooms] { return rooms->inRoom(); };
+    // Caps i1 and f1 and linked devices: introductions, files straight between trusted contacts
+    // ("Direct calls" on for each other, as calls decide it) and a phone's companion.
+    auto *trust = new Trust(chat, &app);
+    auto *files = new FileLink(chat, &app);
+    files->trusted = [calls](const QString &k) { return calls->trusted(k); };
+    auto *linked = new Link(chat, &app);
+    chat->setExtras(trust, files, linked);
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
@@ -285,6 +311,10 @@ int main(int argc, char *argv[])
     QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
     QObject::connect(calls, &CallManager::changed, system, awake);
     QObject::connect(rooms, &RoomManager::changed, system, awake);
+    // Push to talk (Settings › Calls): the key is watched only while Huginn is in front.
+    rooms->setPushToTalk(settings->pushToTalk());
+    QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
+    auto *talkKey = new TalkKey(settings, rooms, &app);
 
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
@@ -295,13 +325,19 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Chat", chat);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Vault", vault);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Voice", voice);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Videos", videos);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Ble", ble);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Direct", direct);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Rooms", rooms);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
+    engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(chat));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);

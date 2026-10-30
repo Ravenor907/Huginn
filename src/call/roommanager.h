@@ -41,6 +41,11 @@ class RoomManager : public QObject
     // [{key, name, me, speaking, muted, state}] with me first; state "connecting", "live", "reconnecting".
     Q_PROPERTY(QVariantList people READ people NOTIFY changed)
     Q_PROPERTY(bool muted READ muted NOTIFY changed)
+    // Deafened: nobody is heard here (and the microphone is muted while it lasts).
+    Q_PROPERTY(bool deafened READ deafened NOTIFY changed)
+    // Push to talk (Settings): the microphone only sends while the key is held. talking: held now.
+    Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
+    Q_PROPERTY(bool talking READ talking NOTIFY changed)
     Q_PROPERTY(QString statusText READ statusText NOTIFY changed)
     Q_PROPERTY(int elapsed READ elapsed NOTIFY tick)
     Q_PROPERTY(QString outputName READ outputName NOTIFY changed)
@@ -76,6 +81,10 @@ public:
     QString groupName() const;
     QVariantList people() const;
     bool muted() const { return m_muted; }
+    bool deafened() const { return m_deaf; }
+    bool pushToTalk() const { return m_ptt; }
+    void setPushToTalk(bool on);
+    bool talking() const { return m_talking; }
     QString statusText() const;
     int elapsed() const { return m_clock.isValid() ? int(m_clock.elapsed() / 1000) : 0; }
     QString outputName() const;
@@ -93,6 +102,9 @@ public:
     Q_INVOKABLE QString join(const QString &g, const QString &ch);
     Q_INVOKABLE void leave();
     Q_INVOKABLE void toggleMute();
+    Q_INVOKABLE void toggleDeafen();
+    // The push to talk key went down or up (only while Huginn is in front).
+    Q_INVOKABLE void setTalking(bool on);
     Q_INVOKABLE void nextOutput();
     // Rings keys (all members who can join when empty) into a new group call of g, and joins it.
     Q_INVOKABLE QString callGroup(const QString &g, const QStringList &keys = QStringList());
@@ -147,6 +159,8 @@ private:
     QString m_g, m_ch, m_note, m_endText;
     qint64 m_joinedAt = 0;
     bool m_muted = false;
+    bool m_deaf = false, m_mutedByDeaf = false;
+    bool m_ptt = false, m_talking = false;
     QHash<QString, Peer> m_peers;
     QSet<QString> m_rung, m_declined;
     RoomWire::Presence m_presence;

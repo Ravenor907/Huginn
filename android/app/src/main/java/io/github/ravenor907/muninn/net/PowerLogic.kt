@@ -6,29 +6,38 @@ package io.github.ravenor907.muninn.net
  * relays, Bluetooth, Nearby and Wi-Fi discovery.
  *
  * - Open on screen, in a call, a Kids' TV, plugged in, or Battery saver switched off: fully connected.
- * - Screen off or Muninn in the background: two relays (the healthiest) stay open so messages and
- *   call offers still arrive within seconds, checked together every two minutes so the radio wakes once.
- *   Bluetooth and Nearby go low power and take turns; Wi-Fi discovery slows down (or stops off Wi-Fi).
- * - Android's Battery Saver: like the screen being off (two relays, so calls still ring), with Wi-Fi
+ * - Screen off or Muninn in the background ("Right away"): one light connection. The healthiest relay stays
+ *   open, checked about every 5 minutes (just under the time a mobile network forgets a quiet connection),
+ *   on an alarm Android may line up with other apps' wake-ups. A relay that stops answering is swapped for
+ *   the next healthiest at once. No Google push and no periodic checks instead. Bluetooth and Nearby go low
+ *   power and take turns; Wi-Fi discovery slows down (or stops off Wi-Fi).
+ * - A conversation (a message sent or received in the last [TALK_MS]): every relay and the quick check, so
+ *   replies arrive at once.
+ * - Android's Battery Saver: like the screen being off (one connection, so calls still ring), with Wi-Fi
  *   discovery off.
- * - Doze while Android may cut Muninn's network: no live connections; the 15-minute inbox check picks
- *   messages up.
+ * - Doze while Android may cut Muninn's network (background use not unrestricted): no live connections; the
+ *   15-minute inbox check picks messages up. The Finish setting up card asks for unrestricted use.
  * - Settings › Check for messages "Every 15 minutes" or "Every hour": nothing live while Muninn is closed
  *   (unless charging); the inbox check ([checkEveryMinutes]) picks messages up and old calls show as missed.
- *   "Only when open": nothing at all until Muninn is opened, charging or not.
- * - Low battery (on unless switched off, never while charging): below 30% at most every 15 minutes, below
- *   15% at most every hour. Quiet hours: the mode picked for them, while they last. Whichever saves most wins.
+ *   "Only when open": nothing at all until Muninn is opened, charging or not. These are the only periodic modes.
+ * - Low battery (on unless switched off, never while charging): below 30% close-by scanning rests; below 15%
+ *   the one connection is checked every [LONG_PING_MS] instead of being dropped. Never an hourly floor.
+ * - Quiet hours (and Do Not Disturb, unless switched off): the mode picked for them, while they last. With
+ *   anyone on the "Always right away" list and "Right away" chosen, the connection stays instead, their
+ *   messages ring as usual, and everyone else's arrive quietly ([alert]).
+ * - Check less when it's quiet (on unless switched off, never while charging): after [DROWSY_MS] with nothing
+ *   arriving and Muninn not opened, the one connection is checked every [LONG_PING_MS] (calls still ring), and
+ *   "Every 15 minutes" becomes every 30, then every hour after twice as long.
+ * - The "Always right away" list ([rightAway]: the Family folder to start with, plus or minus anyone): low
+ *   battery, quiet hours and checking less never hold their messages or notifications back. While anyone is
+ *   on it, the one connection keeps its 5-minute check.
  * - Bluetooth and Nearby look for phones close by only while Muninn is open, unless "Find phones close by in
  *   the background" is on. Wi-Fi discovery runs fully only on the Files tab, in a transfer or Direct connect.
- * - Do Not Disturb (or Bedtime mode) counts as quiet hours, unless switched off: Muninn uses the quiet hours mode.
- * - Check less when it's quiet (on unless switched off, never while charging): after [DROWSY_MS] with nothing arriving
- *   and Muninn not opened, the relays kept open in the background are checked every 5 minutes instead of 2 (calls
- *   still ring), and "Every 15 minutes" becomes every 30, then every hour after twice as long.
  */
 object PowerLogic {
     enum class Radio { FULL, LOW, OFF }
 
-    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN }
+    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, TALKING, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN }
 
     /** Settings › Notifications › Check for messages. */
     enum class Check(val key: String, val title: String) {
@@ -36,7 +45,10 @@ object PowerLogic {
         companion object { fun of(key: String?): Check? = entries.firstOrNull { it.key == key } }
     }
 
-    /** How often the background inbox check runs for [c] (0: never, Muninn waits to be opened). */
+    /**
+     * How often the background inbox check runs for [c] (0: never, Muninn waits to be opened). With "Right away"
+     * it only looks whether the live connection is still there (it does nothing while it is).
+     */
     fun checkEveryMinutes(c: Check): Long = when (c) { Check.LIVE, Check.QUARTER -> 15; Check.HOUR -> 60; Check.OPEN -> 0 }
 
     data class Inputs(
@@ -69,6 +81,10 @@ object PowerLogic {
         val idleMs: Long = 0,
         /** Settings › Check less when it's quiet. */
         val adaptive: Boolean = true,
+        /** Someone is on the "Always right away" list. */
+        val rightAway: Boolean = false,
+        /** A message was sent or received in the last [TALK_MS]: the conversation window. */
+        val talking: Boolean = false,
     )
 
     /** Check less when it's quiet: how drowsy Muninn is now (0 awake, 1 after [DROWSY_MS], 2 after twice that). */
@@ -76,6 +92,14 @@ object PowerLogic {
         !i.adaptive || i.plugged || i.kidsTv -> 0
         i.idleMs >= 2 * DROWSY_MS -> 2
         i.idleMs >= DROWSY_MS -> 1
+        else -> 0
+    }
+
+    /** How low the battery is for saving: 0 fine (or charging, or switched off), 1 below [LOW_BATTERY], 2 below [VERY_LOW]. */
+    fun low(i: Inputs): Int = when {
+        !i.lowBatterySave || i.plugged -> 0
+        i.battery < VERY_LOW -> 2
+        i.battery < LOW_BATTERY -> 1
         else -> 0
     }
 
@@ -87,17 +111,23 @@ object PowerLogic {
         return when (drowsy(i)) { 2 -> 60; 1 -> 30; else -> base }
     }
 
-    /** What saves battery right now: the person's choice, quiet hours or a low battery, whichever checks least. */
+    /**
+     * Quiet hours keep the connection instead of their own mode: "Right away" is chosen and someone is on the
+     * "Always right away" list, so their messages must still arrive at once.
+     */
+    fun quietHeld(i: Inputs): Boolean = i.quiet != null && i.rightAway && i.check == Check.LIVE
+
+    /**
+     * The mode in use: the person's choice, or the quiet hours mode while they last, whichever checks least.
+     * A low battery never changes it (it checks the one connection less often instead).
+     */
     fun effective(i: Inputs): Check {
-        val low = when {
-            !i.lowBatterySave || i.plugged -> null
-            i.battery < LOW_HOUR -> Check.HOUR
-            i.battery < LOW_15 -> Check.QUARTER
-            else -> null
-        }
-        return listOfNotNull(i.check, i.quiet, low).maxBy { it.ordinal }
+        val q = i.quiet
+        if (q == null || quietHeld(i)) return i.check
+        return if (q.ordinal > i.check.ordinal) q else i.check
     }
 
+    /** Quiet hours from [from] to [to] (hours of the day; across midnight when [to] is earlier) include [hour]. */
     /** Quiet hours from [from] to [to] (hours of the day; across midnight when [to] is earlier) include [hour]. */
     fun inQuiet(from: Int, to: Int, hour: Int): Boolean = when {
         from == to -> false
@@ -105,12 +135,8 @@ object PowerLogic {
         else -> hour >= from || hour < to
     }
 
-    /** Why [effective] isn't the person's own choice: "battery" or "quiet", else "". */
-    fun because(i: Inputs): String = when (effective(i)) {
-        i.check -> ""
-        i.quiet -> "quiet"
-        else -> "battery"
-    }
+    /** Why [effective] isn't the person's own choice: "quiet", else "". */
+    fun because(i: Inputs): String = if (effective(i) != i.check) "quiet" else ""
 
     /**
      * [relays]: how many relay sockets stay open (null: all of them, 0: none). [pingMs]: how often
@@ -121,25 +147,38 @@ object PowerLogic {
         val label: String get() = label(why) + when (because) {
             "battery" -> " (the battery is low)"; "quiet" -> " (quiet hours)"
             "idle30" -> ". It's been quiet, so every 30 minutes for now"; "idle60" -> ". It's been quiet, so every hour for now"
+            "lowPing" -> ". The battery is low, so the connection is checked every ${LONG_PING_MS / 60_000} minutes"
+            "idlePing" -> ". It's been quiet, so the connection is checked every ${LONG_PING_MS / 60_000} minutes for now"
+            "quietHeld" -> ". Quiet hours: only people on your Always right away list ring"
             else -> ""
         }
     }
 
     const val FAST_PING_MS = 30_000L
-    /** One check for every socket together; Android may run it a little late to batch it with other apps. */
-    const val SLOW_PING_MS = 120_000L
-    /** Quiet for a long while: the sockets kept open in the background are checked this often. */
-    const val DROWSY_PING_MS = 300_000L
+    /**
+     * The one light connection in the background is checked this often: just under the 5 to 10 minutes after
+     * which many mobile networks forget a quiet connection. Android may run it up to [PING_WINDOW_MS] early to
+     * batch it with other apps' wake-ups.
+     */
+    const val AWAY_PING_MS = 300_000L
+    const val PING_WINDOW_MS = 60_000L
+    /** A very low battery or a long quiet spell: the one connection is checked this often instead of being dropped. */
+    const val LONG_PING_MS = 600_000L
     /** Nothing arrived and Muninn not opened for this long: check less (see [drowsy]). */
     const val DROWSY_MS = 3 * 3_600_000L
     /** A socket that hasn't answered a check within this long is dead and is replaced at once. */
     const val ANSWER_MS = 10_000L
-    const val SAVING_RELAYS = 2
-    /** Open on screen: the healthiest three of the relays. Senders post to every relay, so nothing is missed. */
+    /** In the background: one relay socket, not two. Senders post to every relay, so nothing is missed. */
+    const val AWAY_RELAYS = 1
+    /** Open on screen: the healthiest three of the relays. */
     const val OPEN_RELAYS = 3
-    /** Low battery: below these, at most every 15 minutes, then at most every hour. */
-    const val LOW_15 = 30
-    const val LOW_HOUR = 15
+    /** The conversation window: this long after a message is sent or received, every relay and a quick check. */
+    const val TALK_MS = 5 * 60_000L
+    /** The quick check in a conversation: on an alarm too, so it still runs (and the window still ends) while the phone sleeps. */
+    const val TALK_PING_MS = 60_000L
+    /** Low battery: below this, close-by scanning rests; below [VERY_LOW], the connection is checked less. */
+    const val LOW_BATTERY = 30
+    const val VERY_LOW = 15
     /** Bluetooth and Nearby with the screen off: look for this long, then rest until the period is over. */
     const val DUTY_ON_MS = 15_000L
     const val DUTY_PERIOD_MS = 120_000L
@@ -157,30 +196,46 @@ object PowerLogic {
         fun full(w: Why) = Plan(w, null, FAST_PING_MS, Radio.FULL, wifiFull)
         val check = effective(i)
         val why = because(i)
+        // Close-by scanning in the background: only when switched on, and never with the battery low.
+        val scan = i.closeBy && low(i) == 0
+        val (ping, pingWhy) = awayPing(i)
         return when {
             i.inCall -> full(Why.CALL)
             i.kidsTv -> full(Why.KIDS_TV)
             i.foreground -> Plan(Why.OPEN, OPEN_RELAYS, FAST_PING_MS, Radio.FULL, wifiOpen)
             // Nothing in the background, not even on the charger: Muninn catches up when it's opened.
-            check == Check.OPEN -> Plan(Why.ONLY_OPEN, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF, why)
+            check == Check.OPEN -> Plan(Why.ONLY_OPEN, 0, AWAY_PING_MS, Radio.OFF, Radio.OFF, why)
             i.alwaysFull && check == Check.LIVE -> full(Why.ALWAYS)
             i.plugged -> full(Why.PLUGGED)
             // No live connections between the scheduled inbox checks; calls that come in between show as missed.
-            check == Check.QUARTER -> Plan(Why.EVERY_15, 0, SLOW_PING_MS, Radio.OFF, wifiAway,
+            check == Check.QUARTER -> Plan(Why.EVERY_15, 0, AWAY_PING_MS, Radio.OFF, wifiAway,
                 why.ifEmpty { when (drowsy(i)) { 2 -> "idle60"; 1 -> "idle30"; else -> "" } })
-            check == Check.HOUR -> Plan(Why.EVERY_HOUR, 0, SLOW_PING_MS, Radio.OFF, wifiAway, why)
-            i.doze && !i.unrestricted -> Plan(Why.DOZE, 0, SLOW_PING_MS, Radio.OFF, Radio.OFF)
-            // Calls must still ring: the same two relays as with the screen off (checked less once it's been quiet a while).
-            i.batterySaver -> Plan(Why.BATTERY_SAVER, SAVING_RELAYS, awayPing(i), if (i.closeBy) Radio.LOW else Radio.OFF, wifiAway)
-            !i.screenOn -> Plan(Why.SCREEN_OFF, SAVING_RELAYS, awayPing(i), if (i.closeBy) Radio.LOW else Radio.OFF, wifiAway)
-            else -> Plan(Why.BACKGROUND, SAVING_RELAYS, awayPing(i), if (i.closeBy) Radio.FULL else Radio.OFF, wifiAway)
+            check == Check.HOUR -> Plan(Why.EVERY_HOUR, 0, AWAY_PING_MS, Radio.OFF, wifiAway, why)
+            i.doze && !i.unrestricted -> Plan(Why.DOZE, 0, AWAY_PING_MS, Radio.OFF, Radio.OFF)
+            // Just talking: every relay, checked quickly, so the reply comes at once. The radios stay as they were.
+            i.talking -> Plan(Why.TALKING, null, TALK_PING_MS, if (scan) Radio.LOW else Radio.OFF, wifiAway)
+            // Calls must still ring: the same one connection as with the screen off.
+            i.batterySaver -> Plan(Why.BATTERY_SAVER, AWAY_RELAYS, ping, if (scan) Radio.LOW else Radio.OFF, wifiAway, pingWhy)
+            !i.screenOn -> Plan(Why.SCREEN_OFF, AWAY_RELAYS, ping, if (scan) Radio.LOW else Radio.OFF, wifiAway, pingWhy)
+            else -> Plan(Why.BACKGROUND, AWAY_RELAYS, ping, if (scan) Radio.FULL else Radio.OFF, wifiAway, pingWhy)
         }
     }
 
-    private fun awayPing(i: Inputs) = if (drowsy(i) > 0) DROWSY_PING_MS else SLOW_PING_MS
+    /**
+     * How often the one connection is checked in the background, and why it's longer than usual. Anyone on the
+     * "Always right away" list keeps it at [AWAY_PING_MS]: a longer check could leave a connection the network
+     * has forgotten unnoticed for minutes.
+     */
+    fun awayPing(i: Inputs): Pair<Long, String> = when {
+        quietHeld(i) -> AWAY_PING_MS to "quietHeld"
+        i.rightAway -> AWAY_PING_MS to ""
+        low(i) >= 2 -> LONG_PING_MS to "lowPing"
+        drowsy(i) > 0 -> LONG_PING_MS to "idlePing"
+        else -> AWAY_PING_MS to ""
+    }
 
     /** What happens once the screen goes off: the line Settings shows (Settings itself is always "open"). */
-    fun whenAway(i: Inputs): Plan = plan(i.copy(foreground = false, screenOn = false, inCall = false))
+    fun whenAway(i: Inputs): Plan = plan(i.copy(foreground = false, screenOn = false, inCall = false, talking = false))
 
     fun label(w: Why): String = when (w) {
         Why.OPEN -> "Fully connected while Muninn is open"
@@ -188,14 +243,58 @@ object PowerLogic {
         Why.KIDS_TV -> "Kids' TV: always fully connected so calls ring at once"
         Why.PLUGGED -> "Charging: fully connected"
         Why.ALWAYS -> "Always fully connected"
+        Why.TALKING -> "In a conversation: fully connected for a few minutes so replies arrive at once"
         Why.BACKGROUND -> "Saving battery while Muninn is in the background"
         Why.SCREEN_OFF -> "Saving battery while the screen is off"
         Why.BATTERY_SAVER -> "Android's Battery Saver is on: saving battery, messages and calls still arrive"
-        Why.DOZE -> "Phone is asleep: checking for messages about every 15 minutes"
+        Why.DOZE -> "Phone is asleep and Android is pausing Muninn: checking for messages about every 15 minutes"
         Why.EVERY_15 -> "Checking for messages about every 15 minutes. Calls in between show as missed"
         Why.EVERY_HOUR -> "Checking for messages about once an hour. Calls in between show as missed"
         Why.ONLY_OPEN -> "Not checking until you open Muninn. No notifications or calls until then"
     }
+
+    /** How a message that arrived is shown: with sound and on screen, quietly in the list, or not until Muninn opens. */
+    enum class Alert { LOUD, QUIET, NONE }
+
+    /**
+     * [fromRightAway]: the chat is on the "Always right away" list. While quiet hours are held open for that list
+     * ([quietHeld]), everyone else's messages arrive without a sound ("Every hour") or wait for Muninn to open
+     * ("Only when open"), as they would have with the quiet hours mode itself.
+     */
+    fun alert(i: Inputs, fromRightAway: Boolean): Alert = when {
+        fromRightAway || i.kidsTv || !quietHeld(i) -> Alert.LOUD
+        i.quiet == Check.OPEN -> Alert.NONE
+        else -> Alert.QUIET
+    }
+
+    /**
+     * The "Always right away" list: the Family folder's chats ([family]) plus the ones [added], minus the ones
+     * [removed]. Someone added and then taken off again is only in [removed].
+     */
+    fun rightAway(family: Collection<String>, added: Collection<String>, removed: Collection<String>): Set<String> =
+        (family.toSet() + added) - removed.toSet()
+
+    /** The new added and removed sets after putting [key] on the list ([on]) or taking it off. */
+    fun setRightAway(key: String, on: Boolean, inFamily: Boolean, added: Set<String>, removed: Set<String>): Pair<Set<String>, Set<String>> =
+        if (on) (if (inFamily) added - key else added + key) to (removed - key)
+        else (added - key) to (if (inFamily) removed + key else removed - key)
+
+    /** The conversation window is open: a message went or came [sinceMs] ago (negative: never). */
+    fun talking(sinceMs: Long): Boolean = sinceMs in 0 until TALK_MS
+
+    /**
+     * A rough share of the battery (percent) the connection used: [fullMs] fully connected, [lightMs] on the one
+     * light connection, [wakeups] times it woke the phone to check, [reconnects] connections made again. Based on
+     * a typical 4,500 mAh phone; Android's own battery screen has the real number.
+     */
+    fun costPercent(fullMs: Long, lightMs: Long, wakeups: Int, reconnects: Int): Double =
+        fullMs / 3_600_000.0 * FULL_PER_HOUR + lightMs / 3_600_000.0 * LIGHT_PER_HOUR + wakeups * WAKE_COST + reconnects * RECONNECT_COST
+
+    /** About 1% an hour fully connected; an open but quiet socket costs little; each wake-up keeps the radio on a few seconds. */
+    const val FULL_PER_HOUR = 1.0
+    const val LIGHT_PER_HOUR = 0.02
+    const val WAKE_COST = 0.01
+    const val RECONNECT_COST = 0.03
 
     private fun rank(p: Plan): Int = (p.relays?.coerceAtMost(OPEN_RELAYS) ?: (OPEN_RELAYS + 1)) * 10 + (2 - p.radio.ordinal) * 3 + (2 - p.wifi.ordinal)
 
@@ -220,6 +319,12 @@ object PowerLogic {
         )).take(n).map { it.value }.toSet()
         return relays.filter { it in chosen }
     }
+
+    /**
+     * Failed tries in a row before a relay kept open while saving battery gives its place to the next healthiest:
+     * at once when it's the only one (nothing else would bring messages meanwhile), else after two.
+     */
+    fun swapAfter(keep: Int?): Int = if (keep != null && keep <= 1) 1 else 2
 
     /** A socket asked at [probedAt] that hasn't said anything since is gone (0: never asked). */
     fun silent(probedAt: Long, heardAt: Long): Boolean = probedAt > 0 && heardAt < probedAt

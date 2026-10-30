@@ -14,11 +14,13 @@ import java.util.concurrent.ConcurrentHashMap
  * [groupOnly]: a group peer (protocol 0.6, 3.7): someone in a group with me who isn't a contact. Kept here so
  *   they can be reached, never shown in the contact list, and private messages from them need the usual asking.
  * [caps]: what their app said it speaks ("caps" in their envelopes: r1 g1 c1 k1), empty until known.
+ * [days]: how long their app keeps our chat ("days" in their envelopes, cap d1), 0 until they say.
+ * [keep]: how long I chose to keep it (only for someone in my Family or Work folder), 0 for the usual 7 days.
  */
 data class Contact(
     val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null,
     val ratchet: Boolean = false, val nickname: String? = null, val keyChanged: Boolean = false,
-    val groupOnly: Boolean = false, val caps: Set<String> = emptySet(),
+    val groupOnly: Boolean = false, val caps: Set<String> = emptySet(), val days: Int = 0, val keep: Int = 0,
 ) {
     /** What this phone shows for them. */
     val shown: String get() = nickname ?: name
@@ -106,10 +108,11 @@ object ChatWire {
     fun contactToJson(c: Contact): JSONObject = JSONObject().put("k", c.chatKey).put("n", c.name).put("p", c.mailbox ?: "")
         .put("v", c.verified).put("i", c.invite ?: "").put("r", c.ratchet).put("nick", c.nickname ?: "").put("kc", c.keyChanged)
         .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" "))
+        .apply { if (c.days > 0) put("dd", c.days); if (c.keep > 0) put("dk", c.keep) }
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
         o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
-        o.optBoolean("go"), Proto06.caps(o.optString("cp")))
+        o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
@@ -117,7 +120,8 @@ object ChatWire {
         return c.copy(verified = !kc && (c.verified || old.verified), mailbox = c.mailbox ?: old.mailbox, name = c.name.ifBlank { old.name },
             invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc,
             // Adding a group peer as a contact just clears groupOnly; a contact never turns into a group peer.
-            groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps)
+            groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps,
+            days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep)
     }
 
     /**
