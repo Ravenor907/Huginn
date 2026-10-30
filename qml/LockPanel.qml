@@ -60,7 +60,7 @@ Item {
     onVisibleChanged: if (visible) Qt.callLater(focusField)
 
     Column {
-        id: top
+        id: intro
         width: parent.width
         spacing: Theme.px(10)
         topPadding: Theme.px(28)
@@ -105,7 +105,7 @@ Item {
     // The pattern (or the password) sits where Settings says: the free room is split above and below.
     Item {
         id: room
-        anchors.top: top.bottom
+        anchors.top: intro.bottom
         anchors.bottom: foot.top
         width: parent.width
         readonly property real free: Math.max(0, height - entry.height)
