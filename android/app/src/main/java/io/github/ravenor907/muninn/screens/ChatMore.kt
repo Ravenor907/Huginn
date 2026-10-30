@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -76,7 +77,7 @@ import kotlinx.coroutines.withContext
 
 /** The "+" in the message box: photos, the camera, a video message, a poll. */
 @Composable
-internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, done: () -> Unit) {
+internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null, done: () -> Unit) {
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
@@ -87,6 +88,7 @@ internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: (
                 Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
                 Line("Video message", "Up to a minute. You see it before it's sent", icon = "video") { done(); onVideo() }
                 Line("Poll", "A question with answers to pick", icon = "check") { done(); onPoll() }
+                if (onFile != null) Line("File", "Any file, straight to their phone", icon = "file") { done(); onFile() }
             }
         },
         confirmButton = { MButton("Cancel") { done() } },
@@ -427,5 +429,55 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
         }
         Text(status, style = Type.big, modifier = Modifier.fillMaxWidth())
         added?.let { k -> MButton("Say hi", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent, icon = "chat") { io.github.ravenor907.muninn.screens.ChatNav.open = k } }
+    }
+}
+
+
+/** A small file that came over the relays: its name, and Save to Downloads. */
+@Composable
+internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
+    val context = LocalContext.current
+    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 260.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("file", Palette.accent, 22.dp) }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text(m.file, style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(if (m.mine) "Sent" else "Tap Save to keep it", style = Type.small)
+        }
+        if (!m.mine) MButton("Save") {
+            val b = bytes()
+            val saved = try {
+                b?.let { data -> io.github.ravenor907.muninn.net.Received.create(context, m.file).let { t -> t.out.write(data); t.finish(); t.name } }
+            } catch (e: Exception) { null }
+            Ui.say(if (saved != null) "$saved is in Downloads." else "That file couldn't be saved.", saved == null)
+        }
+    }
+}
+
+/** Files on their way straight between phones with this person (direct, never through the relay). */
+@Composable
+internal fun DirectFiles(peer: String) {
+    val all by io.github.ravenor907.muninn.net.FileLink.all.collectAsState()
+    val mine = all.values.filter { it.peer == peer }
+    if (mine.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        mine.forEach { f ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.panel).padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                MIcon(if (f.mine) "upload" else "download", Palette.accent, 20.dp)
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Text(f.name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val pct = if (f.size > 0) (f.done * 100 / f.size).toInt() else 0
+                    Text(when (f.state) {
+                        "offered" -> "Waiting for them to accept"
+                        "waiting" -> f.note
+                        "connecting" -> "Connecting straight to their phone…"
+                        "sending" -> "$pct% · ${io.github.ravenor907.muninn.net.LocalSend.size(f.size)}"
+                        "done" -> if (f.mine) "Sent" else f.note.ifEmpty { "Saved in Downloads" }
+                        else -> f.note
+                    }, style = Type.small.copy(color = if (f.state == "failed") Palette.danger else Palette.textMuted))
+                }
+                if (f.state == "waiting") MButton("Download", kind = Kind.Accent) { io.github.ravenor907.muninn.net.FileLink.accept(f.id) }
+            }
+        }
     }
 }

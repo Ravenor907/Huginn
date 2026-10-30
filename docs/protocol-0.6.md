@@ -66,6 +66,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
 | `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93. |
+| `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -1316,4 +1317,34 @@ fixed). The same on both phones means nobody is in between. Nothing goes on the 
 
 A contact code may carry `"1": true`: its invite token works once. The first stranger whose message carries it is added
 as a contact at once (no request to accept), and the token is used up; the app that adds such a code says hi straight away.
+
+## 14. Files over the internet (cap `f1`)
+
+### 14.1 Straight between phones
+
+Never through the call relay. Only between two people who trust each other with their addresses (5.8.1).
+
+Room `file`, sealed like a call signal and sent once on every route (5.1); deduped with Seen. Limit: 30 per sender per 10 s.
+
+| t | fields | |
+|---|---|---|
+| `offer` | `id` (logical id), `name` (1 to 200 characters, no `/`, `\` or control characters), `size` (1 byte to 4 GB), `sha` (SHA-256, lowercase hex), `e` (a one-off P-256 public key, base64 SPKI), `c` (candidates, 5.8.2) | the sender's phone, after asking a STUN server from a new UDP socket |
+| `accept` | `id`, `e`, `c` | the receiver's phone, from its own new socket; with Data saver on mobile data only once the person taps Download |
+| `decline` | `id` | the receiver doesn't trust the sender (addresses aren't swapped) |
+
+- Key: `SHA-256(UTF-8("muninn file v1") || ECDH-derived key of the two one-off keys (as ChatCrypto.sharedKey) || UTF-8(id))`.
+- UDP packets: `type (1 byte) || seq (8 bytes, big endian) || AES-256-GCM(payload)`, nonce `dir (4 bytes) || seq`, AAD
+  `type || UTF-8(id)`. `dir` is 0 from the sender, 1 from the receiver. Types: 1 probe, 2 data (`index (4 bytes) || piece`),
+  3 ack (`below (4 bytes) || bits (8 bytes)`: every piece below `below` is in, and bit `b` says piece `below + b` is),
+  4 done.
+- Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
+  comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
+  piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
+  the end, says done, and saves the file in Downloads. 30 s with nothing heard ends it.
+
+### 14.2 Small files over the relays
+
+A file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
+`"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`; the receiver keeps it encrypted like a
+photo and saves it to Downloads when the person taps Save.
 

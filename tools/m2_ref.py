@@ -131,6 +131,11 @@ def check(room, p):
         if kind == "video":
             if not int_ok(p.get("ms"), 1, VIDEO_MAX_MS): raise Refused("ms")
             if "al" in p: raise Refused("video in an album")
+        elif kind == "file":
+            # Cap f1 (section 14): a small file over the relays, with its name.
+            fn = p.get("fn")
+            if not isinstance(fn, str) or not fn.strip() or len(fn) > 200 or any(ord(c) < 0x20 or c in "/\\" for c in fn): raise Refused("fn")
+            if "al" in p: raise Refused("file in an album")
         elif kind not in ("photo", "voice"):
             raise Refused("kind")
         return
@@ -184,7 +189,7 @@ GOOD = {
     "mx": [{"t": "vote", "msg": ID, "v": [0], "ts": T}, {"t": "vote", "msg": ID, "v": [], "ts": T}, {"t": "vote", "msg": ID, "v": [0, 2, 9], "ts": 0}],
     "group": [{"t": "vote", "g": G, "id": GID, "msg": GID, "v": [1], "ts": T}],
     "piece": [{}, {"kind": "voice", "ms": 1200}, {"al": ID, "ai": 0, "an": 3}, {"al": "a", "ai": 9, "an": 10},
-              {"kind": "video", "ms": 60_000}, {"kind": "video", "ms": 1}],
+              {"kind": "video", "ms": 60_000}, {"kind": "video", "ms": 1}, {"kind": "file", "fn": "Tax return 2025.pdf"}],
 }
 REFUSE = {
     "rich": [{"text": "x", "poll": {"q": "Q", "a": ["only one"]}},
@@ -215,7 +220,7 @@ REFUSE = {
               {"t": "vote", "g": G, "id": "x", "msg": GID, "v": [0], "ts": T}],
     "piece": [{"al": ID}, {"al": ID, "ai": 3, "an": 3}, {"al": ID, "ai": 0, "an": 11}, {"al": "", "ai": 0, "an": 1},
               {"kind": "video"}, {"kind": "video", "ms": 60_001}, {"kind": "video", "ms": 5, "al": ID, "ai": 0, "an": 2},
-              {"kind": "gif"}],
+              {"kind": "gif"}, {"kind": "file"}, {"kind": "file", "fn": "../etc/passwd"}, {"kind": "file", "fn": " "}],
 }
 
 A, B, C = "A", "B", "C"

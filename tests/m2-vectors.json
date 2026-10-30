@@ -153,6 +153,10 @@
    {
     "kind": "video",
     "ms": 1
+   },
+   {
+    "kind": "file",
+    "fn": "Tax return 2025.pdf"
    }
   ]
  },
@@ -465,6 +469,17 @@
    },
    {
     "kind": "gif"
+   },
+   {
+    "kind": "file"
+   },
+   {
+    "kind": "file",
+    "fn": "../etc/passwd"
+   },
+   {
+    "kind": "file",
+    "fn": " "
    }
   ]
  },

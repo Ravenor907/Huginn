@@ -120,6 +120,12 @@ object More {
                         if (p.has("al")) throw Refused("video in an album")
                     }
                     "photo", "voice" -> {}
+                    // Cap f1 (section 14): a small file over the relays, with its name.
+                    "file" -> {
+                        val fn = p.opt("fn")
+                        if (fn !is String || fn.isBlank() || fn.length > 200 || fn.any { it.code < 0x20 || it == '/' || it == '\\' }) throw Refused("fn")
+                        if (p.has("al")) throw Refused("file in an album")
+                    }
                     else -> throw Refused("kind")
                 }
             }

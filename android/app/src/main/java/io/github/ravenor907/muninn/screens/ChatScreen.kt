@@ -930,6 +930,17 @@ private fun Conversation(app: Muninn, key: String) {
     fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
         app.chat.sendPoll(key, poll.q, poll.options, poll.multi)?.let { Ui.say(it, true) }
     }
+    // A file over the internet: straight to their phone (or over the relays when small).
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch(Dispatchers.IO) {
+            val name = try { context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null } } catch (e: Exception) { null } ?: "file"
+            val tmp = java.io.File(java.io.File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
+            val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
+            if (!ok) Ui.say("That file couldn't be opened.", true)
+            else app.chat.sendFile(key, tmp, name)?.let { Ui.say(it, true) }
+        }
+    }
     fun jumpTo(id: String) {
         val i = msgs.indexOfFirst { it.id == id }
         if (i < 0) Ui.say("That message isn't here any more.") else scope.launch { list.animateScrollToItem(i) }
@@ -1085,7 +1096,8 @@ private fun Conversation(app: Muninn, key: String) {
             }
         }
         if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }) { attaching = false }
+            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }, onFile = { pickFile.launch(arrayOf("*/*")) }) { attaching = false }
+        DirectFiles(key)
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
@@ -1368,7 +1380,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     }
     val isVoice = m.unsent.isEmpty() && m.voice > 0 && photo != null
     val isVideo = m.unsent.isEmpty() && photo != null && m.video > 0
-    val isPhoto = m.unsent.isEmpty() && photo != null && m.voice == 0 && m.video == 0
+    val isPhoto = m.unsent.isEmpty() && photo != null && m.voice == 0 && m.video == 0 && m.file.isEmpty()
     // Swipe right to reply: the bubble follows the finger a little, and past the line it's a reply.
     var dragX by remember { mutableStateOf(0f) }
     val swipe = if (onReply != null && m.unsent.isEmpty()) Modifier.pointerInput(m.id) {
@@ -1401,6 +1413,11 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
                             VideoThumb(m, photo!!)
                             Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
+                        }
+                        m.file.isNotEmpty() && m.unsent.isEmpty() && photo != null -> Column {
+                            Box(Modifier.padding(horizontal = 12.dp)) { Column { name(); quoted() } }
+                            FileCard(m, photo)
+                            Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, bottom = 4.dp)) { metaLine() }
                         }
                         isPhoto && album != null -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
