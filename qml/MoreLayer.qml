@@ -19,6 +19,9 @@ Item {
     property bool sharedOpen: false
     property string sharedTab: "media"
     property int sharedSel: -1
+    // The Shared page loads a page at a time: more as you scroll near the end.
+    readonly property int pageSize: 60
+    property int sharedShown: pageSize
     readonly property var sharedData: sharedOpen ? (Chat.chats, Chat.groups, Chat.shared(where)) : ({ media: [], links: [] })
     readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen
     anchors.fill: parent
@@ -129,7 +132,7 @@ Item {
         if (url === "") return
         Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
     }
-    function openShared() { if (!tour && where !== "") { sharedTab = "media"; sharedSel = -1; sharedOpen = true } }
+    function openShared() { if (!tour && where !== "") { sharedTab = "media"; sharedSel = -1; sharedShown = pageSize; sharedOpen = true } }
     function openSharedItem(i) {
         const media = sharedData.media, links = sharedData.links
         if (sharedTab === "media") {
@@ -168,7 +171,7 @@ Item {
             case "left": if (sharedTab === "media" && sharedSel > 0) sharedSel--; break
             case "right": if (sharedTab === "media" && sharedSel < n - 1) sharedSel++; break
             case "up": sharedSel = Math.max(0, sharedSel - cols); break
-            case "down": sharedSel = n ? Math.min(n - 1, sharedSel < 0 ? 0 : sharedSel + cols) : -1; break
+            case "down": sharedSel = n ? Math.min(n - 1, sharedSel < 0 ? 0 : sharedSel + cols) : -1; if (sharedSel >= sharedShown - cols) sharedShown += pageSize; break
             case "x": sharedTab = sharedTab === "media" ? "links" : "media"; sharedSel = -1; break
             case "a": if (sharedSel >= 0) openSharedItem(sharedSel); break
             case "b": sharedOpen = false; break
@@ -202,7 +205,7 @@ Item {
             x: Theme.px(20)
             options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }]
             value: layer.sharedTab
-            onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1 }
+            onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1; layer.sharedShown = layer.pageSize }
         }
         GridView {
             id: mediaGrid
@@ -213,8 +216,9 @@ Item {
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
             cellWidth: Theme.px(150); cellHeight: Theme.px(150)
-            model: layer.sharedData.media
+            model: layer.sharedData.media.slice(0, layer.sharedShown)
             currentIndex: layer.sharedSel
+            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedData.media.length) layer.sharedShown += layer.pageSize
             delegate: Rectangle {
                 width: mediaGrid.cellWidth - Theme.px(6); height: width
                 radius: Theme.radius; color: Theme.groundDeep; clip: true
@@ -247,8 +251,9 @@ Item {
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
             spacing: Theme.px(8)
-            model: layer.sharedData.links
+            model: layer.sharedData.links.slice(0, layer.sharedShown)
             currentIndex: layer.sharedSel
+            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedData.links.length) layer.sharedShown += layer.pageSize
             delegate: Rectangle {
                 width: linkList.width
                 height: Math.max(Theme.px(64), linkCol.implicitHeight) + Theme.px(16)

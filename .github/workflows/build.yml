@@ -56,6 +56,14 @@ jobs:
           fi
           flatpak build-bundle repo Huginn.flatpak io.github.ravenor907.Huginn \
             --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+      - name: Download size (Huginn.flatpak)
+        shell: bash
+        run: |
+          # The trimmed 0.95 size plus 5%. Growing past it needs the owner's OK.
+          limit=4251165
+          size=$(stat -c %s Huginn.flatpak)
+          echo "::notice title=Huginn.flatpak::$size bytes (limit $limit)"
+          if [ "$size" -gt "$limit" ]; then echo "::error title=Huginn.flatpak too big::$size bytes, over the $limit byte limit."; exit 1; fi
       - name: Screenshot tour (fails on any broken screen)
         shell: bash
         run: |
@@ -415,6 +423,11 @@ jobs:
           $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
           $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
+          # The trimmed 0.95 size plus 5%. Growing past it needs the owner's OK.
+          $limit = 47507516
+          $size = (Get-Item Huginn-Windows.zip).Length
+          Write-Output "::notice title=Huginn-Windows.zip bytes::$size bytes (limit $limit)"
+          if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip too big::$size bytes, over the $limit byte limit."; exit 1 }
           Remove-Item -Recurse -Force dist/Huginn
           Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
           if (-not (Test-Path dist/Huginn/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/Huginn.exe"; exit 1 }
