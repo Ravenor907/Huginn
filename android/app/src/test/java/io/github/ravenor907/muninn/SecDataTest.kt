@@ -37,7 +37,7 @@ class SecDataTest {
             assertEquals(c.getInt("zeros"), o.getString("z").length)
             // Everything else is untouched, so apps from before padding read it the same.
             assertEquals("C".repeat(c.getInt("d")), o.getString("d"))
-            assertEquals(setOf("e", "n", "d", "z"), o.keySet())
+            assertEquals(setOf("e", "n", "d", "z"), o.keys().asSequence().toSet())
         }
     }
 
