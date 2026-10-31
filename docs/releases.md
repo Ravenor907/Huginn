@@ -3,7 +3,7 @@
 Every release has three downloads: `Huginn-Windows.zip`, `Huginn.flatpak` and `Muninn.apk`. Next to each one
 the release has:
 
-- `<file>.sha256`: the file's SHA-256, as `sha256sum` writes it.
+- its SHA-256, shown by GitHub beside the file on the release page.
 - `<file>.sig`: the project's signature of the file.
 - a GitHub build attestation: GitHub's own record that the file was built by this repository's CI, from a
   given commit.
@@ -22,7 +22,7 @@ The project signs every release file with its own Ed25519 key. No outside compan
 
 Huginn (Windows and Linux) and Muninn install an update only when both are true:
 
-1. its SHA-256 matches the release's, and
+1. its SHA-256 matches the one GitHub lists for the file, and
 2. its `.sig` is a good signature from the project key.
 
 Otherwise they say so and install nothing.
@@ -39,10 +39,11 @@ download, its `.sig` and [release-key.pem](release-key.pem):
 openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin -in Huginn-Windows.zip -sigfile Huginn-Windows.zip.sig
 ```
 
-It prints `Signature Verified Successfully` for a good file. For the SHA-256:
+It prints `Signature Verified Successfully` for a good file. For the SHA-256, compare this with the digest GitHub
+shows beside the file:
 
 ```
-sha256sum -c Huginn-Windows.zip.sha256
+sha256sum Huginn-Windows.zip
 ```
 
 ## Check the build attestation

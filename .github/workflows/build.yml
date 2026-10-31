@@ -2,17 +2,42 @@ name: build
 
 on:
   push:
-    branches: [main, testing, dev]
-    tags: ["v*"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
-# Build jobs only read the repository. Only the release job (and the small job that publishes screenshots,
-# which runs no outside actions) may write.
+# Build jobs only read the repository. Only the release job may write.
 permissions:
   contents: read
 
+# One build at a time per branch, so two pushes never race to make the same release.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  rules:
+    # House rules, checked on every build: anything here failing stops the build and the release.
+    name: House rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: No outside services, no pairing, no attribution, no em dashes
+        shell: bash
+        run: |
+          fail=0
+          check() {   # check "<what>" <grep args...>
+            what=$1; shift
+            hits=$(git grep -n -I "$@" -- . ':!.github/workflows/build.yml' | head -n 20)
+            if [ -n "$hits" ]; then echo "::error title=House rule broken::$what"; echo "$hits"; fail=1; fi
+          }
+          check "Google Play services or Firebase" -E 'com\.google\.android\.gms|com\.google\.firebase|play-services'
+          check "Bluetooth pairing or bonding" -E 'createBond|setPairingConfirmation|ACTION_PAIRING_REQUEST|createRfcommSocket|listenUsingRfcomm|requestPairing|PairingRequest'
+          check "AI attribution" -i -E 'co-authored-by|anthropic|claude|chatgpt|copilot'
+          check "Em dash" -F "$(printf '\342\200\224')"
+          [ -e docs/HANDOFF.md ] && { echo "::error title=House rule broken::docs/HANDOFF.md is back"; fail=1; }
+          exit $fail
+
   flatpak:
     name: Flatpak
     runs-on: ubuntu-latest
@@ -117,7 +142,7 @@ jobs:
           pip install --quiet pillow || exit 0
           mkdir -p tour
           python3 tools/make-banner.py tour/banner.png || true
-      # The publish-screens job puts them on the ci-tour branch (this job has no write access).
+      # Screenshots and logs stay with the run, as artifacts.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         with:
@@ -281,7 +306,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: android/ci/screens.sh
-      # The publish-screens job puts them on the ci-muninn branch (this job has no write access).
+      # Screenshots and logs stay with the run, as artifacts.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
@@ -618,7 +643,7 @@ jobs:
             echo "::error title=Wine self-test failed: --release-sig-selftest (exit $s)::$(tail -n 10 t.log | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
-      # The publish-screens job puts them on the ci-wine branch (this job has no write access).
+      # Screenshots and logs stay with the run, as artifacts.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         continue-on-error: true
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -627,39 +652,6 @@ jobs:
           path: wine-logs
           if-no-files-found: ignore
           include-hidden-files: true
-
-  publish-screens:
-    # Screenshots and Wine logs onto their ci-* branches. Only a convenience for reading results: it never
-    # blocks a release, and it is the one job besides the release that may write (it runs no outside actions).
-    name: Publish screenshots
-    needs: [flatpak, muninn-screens, wine]
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        continue-on-error: true
-        with:
-          pattern: ci-*
-          path: pub
-      - name: Push the ci-tour, ci-muninn and ci-wine branches
-        shell: bash
-        run: |
-          for b in ci-tour ci-muninn ci-wine; do
-            [ -d "pub/$b" ] || continue
-            (
-              cd "pub/$b"
-              git init -q -b "$b"
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git add -A
-              git commit -q -m "$b for ${GITHUB_SHA::7}" || exit 0
-              git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "$b" || echo "::warning::Couldn't push $b"
-            )
-          done
-
-
 
   relay:
     name: Relay Worker tests
@@ -691,7 +683,7 @@ jobs:
     # and only after every check above passed.
     name: Release
     # The Flatpak, Muninn and the Windows zip must all pass.
-    needs: [flatpak, muninn, muninn-screens, windows, wine, relay]
+    needs: [rules, flatpak, muninn, muninn-screens, windows, wine, relay]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -725,12 +717,9 @@ jobs:
         if: steps.v.outputs.new == '1'
         with:
           name: Huginn-Windows.zip
-      - name: SHA-256 of every download (each app checks its own before installing an update)
+      - name: SHA-256 of every download (GitHub shows the same digest beside each file)
         if: steps.v.outputs.new == '1'
-        run: |
-          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
-            if [ -f "$f" ]; then sha256sum "$f" > "$f.sha256"; cat "$f.sha256"; fi
-          done
+        run: sha256sum Huginn-Windows.zip Huginn.flatpak Muninn.apk || true
       - name: Sign every download with the project's release key (each app refuses an update without it)
         if: steps.v.outputs.new == '1'
         env:
@@ -778,13 +767,10 @@ jobs:
           name: Huginn and Muninn ${{ steps.v.outputs.version }}
           files: |
             Huginn.flatpak
-            Huginn.flatpak.sha256
             Huginn.flatpak.sig
             Huginn-Windows.zip
-            Huginn-Windows.zip.sha256
             Huginn-Windows.zip.sig
             Muninn.apk
-            Muninn.apk.sha256
             Muninn.apk.sig
           fail_on_unmatched_files: false
           prerelease: false
