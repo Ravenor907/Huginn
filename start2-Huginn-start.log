@@ -1,0 +1,16 @@
+04:28:21.860 Huginn 0.96 starting in Z:\home\runner\work\Huginn-Muninn\Huginn-Muninn\dist\Huginn
+04:28:21.860 Windows 10.0 build 19043
+04:28:21.860 running under Wine 9.0
+04:28:21.860 QT_QPA_PLATFORM was ""
+04:28:21.897 warning: QtWindows::DpiAwareness::PerMonitorVersion2 is not supported by current system.
+04:28:21.916 warning: "Unable to open monitor interface to \\\\.\\DISPLAY1:" "Invalid window handle."
+04:28:21.927 Qt 6.10.3, platform windows
+04:28:25.783 graphics: OpenGL
+04:28:27.188 warning: single instance: the lock's owner doesn't answer; taking it over
+04:28:27.196 single instance claimed
+04:28:27.278 warning: Failed to enumerate ciphers
+04:28:27.278 warning: Failed to enumerate ciphers
+04:28:27.339 loading the main screen
+04:28:27.437 info: Using Qt multimedia with FFmpeg version 7.1.3 LGPL version 2.1 or later
+04:28:28.213 window shown
+04:28:33.215 started
