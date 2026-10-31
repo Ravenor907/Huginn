@@ -110,7 +110,7 @@ docs/relay.md               how the apps use the relay Worker, STUN and TURN, an
 docs/releases.md            how releases are signed (the project's own Ed25519 key) and how to check one
 docs/release-key.pem        the release public key both apps carry
 SECURITY.md                 how to report a security problem privately
-docs/panels/01..09.png      4K marketing panels used by the README (04-huginn-handheld.png is no longer used)
+docs/panels/01..12.png      4K marketing panels used by the README (no 04: the handheld panel was removed in 0.95)
 docs/banner.png             README banner, drawn by tools/make-banner.py in CI
 docs/HANDOFF.md             this file
 tools/*_ref.py              Python reference implementations that write the test vectors
@@ -597,7 +597,6 @@ Quality check fixes (both apps): message history rewrite off the UI thread and o
 - **Discord-style ideas for Huginn on PC:** never gone through with the owner. Ask about them one at a time if the
   owner wants desktop parity.
 - **Huginn support for m2, i1, f1 and linked devices:** see part 10.
-- **Unused file:** `docs/panels/04-huginn-handheld.png` (removed from the README; can stay or be deleted, ask).
 - **Decided against (don't build):**
   - forwarding messages
   - location sharing
