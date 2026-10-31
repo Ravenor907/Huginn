@@ -1,0 +1,909 @@
+package io.github.ravenor907.muninn.net
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.webkit.MimeTypeMap
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URL
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.cert.X509Certificate
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
+
+/**
+ * LocalSend protocol v2 (github.com/localsend/protocol), so Muninn works with Huginn and with the
+ * LocalSend apps: multicast discovery on 224.0.0.167:53317, an HTTPS server on port 53317, and
+ * uploads to other devices. Every incoming transfer waits for the person to accept it.
+ *
+ * Encryption is LocalSend's HTTPS mode: our server uses our own self-signed certificate (see
+ * [Tls]) and we announce its SHA-256 as our fingerprint. When sending, the other device's
+ * certificate must have the fingerprint it announced, or nothing is sent.
+ */
+class LocalSend(private val context: Context, val identity: Identity) {
+    /** Our certificate, made once and kept in the app's private files. Null only if it can't be made: then plain HTTP. */
+    private val tls: Tls? by lazy { Tls.load(File(context.filesDir, "tls")) }
+
+    /** What other devices know us by: our certificate's hash, or (without one) the random id. */
+    val fingerprint: String get() = tls?.fingerprint ?: identity.fingerprint
+
+    data class Device(
+        val id: String, val alias: String, val model: String, val type: String,
+        val ip: String, val port: Int, val protocol: String,
+        /** Huginn and Muninn add these; plain LocalSend apps don't chat. */
+        val chatKey: String?, val chatName: String?, val app: String?,
+        val seen: Long = System.currentTimeMillis(),
+        /** Cap s1: its chat key signed this certificate, so it really is that person's. Without s1, only an extra route. */
+        val proven: Boolean = false,
+    ) {
+        val canChat get() = chatKey != null
+    }
+
+    data class Request(val from: String, val count: Int, val size: Long, val names: String)
+
+    /** A transfer in the Files tab's Recent list. [sent]: going out (else coming in). */
+    data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean, val sent: Boolean = false)
+
+    data class Transfer(
+        val active: Boolean = false, val sending: Boolean = false, val status: String = "",
+        val done: Long = 0, val total: Long = 0,
+    ) {
+        val fraction get() = if (total > 0) done.toFloat() / total else 0f
+    }
+
+    /** This phone's Nostr mailbox, so Wi-Fi contacts can keep chatting from anywhere. */
+    var mailbox: String? = null
+
+    /** Extra routes (chat) served on the same port. Returns (status, json body) or null. */
+    var extraRoute: ((method: String, path: String, body: String, ip: String) -> Pair<Int, String>?)? = null
+
+    /** Cap s1: the contact's chat key a hidden device's hint stands for, if it's one of mine. */
+    var hintKey: ((String) -> String?)? = null
+
+    /** Cap s1: my chat key vouching for my certificate, made once (the certificate never changes). */
+    private val proof: String? by lazy { tls?.let { Proof.route(identity.keys.private, identity.publicKey, it.fingerprint) } }
+
+    private val _devices = MutableStateFlow<List<Device>>(emptyList())
+    val devices: StateFlow<List<Device>> = _devices.asStateFlow()
+    private val _request = MutableStateFlow<Request?>(null)
+    val request: StateFlow<Request?> = _request.asStateFlow()
+    private val _transfer = MutableStateFlow(Transfer())
+    val transfer: StateFlow<Transfer> = _transfer.asStateFlow()
+    private val _items = MutableStateFlow<List<Item>>(emptyList())
+    val items: StateFlow<List<Item>> = _items.asStateFlow()
+    private val _scanning = MutableStateFlow(false)
+    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+    /** One-line results for a toast ("Received 3 files from…"). */
+    val messages = MutableSharedFlow<Pair<Boolean, String>>(extraBufferCapacity = 16)
+    /** A device asked for a PIN when sending to it. */
+    val pinNeeded = MutableSharedFlow<Pair<String, Boolean>>(extraBufferCapacity = 4)
+
+    private val found = ConcurrentHashMap<String, Device>()
+    private val pool = Executors.newCachedThreadPool()
+    private var server: ServerSocket? = null
+    private var udp: MulticastSocket? = null
+    private var lock: WifiManager.MulticastLock? = null
+    @Volatile private var running = false
+
+    // Receiving: the one transfer at a time LocalSend allows.
+    private class InFile(val name: String, val size: Long, val sha: String?) {
+        val token: String = UUID.randomUUID().toString()
+        @Volatile var received = 0L
+        @Volatile var done = false
+        @Volatile var failed = false
+        @Volatile var savedAs: Received.Target? = null
+        /** An app kept in Muninn's own files to be installed (on a TV), not saved to Downloads. */
+        @Volatile var kept = false
+    }
+    /** [kids]: an app a parent sent to this Kids' TV (TvApps). */
+    private class Session(val id: String, val from: String, val ip: String, val files: Map<String, InFile>, val kids: Boolean = false) {
+        @Volatile var touched = System.currentTimeMillis()
+    }
+    @Volatile private var session: Session? = null
+    private var pendingFiles: Map<String, InFile>? = null
+    private var pendingFrom = ""
+    private var pendingIp = ""
+    private val decision = Object()
+    @Volatile private var answer: Boolean? = null
+
+    // Sending.
+    private val stopSend = AtomicBoolean(false)
+    @Volatile private var sendConn: HttpURLConnection? = null
+
+    /**
+     * Hidden from people nearby: no name, chat key or mailbox goes out, only a hint that changes every day, which only
+     * contacts (who have the key) can match (cap s1). Either way the chat key's proof says this certificate is mine.
+     */
+    fun info(): JSONObject = JSONObject()
+        .put("alias", if (identity.visibleNearby) identity.deviceName else Identity.HIDDEN_NAME)
+        .put("version", "2.1")
+        .put("deviceModel", "Muninn")
+        .put("deviceType", "mobile")
+        .put("fingerprint", fingerprint)
+        .put("port", PORT)
+        .put("protocol", if (tls != null) "https" else "http")
+        .put("download", false)
+        .put("chatApp", "muninn")
+        .apply {
+            if (identity.visibleNearby) {
+                put("chatKey", identity.publicKey)
+                mailbox?.let { put("mailbox", it) }
+            } else put("hint", Proof.hintNow(identity.publicKey))
+            proof?.let { put("chatProof", it) }
+            if (identity.nearbyRoom) put("chatName", identity.username)
+        }
+
+    // ------------------------------------------------------------------ start and stop
+
+    fun start() {
+        if (running) return
+        running = true
+        _error.value = null
+        try {
+            val t = tls
+            server = if (t != null) {
+                (t.serverContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+                    // Ask for the sender's certificate but don't require it (some Huginn and Muninn apps have
+                    // none): when one is shown, the fingerprint the sender claims must match it.
+                    wantClientAuth = true
+                    reuseAddress = true
+                    bind(InetSocketAddress(PORT))
+                }
+            } else {
+                ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
+            }
+        } catch (e: Exception) {
+            _error.value = "Nearby sharing couldn't start. Is the LocalSend app running on this phone too? Close it and try again."
+            running = false
+            return
+        }
+        pool.execute { acceptLoop() }
+        try {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            lock = wifi.createMulticastLock("muninn").apply { setReferenceCounted(false); if (wifiLevel == PowerLogic.Radio.FULL) acquire() }
+            udp = MulticastSocket(PORT).apply {
+                reuseAddress = true
+                for (nif in lanInterfaces()) {
+                    try { joinGroup(InetSocketAddress(GROUP, PORT), nif) } catch (_: Exception) {}
+                }
+            }
+            pool.execute { udpLoop() }
+        } catch (e: Exception) {
+            // Discovery falls back to scanning the network.
+        }
+        announce()
+        pool.execute {
+            var quietFor = 0
+            while (running) {
+                Thread.sleep(60_000)
+                if (!running) break
+                // A sender that went quiet ends its session, whatever the Wi-Fi discovery is doing.
+                val s = session
+                if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
+                // Saving battery: off Wi-Fi nothing is announced; with the screen off only every 5 minutes.
+                val w = wifiLevel
+                if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
+                quietFor = 0
+                announce()
+                val cutoff = System.currentTimeMillis() - 10 * 60_000
+                found.entries.removeIf { it.value.seen < cutoff }
+                publish()
+            }
+        }
+    }
+
+    /**
+     * Wi-Fi discovery (see PowerLogic). FULL: always on. LOW and OFF let go of the multicast lock, which
+     * otherwise keeps the Wi-Fi chip waking for every multicast packet on the network; messages sent
+     * straight to this phone still arrive.
+     */
+    @Volatile private var wifiLevel = PowerLogic.Radio.FULL
+
+    fun discovery(r: PowerLogic.Radio) {
+        if (r == wifiLevel) return
+        val was = wifiLevel
+        wifiLevel = r
+        try {
+            if (r == PowerLogic.Radio.FULL) { lock?.let { if (!it.isHeld) it.acquire() }; if (running) announce() }
+            else lock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {}
+        if (was == PowerLogic.Radio.OFF && r != PowerLogic.Radio.OFF && running) announce()   // back on Wi-Fi: say hello now
+    }
+
+    fun stop() {
+        running = false
+        try { server?.close() } catch (_: Exception) {}
+        try { udp?.close() } catch (_: Exception) {}
+        lock?.let { if (it.isHeld) it.release() }
+    }
+
+    // ------------------------------------------------------------------ discovery
+
+    fun announce() {
+        val msg = info().put("announce", true).toString().toByteArray()
+        pool.execute {
+            // Send on each Wi-Fi interface: left alone, Android sends multicast out the mobile-data
+            // connection, where nobody is listening.
+            val sock = udp ?: return@execute
+            for (nif in lanInterfaces()) {
+                try {
+                    sock.networkInterface = nif
+                    sock.send(DatagramPacket(msg, msg.size, InetAddress.getByName(GROUP), PORT))
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /** Multicast plus asking every address on this network, for routers that drop multicast. */
+    fun refresh() {
+        announce()
+        if (_scanning.value) return
+        val me = localAddress() ?: return
+        _scanning.value = true
+        val prefix = me.substringBeforeLast('.') + "."
+        val scan = Executors.newFixedThreadPool(48)
+        val left = AtomicLong(253)
+        for (i in 1..254) {
+            val ip = prefix + i
+            if (ip == me) continue
+            scan.execute {
+                register(ip, PORT, "https", scan = true) || register(ip, PORT, "http", scan = true)
+                if (left.decrementAndGet() <= 0L) _scanning.value = false
+            }
+        }
+        scan.shutdown()
+        pool.execute { scan.awaitTermination(30, TimeUnit.SECONDS); _scanning.value = false }
+    }
+
+    private fun udpLoop() {
+        val buf = ByteArray(8192)
+        while (running) {
+            try {
+                val p = DatagramPacket(buf, buf.size)
+                udp?.receive(p) ?: return
+                // Only devices on this very network (not routed in from somewhere farther away).
+                if (!isNeighbour(p.address)) continue
+                val o = JSONObject(String(p.data, 0, p.length))
+                val fp = o.optString("fingerprint")
+                if (Tls.same(fp, fingerprint)) continue   // our own announcement
+                val ip = p.address.hostAddress ?: continue
+                val announce = o.optBoolean("announce", o.optBoolean("announcement", false))
+                // A multicast message proves nothing: a device is only listed once its certificate answered (register).
+                if (!announce && known(ip, fp)) continue
+                if (!asking(ip)) continue
+                pool.execute {
+                    if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce) {
+                        val reply = info().put("announce", false).toString().toByteArray()
+                        try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                if (!running) return
+            }
+        }
+    }
+
+    /**
+     * [expected]: the fingerprint the device announced; its certificate must match. Empty for a
+     * scan, which can't know it yet: then the certificate it shows becomes its identity.
+     */
+    private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = try {
+        val c = open("$protocol://$ip:$port$API/register", if (scan) 1500 else 5000, expected.ifEmpty { null })
+        c.requestMethod = "POST"
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(info().toString().toByteArray()) }
+        val ok = c.responseCode == 200
+        if (ok) {
+            val o = JSONObject(c.inputStream.bufferedReader().readText())
+            if (!o.has("port")) o.put("port", port)
+            // Over HTTPS the certificate is the device's identity, whatever the answer claims.
+            val proven = (c as? HttpsURLConnection)?.let { h ->
+                (h.serverCertificates.firstOrNull() as? X509Certificate)?.let { Tls.fingerprintOf(it) }
+            }
+            remember(o, ip, protocol, proven)
+        }
+        c.disconnect()
+        ok
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * [proven]: the fingerprint of a certificate the device actually showed us; it wins over what the message claims.
+     * Over HTTPS nothing is learned without one (a spoofed announce can't take over another device's entry).
+     */
+    private fun remember(o: JSONObject, ip: String, fallback: String, proven: String? = null) {
+        val protocol = o.optString("protocol", fallback)
+        if (protocol == "https" && proven == null) return
+        var id = proven ?: o.optString("fingerprint")
+        if (id.isEmpty() || Tls.same(id, fingerprint)) return
+        if (protocol == "https") id = id.uppercase()   // certificate hashes: one spelling, so a device is listed once
+        // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
+        // claiming it with encryption off, which would skip the certificate check when sending.
+        if (protocol != "https" && found[id]?.protocol == "https") return
+        // Cap s1: whose chat it is. A hidden device sends a hint only a contact can match; its proof must check out
+        // against this certificate. A wrong proof means it isn't theirs; no proof at all is an app without s1 (not proven).
+        val claimed = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
+        val sig = o.optString("chatProof")
+        val ok = claimed != null && proven != null && sig.isNotEmpty() && Proof.routeOk(claimed, proven, sig)
+        val key = if (ok || sig.isEmpty()) claimed else null
+        found[id] = Device(
+            id, deviceName(o), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
+            ip, o.optInt("port", PORT), protocol,
+            key, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null }, proven = ok,
+        )
+        publish()
+    }
+
+    /** Already listed at that address with that certificate. */
+    private fun known(ip: String, fp: String) = found[fp.uppercase()]?.let { it.ip == ip } == true
+
+    /** At most one register to an address every 10 s, whatever floods the multicast group. */
+    private val asked = ConcurrentHashMap<String, Long>()
+    private fun asking(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+        if (asked.size > 512) asked.entries.removeIf { now - it.value > 10_000 }
+        val last = asked[ip]
+        if (last != null && now - last < 10_000) return false
+        asked[ip] = now
+        return true
+    }
+
+    private fun publish() {
+        _devices.value = found.values.sortedBy { it.alias.lowercase() }
+    }
+
+    fun device(id: String): Device? = found[id]
+
+    /**
+     * Where to reach [chatKey] on the Wi-Fi: a device whose chat key proved this certificate, newest first; one that
+     * couldn't (no s1) only when not [strict]. Never by name order, which anyone can game.
+     */
+    fun deviceFor(chatKey: String, strict: Boolean = false): Device? {
+        val all = found.values.filter { it.chatKey == chatKey }
+        return all.filter { it.proven }.maxByOrNull { it.seen } ?: if (strict) null else all.maxByOrNull { it.seen }
+    }
+
+    // ------------------------------------------------------------------ server
+
+    /** At most this many connections at once: anything past it is closed straight away (nobody can pile them up). */
+    private val slots = java.util.concurrent.Semaphore(MAX_CONNECTIONS)
+
+    private fun acceptLoop() {
+        while (running) {
+            val s: Socket = (try { server?.accept() } catch (e: Exception) { null }) ?: if (running) continue else return
+            // Only devices on this very network: not over mobile data, a VPN or anything routed in from farther away.
+            if (!isNeighbour(s.inetAddress) || !slots.tryAcquire()) { try { s.close() } catch (_: Exception) {}; continue }
+            pool.execute { try { handle(s) } catch (_: Exception) {} finally { try { s.close() } catch (_: Exception) {}; slots.release() } }
+        }
+    }
+
+    private class Req(val method: String, val path: String, val query: Map<String, String>, val headers: Map<String, String>, val body: InputStream)
+
+    private fun readRequest(input: InputStream): Req? {
+        val head = StringBuilder()
+        var last4 = 0
+        while (true) {
+            val b = input.read()
+            if (b < 0) return null
+            head.append(b.toChar())
+            last4 = (last4 shl 8) or b
+            if (last4 == 0x0d0a0d0a) break
+            if (head.length > 64 * 1024) return null
+        }
+        val lines = head.toString().split("\r\n")
+        val first = lines[0].split(" ")
+        if (first.size < 2) return null
+        val target = first[1]
+        val path = target.substringBefore('?')
+        val query = target.substringAfter('?', "").split('&').filter { it.contains('=') }.associate {
+            URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('='), "UTF-8")
+        }
+        val headers = lines.drop(1).filter { it.contains(':') }.associate { it.substringBefore(':').trim().lowercase() to it.substringAfter(':').trim() }
+        return Req(first[0], path, query, headers, input)
+    }
+
+    private fun reply(out: OutputStream, code: Int, body: String = "") {
+        val bytes = body.toByteArray()
+        val reason = when (code) { 200 -> "OK"; 204 -> "No Content"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"
+            404 -> "Not Found"; 409 -> "Conflict"; 413 -> "Payload Too Large"; 422 -> "Unprocessable Entity"; 429 -> "Too Many Requests"; else -> "Error" }
+        out.write("HTTP/1.1 $code $reason\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+        out.write(bytes)
+        out.flush()
+    }
+
+    private fun handle(s: Socket) {
+        s.soTimeout = 15_000   // the request itself must come quickly; a transfer gets longer below
+        // The certificate the sender showed, if any (LocalSend apps and Huginn and Muninn with a certificate do).
+        val peerFp: String? = if (s is SSLSocket) {
+            s.soTimeout = 15_000   // a stalled handshake shouldn't hold a thread for a minute
+            s.startHandshake()
+            s.soTimeout = 60_000
+            // Throws when the sender showed no certificate.
+            try { (s.session.peerCertificates.firstOrNull() as? X509Certificate)?.let { Tls.fingerprintOf(it) } } catch (_: Exception) { null }
+        } else null
+        // A sender that showed a certificate must claim that certificate's fingerprint, or it is
+        // pretending to be another device: answer, but don't list it (LocalSend does the same).
+        // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
+        val learn = { o: JSONObject, ip: String ->
+            when {
+                peerFp == null -> if (o.optString("protocol", "https") == "https" && asking(ip))
+                    pool.execute { register(ip, o.optInt("port", PORT), "https", scan = false, expected = o.optString("fingerprint")) }
+                    else remember(o, ip, "http")
+                Tls.same(o.optString("fingerprint"), peerFp) -> remember(o, ip, "https", peerFp)
+                else -> {}
+            }
+        }
+        val input = BufferedInputStream(s.getInputStream(), 1 shl 16)
+        val out = s.getOutputStream()
+        val r = readRequest(input) ?: return
+        val ip = (s.inetAddress as? Inet4Address)?.hostAddress ?: s.inetAddress.hostAddress ?: ""
+        val length = r.headers["content-length"]?.toLongOrNull() ?: 0L
+        s.soTimeout = 60_000
+
+        if (r.method == "POST" && r.path == "$API/upload") {
+            upload(r, length, ip, out)
+            return
+        }
+        // Chat envelopes are at most 64 KB (protocol 9); other requests a little JSON. Read as it arrives, never all at once up front.
+        val most = if (r.path == "/api/huginn/v1/message") MAX_CHAT_BODY else MAX_BODY
+        if (length < 0 || length > most) { reply(out, 413); return }
+        val body = java.io.ByteArrayOutputStream(minOf(length, 64L * 1024).toInt()).also { b ->
+            val buf = ByteArray(16 * 1024)
+            var left = length
+            while (left > 0) { val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (n < 0) break; b.write(buf, 0, n); left -= n }
+        }.toByteArray()
+        val text = String(body)
+
+        extraRoute?.invoke(r.method, r.path, text, ip)?.let { (code, json) -> reply(out, code, json); return }
+
+        when (r.path) {
+            "$API/register", "/api/localsend/v1/register" -> {
+                try { learn(JSONObject(text), ip) } catch (_: Exception) {}
+                reply(out, 200, info().toString())
+            }
+            "$API/info", "/api/localsend/v1/info" -> reply(out, 200, info().toString())
+            "$API/prepare-upload" -> prepare(text, ip, out, learn)
+            "$API/cancel" -> {
+                val sess = session
+                if (sess != null && r.query["sessionId"] == sess.id) endSession(false, "${sess.from} cancelled sending.")
+                reply(out, 200)
+            }
+            else -> reply(out, 404)
+        }
+    }
+
+    /** "Wants to send" boxes turned down (or left unanswered) per address: past [PROMPTS] in 10 minutes, it has to wait. */
+    private val prompts = ConcurrentHashMap<String, ArrayDeque<Long>>()
+
+    private fun mayPrompt(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+        val q = prompts[ip] ?: return true
+        synchronized(q) { while (q.isNotEmpty() && now - q.first() > 600_000) q.removeFirst(); return q.size < PROMPTS }
+    }
+
+    private fun turnedDown(ip: String, now: Long = System.currentTimeMillis()) {
+        if (prompts.size > 256) prompts.entries.removeIf { q -> synchronized(q.value) { q.value.all { now - it > 600_000 } } }
+        val q = prompts.getOrPut(ip) { ArrayDeque() }
+        synchronized(q) { q.addLast(now); while (q.size > PROMPTS) q.removeFirst() }
+    }
+
+    private fun prepare(text: String, ip: String, out: OutputStream, learn: (JSONObject, String) -> Unit) {
+        if (session != null || pendingFiles != null) { reply(out, 409); return }
+        val o = try { JSONObject(text) } catch (e: Exception) { reply(out, 400); return }
+        val from = o.optJSONObject("info") ?: JSONObject()
+        learn(from, ip)
+        val files = o.optJSONObject("files") ?: run { reply(out, 400); return }
+        val map = LinkedHashMap<String, InFile>()
+        var total = 0L
+        for (k in files.keys()) {
+            val f = files.getJSONObject(k)
+            val inf = InFile(f.optString("fileName", "file"), f.optLong("size"), f.optString("sha256").ifEmpty { null }.takeUnless { it == "null" })
+            total += inf.size
+            map[k] = inf
+        }
+        val alias = deviceName(from)
+        val free = Received.freeBytes(context)
+        if (total + 64L * 1024 * 1024 > free) {
+            reply(out, 403)
+            messages.tryEmit(false to "$alias tried to send ${size(total)}, but there's only ${size(free)} free. Free up space and try again.")
+            return
+        }
+        // A Kids' TV shows no "wants to send" box and takes nothing from anyone, except an app a parent said is
+        // coming, file for file by SHA-256 and size (TvApps, 7.9). The parent's word may come a moment after the files.
+        if (io.github.ravenor907.muninn.tv.KidMode.saved(context)) {
+            val parts = map.values.map { io.github.ravenor907.muninn.tv.TvApps.Part(it.sha?.lowercase() ?: "", it.size) }
+            val apps = map.values.all { AppFiles.isApk(it.name) && it.sha != null }
+            if (!apps || io.github.ravenor907.muninn.tv.TvApps.await(parts, 10_000) == null) { reply(out, 403); return }
+            synchronized(decision) {
+                if (session != null || pendingFiles != null) { reply(out, 409); return }
+                open(map, alias, ip, total, out, kids = true)
+            }
+            return
+        }
+        // Asking again and again from one address would keep a box up for a minute each time: past a few, wait.
+        if (!mayPrompt(ip)) { reply(out, 429); return }
+        synchronized(decision) {
+            pendingFiles = map; pendingFrom = alias; pendingIp = ip; answer = null
+            val names = map.values.map { it.name.substringAfterLast('/') }.sorted()
+            _request.value = Request(alias, map.size, total, names.take(3).joinToString(", ") + if (names.size > 3) " and ${names.size - 3} more" else "")
+            val deadline = System.currentTimeMillis() + 60_000
+            while (answer == null && System.currentTimeMillis() < deadline) (decision as Object).wait(500)
+            val yes = answer == true
+            _request.value = null
+            pendingFiles = null
+            if (!yes) {
+                turnedDown(ip)
+                if (answer == null) messages.tryEmit(false to "No answer in a minute, so the files from $alias were turned down.")
+                reply(out, 403)
+                return
+            }
+            open(map, alias, ip, total, out, kids = false)
+        }
+    }
+
+    /** The files are accepted: the session starts and the sender gets a token per file. */
+    private fun open(map: Map<String, InFile>, alias: String, ip: String, total: Long, out: OutputStream, kids: Boolean) {
+        val sess = Session(UUID.randomUUID().toString(), alias, ip, map, kids)
+        session = sess
+        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total)
+        NearbyService.hold(context, true)
+        val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
+        reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
+    }
+
+    fun accept() = synchronized(decision) { answer = true; (decision as Object).notifyAll() }
+    fun decline() = synchronized(decision) { answer = false; (decision as Object).notifyAll() }
+
+    private fun upload(r: Req, length: Long, ip: String, out: OutputStream) {
+        val sess = session ?: run { reply(out, 409); return }
+        val f = sess.files[r.query["fileId"]]
+        if (r.query["sessionId"] != sess.id) { reply(out, 409); return }
+        if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
+        // Never more than the size it was accepted at: a sender can't fill the storage past what the person agreed to.
+        if (length > f.size) { reply(out, 413); return }
+        // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg"). On a TV an
+        // app waits in Muninn's own files instead, to be installed (ApkInstall) and then deleted.
+        val keep = AppFiles.isApk(f.name) && (sess.kids || io.github.ravenor907.muninn.tv.KidMode.isTv(context))
+        val target = try {
+            if (keep) Received.inside(context, File(context.cacheDir, "apps/${sess.id}"), f.name) else Received.create(context, f.name)
+        } catch (e: Exception) { null }
+        f.savedAs = target
+        f.kept = keep
+        f.received = 0
+        f.failed = false
+        val md = if (f.sha != null) MessageDigest.getInstance("SHA-256") else null
+        var ok = false
+        if (target != null) try {
+            target.out.use { fo ->
+                val buf = ByteArray(1 shl 18)
+                var left = length
+                while (left > 0) {
+                    val n = r.body.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                    if (n < 0) break
+                    fo.write(buf, 0, n)
+                    md?.update(buf, 0, n)
+                    left -= n
+                    f.received += n
+                    sess.touched = System.currentTimeMillis()
+                    progressIn(sess)
+                }
+                ok = left == 0L
+            }
+        } catch (e: Exception) {
+            ok = false
+        }
+        if (target == null) {
+            f.failed = true; reply(out, 500)
+        } else if (ok && md != null && md.digest().joinToString("") { "%02x".format(it) } != f.sha!!.lowercase()) {
+            target.discard(); f.failed = true; reply(out, 422)
+        } else if (!ok) {
+            target.discard(); f.failed = true; f.received = 0
+        } else {
+            target.finish(); f.done = true; reply(out, 200)
+        }
+        progressIn(sess)
+        if (sess.files.values.all { it.done || it.failed }) {
+            val done = sess.files.values.count { it.done }
+            val failed = sess.files.values.any { it.failed }
+            val apps = AppFiles.group(sess.files.values.toList()) { it.name }.map { it.first }
+            endSession(!failed, when {
+                failed -> "$done of ${sess.files.size} files from ${sess.from} arrived. Send the rest again."
+                sess.files.values.all { it.kept } -> "${sess.from} sent ${apps.joinToString(", ")}."
+                else -> "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${Received.place(context)}."
+            })
+        }
+    }
+
+    private fun progressIn(s: Session) {
+        val total = s.files.values.sumOf { it.size }
+        val got = s.files.values.sumOf { if (it.done) it.size else it.received }
+        _transfer.update { it.copy(done = got, total = total) }
+        NearbyService.progress()
+        _items.value = s.files.values.map { it.toItem() } + history
+    }
+
+    private fun InFile.toItem() = Item(
+        savedAs?.name ?: name.substringAfterLast('/'),
+        when { done && kept -> "Ready to install"; done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
+        if (size > 0) received.toFloat() / size else if (done) 1f else 0f, failed,
+    )
+
+    private val history = mutableListOf<Item>()
+
+    private fun endSession(ok: Boolean, message: String) {
+        val s = session ?: return
+        session = null
+        s.files.values.forEach { f ->
+            if (!f.done) f.savedAs?.discard()
+            val where = if (f.kept) "ready to install" else "saved to ${Received.place(context)}"
+            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "From ${s.from} · $where" else "From ${s.from} · didn't arrive", failed = !f.done))
+        }
+        // Apps for this TV: installed once every part is here (an app missing a part won't install), else deleted.
+        val apps = s.files.values.filter { it.kept && it.done }.mapNotNull { it.savedAs?.file }
+        if (ok && apps.isNotEmpty()) io.github.ravenor907.muninn.update.ApkInstall.arrived(context, s.from, apps, s.kids)
+        else apps.forEach { it.delete() }
+        while (history.size > 30) history.removeAt(history.size - 1)
+        _items.value = history.toList()
+        _transfer.value = Transfer()
+        NearbyService.hold(context, false)
+        messages.tryEmit(ok to message)
+    }
+
+    // ------------------------------------------------------------------ sending
+
+    fun send(deviceId: String, files: List<File>, pin: String? = null) {
+        val dev = found[deviceId] ?: run { messages.tryEmit(false to "That device isn't nearby anymore. Look again and pick it."); return }
+        val list = files.filter { it.isFile }
+        if (list.isEmpty()) { messages.tryEmit(false to "Pick some files to send first."); return }
+        if (_transfer.value.active) return
+        stopSend.set(false)
+        val total = list.sumOf { it.length() }
+        _transfer.value = Transfer(true, true, "Waiting for ${dev.alias} to accept…", 0, total)
+        NearbyService.hold(context, true)
+        // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
+        val expected = if (dev.protocol == "https") dev.id else null
+        pool.execute {
+            val base = "${dev.protocol}://${dev.ip}:${dev.port}$API"
+            try {
+                // Apps go with their SHA-256: a Kids' TV takes only the exact files a parent named (TvApps).
+                val shas = list.map { f -> if (AppFiles.isApk(f.name)) try { AppFiles.sha256(f) } catch (e: Exception) { null } else null }
+                val meta = JSONObject()
+                list.forEachIndexed { i, f ->
+                    val ext = f.extension.lowercase()
+                    meta.put("f$i", JSONObject().put("id", "f$i").put("fileName", f.name).put("size", f.length())
+                        .put("fileType", MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream")
+                        .put("sha256", shas[i] ?: JSONObject.NULL).put("preview", JSONObject.NULL))
+                }
+                val c = open("$base/prepare-upload" + (pin?.let { "?pin=" + URLEncoder.encode(it, "UTF-8") } ?: ""), 5 * 60_000, expected)
+                sendConn = c
+                c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(JSONObject().put("info", info()).put("files", meta).toString().toByteArray()) }
+                when (val code = c.responseCode) {
+                    200 -> {
+                        val o = JSONObject(c.inputStream.bufferedReader().readText())
+                        val sid = o.getString("sessionId")
+                        val tokens = o.getJSONObject("files")
+                        val accepted = list.indices.filter { tokens.has("f$it") }
+                        var sent = 0L
+                        for ((n, i) in accepted.withIndex()) {
+                            if (stopSend.get()) throw InterruptedException()
+                            val f = list[i]
+                            _transfer.update { it.copy(status = "Sending ${f.name} to ${dev.alias}…", total = accepted.sumOf { j -> list[j].length() }) }
+                            val u = open("$base/upload?sessionId=${enc(sid)}&fileId=f$i&token=${enc(tokens.getString("f$i"))}", 60_000, expected)
+                            sendConn = u
+                            u.requestMethod = "POST"; u.doOutput = true
+                            u.setFixedLengthStreamingMode(f.length())
+                            u.setRequestProperty("Content-Type", "application/octet-stream")
+                            u.outputStream.use { os ->
+                                f.inputStream().use { ins ->
+                                    val buf = ByteArray(1 shl 18)
+                                    while (true) {
+                                        if (stopSend.get()) throw InterruptedException()
+                                        val r = ins.read(buf); if (r < 0) break
+                                        os.write(buf, 0, r); sent += r
+                                        _transfer.update { it.copy(done = sent) }
+                                        NearbyService.progress()
+                                    }
+                                }
+                            }
+                            if (u.responseCode != 200) {
+                                val left = accepted.drop(n).map { list[it].name }
+                                throw java.io.IOException("${dev.alias} didn't take ${f.name}. Sent $n of ${accepted.size}. Not sent: ${left.take(4).joinToString(", ")}.")
+                            }
+                            u.disconnect()
+                        }
+                        logSent(accepted.map { list[it].name }, dev.alias)
+                        done(true, "Sent ${if (accepted.size == 1) "1 file" else "${accepted.size} files"} to ${dev.alias}.")
+                    }
+                    204 -> done(true, "${dev.alias} already has these files.")
+                    401 -> { done(null, ""); pinNeeded.tryEmit(deviceId to (pin != null)) }
+                    403 -> done(false, "${dev.alias} turned the files down.")
+                    409 -> done(false, "${dev.alias} is busy with another transfer. Try again in a moment.")
+                    429 -> done(false, "${dev.alias} asked to wait a bit before sending again.")
+                    else -> done(false, "${dev.alias} couldn't take the files (error $code).")
+                }
+            } catch (e: InterruptedException) {
+                done(false, "Sending stopped.")
+            } catch (e: java.io.IOException) {
+                // The certificate check failing shows up as a handshake error caused by our CertificateException.
+                if (generateSequence<Throwable>(e) { it.cause }.any { it is java.security.cert.CertificateException }) {
+                    done(false, "Didn't send: whoever answered isn't the ${dev.alias} that was found earlier. Look again and pick it.")
+                    return@execute
+                }
+                done(false, e.message?.takeIf { it.contains(dev.alias) }?.let { ChatWire.noIp(it) } ?: "Couldn't reach ${dev.alias}. Is it on the same Wi-Fi with LocalSend, Huginn or Muninn open?")
+            } catch (e: Exception) {
+                done(false, "Sending to ${dev.alias} failed. Check it's on the same Wi-Fi and try again.")
+            }
+        }
+    }
+
+    // Close-by (Bluetooth / Wi-Fi Direct) transfers report here, so every screen shows them the same way.
+    fun closeStatus(active: Boolean, sending: Boolean, status: String, total: Long) {
+        _transfer.value = if (active) Transfer(true, sending, status, 0, total) else Transfer()
+        NearbyService.hold(context, active)
+    }
+    fun closeProgress(done: Long, total: Long) { _transfer.update { it.copy(done = done, total = total) }; NearbyService.progress() }
+    fun closeItem(name: String, ok: Boolean, from: String = "") {
+        val what = if (ok) "saved to ${Received.place(context)}" else "didn't arrive"
+        history.add(0, Item(name, if (from.isEmpty()) what.replaceFirstChar { it.uppercase() } else "From $from · $what", if (ok) 1f else 0f, !ok))
+        while (history.size > 30) history.removeAt(history.size - 1)
+        _items.value = history.toList()
+    }
+
+    /** Files that went out, for the Recent list. */
+    fun logSent(names: List<String>, to: String) {
+        names.forEach { history.add(0, Item(it, "To $to · sent", 1f, false, sent = true)) }
+        while (history.size > 30) history.removeAt(history.size - 1)
+        _items.value = history.toList()
+    }
+
+    fun cancelSend() {
+        stopSend.set(true)
+        try { sendConn?.disconnect() } catch (_: Exception) {}
+    }
+
+    private fun done(ok: Boolean?, msg: String) {
+        _transfer.value = Transfer()
+        sendConn = null
+        NearbyService.hold(context, false)
+        if (ok != null) messages.tryEmit(ok to msg)
+    }
+
+    /** A JSON POST to a device's extra routes (chat). Returns the status code, or -1. */
+    fun post(dev: Device, path: String, json: String): Int = try {
+        val c = open("${dev.protocol}://${dev.ip}:${dev.port}$path", 6000, if (dev.protocol == "https") dev.id else null)
+        c.requestMethod = "POST"; c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(json.toByteArray()) }
+        val code = c.responseCode
+        c.disconnect()
+        code
+    } catch (e: Exception) {
+        -1
+    }
+
+    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
+    /**
+     * A connection to another device. Over HTTPS it shows our certificate (some LocalSend apps
+     * require one) and only goes ahead if the device's certificate has the [expected] fingerprint
+     * (any certificate when null, for a scan).
+     */
+    private fun open(url: String, timeout: Int, expected: String?): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        if (c is HttpsURLConnection) {
+            c.sslSocketFactory = tls?.client(expected) ?: Tls.anonymousClient(expected)
+            c.hostnameVerifier = anyHost
+        }
+        c.connectTimeout = minOf(timeout, 4000)
+        c.readTimeout = timeout
+        return c
+    }
+
+    companion object {
+        const val PORT = 53317
+        const val GROUP = "224.0.0.167"
+        const val API = "/api/localsend/v2"
+        /** A chat envelope (64 KB, protocol 9) with room to spare; and any other request's JSON (a long file list). */
+        const val MAX_CHAT_BODY = 96 * 1024L
+        const val MAX_BODY = 2 * 1024 * 1024L
+        const val MAX_CONNECTIONS = 32
+        const val PROMPTS = 3
+
+        /** On this very home network: a private address inside the subnet of one of this phone's own private addresses (Huginn's Lan::isNeighbour). */
+        fun isNeighbour(peer: InetAddress?): Boolean {
+            val p0 = peer ?: return false
+            val b = p0.address
+            val p = if (Lan.mapped(b)) InetAddress.getByAddress(b.copyOfRange(12, 16)) else p0
+            if (!Lan.isPrivate(p)) return false
+            return try {
+                NetworkInterface.getNetworkInterfaces().toList().any { nif ->
+                    nif.isUp && !nif.isLoopback && MOBILE.none { nif.name.startsWith(it) } &&
+                        nif.interfaceAddresses.any { e -> e.address != null && Lan.isPrivate(e.address) && Lan.inSubnet(p.address, e.address.address, e.networkPrefixLength.toInt()) }
+                }
+            } catch (e: Exception) { false }
+        }
+
+        /** Devices are reached by IP and certificates carry no names: the fingerprint check replaces the name check. */
+        private val anyHost = HostnameVerifier { _, _ -> true }
+
+        /**
+         * A JSON POST straight to [addr] ("ip:port") on the same network (moving to another device, cap x1): HTTPS with
+         * any certificate first (everything inside is sealed), then HTTP. (status, body), or null when it can't connect.
+         */
+        fun postTo(addr: String, path: String, json: String): Pair<Int, String>? {
+            for (scheme in listOf("https", "http")) try {
+                val c = URL("$scheme://$addr$path").openConnection() as HttpURLConnection
+                if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = anyHost }
+                c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(json.toByteArray()) }
+                val code = c.responseCode
+                val text = (if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readBytes()) } ?: ""
+                c.disconnect()
+                return code to text
+            } catch (e: Exception) {}
+            return null
+        }
+
+        /** Mobile-data interfaces (often on 10.x addresses, which look like a home network). */
+        private val MOBILE = listOf("rmnet", "ccmni", "pdp", "clat", "v4-", "tun", "dummy", "ifb", "r_rmnet", "seth", "usb")
+
+        /** Wi-Fi, a hotspot or wired: the interfaces where Huginn, Muninn and LocalSend can be. */
+        fun lanInterfaces(): List<NetworkInterface> = try {
+            NetworkInterface.getNetworkInterfaces().toList().filter { nif ->
+                nif.isUp && !nif.isLoopback && nif.supportsMulticast() && MOBILE.none { nif.name.startsWith(it) } &&
+                    nif.inetAddresses.toList().any { it is Inet4Address && it.isSiteLocalAddress }
+            }.sortedBy { if (it.name.startsWith("wlan")) 0 else 1 }
+        } catch (e: Exception) { emptyList() }
+
+        fun localAddress(): String? = lanInterfaces().firstNotNullOfOrNull { nif ->
+            nif.inetAddresses.toList().filterIsInstance<Inet4Address>().firstOrNull { it.isSiteLocalAddress }?.hostAddress
+        }
+
+        /** What a device is called on screen: its own name (or model), never its network address. */
+        fun deviceName(o: JSONObject): String {
+            val alias = ChatWire.noIp(o.optString("alias").trim(), "").trim()
+            val model = ChatWire.noIp(o.optString("deviceModel").trim(), "").trim()
+            return alias.ifEmpty { model }.ifEmpty { "A nearby device" }.take(60)
+        }
+
+        fun size(b: Long): String = when {
+            b >= 1L shl 30 -> "%.1f GB".format(b / 1073741824.0)
+            b >= 1L shl 20 -> "%.1f MB".format(b / 1048576.0)
+            b >= 1L shl 10 -> "%.0f KB".format(b / 1024.0)
+            else -> "$b bytes"
+        }
+    }
+}

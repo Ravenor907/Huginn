@@ -1,0 +1,74 @@
+package io.github.ravenor907.muninn
+
+import io.github.ravenor907.muninn.net.FileLink
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Files straight between phones (section 14): the window, the acks, and the sealing. */
+class FileLinkTest {
+    private val id = "0123456789abcdef0123456789abcdef"
+
+    @Test
+    fun everyPieceArrivesEvenWhenSomeAreLost() {
+        val n = 500
+        val s = FileLink.Sender(n)
+        val r = FileLink.Receiver(n)
+        var now = 0L
+        var rounds = 0
+        while (!s.done && rounds < 10_000) {
+            for (i in s.due(now)) if (i % 7 != 3 || now > 2_000) r.take(i)   // every seventh piece lost at first
+            val (below, bits) = r.ack()
+            s.ack(below, bits)
+            now += 100; rounds++
+        }
+        assertTrue(s.done)
+        assertTrue(r.done)
+    }
+
+    @Test
+    fun theWindowLimitsWhatIsInFlight() {
+        val s = FileLink.Sender(1000)
+        assertEquals(FileLink.WINDOW, s.due(0).size)
+        assertTrue(s.due(10).isEmpty())                         // nothing confirmed, nothing late yet
+        assertEquals(FileLink.WINDOW, s.due(FileLink.RTO_MS).size)   // all of it again once it's late
+    }
+
+    @Test
+    fun acksNameTheFirstGapAndWhatFollows() {
+        val r = FileLink.Receiver(100)
+        listOf(0, 1, 2, 4, 6).forEach { r.take(it) }
+        val (below, bits) = r.ack()
+        assertEquals(3, below)
+        assertEquals(0b1010L, bits)
+        assertFalse(r.take(4))
+    }
+
+    @Test
+    fun sealedPacketsOpenOnlyWithTheRightKeyAndDirection() {
+        val key = FileLink.key(ByteArray(32) { it.toByte() }, id)
+        val p = FileLink.seal(key, id, FileLink.DATA, 0, 7, byteArrayOf(1, 2, 3))
+        val (t, back) = FileLink.open(key, id, 0, p)!!
+        assertEquals(FileLink.DATA, t)
+        assertArrayEquals(byteArrayOf(1, 2, 3), back)
+        assertNull(FileLink.open(key, id, 1, p))
+        assertNull(FileLink.open(FileLink.key(ByteArray(32), id), id, 0, p))
+        p[p.size - 1] = (p[p.size - 1] + 1).toByte()
+        assertNull(FileLink.open(key, id, 0, p))
+    }
+
+    @Test
+    fun offersAreChecked() {
+        val ok = JSONObject().put("t", "offer").put("id", id).put("name", "a.pdf").put("size", 5).put("sha", "a".repeat(64)).put("e", "k").put("c", JSONArray())
+        assertTrue(FileLink.ok(ok))
+        assertFalse(FileLink.ok(JSONObject(ok.toString()).put("name", "../a")))
+        assertFalse(FileLink.ok(JSONObject(ok.toString()).put("size", 0)))
+        assertFalse(FileLink.ok(JSONObject(ok.toString()).put("id", "x")))
+        assertEquals(3, FileLink.pieces(2 * FileLink.CHUNK + 1L))
+    }
+}

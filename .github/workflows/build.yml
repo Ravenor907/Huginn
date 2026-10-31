@@ -1,0 +1,798 @@
+name: build
+
+on:
+  push:
+    branches: [main, testing, dev]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Build jobs only read the repository. Only the release job (and the small job that publishes screenshots,
+# which runs no outside actions) may write.
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
+      options: --privileged
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Fonts
+        run: tools/get-fonts.sh
+      - name: Version
+        shell: bash
+        run: |
+          # VERSION holds one dot only: 0.3, 0.31, 0.4. Changing it on main makes a release.
+          v=$(head -n1 VERSION | tr -d '\r')
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
+          tag="v$v"
+          echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          echo "HUGINN_TAG=$tag" >> "$GITHUB_ENV"
+          sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" packaging/io.github.ravenor907.Huginn.json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: .flatpak-builder
+          key: fb-${{ hashFiles('packaging/*.json') }}-${{ github.sha }}
+          restore-keys: fb-${{ hashFiles('packaging/*.json') }}-
+      - name: Build Flatpak
+        shell: bash
+        run: |
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          set +e
+          flatpak-builder --repo=repo --disable-rofiles-fuse --force-clean --install-deps-from=flathub \
+            --state-dir=.flatpak-builder flatpak_app packaging/io.github.ravenor907.Huginn.json > build.log 2>&1
+          code=$?
+          set -e
+          tail -n 40 build.log
+          if [ $code -ne 0 ]; then
+            # Logs can't always be downloaded, so the errors go out as one annotation.
+            last=$(tail -n 45 build.log | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Flatpak build failed (last lines)::$last"
+            errs=$(grep -E "error:|Error:|ERROR:|undefined reference" build.log | grep -v WERROR | head -n 25 | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            [ -n "$errs" ] && echo "::error title=Error lines::$errs"
+            exit 1
+          fi
+          flatpak build-bundle repo Huginn.flatpak io.github.ravenor907.Huginn \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+      - name: Download size (Huginn.flatpak)
+        shell: bash
+        run: |
+          # The limit: 4,199,464 bytes plus 5%.
+          limit=4409437
+          size=$(stat -c %s Huginn.flatpak)
+          echo "::notice title=Huginn.flatpak::$size bytes (limit $limit)"
+          if [ "$size" -gt "$limit" ]; then echo "::error title=Huginn.flatpak too big::$size bytes, over the $limit byte limit."; exit 1; fi
+      - name: Screenshot tour (fails on any broken screen)
+        shell: bash
+        run: |
+          mkdir -p tour /tmp/tourhome
+          set +e
+          flatpak install --user -y --noninteractive Huginn.flatpak > tour/install.txt 2>&1 || cat tour/install.txt
+          timeout 240 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_QUICK_BACKEND=software \
+            --filesystem="$PWD/tour" io.github.ravenor907.Huginn --tour "$PWD/tour" > tour/log.txt 2>&1
+          code=$?
+          set -e
+          cat tour/log.txt
+          if [ $code -ne 0 ]; then
+            msg=$( (echo "exit $code"; grep -iE "qml|warning|error" tour/log.txt | head -n 60) | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Screenshot tour failed::$msg"
+          fi
+          ls tour/*.png
+          exit $code
+      - name: Chat encryption matches Muninn (shared test vectors)
+        shell: bash
+        run: |
+          run() {
+            s=0; "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              name=$(echo "$*" | grep -oE -- '--[a-z]+-selftest' || echo "$*")
+              echo "::error title=Self-test failed::$name (exit $s)"
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | tr -cd '[:print:]\n' | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=$name output::$e"
+              bad=1
+            fi
+          }
+          bad=0
+          # The runtime's Qt (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          q=$(flatpak run --command=sh io.github.ravenor907.Huginn -c 'ls /usr/lib/*/libQt6Core.so.6.* /usr/lib/libQt6Core.so.6.* 2>/dev/null' | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          echo "::notice title=Flatpak runtime::Qt ${q:-unknown}"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --chat-selftest "$PWD/tests/chat-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --ratchet-selftest "$PWD/tests/ratchet-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --nostr-selftest "$PWD/tests/nostr-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
+          run timeout 150 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --wifi-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/tests/proto06-vectors.json"
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/tests:ro" io.github.ravenor907.Huginn --release-sig-selftest "$PWD/tests/release-sig-vectors.json"
+          exit $bad
+      - name: Draw the project banner (both ravens)
+        if: always()
+        shell: bash
+        run: |
+          pip install --quiet pillow || exit 0
+          mkdir -p tour
+          python3 tools/make-banner.py tour/banner.png || true
+      # The publish-screens job puts them on the ci-tour branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        with:
+          name: ci-tour
+          path: tour
+          if-no-files-found: ignore
+          include-hidden-files: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: success()
+        with:
+          name: Huginn.flatpak
+          path: Huginn.flatpak
+
+  muninn:
+    name: Muninn (Android)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4.4.3
+      - name: Fonts (same as Huginn)
+        run: |
+          tools/get-fonts.sh
+          d=android/app/src/main/res/font; mkdir -p $d
+          cp fonts/Cinzel.ttf $d/cinzel.ttf
+          cp fonts/Barlow-Regular.ttf $d/barlow_regular.ttf
+          cp fonts/Barlow-Medium.ttf $d/barlow_medium.ttf
+          cp fonts/Barlow-SemiBold.ttf $d/barlow_semibold.ttf
+          cp fonts/Barlow-Bold.ttf $d/barlow_bold.ttf
+          cp fonts/NotoSansRunic-Regular.ttf $d/noto_sans_runic.ttf
+      - name: Release signing key
+        # The private key lives only in the repository's secrets. Pull requests from forks and local
+        # builds have none and sign with the test key; a push to main without it fails here instead of releasing
+        # an APK anyone could forge an update for.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MUNINN_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            # Spaces and line breaks from pasting are dropped from both, as Gradle does for the password.
+            if ! printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/muninn-release.p12"; then
+              echo "::error title=Release key unreadable::MUNINN_KEYSTORE_BASE64 isn't the whole key. Paste it again from MUNINN_KEYSTORE_BASE64.txt."
+              exit 1
+            fi
+            pass=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d ' \r\n')
+            # Say which secret is wrong here, rather than as a keystore error deep in the Gradle build.
+            if ! keytool -list -storetype pkcs12 -keystore "$RUNNER_TEMP/muninn-release.p12" -storepass "$pass" > /dev/null 2>&1; then
+              echo "::error title=Release key password wrong::MUNINN_KEYSTORE_PASSWORD doesn't open the key in MUNINN_KEYSTORE_BASE64. Paste it again from MUNINN_KEYSTORE_PASSWORD.txt."
+              exit 1
+            fi
+            echo "MUNINN_KEYSTORE=$RUNNER_TEMP/muninn-release.p12" >> "$GITHUB_ENV"
+          elif [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ]; then
+            echo "::error title=Release key missing::Add the secrets MUNINN_KEYSTORE_BASE64 and MUNINN_KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."
+            exit 1
+          else
+            echo "No release key here: the release APK is signed with the test key."
+          fi
+      - name: A file signed like a release, with a throwaway key (ReleaseSigTest checks it)
+        run: |
+          t="$RUNNER_TEMP/release-sig"; mkdir -p "$t"
+          openssl genpkey -algorithm ed25519 -out "$t/k.pem"
+          head -c 300000 /dev/urandom > "$t/test.bin"
+          openssl pkeyutl -sign -inkey "$t/k.pem" -rawin -in "$t/test.bin" -out "$t/test.bin.sig"
+          openssl pkey -in "$t/k.pem" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n' > "$t/test.pub.hex"
+          rm "$t/k.pem"
+          echo "RELEASE_SIG_CI=$t" >> "$GITHUB_ENV"
+          # Both apps carry the project's public key (docs/release-key.pem); they must carry the same one.
+          key=$(openssl pkey -pubin -in docs/release-key.pem -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+          for f in src/updater.cpp android/app/src/main/java/io/github/ravenor907/muninn/update/Updater.kt; do
+            grep -q "\"$key\"" "$f" || { echo "::error title=Release key::$f doesn't carry the key in docs/release-key.pem ($key)"; exit 1; }
+          done
+      - name: Unit tests and APKs
+        working-directory: android
+        env:
+          MUNINN_KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease \
+            2>&1 | tee build.log; status=${PIPESTATUS[0]}
+          if [ $status -ne 0 ]; then ci/annotate.sh build.log; exit $status; fi
+      - name: Unit test failures
+        if: failure()
+        run: |
+          for f in android/app/build/test-results/testDebugUnitTest/*.xml; do
+            [ -f "$f" ] || continue
+            python3 - "$f" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          for tc in ET.parse(sys.argv[1]).getroot().iter("testcase"):
+              for fl in list(tc.findall("failure")) + list(tc.findall("error")):
+                  msg = (fl.get("message") or fl.text or "")[:800].replace("%", "%25").replace("\n", "%0A")
+                  print(f"::error title=Test {tc.get('classname')}.{tc.get('name')}::{msg}")
+          PY
+          done
+      - name: Name the APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Muninn.apk
+          # Signed with the release key when CI has it: the certificate must be the one in android/signing.
+          if [ -n "$MUNINN_KEYSTORE" ]; then
+            want=$(tr -d ' \n' < android/signing/release-cert-sha256.txt)
+            apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+            # apksigner's own failure (or an output it words differently) shows in the log rather than as an empty digest.
+            certs=$("$apksigner" verify --print-certs Muninn.apk 2>&1) || { echo "$certs"; echo "::error title=APK check failed::apksigner couldn't verify Muninn.apk."; exit 1; }
+            got=$(printf '%s\n' "$certs" | sed -n 's/^.*Signer.*certificate SHA-256 digest: *//p' | head -1 | tr -d ' :' | tr A-F a-f)
+            if [ "$got" != "$want" ]; then echo "$certs"; echo "::error title=Wrong signing key::Muninn.apk is signed by ${got:-an unreadable certificate}, not $want."; exit 1; fi
+            echo "Muninn.apk is signed with the release key ($got)."
+          fi
+      - name: Download size (Muninn.apk at most 8 MB)
+        run: |
+          python3 - Muninn.apk <<'PY'
+          import os, sys, zipfile
+          f = sys.argv[1]
+          size = os.path.getsize(f)
+          limit = 8 * 1024 * 1024
+          libs = [i for i in zipfile.ZipFile(f).infolist() if i.filename.startswith("lib/")]
+          abis = sorted({i.filename.split("/")[1] for i in libs})
+          saved = sum(i.file_size - i.compress_size for i in libs)
+          print(f"::notice title=Muninn.apk::{size} bytes ({size / 1048576:.2f} MB, limit 8 MB). Native code for {', '.join(abis)}; "
+                f"stored compressed it is {saved} bytes smaller than stored plain.")
+          if any(a in ("x86", "x86_64") for a in abis):
+              print("::error title=Muninn.apk::The release APK carries emulator code (x86 or x86_64).")
+              sys.exit(1)
+          if size > limit:
+              print(f"::error title=Muninn.apk too big::{size} bytes, over the {limit} byte (8 MB) limit.")
+              sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: muninn-apk
+          path: |
+            Muninn.apk
+            android/app/build/outputs/apk/debug/app-debug.apk
+
+  muninn-screens:
+    name: Muninn on an emulator
+    # Opens every tab on an emulator, screenshots it, and fails on any crash.
+    needs: muninn
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: muninn-apk
+      - name: Put the debug APK where the script looks
+        run: |
+          mkdir -p android/app/build/outputs/apk/debug
+          t=android/app/build/outputs/apk/debug/app-debug.apk
+          [ -f "$t" ] || cp "$(find . -name app-debug.apk | head -1)" "$t"
+          ls -l "$t"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d  # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: android/ci/screens.sh
+      # The publish-screens job puts them on the ci-muninn branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: ci-muninn
+          path: screens
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+  windows:
+    name: Windows (portable zip)
+    # Huginn-Windows.zip: unzip anywhere and run Huginn.exe, nothing to install.
+    # Required: a release only goes out when this passes.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VCPKG_PACKAGES: openssl opus sdl2 libqrencode libvpx
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Fonts
+        run: tools/get-fonts.sh
+      - name: Version
+        run: |
+          v=$(head -n1 VERSION | tr -d '\r')
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
+          echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
+          # Windows file names ignore case, so MSVC would take this file for the C++ <version> header.
+          rm VERSION
+      - name: Qt 6.10 (same modules as the Flatpak)
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06  # v4.5.0
+        with:
+          version: "6.10.*"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtwebsockets qtconnectivity qtmultimedia
+          cache: true
+          # The cache is keyed by the text "6.10.*", so it would keep the first 6.10 it ever got. A new
+          # prefix fetches the newest 6.10 again (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
+          cache-key-prefix: qt-6.10-2026-10
+      - name: Qt is 6.10.2 or newer
+        run: |
+          v=$("$QT_ROOT_DIR/bin/qtpaths.exe" --qt-version 2>/dev/null || "$QT_ROOT_DIR/bin/qmake.exe" -query QT_VERSION)
+          v=$(echo "$v" | tr -d '\r')
+          echo "Qt $v"
+          # Any Qt older than 6.10.2 (6.8.3 to 6.10.1 can crash in QSoundEffect, QTBUG-142694), or one that can't be read.
+          IFS=. read -r ma mi pa <<< "$v"
+          case "$ma.$mi.$pa" in *[!0-9.]*|.*|*..*|*.) echo "::error title=Qt version::Can't read the Qt version (\"$v\")"; exit 1 ;; esac
+          if [ $(( ma * 10000 + mi * 100 + pa )) -lt 61002 ]; then
+            echo "::error title=Qt too old::Qt $v; 6.10.2 or newer is needed (QSoundEffect crash fix)"; exit 1
+          fi
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: x64
+      - name: vcpkg cache folder
+        run: |
+          d="$(cygpath -m "$GITHUB_WORKSPACE")/vcpkg-bincache"
+          mkdir -p "$d"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$d" >> "$GITHUB_ENV"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: vcpkg-bincache
+          key: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-${{ github.sha }}
+          restore-keys: vcpkg-x64-windows-${{ env.VCPKG_PACKAGES }}-
+      - name: OpenSSL, Opus, SDL2, libqrencode and libvpx (vcpkg)
+        run: |
+          vcpkg="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/vcpkg.exe"
+          "$vcpkg" install $VCPKG_PACKAGES --triplet x64-windows 2>&1 | tee vcpkg.log; status=${PIPESTATUS[0]}
+          if [ $status -ne 0 ]; then
+            errs=$(grep -iE "error" vcpkg.log | head -n 20 | cut -c1-220 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=vcpkg failed::$errs"
+            exit $status
+          fi
+      - name: Build Huginn.exe (CMake, MSVC)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT -replace '\\','/'
+          $qt = $env:QT_ROOT_DIR -replace '\\','/'
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DHUGINN_VERSION=$env:HUGINN_VERSION" -DHUGINN_WINDOWS_PORTABLE=ON `
+            "-DCMAKE_PREFIX_PATH=$qt" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { $e = (Get-Content configure.log -Tail 40) -join '%0A'; Write-Output "::error title=CMake configure failed::$e"; exit 1 }
+          cmake --build build --config Release 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            $e = (Select-String -Path build.log -Pattern 'error C|error LNK|fatal error|: error' | Select-Object -First 25 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }) -join '%0A'
+            Write-Output "::error title=Windows build failed::$e"
+            exit 1
+          }
+      - name: Gather Huginn and everything it needs (windeployqt)
+        shell: pwsh
+        run: |
+          $out = "dist/Huginn"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item build/Huginn.exe $out
+          windeployqt --release --qmldir qml --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw "$out/Huginn.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::windeployqt failed"; exit 1 }
+          # Qt's offscreen platform too, so Huginn can start with no screen (QT_QPA_PLATFORM=offscreen, CI under Wine).
+          Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$out/platforms/"
+          # OpenSSL (chat crypto and Qt's TLS), Opus (calls), libvpx (video), SDL2 (controllers), libqrencode (QR codes)
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $out
+          # Not needed to run: the Direct3D 12 shader compiler (Huginn draws with Direct3D 11 or OpenGL),
+          # QML debugging plugins, and vcpkg's pkgconf build tool.
+          Remove-Item -Force "$out/dxcompiler.dll", "$out/dxil.dll" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$out/qmltooling" -ErrorAction SilentlyContinue
+          Get-ChildItem $out -Filter "pkgconf*.dll" | Remove-Item -Force
+          # The Visual C++ runtime, so nothing has to be installed first
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
+          Copy-Item "$($crt.FullName)/*.dll" $out
+          Copy-Item LICENSE "$out/LICENSE.txt"
+      - name: Tidy the folder (Huginn.exe on top, everything else in lib/)
+        run: |
+          d=dist/Huginn
+          mkdir -p "$d/lib"
+          for f in "$d"/* "$d"/.[!.]*; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in lib|LICENSE.txt|Huginn.exe) ;; *) mv "$f" "$d/lib/" ;; esac
+          done
+          # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
+          find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
+            -o -iname '*.prl' -o -iname '*.cmake' -o -iname '*.debug' \) -print -delete
+          # Huginn.exe at the top is the app itself. Its manifest names lib\ as a private assembly, and this
+          # lists the DLLs in it, so Windows (and Wine) load them from lib\ (packaging/windows/huginn.manifest.in).
+          {
+            echo '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            echo '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">'
+            echo '  <assemblyIdentity type="win32" name="lib" version="1.0.0.0" processorArchitecture="amd64"/>'
+            for f in "$d"/lib/*.dll; do echo "  <file name=\"$(basename "$f")\"/>"; done
+            echo '</assembly>'
+          } > "$d/lib/lib.manifest"
+          echo "lib.manifest lists $(grep -c '<file ' "$d/lib/lib.manifest") DLLs"
+          top=$(ls -A "$d" | tr '\n' ' ')
+          [ "$top" = "Huginn.exe LICENSE.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt and lib/, not: $top"; exit 1; }
+          # Huginn's own QML is compiled into Huginn.exe: no copy of it loose, and no source text inside.
+          loose=$(grep -rl --include='*.qml' -E '^import Huginn|Huginn\.' "$d" || true)
+          [ -z "$loose" ] || { echo "::error title=Loose QML::$loose"; exit 1; }
+          n=$(grep -c -a "^import QtQuick" "$d/Huginn.exe" || true)
+          [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in Huginn.exe"; exit 1; }
+          echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
+      - name: Nothing in Huginn.exe that looks like malware (scripts, hidden windows, suspended processes)
+        run: python tools/check-windows-binary.py dist/Huginn
+      - name: Zip it, then unpack the zip and test exactly what ships
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force dist/Huginn/update-staging -ErrorAction SilentlyContinue
+          $7z = "C:/Program Files/7-Zip/7z.exe"
+          Push-Location dist
+          if (Test-Path $7z) { & $7z a -tzip -mx=9 ../Huginn-Windows.zip Huginn | Out-Null } else { Compress-Archive -Path Huginn -DestinationPath ../Huginn-Windows.zip }
+          Pop-Location
+          $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
+          $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
+          # The limit: 37,989,814 bytes plus 5%.
+          $limit = 39889305
+          $size = (Get-Item Huginn-Windows.zip).Length
+          if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip too big::$size bytes, over the $limit byte limit."; exit 1 }
+          Remove-Item -Recurse -Force dist/Huginn
+          Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
+          if (-not (Test-Path dist/Huginn/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/Huginn.exe"; exit 1 }
+          if (-not (Test-Path dist/Huginn/lib/lib.manifest)) { Write-Output "::error::The zip doesn't unpack to Huginn/lib/lib.manifest"; exit 1 }
+      - name: Windows Defender scan of the zip and the unpacked folder
+        shell: pwsh
+        run: |
+          $mp = Join-Path $env:ProgramFiles "Windows Defender/MpCmdRun.exe"
+          if (-not (Test-Path $mp)) { Write-Output "::warning title=Defender::MpCmdRun.exe isn't on this runner; no scan"; exit 0 }
+          & $mp -SignatureUpdate 2>&1 | Select-Object -Last 3
+          $bad = 0
+          foreach ($what in @("$PWD\Huginn-Windows.zip", "$PWD\dist\Huginn")) {
+            $out = (& $mp -Scan -ScanType 3 -File $what -DisableRemediation 2>&1) -join "`n"
+            $code = $LASTEXITCODE
+            Write-Output $out
+            if ($code -eq 2 -or $out -match 'found [1-9][0-9]* threat') {
+              $t = ($out -split "`n" | Select-String -Pattern 'Threat|found' | ForEach-Object { $_.Line }) -join '%0A'
+              Write-Output "::error title=Windows Defender flagged $(Split-Path $what -Leaf)::$t"
+              $bad = 1
+            } elseif ($code -ne 0) {
+              Write-Output "::warning title=Defender couldn't scan $(Split-Path $what -Leaf) (exit $code)::$(($out -split "`n" | Select-Object -Last 4) -join '%0A')"
+            } else {
+              Write-Output "Defender: no threats in $what"
+            }
+          }
+          exit $bad
+      - name: Self-tests (same as the Flatpak; also proves no DLL is missing)
+        run: |
+          h=dist/Huginn/Huginn.exe
+          run() {
+            s=0; "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Windows self-test failed: $* (exit $s)::$e"
+              bad=1
+            fi
+          }
+          bad=0
+          run "$h" --chat-selftest tests/chat-vectors.json
+          run "$h" --ratchet-selftest tests/ratchet-vectors.json
+          run "$h" --nostr-selftest tests/nostr-vectors.json
+          run "$h" --privacy-selftest
+          # A message from a pretend Muninn over the local HTTPS endpoint, with the raven call and a notification.
+          run timeout 150 "$h" --wifi-selftest
+          run "$h" --backup-selftest
+          run "$h" --call-selftest tests/proto06-vectors.json
+          run "$h" --release-sig-selftest tests/release-sig-vectors.json
+          # A file signed the way the release job signs (openssl, Ed25519 over the raw bytes) with a throwaway key.
+          t="$RUNNER_TEMP/release-sig"; mkdir -p "$t"
+          openssl genpkey -algorithm ed25519 -out "$t/k.pem"
+          head -c 200000 /dev/urandom > "$t/test.bin"
+          openssl pkeyutl -sign -inkey "$t/k.pem" -rawin -in "$t/test.bin" -out "$t/test.bin.sig"
+          openssl pkey -in "$t/k.pem" -pubout -outform DER | tail -c 32 > "$t/test.pub"
+          python - "$t" > tests/release-sig-fresh.json <<'PY'
+          import json, os, sys
+          t = sys.argv[1]
+          rd = lambda n: open(os.path.join(t, n), "rb").read()
+          pub, msg, sig = rd("test.pub").hex(), rd("test.bin"), rd("test.bin.sig").hex()
+          bad = bytearray(msg); bad[777] ^= 1
+          print(json.dumps({"cases": [
+              {"name": "openssl, throwaway key", "public": pub, "message": msg.hex(), "signature": sig, "valid": True},
+              {"name": "openssl, file changed", "public": pub, "message": bytes(bad).hex(), "signature": sig, "valid": False}]}))
+          PY
+          run "$h" --release-sig-selftest tests/release-sig-fresh.json
+          if [ -f dist/Huginn/Huginn-start.log ] && [ $bad -ne 0 ]; then
+            e=$(tail -n 30 dist/Huginn/Huginn-start.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Huginn-start.log::$e"
+          fi
+          exit $bad
+      - name: Screenshot tour (for a look, doesn't fail the job yet)
+        continue-on-error: true
+        env:
+          QT_QUICK_BACKEND: software
+        run: |
+          mkdir -p tour-windows
+          s=0; timeout 240 dist/Huginn/Huginn.exe --tour "$(cygpath -m "$PWD/tour-windows")" > tour.log 2>&1 || s=$?
+          cat tour.log
+          n=$(ls tour-windows/*.png 2>/dev/null | wc -l)
+          w=$(grep -ciE "warning|qml:" tour.log || true)
+          if [ $s -ne 0 ] || [ "$n" -eq 0 ]; then
+            e=$(tail -n 20 tour.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::warning title=Windows tour (exit $s, $n screenshots)::$e"
+          else
+            echo "::notice title=Windows tour::$n screenshots in the huginn-windows-tour artifact; $w warning lines in its log"
+          fi
+          exit $s
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: always()
+        with:
+          name: huginn-windows-tour
+          path: tour-windows
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: Huginn-Windows.zip
+          path: Huginn-Windows.zip
+
+  wine:
+    name: Windows zip under Wine (Proton)
+    # The same zip on Linux through Wine, as Steam's Proton runs it: the self-tests, then a start with
+    # no screen (offscreen) and one on a virtual X screen (the real Windows platform and OpenGL).
+    needs: windows
+    runs-on: ubuntu-24.04
+    env:
+      WINEPREFIX: ${{ github.workspace }}/wineprefix
+      WINEDEBUG: -all
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: Huginn-Windows.zip
+      - name: Wine
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends wine wine64 xvfb xauth unzip libgl1-mesa-dri > apt.log 2>&1 || { tail -n 30 apt.log; echo "::error title=Wine::apt couldn't install Wine"; exit 1; }
+          unzip -q Huginn-Windows.zip -d dist
+          wine --version
+          timeout 180 wineboot -i > /dev/null 2>&1 || true
+          wineserver -w || true
+      - name: Self-tests under Wine
+        run: |
+          h=dist/Huginn/Huginn.exe
+          run() {
+            s=0; timeout 300 "$@" > t.log 2>&1 || s=$?
+            cat t.log
+            if [ $s -ne 0 ]; then
+              e=$( { grep -E "self-test" t.log | head -n 8; tail -n 22 t.log; [ -f dist/Huginn/Huginn-start.log ] && tail -n 15 dist/Huginn/Huginn-start.log; } | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Wine self-test failed: ${*:2} (exit $s)::$e"
+              bad=1
+            fi
+            wineserver -k 2>/dev/null || true
+          }
+          bad=0
+          run wine "$h" --chat-selftest tests/chat-vectors.json
+          run wine "$h" --ratchet-selftest tests/ratchet-vectors.json
+          run wine "$h" --nostr-selftest tests/nostr-vectors.json
+          run wine "$h" --privacy-selftest
+          run wine "$h" --backup-selftest
+          run wine "$h" --call-selftest tests/proto06-vectors.json
+          exit $bad
+      - name: Start under Wine (offscreen, then a virtual X screen)
+        run: |
+          h=dist/Huginn/Huginn.exe
+          log=dist/Huginn/Huginn-start.log
+          start() {
+            rm -f "$log"
+            s=0; HUGINN_KEEP_START_LOG=1 timeout 60 "$@" > out.log 2>&1 || s=$?
+            wineserver -k 2>/dev/null || true
+            n=$((n+1)); mkdir -p wine-logs; cp out.log "wine-logs/start$n-out.log"; cp "$log" "wine-logs/start$n-Huginn-start.log" 2>/dev/null || true
+            echo "--- $* (exit $s)"; tail -n 30 out.log; echo "--- Huginn-start.log"; cat "$log" 2>/dev/null || echo "(none)"
+            # Still running when the minute was up (124; 0 when xvfb-run's screen is what gets stopped),
+            # and it drew its window and kept going for 5 seconds ("started"): it started.
+            if { [ $s -eq 124 ] || [ $s -eq 0 ]; } && grep -q "started" "$log" 2>/dev/null; then
+              echo "::notice title=Wine start ($1)::$(grep -E 'Wine|graphics' "$log" | cut -c14- | tr '\n' ';')"
+            else
+              e=$( { echo "exit $s"; tail -n 25 "$log" 2>/dev/null; tail -n 10 out.log; } | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=Huginn didn't start under Wine ($1)::$e"
+              bad=1
+            fi
+          }
+          bad=0; n=0
+          start env QT_QPA_PLATFORM=offscreen wine "$h" -platform offscreen
+          start xvfb-run -a -s "-screen 0 1280x800x24" wine "$h"
+          exit $bad
+      - name: Update signature self-test under Wine
+        # After the start test: run just before it, this quick self-test leaves the Wine prefix in a state that
+        # makes the next start on the virtual X screen crash in Qt's text layout (Wine prefix state, not Huginn).
+        run: |
+          wineserver -k 2>/dev/null || true
+          timeout 300 wine dist/Huginn/Huginn.exe --release-sig-selftest tests/release-sig-vectors.json > t.log 2>&1 || s=$?
+          cat t.log
+          wineserver -k 2>/dev/null || true
+          if [ "${s:-0}" -ne 0 ]; then
+            echo "::error title=Wine self-test failed: --release-sig-selftest (exit $s)::$(tail -n 10 t.log | cut -c1-260 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
+      # The publish-screens job puts them on the ci-wine branch (this job has no write access).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        continue-on-error: true
+        if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        with:
+          name: ci-wine
+          path: wine-logs
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+  publish-screens:
+    # Screenshots and Wine logs onto their ci-* branches. Only a convenience for reading results: it never
+    # blocks a release, and it is the one job besides the release that may write (it runs no outside actions).
+    name: Publish screenshots
+    needs: [flatpak, muninn-screens, wine]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        continue-on-error: true
+        with:
+          pattern: ci-*
+          path: pub
+      - name: Push the ci-tour, ci-muninn and ci-wine branches
+        shell: bash
+        run: |
+          for b in ci-tour ci-muninn ci-wine; do
+            [ -d "pub/$b" ] || continue
+            (
+              cd "pub/$b"
+              git init -q -b "$b"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add -A
+              git commit -q -m "$b for ${GITHUB_SHA::7}" || exit 0
+              git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "$b" || echo "::warning::Couldn't push $b"
+            )
+          done
+
+
+
+  relay:
+    name: Relay Worker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Relay Worker tests
+        run: node relay-worker/test.mjs
+
+  site:
+    name: Add page (GitHub Pages)
+    # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
+        with:
+          path: site
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4.0.5
+  release:
+    # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
+    # and only after every check above passed.
+    name: Release
+    # The Flatpak, Muninn and the Windows zip must all pass.
+    needs: [flatpak, muninn, muninn-screens, windows, wine, relay]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # GitHub build attestations: proof each download was built here, from this commit.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Version
+        id: v
+        run: |
+          v=$(head -n1 VERSION | tr -d '\r')
+          tag="v$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "new=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        if: steps.v.outputs.new == '1'
+        with:
+          name: Huginn.flatpak
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        if: steps.v.outputs.new == '1'
+        with:
+          name: muninn-apk
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        if: steps.v.outputs.new == '1'
+        with:
+          name: Huginn-Windows.zip
+      - name: SHA-256 of every download (each app checks its own before installing an update)
+        if: steps.v.outputs.new == '1'
+        run: |
+          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
+            if [ -f "$f" ]; then sha256sum "$f" > "$f.sha256"; cat "$f.sha256"; fi
+          done
+      - name: Sign every download with the project's release key (each app refuses an update without it)
+        if: steps.v.outputs.new == '1'
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          # <file>.sig is the Ed25519 signature of the file's raw bytes (docs/releases.md). Never ship unsigned:
+          # Huginn and Muninn refuse an update without it.
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error title=Release signing key missing::Add the secret RELEASE_SIGNING_KEY (Settings > Secrets and variables > Actions), then re-run this job. Nothing was released."
+            exit 1
+          fi
+          k="$RUNNER_TEMP/release-key.pem"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" | tr -d '\r' > "$k"
+          if ! openssl pkey -in "$k" -pubout -outform DER > "$RUNNER_TEMP/release-pub.der" 2>/dev/null; then
+            rm -f "$k"
+            echo "::error title=Release signing key unreadable::RELEASE_SIGNING_KEY isn't a whole Ed25519 private key (PEM). Paste it again, BEGIN and END lines included."
+            exit 1
+          fi
+          # It must be the private half of the key both apps carry (docs/release-key.pem).
+          if ! openssl pkey -pubin -in docs/release-key.pem -outform DER | cmp -s - "$RUNNER_TEMP/release-pub.der"; then
+            rm -f "$k"
+            echo "::error title=Wrong release signing key::RELEASE_SIGNING_KEY doesn't match docs/release-key.pem, so the apps would refuse this release."
+            exit 1
+          fi
+          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
+            [ -f "$f" ] || continue
+            openssl pkeyutl -sign -inkey "$k" -rawin -in "$f" -out "$f.sig"
+            openssl pkeyutl -verify -pubin -inkey docs/release-key.pem -rawin -in "$f" -sigfile "$f.sig" \
+              || { rm -f "$k"; echo "::error title=Signing failed::$f.sig doesn't check out"; exit 1; }
+          done
+          rm -f "$k"
+      - name: Build attestations (gh attestation verify, see docs/releases.md)
+        if: steps.v.outputs.new == '1'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+        with:
+          subject-path: |
+            Huginn-Windows.zip
+            Huginn.flatpak
+            Muninn.apk
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        if: steps.v.outputs.new == '1'
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Huginn and Muninn ${{ steps.v.outputs.version }}
+          files: |
+            Huginn.flatpak
+            Huginn.flatpak.sha256
+            Huginn.flatpak.sig
+            Huginn-Windows.zip
+            Huginn-Windows.zip.sha256
+            Huginn-Windows.zip.sig
+            Muninn.apk
+            Muninn.apk.sha256
+            Muninn.apk.sig
+          fail_on_unmatched_files: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: false
+          body: |
+            **Huginn** (Linux): Huginn.flatpak. Installed copies update themselves at launch.
+            **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
+            **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
+            Every file is signed with the project's release key (the .sig beside it) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/docs/releases.md
+            Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security

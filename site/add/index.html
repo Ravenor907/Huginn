@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Add on Muninn</title>
+<meta name="description" content="Someone shared their Muninn code. Muninn (Android) and Huginn (.exe or Flatpak, desktop and handheld) are free private messengers.">
+<link rel="icon" href="../raven.png">
+<style>
+  :root { --ground:#101112; --panel:#17191b; --line:#2a2d30; --text:#e4e1da; --soft:#a9a7a1; --accent:#c8cdd3; --fill:#22262a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--text); font:17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:520px; margin:0 auto; padding:28px 16px 40px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:22px; }
+  header img { width:56px; height:56px; }
+  h1 { margin:0; font-size:26px; letter-spacing:.18em; font-weight:500; color:var(--accent); }
+  .runes { color:var(--soft); letter-spacing:.3em; font-size:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:14px; }
+  h2 { margin:0 0 6px; font-size:20px; font-weight:600; }
+  p { margin:6px 0; color:var(--soft); }
+  .btn { display:block; width:100%; text-align:center; padding:15px; margin-top:12px; border-radius:10px; font-size:18px; font-weight:600;
+         text-decoration:none; color:var(--accent); background:var(--fill); border:1px solid var(--accent); cursor:pointer; }
+  .btn.plain { border-color:var(--line); color:var(--text); background:transparent; }
+  ol { margin:8px 0 0; padding-left:22px; color:var(--soft); }
+  code { display:block; word-break:break-all; background:#0b0c0d; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; color:var(--soft); margin-top:8px; }
+  .hidden { display:none; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row .btn { flex:1 1 200px; width:auto; }
+  .small { font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="../raven.png" alt="">
+    <div><h1>MUNINN</h1><div class="runes">ᛗᚢᚾᛁᚾᚾ</div></div>
+  </header>
+
+  <div class="panel" id="found">
+    <h2>Someone shared their Muninn code</h2>
+    <p>Muninn is a free private messenger for Android: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Huginn, does the same on desktops and handhelds (.exe or Flatpak), and the two talk to each other.</p>
+    <a class="btn" id="open" href="#">I have Muninn: open it</a>
+  </div>
+
+  <div class="panel">
+    <h2>Don't have Muninn yet?</h2>
+    <p>Get it on this phone, then come back to this page.</p>
+    <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">Download Muninn for Android</a>
+    <ol>
+      <li>Open the downloaded file. If Android asks, allow installs from your browser.</li>
+      <li>Open Muninn and set your pattern or password.</li>
+      <li>Come back here and tap <b>I have Muninn: open it</b>. The code works for an hour from when it was shared.</li>
+    </ol>
+    <p class="small">No internet? Ask them to tap <b>Share the app</b> in Muninn: it sends Muninn itself by Quick Share or Bluetooth.</p>
+  </div>
+
+  <div class="panel">
+    <h2>On a computer or handheld?</h2>
+    <p>Huginn is the companion of Muninn, for desktops and handhelds: get the .exe or the Flatpak. Install it, tap <b>Add someone</b> and paste the code below.</p>
+    <div class="row">
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">Huginn .exe</a>
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">Huginn Flatpak</a>
+    </div>
+    <p class="small">.exe: unzip it anywhere and run Huginn.exe, nothing to install. Flatpak: open it to install.</p>
+  </div>
+
+  <div class="panel" id="manual">
+    <h2>Or add them by hand</h2>
+    <p>In Muninn or Huginn, tap <b>Add someone</b> and paste this code (or this whole link):</p>
+    <code id="code"></code>
+    <button class="btn plain" id="copy">Copy code</button>
+  </div>
+
+  <div class="panel hidden" id="none">
+    <h2>No code here</h2>
+    <p>This link is missing its code. Ask them to share their Muninn code again.</p>
+  </div>
+</main>
+<script>
+  // The code is after the "#", which browsers never send to the server: only this page sees it.
+  var code = decodeURIComponent((location.hash || "").slice(1));
+  // A group invite link (MUNINNG1:) opens the app the same way. (A move code never does: it is only taken in the app.)
+  var group = code.indexOf("MUNINNG1:") === 0;
+  if (code.indexOf("MUNINN1:") !== 0 && !group) {
+    document.getElementById("found").classList.add("hidden");
+    document.getElementById("manual").classList.add("hidden");
+    document.getElementById("none").classList.remove("hidden");
+  } else {
+    document.getElementById("code").textContent = code;
+    var body = group ? code : code.slice("MUNINN1:".length);
+    var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
+    document.getElementById("open").href = /Android/i.test(navigator.userAgent)
+      ? "intent://add/" + body + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
+      : "muninn://add/" + body;
+    document.getElementById("copy").onclick = function () {
+      var b = this;
+      (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(
+        function () { b.textContent = "Copied"; }, function () { b.textContent = "Select the code above and copy it"; });
+    };
+  }
+</script>
+</body>
+</html>

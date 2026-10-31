@@ -1,0 +1,71 @@
+package io.github.ravenor907.muninn
+
+import io.github.ravenor907.muninn.net.ChatFlags
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Mute, archive and mark as unread: kept on this phone, across a restart. */
+class ChatFlagsTest {
+    @Test
+    fun muteRunsOutOrStaysUntilTurnedOff() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.mute("k", 1_000)
+        assertTrue(f.muted("k", 999))
+        assertFalse(f.muted("k", 1_000))
+        f.mute("k", ChatFlags.FOREVER)
+        assertTrue(f.muted("k", Long.MAX_VALUE - 1))
+        f.mute("k", 0)
+        assertFalse(f.muted("k", 0))
+    }
+
+    @Test
+    fun anArchivedChatComesBackWhenAMessageArrivesUnlessMuted() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.archive("a", true)
+        f.archive("b", true)
+        f.mute("b", ChatFlags.FOREVER)
+        assertTrue(f.arrived("a", 0))
+        assertFalse(f.archived("a"))
+        assertFalse(f.arrived("b", 0))
+        assertTrue(f.archived("b"))
+    }
+
+    @Test
+    fun markedUnreadUntilOpenedAndKeptAcrossARestart() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.markUnread("g:x", true)
+        f.archive("p", true)
+        f.mute("p", 5_000)
+        val again = ChatFlags({ stored }, { stored = it })
+        assertEquals(setOf("g:x"), again.all.value.unread)
+        assertEquals(setOf("p"), again.all.value.archived)
+        assertEquals(5_000L, again.all.value.muted["p"])
+        again.read("g:x")
+        assertTrue(again.all.value.unread.isEmpty())
+        again.forget("p")
+        assertTrue(again.all.value.archived.isEmpty() && again.all.value.muted.isEmpty())
+    }
+
+    @Test
+    fun mutedText() {
+        assertEquals("Muted", ChatFlags.mutedText(ChatFlags.FOREVER, 0))
+        assertEquals("Muted for 8 more hours", ChatFlags.mutedText(8 * ChatFlags.HOUR, 0))
+        assertEquals("", ChatFlags.mutedText(10, 20))
+    }
+
+    @Test
+    fun chatColorsAreKeptAndUnknownOnesRefused() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.color("k", "green")
+        f.color("j", "neon")
+        assertEquals(mapOf("k" to "green"), ChatFlags({ stored }, { stored = it }).all.value.colors)
+        f.color("k", "")
+        assertTrue(f.all.value.colors.isEmpty())
+    }
+}

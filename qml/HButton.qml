@@ -1,0 +1,41 @@
+import QtQuick
+import Huginn
+
+// A flat, squared button. kind: "normal", "accent", "primary" (filled with the accent, for a dialog's
+// main answer), "plain" (no box) or "danger". `focused` draws the controller focus.
+Rectangle {
+    id: btn
+    property string text
+    property string kind: "normal"
+    property bool focused: false
+    property bool enabled: true
+    property int fontSize: 14
+    signal clicked()
+
+    implicitWidth: label.implicitWidth + Theme.px(32)
+    implicitHeight: Theme.px(36)
+    radius: Theme.radius
+    opacity: enabled ? 1 : 0.45
+    color: kind === "primary" ? (hover.hovered ? Qt.lighter(Theme.accent, 1.12) : Theme.accent)
+         : kind === "plain" ? (hover.hovered ? Theme.raised : "transparent")
+         : kind === "accent" ? Theme.accentFill : kind === "danger" ? Theme.dangerFill : hover.hovered ? Theme.tile : Theme.raised
+    border.width: focused ? Theme.focusWidth : kind === "primary" || kind === "plain" ? 0 : 1
+    Accessible.role: Accessible.Button
+    Accessible.name: text
+    Accessible.onPressAction: clicked()
+    border.color: focused ? Theme.text
+                : kind === "accent" ? Theme.accent
+                : kind === "danger" ? Theme.dangerLine : Theme.lineMuted
+
+    Text {
+        id: label
+        anchors.centerIn: parent
+        text: btn.text
+        color: btn.kind === "primary" ? Theme.ground : btn.kind === "accent" ? Theme.accent : btn.kind === "danger" ? Theme.danger : Theme.text
+        font.family: Theme.body
+        font.pixelSize: Theme.fs(btn.fontSize)
+        font.weight: Font.DemiBold
+    }
+    HoverHandler { id: hover; cursorShape: btn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
+    TapHandler { enabled: btn.enabled; onTapped: btn.clicked() }
+}
