@@ -48,6 +48,10 @@ class Identity(context: Context, private val vault: Vault) {
     /** The Nearby room is on: its own switch, and only while visible to people nearby. */
     val nearbyRoom: Boolean get() = nearbyChat && visibleNearby
 
+    /** Google Nearby (Close) on top of Muninn's own Bluetooth and Wi-Fi. Off for everyone until turned on: it needs Google Play services. */
+    var useGoogleNearby: Boolean
+        get() = prefs.getBoolean("googleNearby", false)
+        set(v) = prefs.edit().putBoolean("googleNearby", v).apply()
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()

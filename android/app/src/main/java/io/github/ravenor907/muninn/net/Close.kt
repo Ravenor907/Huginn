@@ -113,6 +113,8 @@ class Close(private val context: Context, private val identity: Identity) {
         main.post {
             main.removeCallbacks(duty)
             if (!running) return@post
+            // "Use Google Nearby too" off: never advertise or discover (Muninn's own Bluetooth and Wi-Fi carry on).
+            if (!identity.useGoogleNearby) { if (looking) quiet(); return@post }
             val want = level == PowerLogic.Radio.FULL || (level == PowerLogic.Radio.LOW && dutyOn)
             if (want && !looking) {
                 looking = true
@@ -124,6 +126,15 @@ class Close(private val context: Context, private val identity: Identity) {
                     .addOnFailureListener { fail(it) }
             } else if (!want && looking) quiet()
             if (level == PowerLogic.Radio.LOW) main.postDelayed(duty, PowerLogic.dutyNext(dutyOn))
+        }
+    }
+
+    /** "Use Google Nearby too" was switched: start or stop looking with Google Nearby. */
+    fun googleChanged() {
+        main.post {
+            _error.value = null
+            if (!identity.useGoogleNearby) { main.removeCallbacks(duty); if (looking) quiet() }
+            else if (running) { dutyOn = true; look() }
         }
     }
 
