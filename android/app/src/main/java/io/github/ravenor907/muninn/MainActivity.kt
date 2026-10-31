@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.AlertDialog
@@ -519,7 +520,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * The main Settings button: the valknut, black and grey. A soft ring shows while Settings is open. TalkBack
+     * The main Settings button: the valknut, black and grey. A very faint glow shows behind it while Settings is open. TalkBack
      * reads "Settings", and holding it shows the word too, for anyone who doesn't know the knot.
      */
     @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -530,9 +531,15 @@ class MainActivity : ComponentActivity() {
             tooltip = { PlainTooltip { Text("Settings") } },
             state = androidx.compose.material3.rememberTooltipState(),
         ) {
-            Box(Modifier.size(44.dp).clip(CircleShape).background(if (open) Palette.field else androidx.compose.ui.graphics.Color.Transparent)
+            // No circle behind the knot: while Settings is open, a very faint glow comes from its centre instead.
+            Box(Modifier.size(44.dp)
                 .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
-                .semantics { contentDescription = label }, contentAlignment = Alignment.Center) { Valknut(28.dp) }
+                .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+                if (open) Box(Modifier.size(44.dp).background(androidx.compose.ui.graphics.Brush.radialGradient(
+                    listOf(Palette.goldBright.copy(alpha = 0.16f), androidx.compose.ui.graphics.Color.Transparent))))
+                // The knot's weight sits low in its picture (wide base, pointed tops): lift it 2dp so it looks centred.
+                Box(Modifier.offset(y = (-2).dp)) { Valknut(28.dp) }
+            }
         }
     }
 
