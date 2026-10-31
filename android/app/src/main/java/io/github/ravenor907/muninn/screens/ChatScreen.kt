@@ -44,7 +44,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import io.github.ravenor907.muninn.net.Voice
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -1139,7 +1138,7 @@ private fun Conversation(app: Muninn, key: String) {
                     else { replyTo = null; editing = s; text = s.text }
                 })
             if (s.unsent.isEmpty() && s.text.isNotEmpty()) add(SheetAction("Copy text", "copy") {
-                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Message", s.text))
+                io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", s.text)
                 Ui.say("Copied.")
             })
             when {
@@ -1252,7 +1251,7 @@ private fun MyCode(app: Muninn) {
                         .putExtra(Intent.EXTRA_TEXT, "Message me on Muninn, the private messenger. Tap to add me (or get Muninn first). The link works for an hour:\n${Contacts.link(code)}"), "Share your Muninn code"))
                 }
                 MButton("Copy", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "copy") {
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn code", code))
+                    io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn code", code)
                     Ui.say("Code copied.")
                 }
                 MButton("New code", Modifier.fillMaxWidth().padding(top = 8.dp)) { code = app.chat.myCode() }
@@ -2348,7 +2347,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             if (!grp.readOnly && gm.mine && gm.unsent.isEmpty() && gm.photo.isEmpty() && gm.text.isNotEmpty())
                 add(SheetAction("Edit", "edit") { replyTo = null; editing = gm; text = gm.text })
             if (gm.unsent.isEmpty() && gm.text.isNotEmpty()) add(SheetAction("Copy text", "copy") {
-                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Message", gm.text))
+                io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", gm.text)
                 Ui.say("Copied.")
             })
             // Who reacted with what: everyone in the group sees reactions.
@@ -2603,7 +2602,7 @@ private fun GroupCodeDialog(app: Muninn, g: String, s: Proto06.State, code: Stri
                         .putExtra(Intent.EXTRA_TEXT, "Join ${s.name} on Muninn. Open Muninn, tap + › Add someone and paste this (it works for an hour):\n$code"), "Share the group code"))
                 }
                 MButton("Copy", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "copy") {
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn group code", code))
+                    io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn group code", code)
                     Ui.say("Group code copied.")
                 }
                 MButton("Stop this group's codes", Modifier.fillMaxWidth().padding(top = 8.dp)) {

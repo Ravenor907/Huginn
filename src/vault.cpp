@@ -1,5 +1,6 @@
 #include "vault.h"
 #include "platform/powerwatch.h"
+#include "platform/protect.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
 
@@ -27,13 +28,98 @@
 #include <cstdio>
 #include <memory>
 
+#include <QElapsedTimer>
+
+#include <openssl/core_names.h>
 #include <openssl/evp.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
 #include <openssl/rand.h>
 
 namespace
 {
 const QByteArray kMagic = QByteArrayLiteral("MUNV1");
 const int kRounds = 310000;
+// New locks: at least this many pattern dots or password characters. Older, shorter ones keep working.
+const int kMinSecret = 6;
+// Argon2id: 64 MiB, 3 passes, 4 lanes (a moment on a handheld; very slow to guess on a graphics card).
+const quint32 kArgonMem = 65536, kArgonIter = 3, kArgonLanes = 4;
+// scrypt, when this OpenSSL has no Argon2id: N = 2^17, r = 8, p = 1 (128 MiB).
+const quint64 kScryptN = quint64(1) << 17;
+const quint64 kScryptR = 8, kScryptP = 1;
+
+// Argon2id from OpenSSL 3.2 or later; empty when this OpenSSL doesn't have it.
+QByteArray argon2id(const QByteArray &pw, const QByteArray &salt, quint32 mem, quint32 iter, quint32 lanes, int len = 32,
+                    const QByteArray &secret = QByteArray(), const QByteArray &ad = QByteArray())
+{
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, "ARGON2ID", nullptr);
+    if (!kdf)
+        return {};
+    EVP_KDF_CTX *ctx = EVP_KDF_CTX_new(kdf);
+    EVP_KDF_free(kdf);
+    if (!ctx)
+        return {};
+    quint32 threads = 1;
+    QByteArray p = pw, sa = salt, se = secret, a = ad;
+    OSSL_PARAM params[9];
+    int n = 0;
+    params[n++] = OSSL_PARAM_construct_octet_string("pass", p.data(), size_t(p.size()));
+    params[n++] = OSSL_PARAM_construct_octet_string("salt", sa.data(), size_t(sa.size()));
+    params[n++] = OSSL_PARAM_construct_uint32("iter", &iter);
+    params[n++] = OSSL_PARAM_construct_uint32("threads", &threads);
+    params[n++] = OSSL_PARAM_construct_uint32("lanes", &lanes);
+    params[n++] = OSSL_PARAM_construct_uint32("memcost", &mem);
+    if (!se.isEmpty())
+        params[n++] = OSSL_PARAM_construct_octet_string("secret", se.data(), size_t(se.size()));
+    if (!a.isEmpty())
+        params[n++] = OSSL_PARAM_construct_octet_string("ad", a.data(), size_t(a.size()));
+    params[n] = OSSL_PARAM_construct_end();
+    QByteArray out(len, 0);
+    const bool ok = EVP_KDF_derive(ctx, reinterpret_cast<unsigned char *>(out.data()), size_t(len), params) == 1;
+    EVP_KDF_CTX_free(ctx);
+    return ok ? out : QByteArray();
+}
+
+QByteArray scrypt(const QByteArray &pw, const QByteArray &salt, quint64 N, quint64 r, quint64 p, int len = 32)
+{
+    QByteArray out(len, 0);
+    if (EVP_PBE_scrypt(pw.constData(), size_t(pw.size()), reinterpret_cast<const unsigned char *>(salt.constData()), size_t(salt.size()),
+                       N, r, p, 512ull * 1024 * 1024, reinterpret_cast<unsigned char *>(out.data()), size_t(len)) != 1)
+        return {};
+    return out;
+}
+
+// The key a lock file's secret makes, by its "kdf" (none: PBKDF2, from before 0.95). Empty if it can't.
+QByteArray lockKey(const QJsonObject &o, const QString &secret)
+{
+    const QByteArray salt = QByteArray::fromBase64(o.value(QStringLiteral("salt")).toString().toLatin1());
+    const QString kdf = o.value(QStringLiteral("kdf")).toString();
+    if (kdf == QLatin1String("argon2id"))
+        return argon2id(secret.toUtf8(), salt, quint32(o.value(QStringLiteral("m")).toInt()), quint32(o.value(QStringLiteral("t")).toInt()),
+                        quint32(o.value(QStringLiteral("p")).toInt()));
+    if (kdf == QLatin1String("scrypt"))
+        return scrypt(secret.toUtf8(), salt, quint64(o.value(QStringLiteral("N")).toDouble()), quint64(o.value(QStringLiteral("r")).toInt()),
+                      quint64(o.value(QStringLiteral("p")).toInt()));
+    return Vault::derive(secret, salt, o.value(QStringLiteral("rounds")).toInt(kRounds));
+}
+
+// "pattern:0,3,6,..." counts dots; a password counts characters.
+bool strongSecret(const QString &secret)
+{
+    if (secret.startsWith(QLatin1String("pattern:")))
+        return secret.mid(8).split(QLatin1Char(','), Qt::SkipEmptyParts).size() >= kMinSecret;
+    return secret.size() >= kMinSecret;
+}
+
+// The wrong-try wait runs on the time since start-up, which a changed clock doesn't move. Its start is known
+// as (clock - time since start-up): when that moved by more than two minutes (a restart, or the clock
+// changed), the whole wait begins again rather than ending.
+qint64 sinceStart()
+{
+    QElapsedTimer t;
+    t.start();
+    return t.msecsSinceReference();
+}
 
 QString dataDir()
 {
@@ -54,6 +140,8 @@ QSettings &settings()
     static QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
     return s;
 }
+
+void restartHuginn();
 }
 
 Vault::Vault(QObject *parent)
@@ -157,8 +245,19 @@ bool Vault::usesPattern() const
 
 int Vault::waitSeconds() const
 {
-    const qint64 until = settings().value(QStringLiteral("vault/until"), 0).toLongLong();
-    const qint64 left = until - QDateTime::currentMSecsSinceEpoch();
+    const qint64 wait = settings().value(QStringLiteral("vault/wait"), 0).toLongLong();
+    if (wait <= 0)
+        return 0;
+    const qint64 mono = sinceStart(), started = QDateTime::currentMSecsSinceEpoch() - mono;
+    const qint64 at = settings().value(QStringLiteral("vault/at"), 0).toLongLong();
+    const qint64 was = settings().value(QStringLiteral("vault/started"), 0).toLongLong();
+    if (qAbs(started - was) > 120000) {
+        // Restarted, or the clock moved: the whole wait again, from now.
+        settings().setValue(QStringLiteral("vault/at"), mono + wait);
+        settings().setValue(QStringLiteral("vault/started"), started);
+        return int((wait + 999) / 1000);
+    }
+    const qint64 left = qBound<qint64>(0, at - mono, wait);
     return left > 0 ? int((left + 999) / 1000) : 0;
 }
 
@@ -170,22 +269,42 @@ bool Vault::unlock(const QString &secret)
     if (!f.open(QIODevice::ReadOnly))
         return false;
     const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-    const QByteArray kek = derive(secret, QByteArray::fromBase64(o.value(QStringLiteral("salt")).toString().toLatin1()),
-                                  o.value(QStringLiteral("rounds")).toInt(kRounds));
+    f.close();
+    const QByteArray kek = lockKey(o, secret);
+    QByteArray wrapped = QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1());
     bool ok = false;
-    const QByteArray key = open(kek, QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1()), &ok);
+    const bool dpapi = o.value(QStringLiteral("dpapi")).toInt() == 1;
+    if (dpapi && !Platform::unprotect(wrapped, &wrapped))
+        wrapped.clear();   // another Windows account or computer: it can't open here
+    const QByteArray key = kek.isEmpty() || wrapped.isEmpty() ? QByteArray() : open(kek, wrapped, &ok);
     if (!ok || key.size() != 32) {
         // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
         const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
         settings().setValue(QStringLiteral("vault/fails"), fails);
-        if (fails % 5 == 0)
-            settings().setValue(QStringLiteral("vault/until"), QDateTime::currentMSecsSinceEpoch() + qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)));
+        if (fails % 5 == 0) {
+            const qint64 wait = qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)), mono = sinceStart();
+            settings().setValue(QStringLiteral("vault/wait"), wait);
+            settings().setValue(QStringLiteral("vault/at"), mono + wait);
+            settings().setValue(QStringLiteral("vault/started"), QDateTime::currentMSecsSinceEpoch() - mono);
+        }
         Q_EMIT changed();
         return false;
     }
     settings().setValue(QStringLiteral("vault/fails"), 0);
+    settings().remove(QStringLiteral("vault/wait"));
+    settings().remove(QStringLiteral("vault/at"));
+    settings().remove(QStringLiteral("vault/started"));
+    settings().remove(QStringLiteral("vault/until"));   // the old clock-based wait (before 0.95)
     const bool first = m_key.isEmpty();
     m_key = key;
+    m_weak = !strongSecret(secret);
+    // A lock from before 0.95 (PBKDF2 only): store it again the new way, now that the secret is known.
+    bool redo = o.value(QStringLiteral("kdf")).toString().isEmpty();
+#ifdef Q_OS_WIN
+    redo = redo || !dpapi;   // and on Windows, locked to this account too
+#endif
+    if (redo)
+        writeLock(secret, o.value(QStringLiteral("kind")).toString() == QLatin1String("pattern"));
     m_screenLocked = false;
     Q_EMIT changed();
     if (first)
@@ -195,23 +314,19 @@ bool Vault::unlock(const QString &secret)
 
 bool Vault::setSecret(const QString &secret, bool pattern)
 {
-    if (secret.size() < 4)
+    if (!strongSecret(secret))
         return false;
     if (exists() && m_key.isEmpty())
         return false;   // changing needs the old lock opened first
     const bool first = m_key.isEmpty();
     if (first)
         m_key = random(32);
-    const QByteArray salt = random(16);
-    const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("password")}, {QStringLiteral("kind"), pattern ? QStringLiteral("pattern") : QStringLiteral("text")},
-                        {QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())}, {QStringLiteral("rounds"), kRounds},
-                        {QStringLiteral("wrapped"), QString::fromLatin1(seal(derive(secret, salt, kRounds), m_key).toBase64())}};
-    QSaveFile f(keyFile());
-    if (!f.open(QIODevice::WriteOnly))
+    if (!writeLock(secret, pattern)) {
+        if (first)
+            m_key.clear();
         return false;
-    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    if (!f.commit())
-        return false;
+    }
+    m_weak = false;
     m_screenLocked = false;
     Q_EMIT changed();
     if (first)
@@ -219,15 +334,65 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     return true;
 }
 
+bool Vault::writeLock(const QString &secret, bool pattern) const
+{
+    const QByteArray salt = random(16);
+    QJsonObject o{{QStringLiteral("mode"), QStringLiteral("password")}, {QStringLiteral("kind"), pattern ? QStringLiteral("pattern") : QStringLiteral("text")},
+                  {QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())}};
+    // Argon2id when this OpenSSL has it, scrypt otherwise: both make guessing on a graphics card slow.
+    QByteArray kek = argon2id(secret.toUtf8(), salt, kArgonMem, kArgonIter, kArgonLanes);
+    if (!kek.isEmpty()) {
+        o.insert(QStringLiteral("kdf"), QStringLiteral("argon2id"));
+        o.insert(QStringLiteral("m"), int(kArgonMem));
+        o.insert(QStringLiteral("t"), int(kArgonIter));
+        o.insert(QStringLiteral("p"), int(kArgonLanes));
+    } else {
+        kek = scrypt(secret.toUtf8(), salt, kScryptN, kScryptR, kScryptP);
+        if (kek.isEmpty())
+            return false;
+        o.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
+        o.insert(QStringLiteral("N"), double(kScryptN));
+        o.insert(QStringLiteral("r"), int(kScryptR));
+        o.insert(QStringLiteral("p"), int(kScryptP));
+    }
+    QByteArray wrapped = seal(kek, m_key);
+    // Windows: also locked to this Windows account on this computer, so a copied file can't be guessed at elsewhere.
+    QByteArray bound;
+    if (Platform::protect(wrapped, &bound)) {
+        wrapped = bound;
+        o.insert(QStringLiteral("dpapi"), 1);
+    }
+    o.insert(QStringLiteral("wrapped"), QString::fromLatin1(wrapped.toBase64()));
+    QSaveFile f(keyFile());
+    if (!f.open(QIODevice::WriteOnly))
+        return false;
+    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    return f.commit();
+}
+
+bool Vault::askStronger()
+{
+    if (!m_weak || settings().value(QStringLiteral("chatlock/strongerAsked"), false).toBool())
+        return false;
+    settings().setValue(QStringLiteral("chatlock/strongerAsked"), true);
+    return true;
+}
+
 void Vault::eraseAll()
 {
     QDir(dataDir()).removeRecursively();
+    // Files waiting in the cache (downloads, parts of a move) and a move's saved state go too.
+    QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)).removeRecursively();
+    settings().remove(QStringLiteral("move"));
+    settings().remove(QStringLiteral("chatlock/strongerAsked"));
     m_key.fill(0);
     m_key.clear();
     settings().remove(QStringLiteral("vault"));
     // The inbox address and chat identity go too, so an erased computer doesn't keep the old mailbox.
     settings().remove(QStringLiteral("nostr"));
     settings().remove(QStringLiteral("chat"));
+    // Written now, so what Move saves right after (its "Moved to" note, through its own QSettings) isn't removed later.
+    settings().sync();
     Q_EMIT changed();
 }
 
@@ -252,10 +417,8 @@ QByteArray Vault::read(const QString &name) const
         return {};
     const QByteArray b = f.readAll();
     f.close();
-    if (!b.startsWith(kMagic)) {
-        write(name, b);   // from before encryption: save it encrypted now
-        return b;
-    }
+    if (!b.startsWith(kMagic))
+        return {};   // never take a file that isn't sealed: another program could have put it there
     bool ok = false;
     const QByteArray plain = open(m_key, b.mid(kMagic.size()), &ok);
     return ok ? plain : QByteArray();
@@ -284,6 +447,13 @@ void Vault::panic()
         return;
     lockScreen();
     Q_EMIT panicked();
+    // Like Muninn: the key is wiped from memory and Huginn starts again, so nothing readable is left behind.
+    // Nothing may be saved meanwhile (it would need the key).
+    m_key.fill(0);
+    m_key.clear();
+    m_restarting = true;
+    Q_EMIT changed();
+    QTimer::singleShot(300, this, [] { restartHuginn(); });
 }
 
 void Vault::button(const QString &name, bool down)
@@ -897,5 +1067,31 @@ bool Vault::selfTest()
     const bool kdf = derive(QStringLiteral("password"), "salt", 1).toHex() == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
     std::printf("vault PBKDF2 test vector: %s\n", kdf ? "ok" : "FAILED");
     all &= kdf;
+    // scrypt("password", "NaCl", N=1024, r=8, p=16), RFC 7914 section 12.
+    const bool sc = scrypt("password", "NaCl", 1024, 8, 16, 64).toHex()
+        == "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640";
+    std::printf("vault scrypt test vector: %s\n", sc ? "ok" : "FAILED");
+    all &= sc;
+    // Argon2id, RFC 9106 section 5.3 (only when this OpenSSL has it; new locks use scrypt otherwise).
+    const QByteArray a2 = argon2id(QByteArray(32, '\x01'), QByteArray(16, '\x02'), 32, 3, 4, 32, QByteArray(8, '\x03'), QByteArray(12, '\x04'));
+    if (a2.isEmpty()) {
+        std::printf("vault Argon2id: not in this OpenSSL, new locks use scrypt\n");
+    } else {
+        const bool ar = a2.toHex() == "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659";
+        std::printf("vault Argon2id test vector: %s\n", ar ? "ok" : "FAILED");
+        all &= ar;
+    }
+    // New locks: at least 6 dots or 6 characters.
+    const bool rules = !strongSecret(QStringLiteral("pattern:0,1,2,5,8")) && strongSecret(QStringLiteral("pattern:0,1,2,5,8,7"))
+        && !strongSecret(QStringLiteral("abcde")) && strongSecret(QStringLiteral("abcdef"));
+    std::printf("vault lock length rules: %s\n", rules ? "ok" : "FAILED");
+    all &= rules;
+    // Windows: what's locked to this account opens again, and damaged data doesn't.
+    QByteArray bound, back;
+    if (Platform::protect("vault key", &bound)) {
+        const bool dp = Platform::unprotect(bound, &back) && back == "vault key" && !Platform::unprotect(bound.left(bound.size() - 3), &back);
+        std::printf("vault Windows account lock: %s\n", dp ? "ok" : "FAILED");
+        all &= dp;
+    }
     return all;
 }

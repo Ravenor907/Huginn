@@ -232,7 +232,7 @@ object Proto06 {
         if (new.g != cur.g) return false to "other group"
         if (new.by !in cur.admins) return false to "signer is not an admin in the current state"
         if (new.owner != cur.owner && new.by != cur.owner) return false to "only the owner can hand over ownership"
-        // Cap s1 (section 20): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
+        // Cap s1 (section 21): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
         if (new.v > cur.v + MAX_AHEAD) return false to "too far ahead"
         if (new.v > cur.v) return true to "higher version"
         if (new.v == cur.v) {

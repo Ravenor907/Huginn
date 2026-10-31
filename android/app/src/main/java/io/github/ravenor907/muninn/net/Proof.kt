@@ -7,7 +7,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Cap s1 (docs/protocol-0.6.md section 20; tools/s1_ref.py writes tests/s1-vectors.json):
+ * Cap s1 (docs/protocol-0.6.md section 21; tools/s1_ref.py writes tests/s1-vectors.json):
  *  - route proofs: a device signs, with its chat key, the TLS certificate it answers on (Wi-Fi) or the other side's
  *    one-off number (Bluetooth LE and Nearby). Only a proven route is taken as a contact's; one without a proof
  *    (an older app) is only ever an extra route next to the internet.

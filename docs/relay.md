@@ -71,7 +71,7 @@ with 401 `stale`.
   ],
   "username": "...",
   "credential": "...",
-  "ttl": 7200
+  "ttl": 1800
 }
 ```
 
@@ -86,7 +86,7 @@ Errors are JSON `{"error": "<code>"}`:
 | --- | --- | --- |
 | 400 | `bad_request` | Bug in the app. Don't retry. |
 | 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. Don't retry this call. |
-| 429 | `id_limit`, `global_limit` | Daily cap reached. No relay until the next UTC day. |
+| 429 | `id_limit`, `ip_limit`, `global_limit` | Daily cap reached (per install, per internet address, or for everyone). No relay until the next UTC day. |
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
 | 503 | `limits_unavailable`, `not_configured` | Worker not set up or KV down. Retry later. |
 

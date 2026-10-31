@@ -12,8 +12,9 @@
 
 // Everything Huginn's chat keeps (messages, photos, voice, contacts, keys) is encrypted on disk with
 // one random 256-bit data key (AES-256-GCM). That key is locked by the person's pattern or password
-// (PBKDF2-SHA256, 310,000 rounds), the same scheme Muninn uses. A lock is required: until one is
-// set, or while locked, nothing is readable, even by Huginn.
+// (Argon2id, or scrypt where OpenSSL has no Argon2id; PBKDF2 before 0.95, changed on the next unlock),
+// and on Windows also by the Windows account (DPAPI). A lock is required: until one is set, or while
+// locked, nothing is readable, even by Huginn.
 class Vault : public QObject
 {
     Q_OBJECT
@@ -33,7 +34,10 @@ public:
     // Opens with the pattern ("pattern:0,3,6,...") or password. False if wrong.
     Q_INVOKABLE bool unlock(const QString &secret);
     // Sets the lock the first time (creating the data key), or changes it (must be unlocked).
+    // At least 6 pattern dots or 6 characters.
     Q_INVOKABLE bool setSecret(const QString &secret, bool pattern);
+    // True once, after unlocking with a lock shorter than new ones may be (from before 0.95): suggest a stronger one.
+    Q_INVOKABLE bool askStronger();
     // Shows the lock screen again; the data key stays in memory while Huginn runs, so incoming
     // messages are still saved (encrypted) in the background.
     Q_INVOKABLE void lockScreen() { m_screenLocked = true; Q_EMIT changed(); }
@@ -53,7 +57,7 @@ public:
     // the relock time it simply goes; past it, the lock is up instead.
     Q_PROPERTY(bool covered READ covered NOTIFY changed)
     bool covered() const { return m_covered && exists() && !screenLocked(); }
-    // Erases every message, photo, voice message, contact and key. Huginn's other settings stay.
+    // Erases every message, photo, voice message, contact and key, the cache and a move's state. Huginn's other settings stay.
     Q_INVOKABLE void eraseAll();
 
     // Encrypted files in Huginn's data folder. read() returns empty when missing, locked or damaged;
@@ -124,7 +128,8 @@ public:
     bool lockOnLeave() const;
     void setLockOnLeave(bool on);
     Q_INVOKABLE void button(const QString &name, bool down);
-    // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second).
+    // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second). The key is wiped from
+    // memory and Huginn starts again, like Muninn.
     Q_INVOKABLE void panic();
 
 Q_SIGNALS:
@@ -135,7 +140,9 @@ Q_SIGNALS:
 
 private:
     QString keyFile() const;
+    bool writeLock(const QString &secret, bool pattern) const;
     QByteArray m_key;
+    bool m_weak = false;   // the lock just opened is shorter than new ones may be
     void leaving();   // Huginn went to the background: cover at once
     void returning(); // in front again: lock if away too long, then uncover
     void sleeping();  // Windows is going to sleep

@@ -397,7 +397,7 @@ GroupWire::Verdict GroupWire::accept(const QJsonObject *cur, const QJsonObject &
     if (next.value(QStringLiteral("owner")).toString() != owner && by != owner)
         return {false, QStringLiteral("only the owner can hand over ownership")};
     const qint64 nv = next.value(QStringLiteral("v")).toInteger(), cv = cur->value(QStringLiteral("v")).toInteger();
-    // Cap s1 (section 20): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
+    // Cap s1 (section 21): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
     if (nv > cv + kMaxAhead)
         return {false, QStringLiteral("too far ahead")};
     if (nv > cv)

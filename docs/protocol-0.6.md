@@ -72,7 +72,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only, from 0.95. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn from 0.95. |
 | `x1` | moving to another device (section 18). Muninn and Huginn from 0.95. |
-| `s1` | proven routes and bound envelopes (section 20): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn from 0.95. |
+| `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn from 0.95. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -229,7 +229,7 @@ Given the current state `cur` and an incoming state `new` (reference `accept_sta
 4. `new.by` is in `cur.admins`. (An admin removed in `cur` can't sign anything you will take.)
 5. `new.owner == cur.owner`, unless `new.by == cur.owner` (only the owner hands ownership over).
 6. Conflict rule: accept if `new.v > cur.v`, or `new.v == cur.v` and `hash(new) < hash(cur)` (string compare of
-   the lowercase hex). Otherwise refuse. From 0.95 (section 20.5): refuse `new.v > cur.v + 1000`, and at the same
+   the lowercase hex). Otherwise refuse. From 0.95 (section 21.5): refuse `new.v > cur.v + 1000`, and at the same
    version a state signed by its owner (`by == owner`) wins over one that isn't, before the hash decides.
 
 Versions may jump (v3 to v7) as long as rule 4 holds against `cur`. If rule 4 fails only because you are
@@ -1202,7 +1202,7 @@ link code, the payload layout and part counts; link ids and when a link lets som
 Kids' TV reconnect messages are well-formed. Muninn checks it in `P95VectorsTest`, Huginn in `--chat-selftest` (the file
 next to `chat-vectors.json`).
 
-`python3 tools/s1_ref.py` writes `tests/s1-vectors.json` (section 20): route proofs that check out and ones that don't,
+`python3 tools/s1_ref.py` writes `tests/s1-vectors.json` (section 21): route proofs that check out and ones that don't,
 hints for three days and which match, bound fields for good and malformed envelopes, a bound v1 envelope (byte for
 byte from its nonce) with the changed copies that must not open, a bound ratchet envelope Bob opens on a new session,
 and the group state cases. Muninn checks it in `S1Test`, Huginn in `--chat-selftest`.
@@ -1657,19 +1657,58 @@ Keep in touch (0.5): a `keep` yes from someone who is already a contact is answe
 so the side still waiting becomes a contact too. Two people who both said yes are contacts at once, not verified; the 4
 emoji check is offered. Someone met close by can be called while on the same Wi-Fi or close by.
 
-## 20. Proven routes and bound envelopes (cap `s1`)
+## 20. Relay envelopes: padding, sending sockets, expiry (0.95)
+
+Three changes to how a sealed envelope travels over the Nostr relays, so a relay learns less about who talks to whom.
+None changes what a receiver must understand, so there is **no cap token**: apps from before 0.95 read these events
+exactly as before. `tools/pad_ref.py` is the reference and writes `tests/pad-vectors.json`; Muninn checks it in
+`SecDataTest`, Huginn in `--nostr-selftest` (the file next to `nostr-vectors.json`).
+
+### 20.1 Padding
+
+The event's `content` is base64 of the outer wrapping `{"e": .., "n": .., "d": ..}` (the throwaway key, the nonce and the
+sealed envelope). From 0.95 the wrapping gets one more field, `"z"`, a string of `0` characters, so that the base64 is
+exactly one of these lengths:
+
+- 1024, 4096, 16384 or 32768 characters, the smallest that fits;
+- above that, the next multiple of 16384.
+
+The steps stay at 16 KB above 32 KB because many relays refuse events over 64 KB: a photo piece (about 42 KB) becomes
+48 KB, never 64 KB.
+
+How: write the wrapping as JSON text `w` (any field order). `base = bytes(w) + 7` (the 7 characters of `,"z":""`).
+`target = bucket(4 * ceil(base / 3)) / 4 * 3`. The new text is `w` without its last `}`, then `,"z":"`, then
+`target - base` zeros, then `"}`. Its base64 is then exactly `bucket` characters. The padding sits outside the seal and
+means nothing; receivers ignore `z` (as they ignore any unknown field), and apps from before 0.95 already did.
+
+### 20.2 Sending sockets
+
+Events are published on short-lived sockets that only send: they never send `REQ` and never answer `AUTH`, so a relay
+can't tie a published event to the mailbox the same app subscribes to (and may sign in as, NIP-42) on its listening
+socket. Every relay gets every event, each on a sending socket of its own, which closes about 20 s after the last event
+given to it. Events still waiting when a relay's listening socket comes back are sent on a new sending socket. The
+retry rules (every relay; again at 1 h and 6 h while not delivered) are unchanged. The relay still sees the internet
+address on both kinds of socket; only a VPN or Tor hides that.
+
+### 20.3 Expiry (NIP-40)
+
+Each event carries `["expiration", "<unix seconds>"]`: the time of sending plus the chat's message limit in days
+(section 16; a group's limit for group messages), so relays that follow NIP-40 drop it once it is gone from the devices
+anyway. Receivers ignore the tag.
+
+## 21. Proven routes and bound envelopes (cap `s1`)
 
 From 0.95. Everything here is in `tools/s1_ref.py`, which writes `tests/s1-vectors.json`.
 
-### 20.1 Every route, always
+### 21.1 Every route, always
 
 Every message, receipt and control message goes on every route at once and **always to the internet too** (the
 contact's mailbox, when there is one), as section 0 says. A close-by or Wi-Fi route that answers is never a reason
-to skip the internet. A route counts as having taken a message ("sent") only when it is **proven** (20.2); an
+to skip the internet. A route counts as having taken a message ("sent") only when it is **proven** (21.2); an
 unproven one is only ever an extra copy. Among several devices that claim the same chat key, a proven one is used
 first, then the one seen most recently. Never pick one by its name or by list order.
 
-### 20.2 Route proofs
+### 21.2 Route proofs
 
 A proof is a signed object (2.2) by the chat key, without the object itself on the wire: only its `sig` travels.
 
@@ -1689,7 +1728,7 @@ A proof is a signed object (2.2) by the chat key, without the object itself on t
   never stand in for each other.
 - Someone whose caps include `s1` always proves: for them an unproven route is never used at all.
 
-### 20.3 Hidden from people nearby
+### 21.3 Hidden from people nearby
 
 Hidden, a device sends no name, `chatKey` or `mailbox` in announces and hellos. Instead it sends
 `"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]`, where day is the
@@ -1697,7 +1736,7 @@ number of whole days since 1970 (UTC). A contact matches it against each contact
 tomorrow and, on a match, treats the device as that contact (its proof must still check out). Anyone else learns
 nothing they can follow from place to place.
 
-### 20.4 Bound envelopes
+### 21.4 Bound envelopes
 
 To someone whose caps include `s1`, the envelope also carries `"aad": "s1"` and the clear fields are sealed in:
 
@@ -1719,14 +1758,14 @@ two days (by a hash of sender and id), so a restart doesn't let a copy in again;
 (section 15) carries an `id` and the phone sends each id once; and after 20 ratchet envelopes from one key that
 don't open within a minute, more from that key wait a while before any ratchet work is done.
 
-### 20.5 Group states
+### 21.5 Group states
 
 Accepting a state (3.3) refuses `new.v > cur.v + 1000`, and at the same version a state signed by its owner wins
 over one that isn't (then the hash decides as before). So no admin can push `v` out of the owner's reach. Also:
 an `unsend` for a group message that hasn't arrived yet only stops later copies **from that member**; `sync` (3.6)
 is answered only for members of the current state.
 
-### 20.6 Limits on the local routes (no wire change)
+### 21.6 Limits on the local routes (no wire change)
 
 - Wi-Fi: only from addresses on this very home network (a private address inside a subnet of one of the device's
   own private addresses); at most 32 connections at once; a chat envelope body at most 96 KB, any other request

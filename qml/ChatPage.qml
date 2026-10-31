@@ -588,7 +588,13 @@ Rectangle {
             anchors.bottom: parent.bottom
             anchors.horizontalCenter: parent.horizontalCenter
             width: Math.min(parent.width - Theme.px(32), Theme.px(520))
-            onFinished: how => { if (how === "change") page.changeLock = false }   // after an unlock, the change step follows
+            onFinished: how => {
+                if (how === "change") page.changeLock = false   // after an unlock, the change step follows
+                // A lock from before 0.95 shorter than new ones may be: suggest a stronger one, once.
+                if (how === "unlock" && Vault.askStronger())
+                    Ui.sure("Make your lock stronger?", "Your " + (Vault.usesPattern ? "pattern" : "password") + " is shorter than new ones may be. One with at least 6 "
+                            + (Vault.usesPattern ? "dots" : "characters") + " is much harder to guess.", "Change it", () => { page.changeLock = true })
+            }
             onCancelled: { if (page.changeLock) page.changeLock = false; else Ui.closePage() }
         }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference for cap s1 (docs/protocol-0.6.md, section 20): proven routes and sealed clear fields.
+"""Reference for cap s1 (docs/protocol-0.6.md, section 21): proven routes and sealed clear fields.
 
   - Route proofs: a device signs, with its chat key, the TLS certificate it answers Wi-Fi requests with (Wi-Fi), or a
     one-off number the other side picked (Bluetooth LE and Nearby). A route is only taken as a contact's when its proof
@@ -271,7 +271,7 @@ def build():
             for a, b in [("v6admin", "v6owner"), ("v6owner", "v6admin"), ("v5", "v6admin")]]
     expect([w["wins"] for w in wins] == ["b", "a", "b"], "owner wins a tie")
 
-    return {"note": "cap s1, docs/protocol-0.6.md section 20; written by tools/s1_ref.py",
+    return {"note": "cap s1, docs/protocol-0.6.md section 21; written by tools/s1_ref.py",
             "keys": {"A": kA, "B": kB, "C": kC},
             "route": {"fingerprint": fpA, "nonce": nA, "signed": signed, "checks": routes},
             "hint": {"now": now, "days": hints, "match": match},

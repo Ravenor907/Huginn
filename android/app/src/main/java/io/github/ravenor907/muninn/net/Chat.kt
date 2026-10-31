@@ -239,6 +239,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val c = Contact(k, n, null, true)
             if (contacts.get(k) == null && ChatWire.keyChangeFor(contacts.all.value, c) == null) contacts.put(c)
         }
+        id.dropTrusted()
         outbox.sweep()
         net.extraRoute = { method, path, body, ip ->
             when {
@@ -446,7 +447,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val key = ChatCrypto.sharedKey(eph.private, eph.public, ChatCrypto.publicFrom(peerKey))
         val s = ChatCrypto.sealBytes(key, body.toByteArray())
         val o = JSONObject().put("e", ChatCrypto.b64(eph.public.encoded)).put("n", s.nonce).put("d", s.data)
-        return Base64.getEncoder().encodeToString(o.toString().toByteArray())
+        return Base64.getEncoder().encodeToString(EnvelopePad.pad(o.toString()).toByteArray())
     }
 
     private fun unwrap(content: String): String? {
@@ -1806,14 +1807,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun wifiTo(k: String) = net.deviceFor(k, strict(k))
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
-    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null): Boolean {
+    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Boolean {
         if (mailbox == null || Move.locked) return false
+        // Relays may drop it after the chat's message limit (a group's, for group messages): it's gone from the phones by then.
+        val keep = if (days > 0) days else try { chatDays(peerKey) } catch (_: Exception) { Limits.LONGEST }
         // [stored]: once a relay has said OK to every one of them. [held]: once enough relays have (NetLogic.HELD_RELAYS).
         val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
         val heldLeft = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val all: (() -> Unit)? = held?.let { done -> { if (heldLeft.decrementAndGet() == 0) done() } }
-        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all) }
+        bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all, keep) }
         return true
     }
 
@@ -1986,7 +1989,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!c.groupOnly && "g1" !in c.caps) { probeCaps(o.to); return }
         val bodies = (if (!o.retry) listOf(envelope(o.room, o.to, o.plain, o.env).toString())
             else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
-        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null)
+        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g))
     }
 
     /** A group photo or voice message: the 0.5 photo pieces plus g, ch and gid in the clear (3.9). */
@@ -2008,14 +2011,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * Every route at once. A photo goes over the internet only when nothing close by took it (or on a later try).
      * [publish]: false while relays already hold it (it isn't sent to them again yet); [held] runs once they do.
      */
-    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null) {
+    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null, days: Int = 0) {
         if (Move.locked) return
         var local = false
         // Cap s1: only a route that proved it's them keeps a big photo off the internet.
         closeTo(k)?.let { ep -> bodies.forEach { close.send(ep, JSONObject(it).put("t", "msg")) }; if (close.proven(k)) local = true }
         if (ble.has(k, strict(k)) && bodies.all { ble.send(k, it, strict(k)) } && ble.proven(k)) local = true
         wifiTo(k)?.let { d -> if (d.proven) local = true; bg { bodies.forEach { net.post(d, PATH, it) } } }
-        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= Photos.INTERNET_PIECES))) internet(k, bodies, mailbox, held = held)
+        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= Photos.INTERNET_PIECES))) internet(k, bodies, mailbox, held = held, days = days)
     }
 
     private fun receiveGroup(o: JSONObject, room: String, fromKey: String, name: String, mailbox: String?): Pair<Int, String> {
@@ -2183,6 +2186,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         cacheSwept = now
         Link.prune(now)
         for (d in listOf("files", "camera")) File(context.cacheDir, d).listFiles()?.forEach { if (now - it.lastModified() > Limits.DEFAULT * DAY) it.deleteRecursively() }
+        // Copies of what was shared into Muninn (Share › Muninn, or picked in Files): gone after a day.
+        File(context.cacheDir, "outgoing").listFiles()?.forEach { if (now - it.lastModified() > DAY) it.deleteRecursively() }
     }
 
     /** Erases every conversation on this phone. */

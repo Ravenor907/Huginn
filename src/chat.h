@@ -384,7 +384,7 @@ private:
     QByteArray open(const QJsonObject &o, const QString &fromKey, bool *ok);
     void commitPeer();
     QString deliver(const QString &key, const QJsonObject &body, const QString &mailbox);
-    // Cap s1 (docs/protocol-0.6.md section 20): someone whose app proves its routes and seals its clear fields.
+    // Cap s1 (docs/protocol-0.6.md section 21): someone whose app proves its routes and seals its clear fields.
     bool strict(const QString &key) const;
     QString baseTo(const QString &key) const;         // their Wi-Fi address: proven first, an unproven one only when not strict
     bool sendBle(const QString &key, const QByteArray &json);
@@ -440,8 +440,9 @@ private:
     QString mailboxOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
     // Sends over the internet: to their mailbox on the relays. False when they have none.
+    // days: how long relays may keep it (0: this chat's message limit).
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
-                      std::function<void()> sent = nullptr);
+                      std::function<void()> sent = nullptr, int days = 0);
     void noteCaps(const QString &key, bool present, const QStringList &caps);
     // chatpeople.cpp
     void sayHello(const QString &key);
