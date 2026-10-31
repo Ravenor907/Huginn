@@ -37,7 +37,7 @@ class LabsInbox(context: Context, private val vault: Vault) {
                 val a = JSONArray(t)
                 (0 until a.length()).map { a.getJSONObject(it) }.map {
                     Report(it.getString("id"), it.getString("k"), it.optString("n"), it.optString("p").ifEmpty { null }, it.optString("a"),
-                        it.optString("v"), it.optString("o"), it.optString("m"), it.optString("t"), it.optLong("at"), it.optString("s"))
+                        it.optString("v"), it.optString("os"), it.optString("m"), it.optString("t"), it.optLong("at"), it.optString("s"))
                 }
             }.orEmpty()
         } catch (e: Exception) { emptyList() }
@@ -52,7 +52,7 @@ class LabsInbox(context: Context, private val vault: Vault) {
         val a = JSONArray()
         _reports.value.forEach { r ->
             a.put(JSONObject().put("id", r.id).put("k", r.from).put("n", r.name).put("p", r.mailbox ?: "").put("a", r.app).put("v", r.version)
-                .put("o", r.os).put("m", r.model).put("t", r.text).put("at", r.at).put("s", r.shot))
+                .put("os", r.os).put("m", r.model).put("t", r.text).put("at", r.at).put("s", r.shot))
         }
         try { vault.write(store, a.toString()) } catch (_: Exception) {}
     }
