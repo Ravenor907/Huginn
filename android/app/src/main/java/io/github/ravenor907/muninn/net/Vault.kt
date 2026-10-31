@@ -22,9 +22,10 @@ import javax.crypto.spec.SecretKeySpec
  * Everything Muninn keeps (chats, contacts, keys) is encrypted on the phone with one random data
  * key (AES-256-GCM). That data key is itself locked:
  *  - by default, with a key in Android's hardware key store, so only Muninn on this phone can open it;
- *  - with a password set, by the password (PBKDF2, 310,000 rounds) and then by the hardware key too:
- *    without the password nothing is readable, not even by Muninn, and copied files can't be guessed
- *    at on another computer, only on this phone (with its waits after wrong tries).
+ *  - with a password set, by the password alone (scrypt, N = 2^16, r = 8, p = 1, made in Muninn itself):
+ *    without the password nothing is readable, not even by Muninn. Nothing outside the app guards it.
+ *    Locks from before (PBKDF2, and test builds that also used the hardware key) still open, and are
+ *    stored the new way on that unlock.
  */
 class Vault(private val context: Context) {
     private val keyFile = File(context.filesDir, "vault.key")
@@ -57,15 +58,19 @@ class Vault(private val context: Context) {
     fun unlock(password: String): Boolean {
         val o = read() ?: return openDefault()
         if (o.optString("mode") != "password") return openDefault()
-        val kek = Crypto.derive(password, Crypto.b64d(o.getString("salt")), o.optInt("rounds", ROUNDS))
+        val salt = Crypto.b64d(o.getString("salt"))
+        val scrypt = o.optString("kdf") == "scrypt"
+        val kek = if (scrypt) Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", SCRYPT_N), o.optInt("r", SCRYPT_R), o.optInt("p", SCRYPT_P))
+            else Crypto.derive(password, salt, o.optInt("rounds", ROUNDS))
         val wasClosed = dataKey == null
+        // "hw": 1 only from 0.95 test builds, which also wrapped it with the hardware key.
         val hw = o.optInt("hw", 0) == 1
         val wrapped = Crypto.b64d(o.getString("wrapped"))
         val inner = if (hw) Crypto.open(systemKey(), wrapped) ?: return false else wrapped
         val k = Crypto.open(kek, inner) ?: return false
         dataKey = k
-        // Locks from before 0.95 were only the password: wrap with the hardware key too, now that it's known.
-        if (!hw) try { store(k, password, o.optString("kind") == "pattern") } catch (_: Exception) {}
+        // A PBKDF2 lock, or one with the hardware key around it: store it again with scrypt alone, now that it's known.
+        if (!scrypt || hw) try { store(k, password, o.optString("kind") == "pattern") } catch (_: Exception) {}
         weak = !LockRules.strong(password)
         if (wasClosed) applyRestore()   // only on a fresh open, before chats load
         _locked.value = false
@@ -96,9 +101,10 @@ class Vault(private val context: Context) {
             o.put("mode", "keystore").put("wrapped", Crypto.b64(Crypto.seal(systemKey(), k)))
         } else {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            // The password's lock, then the hardware key's around it ("hw": 1), so guessing has to happen on this phone.
-            o.put("mode", "password").put("kind", if (pattern) "pattern" else "text").put("salt", Crypto.b64(salt)).put("rounds", ROUNDS)
-                .put("hw", 1).put("wrapped", Crypto.b64(Crypto.seal(systemKey(), Crypto.seal(Crypto.derive(password, salt, ROUNDS), k))))
+            // The password's lock only, stretched with scrypt (slow and memory-hungry, so guessing is too). Takes about a second.
+            o.put("mode", "password").put("kind", if (pattern) "pattern" else "text").put("salt", Crypto.b64(salt))
+                .put("kdf", "scrypt").put("N", SCRYPT_N).put("r", SCRYPT_R).put("p", SCRYPT_P)
+                .put("wrapped", Crypto.b64(Crypto.seal(Crypto.scrypt(password.toByteArray(), salt, SCRYPT_N, SCRYPT_R, SCRYPT_P), k)))
         }
         val tmp = File(keyFile.path + ".tmp")
         tmp.writeText(o.toString())
@@ -254,6 +260,76 @@ class Vault(private val context: Context) {
         fun open(key: ByteArray, data: ByteArray): ByteArray? = open(SecretKeySpec(key, "AES"), data)
         fun derive(password: String, salt: ByteArray, rounds: Int): ByteArray =
             SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(PBEKeySpec(password.toCharArray(), salt, rounds, 256)).encoded
+        /** PBKDF2-HMAC-SHA256 on raw bytes (scrypt's first and last step; one round there). */
+        fun pbkdf2(password: ByteArray, salt: ByteArray, rounds: Int, len: Int): ByteArray {
+            val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+            // HMAC pads the key with zeros, so one zero byte is the same key as none (which SecretKeySpec refuses).
+            mac.init(SecretKeySpec(if (password.isEmpty()) ByteArray(1) else password, "HmacSHA256"))
+            val out = ByteArray(len)
+            var block = 1
+            var at = 0
+            while (at < len) {
+                mac.update(salt)
+                mac.update(byteArrayOf((block ushr 24).toByte(), (block ushr 16).toByte(), (block ushr 8).toByte(), block.toByte()))
+                var u = mac.doFinal()
+                val t = u.copyOf()
+                for (i in 1 until rounds) { u = mac.doFinal(u); for (j in t.indices) t[j] = (t[j].toInt() xor u[j].toInt()).toByte() }
+                System.arraycopy(t, 0, out, at, minOf(32, len - at))
+                at += 32; block++
+            }
+            return out
+        }
+
+        /** scrypt (RFC 7914), here in Muninn so nothing else is needed. n must be a power of two. Call off the main thread. */
+        fun scrypt(password: ByteArray, salt: ByteArray, n: Int, r: Int, p: Int, len: Int = 32): ByteArray {
+            require(n > 1 && (n and (n - 1)) == 0 && r > 0 && p > 0)
+            val b = pbkdf2(password, salt, 1, p * 128 * r)
+            val w = 32 * r
+            val x = IntArray(w); val y = IntArray(w); val v = IntArray(w * n); val s = IntArray(16); val t = IntArray(16)
+            for (k in 0 until p) {
+                val base = k * 128 * r
+                for (i in 0 until w) { val o = base + i * 4; x[i] = (b[o].toInt() and 255) or ((b[o + 1].toInt() and 255) shl 8) or ((b[o + 2].toInt() and 255) shl 16) or ((b[o + 3].toInt() and 255) shl 24) }
+                for (i in 0 until n) { System.arraycopy(x, 0, v, i * w, w); blockMix(x, y, r, s, t) }
+                for (i in 0 until n) {
+                    val j = x[(2 * r - 1) * 16] and (n - 1)
+                    val off = j * w
+                    for (m in 0 until w) x[m] = x[m] xor v[off + m]
+                    blockMix(x, y, r, s, t)
+                }
+                for (i in 0 until w) { val o = base + i * 4; b[o] = x[i].toByte(); b[o + 1] = (x[i] ushr 8).toByte(); b[o + 2] = (x[i] ushr 16).toByte(); b[o + 3] = (x[i] ushr 24).toByte() }
+            }
+            v.fill(0)
+            return pbkdf2(password, b, 1, len).also { b.fill(0) }
+        }
+
+        private fun blockMix(b: IntArray, y: IntArray, r: Int, s: IntArray, t: IntArray) {
+            System.arraycopy(b, (2 * r - 1) * 16, t, 0, 16)
+            for (i in 0 until 2 * r) {
+                for (j in 0 until 16) t[j] = t[j] xor b[i * 16 + j]
+                salsa8(t, s)
+                System.arraycopy(t, 0, y, (if (i % 2 == 0) i / 2 else r + i / 2) * 16, 16)
+            }
+            System.arraycopy(y, 0, b, 0, 32 * r)
+        }
+
+        private fun rl(a: Int, n: Int) = (a shl n) or (a ushr (32 - n))
+
+        /** Salsa20/8 on the 16 words of [b], in place. */
+        private fun salsa8(b: IntArray, x: IntArray) {
+            System.arraycopy(b, 0, x, 0, 16)
+            for (i in 0 until 4) {
+                x[4] = x[4] xor rl(x[0] + x[12], 7); x[8] = x[8] xor rl(x[4] + x[0], 9); x[12] = x[12] xor rl(x[8] + x[4], 13); x[0] = x[0] xor rl(x[12] + x[8], 18)
+                x[9] = x[9] xor rl(x[5] + x[1], 7); x[13] = x[13] xor rl(x[9] + x[5], 9); x[1] = x[1] xor rl(x[13] + x[9], 13); x[5] = x[5] xor rl(x[1] + x[13], 18)
+                x[14] = x[14] xor rl(x[10] + x[6], 7); x[2] = x[2] xor rl(x[14] + x[10], 9); x[6] = x[6] xor rl(x[2] + x[14], 13); x[10] = x[10] xor rl(x[6] + x[2], 18)
+                x[3] = x[3] xor rl(x[15] + x[11], 7); x[7] = x[7] xor rl(x[3] + x[15], 9); x[11] = x[11] xor rl(x[7] + x[3], 13); x[15] = x[15] xor rl(x[11] + x[7], 18)
+                x[1] = x[1] xor rl(x[0] + x[3], 7); x[2] = x[2] xor rl(x[1] + x[0], 9); x[3] = x[3] xor rl(x[2] + x[1], 13); x[0] = x[0] xor rl(x[3] + x[2], 18)
+                x[6] = x[6] xor rl(x[5] + x[4], 7); x[7] = x[7] xor rl(x[6] + x[5], 9); x[4] = x[4] xor rl(x[7] + x[6], 13); x[5] = x[5] xor rl(x[4] + x[7], 18)
+                x[11] = x[11] xor rl(x[10] + x[9], 7); x[8] = x[8] xor rl(x[11] + x[10], 9); x[9] = x[9] xor rl(x[8] + x[11], 13); x[10] = x[10] xor rl(x[9] + x[8], 18)
+                x[12] = x[12] xor rl(x[15] + x[14], 7); x[13] = x[13] xor rl(x[12] + x[15], 9); x[14] = x[14] xor rl(x[13] + x[12], 13); x[15] = x[15] xor rl(x[14] + x[13], 18)
+            }
+            for (i in 0 until 16) b[i] += x[i]
+        }
+
         fun b64(b: ByteArray): String = java.util.Base64.getEncoder().encodeToString(b)
         fun b64d(s: String): ByteArray = java.util.Base64.getDecoder().decode(s)
     }
@@ -269,7 +345,11 @@ class Vault(private val context: Context) {
 
     companion object {
         private const val ALIAS = "muninn-vault"
-        private const val ROUNDS = 310_000
+        private const val ROUNDS = 310_000   // PBKDF2, locks from before 0.95
+        /** scrypt for new locks: 64 MiB and about a second on a low-end phone (2^17 would be 128 MiB and about twice as long). */
+        const val SCRYPT_N = 1 shl 16
+        const val SCRYPT_R = 8
+        const val SCRYPT_P = 1
         /** Where a restore waits for the next open. */
         const val STAGE = "restore-pending"
         private const val DONE = ".done"
