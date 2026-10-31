@@ -91,28 +91,24 @@ Lost or reset your phone? Another parent lets you back in with one tap. If no pa
 <p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, say it as text, or record a voice message"></p>
 <p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, calls and noise removal"></p>
 
-## What's new in 0.94
+## What's new in 0.95
 
 | | |
 |---|---|
-| **Messages on time, without Google** | In the background Muninn now keeps one light connection to the healthiest relay, checked about every 5 minutes and lined up with the phone's other wake-ups, and swaps to another relay at once if it stops answering. It never falls back to checking every 15 minutes or every hour unless you pick that in Settings. |
-| **Always right away** | Your Family folder to start with, and anyone you add (Settings › Notifications, or a chat's menu). A low battery, quiet hours and checking less never hold their messages back. During quiet hours everyone else's messages arrive without a sound. |
-| **Replies come at once** | For about 5 minutes after you send or get a message, Muninn stays fully connected so the conversation flows. |
-| **Catches up instantly** | When you unlock the phone, when it joins a network, and when you open Muninn. |
-| **Honest ticks** | "Delivered" means it reached their phone. Until then it says "Waiting for Anna's phone". In groups, the message's menu shows whose phones have it and whose it's waiting for. |
-| **No more hourly floor** | A very low battery or a long quiet spell now checks the one connection every 10 minutes instead of dropping to hourly checks. |
-| **Unrestricted background use** | The Finish setting up card explains why it helps and asks for it in one tap. |
-| **Battery report shows the connection's cost** | Time on the light connection, checks and wake-ups, reconnects, and a rough share of the battery. |
-| **Messages disappear after 7 days** | Every chat, 1:1 and group, deletes messages older than 7 days on every phone and computer: text, photos, voice clips, videos, files, polls and previews. Encrypted backups leave them out too. Chats you already have get the limit the first time 0.94 starts, and the chat list says so once. |
-| **Family and Work keep longer** | A group's admins pick its type: Standard, Family or Work. Family and Work groups can keep messages up to 30 days, the same for everyone. In a 1:1 chat with someone in your Family or Work folder you can pick up to 30 days; if you two pick differently, the shorter one counts. |
-| **Older apps** | Someone on an older version keeps messages until they update; the chat's info says so. Your side still deletes them on time. |
-| **Huginn looks and feels like Discord on a PC** | Drag the edges between panels to resize them, hide the list or the member list, compact or cozy messages with their own text size, and Dark, True black or Light themes with any accent color (Settings › Appearance). |
-| **Who's around** | A group's member list shows who's online, idle or in a voice room. Click a name for their profile card: Message, Call, Video, a nickname, a note only you see, and their folders. |
-| **Voice panel** | In a voice room on a PC, who you're with, Mute, Deafen and Leave sit at the foot of the list. Push to talk: hold a key you choose (Settings › Calls). |
-| **Unread and mentions** | Groups and channels show a dot for anything new and a number for @mentions of you. Fold a group's Text or Voice category away. |
-| **Keyboard shortcuts** | Ctrl+/ lists them all. |
-| **Huginn catches up** | On a PC: albums, video messages, polls, link previews and the Shared page; invite links, introductions, the Family group offer and the 4 matching emoji; files of up to 4 GB over the internet; and Linked devices, both as your phone's companion and as the phone others link to. |
-| **Signed updates** | Every download is signed with the project's own key, and both apps refuse an update that isn't. Huginn.exe also gets extra Windows protections (Control Flow Guard, CET). |
+| **Lighter on the battery** | A message that's waiting for someone is sent again at 1 hour and 6 hours instead of every 5 minutes for a day. One "delivered" per message, no reconnecting over and over with no signal, no downloading old mail again, far fewer writes, faster checks. Group messages no longer keep the phone fully awake. |
+| **One battery choice** | Fastest, Balanced or Extreme battery saver. Even Extreme keeps one light connection, so calls still ring almost at once. The battery report also shows how often the message servers woke the phone. |
+| **Smaller downloads** | Muninn.apk is about 6.9 MB (was 11.5) and the Huginn .exe zip about 36 MB (was 43). |
+| **Easier for everyone** | Short Settings with everything else under More, plain words on every screen, one Add someone screen that opens on the camera, and dozens of smaller fixes so nothing feels wonky. |
+| **A new look** | Sharp corners with a touch of noble Norse and Gothic on a clean, modern layout. Four looks in both apps: Dark, True black, Light and Brushed metal. |
+| **Press and hold a person** | On a phone, or right-click on a computer: their role (Family, Work, Folk), what they may do (calls and video, files, seeing when you're active, Always right away), and where the chat sits (pin, move, mute, archive, unread). |
+| **Contacts that just work** | Fixed: a chat stuck on "Waiting for…", and Call or Video missing for someone who is really a contact. Meet someone close by and both tap Keep in touch: you're contacts, no code needed. |
+| **Group invite links** | Like Discord: pick when a link expires and how many people can use it, see every link, and revoke any of them. Admins decide whether members can make links too. |
+| **Move here** | Move yourself to a new phone, tablet or computer over your home Wi-Fi, confirmed with 4 emoji. The old one locks and can come back as a linked device. |
+| **Huginn on a big screen** | The right size on 1080p, 1440p and 4K, with Size from 50% to 200% (Ctrl+= and Ctrl+-). A Discord-style layout, dialogs that fit, Contacts on the rail, and your computer's own file picker. Handheld mode is gone: the layout follows the screen, and a controller's buttons show when you press Select. |
+| **Lock where your thumb is** | The pattern sits low on the screen by default; move it in Settings › Lock and privacy. |
+| **Kids' TV** | Pick the noise removal (None, Standard, Strong or Both), a parent who reset their phone can reconnect (another parent approves, or after a 24-hour wait with every parent warned), "Say it as text" stays on the TV itself, and calls come up over a show on Google TV. |
+| **Checked top to bottom** | A full security and privacy review, and its fixes: moves only on your home network, linked devices confirmed with 4 emoji, nearby devices must prove who they are, messages can't be replayed, relays can't tell who talks to whom and get padded messages, a lock that's very slow to guess, Erase everything really erases everything. Nothing outside the apps guards your data. |
+| **More private by default** | Google Nearby is now its own switch, off unless you turn it on. Link previews are off for new installs. Muninn asks the keyboard not to learn what you type. Update checks don't say which app you use, and you can turn them off. |
 
 Every earlier release is in [What changed](docs/CHANGELOG.md).
 
