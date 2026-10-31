@@ -12,6 +12,11 @@ class Identity(context: Context, private val vault: Vault) {
     private val secrets = java.io.File(context.filesDir, "secrets.json")
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
 
+    init {
+        // Link previews are off for new installs (0.95). A phone set up before that keeps them on unless it turned them off.
+        if (prefs.contains("fingerprint") && !prefs.contains("linkPreviews")) prefs.edit().putBoolean("linkPreviews", true).apply()
+    }
+
     /** Random and stable: LocalSend uses it to tell devices apart and to skip itself. */
     val fingerprint: String = prefs.getString("fingerprint", null) ?: UUID.randomUUID().toString().replace("-", "").also {
         prefs.edit().putString("fingerprint", it).apply()
@@ -126,7 +131,7 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("activeStatus", v).apply()
     /** Link previews (cap m2): this phone looks up a link I send and adds its title and picture. Never for links I get. */
     var linkPreviews: Boolean
-        get() = prefs.getBoolean("linkPreviews", true)
+        get() = prefs.getBoolean("linkPreviews", false)
         set(v) = prefs.edit().putBoolean("linkPreviews", v).apply()
     /** Notifications say only "New message" unless this is on. */
     var showPreview: Boolean
