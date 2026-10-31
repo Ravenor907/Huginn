@@ -26,12 +26,15 @@ object TvAudio {
             ?.any { it.isSource && it.type !in NOT_MICS } == true
     } catch (e: Exception) { false }
 
-    fun canDictate(context: Context): Boolean = try { SpeechRecognizer.isRecognitionAvailable(context) } catch (e: Exception) { false }
+    /** Only with an on-device recognizer (Android 12 and up), so a child's voice never leaves the TV. Without one, "Say it as text" is hidden. */
+    fun canDictate(context: Context): Boolean = try {
+        Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+    } catch (e: Exception) { false }
 }
 
 /**
- * One "Say something": listens once, reports what it heard so far and the final words. Uses the on-device
- * recognizer when the TV has one (nothing leaves the TV), else the TV's usual speech service.
+ * One "Say something": listens once, reports what it heard so far and the final words. Only ever the on-device
+ * recognizer (nothing leaves the TV), never the TV's usual speech service, which may send the voice away.
  * Create and use it on the main thread; [close] when the screen goes.
  */
 class TvSpeech(private val context: Context) {
@@ -47,9 +50,10 @@ class TvSpeech(private val context: Context) {
         feed = f
         var heard = false
         val r = try {
-            if (Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            else SpeechRecognizer.createSpeechRecognizer(context)
-        } catch (e: Exception) { fail("This TV can't turn speech into words."); return }
+            if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            else null
+        } catch (e: Exception) { null }
+        if (r == null) { f?.close(); feed = null; fail("This TV can't turn speech into words."); return }
         rec = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
