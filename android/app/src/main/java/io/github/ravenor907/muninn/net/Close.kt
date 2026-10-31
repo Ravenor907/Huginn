@@ -2,324 +2,54 @@ package io.github.ravenor907.muninn.net
 
 import android.content.Context
 import android.net.Uri
-import com.google.android.gms.nearby.Nearby
-import com.google.android.gms.nearby.connection.AdvertisingOptions
-import com.google.android.gms.nearby.connection.ConnectionInfo
-import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
-import com.google.android.gms.nearby.connection.ConnectionResolution
-import com.google.android.gms.nearby.connection.ConnectionsStatusCodes
-import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
-import com.google.android.gms.nearby.connection.DiscoveryOptions
-import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
-import com.google.android.gms.nearby.connection.Payload
-import com.google.android.gms.nearby.connection.PayloadCallback
-import com.google.android.gms.nearby.connection.PayloadTransferUpdate
-import com.google.android.gms.nearby.connection.Strategy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
 /**
- * "Close by": other phones running Muninn within Bluetooth range, with no Wi-Fi network needed.
- * Google's Nearby Connections finds them over Bluetooth and moves the data to a direct Wi-Fi link
- * when it can. Every phone both looks and is visible; they connect to each other automatically,
- * swap names and chat keys ("hello"), and then carry chat messages and files.
+ * "Close by" through Google Nearby, removed in 0.96: it relied on Google Play services and made TVs send
+ * Bluetooth pairing requests to every device around them. Muninn's own Bluetooth (Ble) and Wi-Fi carry
+ * close-by chat now. This keeps the same shape so the rest of the app needs no changes: it never finds,
+ * advertises to or connects to anything.
  */
 class Close(private val context: Context, private val identity: Identity) {
     /** [proven]: cap s1, it signed the number this phone picked with that chat key. Without (an older app), only an extra route. */
     data class Peer(val endpoint: String, val name: String, val connected: Boolean, val chatKey: String? = null, val mailbox: String? = null,
                     val proven: Boolean = false)
 
-    private val client by lazy { Nearby.getConnectionsClient(context) }
-    private val peers = ConcurrentHashMap<String, Peer>()
     private val _list = MutableStateFlow<List<Peer>>(emptyList())
     val list: StateFlow<List<Peer>> = _list.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
-    /** Permissions Nearby Connections said it was missing on the last try (asked for on top of the usual set). */
     private val _missing = MutableStateFlow<List<String>>(emptyList())
     val missing: StateFlow<List<String>> = _missing.asStateFlow()
     @Volatile var running = false
         private set
 
-    /** Every message from a connected phone: (endpoint, json). */
     var onMessage: ((String, JSONObject) -> Unit)? = null
-    /** Cap s1: signs the other phone's number with my chat key ([Proof.close]); the contact a hidden phone's hint stands for. */
     var prove: ((String) -> String?)? = null
     var hintKey: ((String) -> String?)? = null
-    /** The number this phone picked for each connection, and the hello waiting for its proof. */
-    private val nonces = ConcurrentHashMap<String, String>()
-    private val claims = ConcurrentHashMap<String, String>()
-    /** A file finished arriving: (endpoint, payload id, file or content Uri). */
     var onFile: ((String, Long, File?, Uri?) -> Unit)? = null
-    /** Whether a file of this size from that phone is wanted (an accepted offer): anything else is stopped at once, not written. */
     var allowFile: ((endpoint: String, size: Long) -> Boolean)? = null
-    /** One of our outgoing files finished. */
     var onSent: ((Long) -> Unit)? = null
-    /** Progress of incoming or outgoing files: (payload id, bytes done, total). */
     var onProgress: ((Long, Long, Long) -> Unit)? = null
 
-    /** Breaks the tie when two phones find each other at once: the one with the lower id asks.
-     *  A random one made fresh at each start (8 hex digits, like older phones send), so it can't be used to follow the phone. */
-    @Volatile private var myId = freshId()
-    private fun freshId() = ByteArray(4).also { java.security.SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
-    /** Hidden from people nearby: no name in what's advertised (contacts learn who it is from the chat key in the hello). */
-    private fun advertisedName() = "$myId|${if (identity.visibleNearby) identity.username.take(24) else Identity.HIDDEN_NAME}"
-
-    /** The name to advertise changed (or stopped being shown): start looking again with the new one. */
-    fun readvertise() {
-        main.post {
-            if (!running || !looking) return@post
-            quiet()
-            look()
-        }
-    }
-
-    fun start(hello: () -> JSONObject) {
-        if (running) return
-        running = true
-        myId = freshId()
-        _error.value = null
-        this.hello = hello
-        looking = false
-        look()
-    }
-
-    // ------------------------------------------------------------------ saving battery
-
-    private val main = android.os.Handler(android.os.Looper.getMainLooper())
-    /** See PowerLogic: FULL as before, LOW low-power and in turns, OFF not looking (connected phones stay). */
-    @Volatile private var level = PowerLogic.Radio.FULL
-    private var looking = false
-    private var dutyOn = true
-    private val duty = Runnable { dutyOn = !dutyOn; look() }
-
-    fun power(r: PowerLogic.Radio) {
-        main.post {
-            if (r == level) return@post
-            level = r
-            dutyOn = true
-            if (looking) quiet()   // the options change: start over with the new ones
-            look()
-        }
-    }
-
-    /** Advertise and discover as [level] says, on the main thread. */
-    private fun look() {
-        main.post {
-            main.removeCallbacks(duty)
-            if (!running) return@post
-            // "Use Google Nearby too" off: never advertise or discover (Muninn's own Bluetooth and Wi-Fi carry on).
-            if (!identity.useGoogleNearby) { if (looking) quiet(); return@post }
-            val want = level == PowerLogic.Radio.FULL || (level == PowerLogic.Radio.LOW && dutyOn)
-            if (want && !looking) {
-                looking = true
-                val strategy = Strategy.P2P_CLUSTER
-                val low = level == PowerLogic.Radio.LOW
-                client.startAdvertising(advertisedName(), SERVICE, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).setLowPower(low).build())
-                    .addOnFailureListener { fail(it) }
-                client.startDiscovery(SERVICE, discovery, DiscoveryOptions.Builder().setStrategy(strategy).setLowPower(low).build())
-                    .addOnFailureListener { fail(it) }
-            } else if (!want && looking) quiet()
-            if (level == PowerLogic.Radio.LOW) main.postDelayed(duty, PowerLogic.dutyNext(dutyOn))
-        }
-    }
-
-    /** "Use Google Nearby too" was switched: start or stop looking with Google Nearby. */
-    fun googleChanged() {
-        main.post {
-            _error.value = null
-            if (!identity.useGoogleNearby) { main.removeCallbacks(duty); if (looking) quiet() }
-            else if (running) { dutyOn = true; look() }
-        }
-    }
-
-    /** The refresh button: start looking over from scratch, so phones that came close since are found now. */
-    fun lookAgain() {
-        main.post {
-            if (!running) return@post
-            if (looking) quiet()
-            dutyOn = true
-            look()
-        }
-    }
-
-        /** Stops looking and being seen; phones already connected stay connected. */
-    private fun quiet() {
-        looking = false
-        try { client.stopAdvertising(); client.stopDiscovery() } catch (_: Exception) {}
-    }
-
-    fun stop() {
-        running = false
-        main.post { main.removeCallbacks(duty); looking = false }
-        try {
-            client.stopAdvertising(); client.stopDiscovery(); client.stopAllEndpoints()
-        } catch (_: Exception) {}
-        peers.clear()
-        publish()
-    }
-
-    private var hello: () -> JSONObject = { JSONObject() }
-
-    private fun fail(e: Exception) {
-        val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
-        if (code == ConnectionsStatusCodes.STATUS_ALREADY_ADVERTISING || code == ConnectionsStatusCodes.STATUS_ALREADY_DISCOVERING) return
-        _error.value = when (code) {
-            ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH, ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_ADMIN -> {
-                _missing.value = if (android.os.Build.VERSION.SDK_INT >= 31) listOf(android.Manifest.permission.BLUETOOTH_SCAN,
-                    android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
-                PERMISSION_TEXT
-            }
-            ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_COARSE_LOCATION, ConnectionsStatusCodes.MISSING_PERMISSION_ACCESS_FINE_LOCATION ->
-                // Android 13 and newer: Muninn doesn't ask for location at all. Bluetooth (Ble) still finds Huginn and Muninn.
-                if (android.os.Build.VERSION.SDK_INT >= 33) NO_LOCATION_TEXT
-                else {
-                    _missing.value = listOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION)
-                    PERMISSION_TEXT
-                }
-            ConnectionsStatusCodes.STATUS_BLUETOOTH_ERROR -> "Turn Bluetooth on to find phones close by."
-            else -> "Close-by search isn't available on this phone (Google Play services needed)."
-        }
-        running = false
-    }
-
-    /** Shown when Android won't ask again: the person has to allow it in Muninn's app settings. */
-    fun blocked() { _error.value = if (android.os.Build.VERSION.SDK_INT >= 33) "Close-by chat is off. Tap here, then allow Nearby devices in Muninn's permissions."
-        else "Close-by chat is off. Tap here, then allow Nearby devices or Location in Muninn's permissions. Muninn never sees or shares where you are." }
-    fun denied() { _error.value = PERMISSION_TEXT }
-
-    /** Android 12 and older: nothing is asked at setup. Close-by starts the first time the person taps this. */
-    fun offer() { if (!running) _error.value = OFFER_TEXT }
-
-    private val discovery = object : EndpointDiscoveryCallback() {
-        override fun onEndpointFound(endpoint: String, info: DiscoveredEndpointInfo) {
-            val id = info.endpointName.substringBefore('|')
-            val name = info.endpointName.substringAfter('|')
-            peers[endpoint] = peers[endpoint]?.copy(name = name) ?: Peer(endpoint, name, false)
-            publish()
-            // Only one side asks, so two phones don't both request at once.
-            if (myId < id) client.requestConnection(advertisedName(), endpoint, lifecycle)
-        }
-
-        override fun onEndpointLost(endpoint: String) {
-            if (peers[endpoint]?.connected != true) { peers.remove(endpoint); publish() }
-        }
-    }
-
-    private val lifecycle = object : ConnectionLifecycleCallback() {
-        override fun onConnectionInitiated(endpoint: String, info: ConnectionInfo) {
-            // Every connection is accepted for chat; private chats still verify with the 6-digit code,
-            // and files always wait for the person to accept them.
-            peers[endpoint] = peers[endpoint] ?: Peer(endpoint, info.endpointName.substringAfter('|'), false)
-            client.acceptConnection(endpoint, payloads)
-        }
-
-        override fun onConnectionResult(endpoint: String, result: ConnectionResolution) {
-            if (result.status.isSuccess) {
-                peers[endpoint] = (peers[endpoint] ?: Peer(endpoint, "Phone", false)).copy(connected = true)
-                publish()
-                // Cap s1: a fresh number for this connection; the other phone signs it with its chat key.
-                val n = Proof.newNonce().also { nonces[endpoint] = it }
-                send(endpoint, hello().put("t", "hello").put("n", n))
-            } else if (peers[endpoint]?.connected != true) {
-                peers.remove(endpoint)
-                publish()
-            }
-        }
-
-        override fun onDisconnected(endpoint: String) {
-            peers.remove(endpoint)
-            nonces.remove(endpoint); claims.remove(endpoint)
-            publish()
-        }
-    }
-
-    private val payloads = object : PayloadCallback() {
-        override fun onPayloadReceived(endpoint: String, payload: Payload) {
-            when (payload.type) {
-                Payload.Type.BYTES -> {
-                    val o = try { JSONObject(String(payload.asBytes()!!)) } catch (e: Exception) { return }
-                    when (o.optString("t")) {
-                        "hello" -> {
-                            // A hidden phone sends a hint instead of its key: only a contact's can be matched.
-                            val key = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
-                            val was = peers[endpoint]
-                            peers[endpoint] = (was ?: Peer(endpoint, "Phone", true)).copy(
-                                name = o.optString("name").ifBlank { was?.name ?: "Phone" }.take(40),
-                                chatKey = key, mailbox = o.optString("mailbox").ifEmpty { null }, connected = true,
-                                proven = was?.proven == true && was.chatKey == key)
-                            if (key != null) claims[endpoint] = key
-                            publish()
-                            // Cap s1: answer its number with my key's signature.
-                            val n = o.optString("n")
-                            if (Proof.isNonce(n)) prove?.invoke(n)?.let { send(endpoint, JSONObject().put("t", "proof").put("sig", it)) }
-                        }
-                        "proof" -> {
-                            val key = claims[endpoint]
-                            val n = nonces[endpoint]
-                            // A wrong proof: not who it says it is, so no chat key at all.
-                            if (key != null && n != null) {
-                                val ok = Proof.closeOk(key, n, o.optString("sig"))
-                                peers[endpoint]?.let { peers[endpoint] = it.copy(proven = ok, chatKey = if (ok) key else null) }
-                                publish()
-                            }
-                            return
-                        }
-                    }
-                    onMessage?.invoke(endpoint, o)
-                }
-                Payload.Type.FILE -> {
-                    val size = payload.asFile()?.size ?: -1L
-                    if (allowFile?.invoke(endpoint, size) == false) { try { client.cancelPayload(payload.id) } catch (_: Exception) {}; return }
-                    incoming[payload.id] = endpoint to payload
-                }
-                else -> {}
-            }
-        }
-
-        override fun onPayloadTransferUpdate(endpoint: String, update: PayloadTransferUpdate) {
-            onProgress?.invoke(update.payloadId, update.bytesTransferred, update.totalBytes)
-            if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
-                val (from, p) = incoming.remove(update.payloadId) ?: run { if (update.totalBytes > 0 && outgoingFiles.remove(update.payloadId)) onSent?.invoke(update.payloadId); return }
-                val f = p.asFile()
-                @Suppress("DEPRECATION") onFile?.invoke(from, update.payloadId, f?.asJavaFile(), f?.asUri())
-            } else if (update.status == PayloadTransferUpdate.Status.FAILURE || update.status == PayloadTransferUpdate.Status.CANCELED) {
-                incoming.remove(update.payloadId)
-            }
-        }
-    }
-    private val incoming = ConcurrentHashMap<Long, Pair<String, Payload>>()
-    private val outgoingFiles = java.util.Collections.newSetFromMap(ConcurrentHashMap<Long, Boolean>())
-
-    fun send(endpoint: String, o: JSONObject) {
-        client.sendPayload(endpoint, Payload.fromBytes(o.toString().toByteArray()))
-    }
-
-    /** Sends a file; returns its payload id so the other side can match it to the offer. */
-    fun sendFile(endpoint: String, file: File): Long {
-        val p = Payload.fromFile(file)
-        outgoingFiles.add(p.id)
-        client.sendPayload(endpoint, p)
-        return p.id
-    }
-
-    fun cancel(payloadId: Long) { client.cancelPayload(payloadId) }
-
-    /** A connected phone with that chat key: one that proved it first; one that couldn't (an older app) only when not [strict]. */
-    fun endpointFor(chatKey: String, strict: Boolean = false): String? {
-        val all = peers.values.filter { it.connected && it.chatKey == chatKey }
-        return (all.firstOrNull { it.proven } ?: if (strict) null else all.firstOrNull())?.endpoint
-    }
-
-    /** Whether a phone with that chat key proved it (cap s1). */
-    fun proven(chatKey: String) = peers.values.any { it.connected && it.proven && it.chatKey == chatKey }
-
-    private fun publish() { _list.value = peers.values.sortedBy { it.name.lowercase() } }
+    fun start(@Suppress("UNUSED_PARAMETER") hello: () -> JSONObject) { running = true; _error.value = null }
+    fun stop() { running = false }
+    fun readvertise() {}
+    fun power(@Suppress("UNUSED_PARAMETER") r: PowerLogic.Radio) {}
+    fun lookAgain() {}
+    fun blocked() {}
+    fun denied() {}
+    fun offer() {}
+    fun send(@Suppress("UNUSED_PARAMETER") endpoint: String, @Suppress("UNUSED_PARAMETER") o: JSONObject) {}
+    fun sendFile(@Suppress("UNUSED_PARAMETER") endpoint: String, @Suppress("UNUSED_PARAMETER") file: File): Long = -1L
+    fun cancel(@Suppress("UNUSED_PARAMETER") payloadId: Long) {}
+    fun endpointFor(@Suppress("UNUSED_PARAMETER") chatKey: String, @Suppress("UNUSED_PARAMETER") strict: Boolean = false): String? = null
+    fun proven(@Suppress("UNUSED_PARAMETER") chatKey: String) = false
 
     companion object {
         const val SERVICE = "io.github.ravenor907.muninn"

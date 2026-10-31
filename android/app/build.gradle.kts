@@ -178,7 +178,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("com.google.zxing:core:3.5.3") // QR codes for Direct connect
-    implementation("com.google.android.gms:play-services-nearby:19.3.0") // close by: Bluetooth and Wi-Fi Direct
     implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
     implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background

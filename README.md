@@ -91,6 +91,12 @@ Lost or reset your phone? Another parent lets you back in with one tap. If no pa
 <p align="center"><img src="docs/panels/06-kids-tv-buttons.png" width="100%" alt="One button to call a parent, say it as text, or record a voice message"></p>
 <p align="center"><img src="docs/panels/07-parents-control.png" width="100%" alt="Parents manage the TV from their phone: quick messages, who they can reach, calls and noise removal"></p>
 
+## What's new in 0.96
+
+| | |
+|---|---|
+| **No more pairing requests** | Fixed: a Kids' TV or phone could make PCs, phones and TVs nearby ask to pair over Bluetooth. Google Nearby is gone from Muninn completely, so it no longer leans on Google Play services. Close-by chat goes over Muninn's own Bluetooth and Wi-Fi. Update every TV and phone. |
+
 ## What's new in 0.95
 
 | | |
@@ -108,7 +114,7 @@ Lost or reset your phone? Another parent lets you back in with one tap. If no pa
 | **Lock where your thumb is** | The pattern sits low on the screen by default; move it in Settings › Lock and privacy. |
 | **Kids' TV** | Pick the noise removal (None, Standard, Strong or Both), a parent who reset their phone can reconnect (another parent approves, or after a 24-hour wait with every parent warned), "Say it as text" stays on the TV itself, and calls come up over a show on Google TV. |
 | **Checked top to bottom** | A full security and privacy review, and its fixes: moves only on your home network, linked devices confirmed with 4 emoji, nearby devices must prove who they are, messages can't be replayed, relays can't tell who talks to whom and get padded messages, a lock that's very slow to guess, Erase everything really erases everything. Nothing outside the apps guards your data. |
-| **More private by default** | Google Nearby is now its own switch, off unless you turn it on. Link previews are off for new installs. Muninn asks the keyboard not to learn what you type. Update checks don't say which app you use, and you can turn them off. |
+| **More private by default** | Link previews are off for new installs. Muninn asks the keyboard not to learn what you type. Update checks don't say which app you use, and you can turn them off. |
 
 Every earlier release is in [What changed](docs/CHANGELOG.md).
 

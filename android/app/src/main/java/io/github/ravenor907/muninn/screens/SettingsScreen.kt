@@ -408,7 +408,6 @@ private fun NearbyPage(app: Muninn) {
     var visible by remember { mutableStateOf(id.visibleNearby) }
     var nearby by remember { mutableStateOf(id.nearbyChat) }
     var keep by remember { mutableStateOf(id.keepNearbyHistory) }
-    var google by remember { mutableStateOf(id.useGoogleNearby) }
     var device by remember { mutableStateOf(id.deviceName) }
     ToggleRow("Visible to people nearby", if (visible) "People close by or on the same Wi-Fi can see your name and message you"
         else "Hidden: only your contacts can reach you close by or on the same Wi-Fi. Your name isn't sent out", visible) {
@@ -420,9 +419,6 @@ private fun NearbyPage(app: Muninn) {
     var closeBy by remember { mutableStateOf(app.power.closeBy) }
     ToggleRow("Find phones close by in the background", if (closeBy) "Bluetooth keeps looking while Muninn is closed, for chatting without the internet. Uses more battery"
         else "Off: it looks only while Muninn is open. Saves battery", closeBy) { closeBy = it; app.power.closeBy = it }
-    ToggleRow("Use Google Nearby too", "Finds more phones close by, using Google Play services. Off: Muninn's own Bluetooth and Wi-Fi only", google) {
-        google = it; id.useGoogleNearby = it; app.close.googleChanged()
-    }
     ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
     Section("This phone")
     Text("Name other devices see", style = Type.small)
