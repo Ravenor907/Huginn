@@ -76,7 +76,9 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 {
     if (type >= QtWarningMsg) {
         const QString file = QString::fromUtf8(ctx.file ? ctx.file : "");
-        if (file.endsWith(QLatin1String(".qml")) || msg.contains(QLatin1String(".qml:")) || msg.contains(QLatin1String("QML")))
+        // A screen smaller than the size asked for (a CI machine's small display) is not a QML problem.
+        const bool screenTooSmall = msg.startsWith(QLatin1String("QWindowsWindow::setGeometry"));
+        if (!screenTooSmall && (file.endsWith(QLatin1String(".qml")) || msg.contains(QLatin1String(".qml:")) || msg.contains(QLatin1String("QML"))))
         {
             ++System::s_qmlWarnings;
             if (!s_warningFile.isEmpty()) {
