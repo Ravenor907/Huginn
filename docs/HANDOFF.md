@@ -8,7 +8,7 @@ and how to work so nothing breaks.
 "Read HANDOFF.md first. Follow the owner's rules in it exactly. Then tell me where we are."
 Part 16 at the bottom is a short starter prompt to paste first.
 
-Last updated: 30 October 2026 (0.94 release day).
+Last updated: 30 October 2026 (0.95 release day).
 
 ---
 
@@ -96,21 +96,30 @@ These came from the owner over many sessions. They override any default behaviou
     SignPath, Microsoft malware reports, winget and the Microsoft Store). GitHub and the existing Cloudflare relay are
     the only services.
 
+
+12. **Never lean on outside programs (the owner, 30 Oct 2026, "really need you to remember this").** This is a
+    privacy- and security-focused communication program. Leaning on any outside program or service could break its
+    functionality, undermine its security and remove the anonymity the project is built on. So: nothing outside the
+    app guards or holds the user's data or identity (no Windows DPAPI, no Android Keystore binding for locked
+    vaults, no OS account stores, no cloud or third-party services). Anything optional must fail safe and keep the
+    app fully working without it. Ask the owner before adding any such dependency, however small. (0.95 had DPAPI and
+    a Keystore wrap added during the security fixes; both were removed for this reason.)
+
 ---
 
 ## 3. Where everything is
 
 ```
-VERSION                     one line, e.g. 0.94. Changing it on main makes a release (see part 7)
+VERSION                     one line, e.g. 0.95. Changing it on main makes a release (see part 7)
 README.md                   front page: keeping in touch, privacy, screens, battery, Kids' TV, What's new, Install
-docs/CHANGELOG.md           every release's notes, newest first (0.94 back to 0.6)
+docs/CHANGELOG.md           every release's notes, newest first (0.95 back to 0.6)
 docs/controller.md          Huginn with a game controller or TV remote
 docs/protocol-0.6.md        THE wire protocol for both apps (sections 0 to 15)
 docs/relay.md               how the apps use the relay Worker, STUN and TURN, and data per call
 docs/releases.md            how releases are signed (the project's own Ed25519 key) and how to check one
 docs/release-key.pem        the release public key both apps carry
 SECURITY.md                 how to report a security problem privately
-docs/panels/01..09.png      4K marketing panels used by the README (04-huginn-handheld.png is no longer used)
+docs/panels/01..12.png      4K marketing panels used by the README (no 04: the handheld panel was removed in 0.95)
 docs/banner.png             README banner, drawn by tools/make-banner.py in CI
 docs/HANDOFF.md             this file
 tools/*_ref.py              Python reference implementations that write the test vectors
@@ -345,6 +354,12 @@ Never stack new commits on the merged history.
 - **0.94 (30 Oct 2026):** smart notifications without Google, honest ticks, 7-day message limits (Family/Work up to
   30, d1), signed updates with the project's own key, Discord-style Huginn, Huginn catches up (m2, i1, f1, linked
   devices). See docs/CHANGELOG.md and part 11a.
+- **0.95 (30 Oct 2026):** efficiency and on-time messages, one battery choice, smaller downloads, short Settings and
+  plain wording, the Norse/Gothic sharp look with Dark, True black, Light and Brushed metal, press-and-hold person
+  panel, keep-in-touch and caps fixes, group invite links (j1), Move here (x1), Kids' TV reconnect (k6), noise removal
+  (k5) and update switch (k7), Huginn at true size with a Discord layout (handheld mode removed), and a full security
+  and privacy audit with fixes (s1 route proofs and bound envelopes, padding and separate sending sockets, scrypt or
+  Argon2id locks with nothing outside the app). See part 11b and docs/CHANGELOG.md.
 
 Full notes for each release are in `docs/CHANGELOG.md`.
 
@@ -552,7 +567,7 @@ The owner chose **one big 0.94** with everything below.
 **E. Desktop catch-up: at least everything the phone has.** m2 (albums, video messages, polls, link previews), i1
 (introductions, one-time invites, family offers, 4-emoji check), f1 (files over the internet), and linked devices.
 
-## 11b. 0.95 plan: efficiency, messages on time, lighter and easier (PLANNING ONLY: no code until the owner says go)
+## 11b. 0.95 plan: efficiency, messages on time, lighter and easier (BUILT AND RELEASED in 0.95; kept as the record of decisions)
 
 The owner's absolute focus for 0.95: app efficiency and timely notifications, and a lighter app that is easier for everyone. Decided with the owner on 30 Oct 2026, one question at a time:
 
@@ -563,7 +578,76 @@ The owner's absolute focus for 0.95: app efficiency and timely notifications, an
 - **Retries:** once a relay has said OK, re-publish only at 1 hour and 6 hours (plus right away when the other phone shows up nearby or on Wi-Fi). Today it is every 5 minutes for 24 hours. Require OK from at least 2 relays before slowing down.
 - **Quick-reply window:** opened only by my own sends, 1:1 arrivals and Always-right-away contacts, not every group message.
 - **APK:** release APK leaves out x86/x86_64 (about 7 MB); the emulator job keeps its own build.
-- **Lock screen pattern position** (ui/Pattern.kt PatternPad in screens/LockScreen.kt): adjustable in Settings (Top, Middle, Lower), default Lower half for one-handed use. Applies to unlock and to setting a pattern.
+- **Lock screen pattern position** (ui/Pattern.kt PatternPad in screens/LockScreen.kt): adjustable only in Settings › Lock and privacy (Top, Middle, Lower), never on the lock screen itself; default Lower half for one-handed use. Applies to unlock and to setting a pattern.
+- **Owner report 30 Oct 2026 (0.94 on both phones, both in Family):** his phone shows no Call/Video for her, and a
+  video message said she was on an older version. Cause: a contact's caps are learned only from a 1:1 envelope
+  (`Chat.authentic`, Chat.kt:683); contacts added by QR, introduction, Family offer or met (Chat.kt:318, 594, 778,
+  882, 1060) start with no caps, and group traffic never fills them in. `CallManager.canCall` needs `c1`, video
+  messages need `m2`. Fix: (1) learn caps from group envelopes and group state too; (2) send a small hello with caps
+  right after adding someone, both ways; (3) treat unknown caps as "probably current" in the UI and let the wire
+  fall back if the other side really is old.
+- **Root cause found from the owner's screenshot:** on his phone she is still a Nearby "met" person, not a contact
+  ("You said yes to keeping in touch. Waiting for MoM."), so `contacts.get` is null: no caps, no Call/Video, "needs
+  a newer Muninn". Her phone already has him as a contact, and `"keep"` in Chat.kt (`if (isContact(fromKey)) return
+  200`) swallows his yes without answering, so he waits forever. Fix: when a "keep" yes arrives from someone who is
+  already a contact, answer with our own "keep" yes (once), and the waiting side becomes contacts at once. Also let
+  a met person be called and sent video when they are on the same Wi-Fi.
+- **Owner confirmed 30 Oct:** scanning her code fixed calls, video and video messages. Decision: no code needed when
+  both agree on Nearby. Both tapping "Keep in touch" makes them contacts at once (calls, video, messages work); the
+  4-emoji check is offered with one tap and marks them verified. Permissions (calls, video, files, Always right away,
+  folder, block) can be given and taken away from the long-press menu.
+- **Owner, 30 Oct:** press and hold someone on the home screen (the chat list) to fully adjust their role and
+  placement: folder (Family, Work, Folk), trusted/verified, Always right away, what they may do (calls, video,
+  files), and where the chat sits (pin to top, move up or down, archive, mute, mark unread), plus nickname, color
+  and block. One sheet, same everywhere (chat list, contacts, member list).
+- **Long-press a person** (chat list, contacts, group member list): verify with the 4 emoji, trusted, folder
+  (Family/Work/Folk), Always right away, nickname, block, all in one menu.
+- **Look (owner, 30 Oct):** keep the sharper corners of the current apps (about 4px, like Kit.kt `Corner`), not the
+  rounded mockups. Lean into it as the house style: hints of noble Norse and Gothic, on a modern, clean layout.
+- **Themes in both apps (owner, 30 Oct):** Dark (default), True black, Light (parchment, as Huginn's today) and a new
+  Brushed metal (iron and steel greys with a subtle brushed texture on rails and headers). Muninn gets Light and
+  Brushed metal for the first time; Huginn gets Brushed metal.
+- **Platforms and layout (owner, 30 Oct):** only three downloads, ever: Windows (zip), Linux (Flatpak) and Android
+  (APK). Remove Huginn's handheld mode; keep a scaling choice in Settings. Layout follows orientation, not device:
+  every portrait screen (phone, tablet held upright, a portrait window) uses the same portrait layout, and every
+  landscape screen (tablet, desktop, landscape phone) the same landscape layout. Google TV (kid mode) is the only
+  exception and keeps its own layout. Controller support stays (in the normal layout), checked only while a
+  controller is connected. The button legend is hidden by default: the Select (View/Back) button shows it, and
+  pressing Select again or any other button hides it.
+- **Desktop scaling and a Discord layout (owner, 30 Oct, photo of Huginn on a large monitor: everything huge, the New
+  group hint cut off at the left, controller hints showing with no controller):**
+  - Cause: `System::uiScale` (src/system.cpp:67) grows the desktop with screen height (0.85 x height/1080, up to 2x) and
+    Theme.qml adds x1.3 on top, while Qt already applies the OS DPI scaling. 1440p ends up about 1.47x, 4K up to 2.2x,
+    and with Windows display scaling it doubles up. Fix: desktop base 1.0 at every resolution, no x1.3, let the OS DPI
+    do HiDPI; Size 50% to 200% in Settings, also Ctrl+= / Ctrl+- / Ctrl+0, saved.
+  - Mimic Discord's current desktop layout at 100%: server rail 72 px; channel/DM list 240 px (drag 200 to 360);
+    member list 240 px; 48 px headers; user panel at the bottom left under the rail and list; message text 16 px;
+    density Compact / Default / Spacious; themes like Discord's (Light, Dark, a darker one) plus ours.
+  - Dialogs: title on its own line, help text wraps under it (never cut off), sized to content, not full width.
+  - Controller hints only while a controller is in use (Select shows the legend).
+- **Kids' TV: a parent who wiped or reinstalled can reconnect (owner, 30 Oct).** If another parent is still connected,
+  they approve with one tap. If none is left, the TV's parent menu shows a "Connect a parent" code (opening it needs a
+  5-second hold on the remote, so a child can't); the parent scans it. The old, wiped parent is removed from the TV's
+  list automatically.
+- **Move to another device (owner, 30 Oct).** The QR screen offers "Use on both" (linked devices, as today) and "Move
+  here" (takeover). Move here sends identity, contacts, groups and history straight over the home Wi-Fi, encrypted
+  with a key carried in the QR, nothing through the internet; contacts don't re-add or re-verify. The 4 emoji confirm
+  on both screens. Afterwards the old device is locked out (can't send, read or receive as you; its keys are erased)
+  and shows "Moved to [name]", with one tap to become a linked device of the new one. An interrupted move resumes;
+  the old device stays locked until it finishes. Moving back works the same way. Needs a wire addition (a move
+  message and the locked state) in both apps, with vectors.
+- **Group invite links like Discord (owner, 30 Oct).** Expiry 30 min, 1 h, 6 h, 12 h, 1 day, 7 days (default) or
+  Never; max uses 1, 5, 10, 25, 50, 100 or no limit; a list of active links (creator, uses, time left) with Revoke.
+  Admins can always make links; a group switch "Members can invite" (default off) lets members too. Enforced by the
+  admins' devices that accept the join; old join codes keep working.
+- **Outside-dependency decisions (owner, 30 Oct, for 0.95):** Kids' TV dictation on-device only (button hidden
+  otherwise); the no-lock vault key in Muninn's own files, not the Keystore; "Check for updates automatically"
+  switch, on by default; Google Nearby split into its own switch, off by default; link previews off by default for
+  new installs; 3 more default relays (relay.snort.social, nostr-pub.wellorder.net, offchain.pub); backup STUN
+  servers stun.nextcloud.com and stun.stunprotocol.org after Cloudflare (no Google); incognito keyboard in Muninn;
+  plain User-Agent for update checks; random Google Nearby id; fonts pinned with SHA-256. Kept as is: untrusted calls
+  fail when the call relay is down (never a direct fallback); relayId stays fixed. Later: Flatpak's dependence on
+  Flathub for its runtime and the org.freedesktop.Flatpak permission (the Windows zip under Proton is the fallback).
 - **Mockup:** the owner asked for a mockup of the Android app after the 0.95 changes, to review before code.
 
 Already approved trims (from the 0.94 quality check): remove the duplicate "Photos and voice"; remove Huginn's Steam screenshot scanning and the Flatpak Steam userdata permission; kids' TV noise removal selectable (None, Standard WebRTC, Strong RNNoise, Both; default Both; on the parent phone and the TV); Nearby folded into one switch with details under More; one battery choice (Fastest, Balanced, Most saving) with switches under More; remove Huginn's browser TransferServer page; one "Add someone" screen, QR first; remove old 0.5/Tor migration code.
@@ -597,7 +681,6 @@ Quality check fixes (both apps): message history rewrite off the UI thread and o
 - **Discord-style ideas for Huginn on PC:** never gone through with the owner. Ask about them one at a time if the
   owner wants desktop parity.
 - **Huginn support for m2, i1, f1 and linked devices:** see part 10.
-- **Unused file:** `docs/panels/04-huginn-handheld.png` (removed from the README; can stay or be deleted, ask).
 - **Decided against (don't build):**
   - forwarding messages
   - location sharing
@@ -642,14 +725,16 @@ Quality check fixes (both apps): message history rewrite off the UI thread and o
 
 ## 15. State at handoff
 
-- `main` has 0.94 (squash merge of branch `integ94`), `VERSION` 0.94. Start new work from main.
-- 0.94 device tests still to do by the owner: see part 10 and the 0.94 notes below.
-- Wine CI note: run Huginn's extra self-tests under Wine in their own step after the start test, with `wineserver -k`
-  around them. A second Huginn run in the same prefix before the start test crashed Qt's text code under Wine only.
-- Probe branches to delete by hand (this environment can't delete branches): n94-i1f1-probe-a/b,
-  n94-winefix-probe-a..h.
-- Release v0.93: **published** 30 Oct 2026, 7:41 AM PDT (https://github.com/Ravenor907/Huginn-Muninn/releases/tag/v0.93), with Huginn-Windows.zip (44.7 MB), Huginn.flatpak (3.6 MB) and Muninn.apk (11.5 MB), each with a .sha256. The Flatpak job hit a GitHub 500 on the ci-tour push on the first try and passed on one re-run.
-- No 0.95 code exists. The 0.95 plan (part 11b) is being agreed with the owner; code only after "go".
+- `main` has 0.95 (squash merge of branch `integ95`), `VERSION` 0.95. Start new work from main.
+- Caps: Muninn `r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 k1 k2 k3 k4 k5 k6 k7` (tokens Huginn reads first: a 0.94
+  Huginn keeps only 16); Huginn `r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1` and keeps up to 32 tokens.
+- Owner device tests for 0.95 are still to do (see docs/CHANGELOG.md 0.95).
+- Left for later: pin tools/get-fonts.sh to a google/fonts commit with SHA-256 (google/fonts was unreachable here);
+  3 more default relays and backup STUN servers (the owner approved; a safety check in the build environment
+  blocked the edit, so they were not added); Flatpak's dependence on Flathub for its runtime.
+- The relay Worker on Cloudflare still needs the owner's update (part 12), now also for the per-IP cap and 30-minute
+  TURN logins. The apps work either way.
+- Feature branches (n94-*, n95-*, integ94, integ95) can be deleted by hand.
 
 ---
 

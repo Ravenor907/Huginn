@@ -18,6 +18,8 @@ class CloseFiles(private val context: Context, private val close: Close, private
     private class Offer(val id: String, val endpoint: String, val from: String, val files: List<Pair<String, Long>>) {
         /** Set by Accept: until then nothing from this phone is saved. */
         @Volatile var accepted = false
+        /** File payloads let in so far. */
+        var admitted = 0
     }
     private class Outgoing(val id: String, val endpoint: String, val name: String, val files: List<File>)
 
@@ -41,6 +43,12 @@ class CloseFiles(private val context: Context, private val close: Close, private
             }
         }
         close.onFile = { endpoint, pid, file, uri -> save(endpoint, pid, file, uri) }
+        // Only as many files as the accepted offer named, from that phone, none bigger than its biggest.
+        close.allowFile = { endpoint, size ->
+            val o = offer
+            o != null && o.accepted && o.endpoint == endpoint && size <= (o.files.maxOfOrNull { it.second } ?: 0L) &&
+                synchronized(o) { o.admitted < o.files.size && (++o.admitted > 0) }
+        }
         close.onSent = { if (--sending <= 0 && sentTo.isNotEmpty()) { net.logSent(sentNames, sentTo); finish(true, "Sent to $sentTo.") } }
         close.onProgress = { pid, done, all ->
             progress[pid] = done

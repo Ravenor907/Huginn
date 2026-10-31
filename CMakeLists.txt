@@ -53,14 +53,19 @@ qt_add_executable(huginn
     src/system.cpp src/system.h
     src/gamepad.cpp src/gamepad.h
     src/transfer.cpp src/transfer.h
+    src/livelist.cpp src/livelist.h
     src/updater.cpp src/updater.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.h
     src/chatcrypto.cpp src/chatcrypto.h
     src/chatwire.cpp src/chatwire.h
+    src/proof.cpp src/proof.h
     src/chatgroups.cpp
     src/chatlimits.cpp
+    src/chatpeople.cpp
+    src/grouplinks.cpp
+    src/move.cpp src/move.h
     src/groupwire.cpp src/groupwire.h
     src/richwire.cpp src/richwire.h
     src/morewire.cpp src/morewire.h
@@ -207,6 +212,7 @@ qt_add_qml_module(huginn
         qml/Segmented.qml
         qml/TextPrompt.qml
         qml/ConfirmDialog.qml
+        qml/MoveCover.qml
         qml/Toast.qml
         qml/ListPicker.qml
         qml/Rail.qml
@@ -242,9 +248,14 @@ qt_add_qml_module(huginn
         qml/PeopleActions.qml
         qml/FileStrip.qml
         qml/MirrorPanel.qml
+        qml/Brushed.qml
+        qml/TopBar.qml
+        qml/PersonPanel.qml
+        qml/InvitePanel.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
+        qml/assets/brushed.png
         qml/assets/raven_message.wav
         ${HUGINN_FONTS}
 )
@@ -257,11 +268,12 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels (0.94).
-foreach(f IN ITEMS Splitter PaneToggle MemberList VoicePanel ProfileCard ShortcutsPanel)
+foreach(f IN ITEMS Splitter PaneToggle MemberList VoicePanel ProfileCard ShortcutsPanel Brushed TopBar PersonPanel InvitePanel)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
 set_source_files_properties(qml/assets/valknut.png PROPERTIES QT_RESOURCE_ALIAS assets/valknut.png)
+set_source_files_properties(qml/assets/brushed.png PROPERTIES QT_RESOURCE_ALIAS assets/brushed.png)
 set_source_files_properties(qml/assets/raven_message.wav PROPERTIES QT_RESOURCE_ALIAS assets/raven_message.wav)
 foreach(font IN LISTS HUGINN_FONTS)
     get_filename_component(name ${font} NAME)

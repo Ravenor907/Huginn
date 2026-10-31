@@ -21,9 +21,11 @@ object Link {
     const val PREFIX = "MUNINNL1:"
     const val TOKEN_MS = 10 * 60_000L
     const val CHAT_MSGS = 25
+    private const val SENDS = "link-sends.json"
 
     /** A device linked to this one: on the phone, a companion; on the companion, the phone. */
-    data class Device(val key: String, val mailbox: String, val name: String)
+    /** [ok]: both screens showed the same 4 emoji and the person said so (nothing is mirrored before). */
+    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = true)
     /** One mirrored message on the companion. */
     data class M(val id: String, val text: String, val mine: Boolean, val time: Long)
     /** [days]: the chat's message limit on the phone (cap d1): the companion deletes after it too. */
@@ -44,6 +46,8 @@ object Link {
         fun notice(text: String)
         /** How many days the phone keeps its chat with [peer] (docs/protocol-0.6.md section 16). */
         fun days(peer: String): Int = Limits.DEFAULT
+        /** The 4 emoji for this device and [key] (13.5): the same on both screens means nobody is in between. */
+        fun emoji(key: String): String = ""
     }
 
     @Volatile var host: Host? = null
@@ -95,8 +99,15 @@ object Link {
         return PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
     }
 
-    /** On the phone: link the device whose code this is. Null when done, else what to say. */
-    fun link(code: String): String? {
+    /** The 4 emoji to check with the linked device [key], on both screens, before anything is mirrored. */
+    fun emojiWith(key: String): String = host?.emoji(key).orEmpty()
+
+    /**
+     * On the phone: link the device whose code this is. Nothing is mirrored until both screens showed the same 4 emoji
+     * and the person said so ([confirm]); [confirmed] only for a device already proven (moving, section 18). Null when
+     * done, else what to say.
+     */
+    fun link(code: String, confirmed: Boolean = false): String? {
         val h = host ?: return "Not ready."
         val i = code.indexOf(PREFIX)
         if (i < 0) return "That isn't a link code. On the other device: Settings › Linked devices › Use as a companion."
@@ -105,13 +116,30 @@ object Link {
         val k = o.optString("k")
         try { ChatCrypto.publicFrom(k) } catch (e: Exception) { return "That link code is damaged." }
         if (k == h.myKey()) return "That's this device's own code."
-        val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" })
+        val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" }, ok = confirmed)
         _companions.value = _companions.value.filterNot { it.key == k } + d
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
-        syncAll(d)
+        if (confirmed) syncAll(d)
         return null
     }
+
+    /** The 4 emoji matched on both screens: on the phone the chats go to [key] now; on a companion, they're asked for. */
+    fun confirm(key: String) {
+        val h = host ?: return
+        _companions.value.firstOrNull { it.key == key && !it.ok }?.let { d ->
+            val now = d.copy(ok = true)
+            _companions.value = _companions.value.map { if (it.key == key) now else it }
+            save(); syncAll(now)
+        }
+        _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
+            _phone.value = p.copy(ok = true); save()
+            h.send(p, JSONObject().put("t", "sync").toString())
+        }
+    }
+
+    /** Linked devices whose emoji haven't been checked yet (on the phone, companions; on a companion, the phone). */
+    fun unchecked(): List<Device> = _companions.value.filter { !it.ok } + listOfNotNull(_phone.value?.takeIf { !it.ok })
 
     fun unlink(key: String) {
         val h = host ?: return
@@ -126,7 +154,7 @@ object Link {
     /** Every chat's latest messages to [d] (or to every companion). */
     fun syncAll(d: Device? = null) {
         val h = host ?: return
-        val to = if (d != null) listOf(d) else _companions.value
+        val to = (if (d != null) listOf(d) else _companions.value).filter { it.ok }
         if (to.isEmpty()) return
         for ((peer, chat) in h.chats()) {
             // Kept well under the 64 KB an envelope may be: long messages are cut here (the phone has them whole).
@@ -141,7 +169,7 @@ object Link {
         val h = host ?: return
         if (_companions.value.isEmpty()) return
         val json = JSONObject().put("t", "msg").put("peer", peer).put("n", name).put("m", mJson(m)).put("d", h.days(peer)).toString()
-        _companions.value.forEach { h.send(it, json) }
+        _companions.value.filter { it.ok }.forEach { h.send(it, json) }
     }
 
     private fun mJson(m: Chat.Msg) = JSONObject().put("id", m.id).put("x", text(m).take(2000)).put("me", m.mine).put("t", m.time)
@@ -168,16 +196,18 @@ object Link {
             t == "hello" && ph == null && comp == null -> {
                 if (token.isEmpty() || p.optString("i") != token || System.currentTimeMillis() > tokenUntil) return false
                 token = ""
-                _phone.value = Device(from, p.optString("p"), p.optString("n").take(40).ifBlank { "Your phone" })
+                _phone.value = Device(from, p.optString("p"), p.optString("n").take(40).ifBlank { "Your phone" }, ok = false)
                 _mirror.value = emptyMap()
                 save(); saveMirror()
-                h.notice("Linked. Your phone's chats show here while it's online.")
+                h.notice("Check the 4 emoji with your phone, then tap They match.")
             }
             t == "unlink" && (comp != null || ph != null) -> {
                 if (comp != null) { _companions.value = _companions.value - comp }
                 if (ph != null) { _phone.value = null; _mirror.value = emptyMap(); saveMirror() }
                 save()
             }
+            // Nothing from the phone shows until this screen's emoji were checked.
+            ph != null && !ph.ok && (t == "chat" || t == "msg") -> {}
             ph != null && t == "chat" -> {
                 val c = MirrorChat(p.optString("peer"), p.optString("n").take(40), msgsOf(p.optJSONArray("msgs")), daysOf(p))
                 if (c.peer.isNotEmpty()) { _mirror.value = _mirror.value + (c.peer to c); saveMirror(); prune() }
@@ -192,14 +222,38 @@ object Link {
                 saveMirror()
                 if (!m.mine) h.notice("${p.optString("n")}: ${m.text.take(60)}")
             }
+            comp != null && !comp.ok && (t == "send" || t == "sync") -> {}
             comp != null && t == "send" -> {
                 val text = p.optString("text").trim()
-                if (text.isNotEmpty()) h.sendAsMe(p.optString("peer"), text.take(2000))
+                // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
+                if (text.isNotEmpty() && firstSend(p.optString("id"))) h.sendAsMe(p.optString("peer"), text.take(2000))
             }
             comp != null && t == "sync" -> syncAll(comp)
             else -> return comp != null || ph != null
         }
         return true
+    }
+
+    /** Ids of companions' "send" already sent (kept two days, on disk), so none goes out twice. */
+    private val sends = LinkedHashMap<String, Long>()
+    @Volatile private var sendsLoaded = false
+
+    private fun firstSend(id: String): Boolean {
+        if (id.isEmpty()) return true   // an older companion's: nothing to check against
+        val h = host ?: return false
+        synchronized(sends) {
+            val now = System.currentTimeMillis()
+            if (!sendsLoaded) {
+                sendsLoaded = true
+                try { h.read(SENDS)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sends[it] = o.optLong(it) } } } catch (_: Exception) {}
+            }
+            sends.entries.removeIf { now - it.value > 2 * Limits.DAY }
+            if (sends.containsKey(id)) return false
+            sends[id] = now
+            while (sends.size > 1000) sends.remove(sends.keys.first())
+            h.write(SENDS, JSONObject().apply { sends.forEach { (k, t) -> put(k, t) } }.toString())
+            return true
+        }
     }
 
     // ------------------------------------------------------------------ the companion's side
@@ -216,8 +270,9 @@ object Link {
 
     // ------------------------------------------------------------------ storage
 
-    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name)
-    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"))
+    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok)
+    // Linked before 0.95 (no check then): kept as they were.
+    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", true))
     private fun mOf(o: JSONObject) = M(o.optString("id"), o.optString("x"), o.optBoolean("me"), o.optLong("t"))
     private fun msgsOf(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).map { mOf(a.getJSONObject(it)) }
     private fun daysOf(o: JSONObject) = o.optInt("d", Limits.DEFAULT).coerceIn(Limits.DEFAULT, Limits.LONGEST)

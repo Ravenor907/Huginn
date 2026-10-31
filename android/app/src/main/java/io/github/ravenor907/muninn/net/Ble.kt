@@ -48,7 +48,8 @@ import java.util.concurrent.Executors
  */
 @SuppressLint("MissingPermission")   // every call checks permissions first and catches SecurityException
 class Ble(context: Context, private val hello: () -> JSONObject) {
-    data class Peer(val address: String, val name: String, val chatKey: String?, val mailbox: String?)
+    /** [proven]: cap s1, it signed the number this phone put in its HELLO. Without (an older Huginn), only an extra route. */
+    data class Peer(val address: String, val name: String, val chatKey: String?, val mailbox: String?, val proven: Boolean = false)
 
     private val context = context.applicationContext
     private val manager: BluetoothManager? = this.context.getSystemService(BluetoothManager::class.java)
@@ -64,6 +65,9 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
 
     /** Every chat envelope from a connected Huginn: (its chat key, json). */
     @Volatile var onMessage: ((chatKey: String, json: String) -> Unit)? = null
+    /** Cap s1: signs Huginn's number with my chat key ([Proof.close]); the contact a hidden Huginn's hint stands for. */
+    @Volatile var prove: ((String) -> String?)? = null
+    @Volatile var hintKey: ((String) -> String?)? = null
 
     private class Frame(val number: Int, val bytes: ByteArray)
 
@@ -72,6 +76,9 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         val since = System.nanoTime()
         @Volatile var mtu = 23
         @Volatile var chatKey: String? = null
+        @Volatile var proven = false
+        /** Cap s1: the number in my HELLO for this Huginn, which its hello signs. */
+        val nonce = Proof.newNonce()
         @Volatile var queued = 0
         var name = "Huginn"
         var mailbox: String? = null
@@ -150,11 +157,20 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         }
     }
 
+    /** The connection for that chat key: one that proved it first, else (not [strict]) the newest that couldn't. */
+    private fun connFor(chatKey: String, strict: Boolean): Conn? {
+        val all = conns.values.filter { it.chatKey == chatKey }
+        return all.filter { it.proven }.maxByOrNull { it.since } ?: if (strict) null else all.maxByOrNull { it.since }
+    }
+
+    fun has(chatKey: String, strict: Boolean = false) = connFor(chatKey, strict) != null
+    fun proven(chatKey: String) = conns.values.any { it.proven && it.chatKey == chatKey }
+
     /** Queues a message for that Huginn. False if it isn't connected (or the message is too big). */
-    fun send(chatKey: String, json: String): Boolean {
+    fun send(chatKey: String, json: String, strict: Boolean = false): Boolean {
         val bytes = json.toByteArray(Charsets.UTF_8)
         if (bytes.size > BleFrames.MAX_MESSAGE) return false
-        val c = conns.values.filter { it.chatKey == chatKey }.maxByOrNull { it.since } ?: return false
+        val c = connFor(chatKey, strict) ?: return false
         if (c.queued + bytes.size > MAX_QUEUE) return false
         // Numbering happens on the Bluetooth thread, so two senders can't put numbers out of order.
         handler.post { enqueue(c, bytes) }
@@ -327,11 +343,15 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         catch (_: Exception) {}
     }
 
-    /** Just the four fields Huginn needs, whatever else the app's hello carries. */
-    private fun helloBytes(): ByteArray? = try {
+    /**
+     * Just the fields Huginn needs, whatever else the app's hello carries. Hidden: a daily hint instead of the chat key
+     * and mailbox (cap s1). "n": this connection's number, which Huginn's hello signs.
+     */
+    private fun helloBytes(c: Conn): ByteArray? = try {
         val h = hello()
-        JSONObject().put("name", h.optString("name")).put("chatKey", h.optString("chatKey"))
-            .put("mailbox", h.optString("mailbox")).put("app", "muninn").toString().toByteArray(Charsets.UTF_8)
+        JSONObject().put("name", h.optString("name")).apply {
+            if (h.has("hint")) put("hint", h.optString("hint")) else put("chatKey", h.optString("chatKey")).put("mailbox", h.optString("mailbox"))
+        }.put("app", "muninn").put("n", c.nonce).toString().toByteArray(Charsets.UTF_8)
     } catch (_: Exception) { null }
 
     private inner class ServerCallback(private val g: Int) : BluetoothGattServerCallback() {
@@ -370,7 +390,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
                 if (characteristic?.uuid != HELLO) { respond(device, requestId, BluetoothGatt.GATT_READ_NOT_PERMITTED, offset, null); return@later }
                 val c = conn(device)
                 // A long read comes in pieces; keep the same bytes for all of them so they match up.
-                val bytes = (if (offset == 0) null else c.helloBytes) ?: helloBytes().also { c.helloBytes = it }
+                val bytes = (if (offset == 0) null else c.helloBytes) ?: helloBytes(c).also { c.helloBytes = it }
                 when {
                     bytes == null -> respond(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
                     offset < 0 || offset > bytes.size -> respond(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null)
@@ -470,9 +490,16 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
         val o = try { JSONObject(text) } catch (_: Exception) { return }
         if (o.optString("t") == "hello") {
             c.name = o.optString("name").ifBlank { c.name }.take(40)
-            c.chatKey = o.optString("chatKey").ifEmpty { null }
+            val key = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
+            // Cap s1: its hello signs the number in my HELLO. A wrong signature: not who it says, so no chat key at all.
+            val sig = o.optString("proof")
+            c.proven = key != null && sig.isNotEmpty() && Proof.closeOk(key, c.nonce, sig)
+            c.chatKey = if (c.proven || sig.isEmpty()) key else null
             c.mailbox = o.optString("mailbox").ifEmpty { null }
             c.heard = true
+            // And I sign its number, so it knows this is really me.
+            val n = o.optString("n")
+            if (Proof.isNonce(n)) prove?.invoke(n)?.let { enqueue(c, JSONObject().put("t", "proof").put("sig", it).toString().toByteArray(Charsets.UTF_8)) }
             publish()
             pump(c)
             return
@@ -542,7 +569,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
 
     private fun publish() {
         _peers.value = conns.values.filter { it.heard }.sortedBy { it.name.lowercase() }
-            .map { Peer(it.device.address, it.name, it.chatKey, it.mailbox) }
+            .map { Peer(it.device.address, it.name, it.chatKey, it.mailbox, it.proven) }
     }
 
     companion object {

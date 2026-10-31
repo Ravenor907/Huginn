@@ -52,7 +52,8 @@ extern "C" TvVoice *tvv_create(int in_rate, int out_rate, int render_rate, int p
   c.high_pass_filter.enabled = true;
   c.echo_canceller.enabled = (flags & TVV_AEC) != 0;
   c.echo_canceller.mobile_mode = false;  // AEC3, not the old mobile canceller
-  c.noise_suppression.enabled = (flags & TVV_NS) != 0 && !rn;
+  // Standard (WebRTC) and Strong (RNNoise) can run together: WebRTC first, then RNNoise.
+  c.noise_suppression.enabled = (flags & TVV_NS) != 0;
   c.noise_suppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kHigh;
   c.transient_suppression.enabled = false;
   c.voice_detection.enabled = false;

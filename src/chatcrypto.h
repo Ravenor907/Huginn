@@ -17,9 +17,10 @@ KeyPair newKeyPair();
 QByteArray sharedKey(const QByteArray &myPrivateDer, const QByteArray &myPublicDer, const QByteArray &theirPublicDer);
 QString pairingCode(const QByteArray &key);
 // AES-256-GCM with a random 12-byte nonce; data is ciphertext followed by the 16-byte tag.
-void seal(const QByteArray &key, const QByteArray &plain, QByteArray *nonce, QByteArray *data);
+// aad: cap s1's bound clear fields (Proof::aad); empty means the old constant.
+void seal(const QByteArray &key, const QByteArray &plain, QByteArray *nonce, QByteArray *data, const QByteArray &aad = QByteArray());
 // Empty (and ok false) when the message was tampered with or isn't for this key.
-QByteArray open(const QByteArray &key, const QByteArray &nonce, const QByteArray &data, bool *ok);
+QByteArray open(const QByteArray &key, const QByteArray &nonce, const QByteArray &data, bool *ok, const QByteArray &aad = QByteArray());
 // Checks tests/chat-vectors.json; prints what it found. Returns true when everything matches.
 bool selfTest(const QString &vectorsPath);
 }

@@ -45,6 +45,20 @@ object TvMic {
     /** Whether [TvVoice] runs here (a Kids' TV whose library loaded). */
     val processing: Boolean get() = active && TvVoice.available
 
+    /** k5 (7.10): noise removal on this Kids' TV, [TvRules.NR_NONE] to [TvRules.NR_BOTH] (both unless a parent or the TV changed it). */
+    @Volatile var noise = TvRules.NR_BOTH
+
+    /** [TvVoice]'s noise flags for [noise]: Standard is WebRTC's suppressor, Strong is RNNoise, both runs both. */
+    fun noiseFlags(): Int = when (noise) {
+        TvRules.NR_NONE -> 0
+        TvRules.NR_STANDARD -> TvVoice.NS
+        TvRules.NR_STRONG -> TvVoice.RNNOISE
+        else -> TvVoice.NS or TvVoice.RNNOISE
+    }
+
+    /** Android's own noise suppressor may run (a phone always; a Kids' TV unless its noise removal is None). */
+    fun platformNoise(): Boolean = !active || noise != TvRules.NR_NONE
+
     /**
      * Gain with a soft limiter. Below [KNEE] the signal is only made louder; above it, it curves smoothly
      * toward full scale (tanh) and never wraps around. Pure Kotlin, so the unit tests can run it.
@@ -142,7 +156,7 @@ object TvMic {
 
         internal fun start() {
             // Everything; if that can't start, at least the clean rate conversion.
-            proc = TvVoice.Processor.open(captureRate, callRate, callRate, playRate, TvVoice.AEC or TvVoice.RNNOISE or TvVoice.AGC)
+            proc = TvVoice.Processor.open(captureRate, callRate, callRate, playRate, TvVoice.AEC or noiseFlags() or TvVoice.AGC)
                 ?: TvVoice.Processor.open(captureRate, callRate, callRate, playRate, 0)
         }
 
@@ -242,7 +256,7 @@ object TvMic {
      * Noise suppression and automatic gain for a clip or dictation ([TvVoice] without the echo canceller:
      * nothing is playing), [rate] in and out. Null without the library. Close it when the recording ends.
      */
-    fun clipProcessor(rate: Int): TvVoice.Processor? = TvVoice.Processor.open(rate, rate, 16_000, 16_000, TvVoice.RNNOISE or TvVoice.AGC)
+    fun clipProcessor(rate: Int): TvVoice.Processor? = TvVoice.Processor.open(rate, rate, 16_000, 16_000, noiseFlags() or TvVoice.AGC)
 
     /** Reads exactly [n] samples (fewer only at the end or on an error, as AudioRecord says). */
     fun readFully(rec: AudioRecord, pcm: ShortArray, n: Int): Int {

@@ -1,7 +1,11 @@
-const TTL = 7200;
+// Logins last 30 minutes: the apps fetch a new one for each call (reused until 5 minutes before it ends).
+const TTL = 1800;
 const SKEW = 300;
 const PER_ID_DAILY = 30;
 const GLOBAL_DAILY = 3000;
+// Per internet address (CF-Connecting-IP), so one place can't use up everyone's daily cap with made-up ids.
+// A household shares one address, so this is a few installs' worth.
+const PER_IP_DAILY = 60;
 const MAX_BODY = 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -41,17 +45,26 @@ async function readBody(request) {
   }
 }
 
-async function takeQuota(kv, id, nowSec) {
+// The address is never stored: only a hash of it with the day, so the KV store holds no addresses.
+async function ipKey(ip, day) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ip:" + day + ":" + ip));
+  return "i:" + day + ":" + [...new Uint8Array(digest)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function takeQuota(kv, id, ip, nowSec) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
   const gKey = "g:" + day;
   const uKey = "u:" + day + ":" + id;
-  const [gRaw, uRaw] = await Promise.all([kv.get(gKey), kv.get(uKey)]);
+  const iKey = await ipKey(ip, day);
+  const [gRaw, uRaw, iRaw] = await Promise.all([kv.get(gKey), kv.get(uKey), kv.get(iKey)]);
   const g = parseInt(gRaw || "0", 10) || 0;
   const u = parseInt(uRaw || "0", 10) || 0;
+  const i = parseInt(iRaw || "0", 10) || 0;
   if (g >= GLOBAL_DAILY) return "global";
+  if (i >= PER_IP_DAILY) return "ip";
   if (u >= PER_ID_DAILY) return "id";
   const opts = { expirationTtl: 172800 };
-  await Promise.all([kv.put(gKey, String(g + 1), opts), kv.put(uKey, String(u + 1), opts)]);
+  await Promise.all([kv.put(gKey, String(g + 1), opts), kv.put(uKey, String(u + 1), opts), kv.put(iKey, String(i + 1), opts)]);
   return "ok";
 }
 
@@ -74,11 +87,11 @@ async function handleTurn(request, env, nowSec) {
   if (!env.LIMITS) return json(503, { error: "limits_unavailable" });
   let quota;
   try {
-    quota = await takeQuota(env.LIMITS, id, nowSec);
+    quota = await takeQuota(env.LIMITS, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec);
   } catch {
     return json(503, { error: "limits_unavailable" });
   }
-  if (quota !== "ok") return json(429, { error: quota === "global" ? "global_limit" : "id_limit" });
+  if (quota !== "ok") return json(429, { error: quota + "_limit" });
 
   let upstream;
   try {

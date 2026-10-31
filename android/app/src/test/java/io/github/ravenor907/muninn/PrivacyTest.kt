@@ -26,6 +26,32 @@ class PrivacyTest {
         assertNull(Vault.Crypto.open(key, sealed))
     }
 
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+    /** RFC 7914 section 12: the scrypt that locks the vault from 0.95, written in Muninn itself. */
+    @Test fun scryptMatchesRfc7914() {
+        assertEquals("77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906",
+            hex(Vault.Crypto.scrypt(ByteArray(0), ByteArray(0), 16, 1, 1, 64)))
+        assertEquals("fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640",
+            hex(Vault.Crypto.scrypt("password".toByteArray(), "NaCl".toByteArray(), 1024, 8, 16, 64)))
+        assertEquals("7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887",
+            hex(Vault.Crypto.scrypt("pleaseletmein".toByteArray(), "SodiumChloride".toByteArray(), 16384, 8, 1, 64)))
+    }
+
+    /** The lock's own settings run, and make a 32-byte key that depends on the secret. */
+    @Test fun scryptLockSettings() {
+        val salt = ByteArray(16) { 9 }
+        val a = Vault.Crypto.scrypt("pattern:0,1,2,5,8,7".toByteArray(), salt, Vault.SCRYPT_N, Vault.SCRYPT_R, Vault.SCRYPT_P)
+        assertEquals(32, a.size)
+        assert(!a.contentEquals(Vault.Crypto.scrypt("pattern:0,1,2,5,8,6".toByteArray(), salt, Vault.SCRYPT_N, Vault.SCRYPT_R, Vault.SCRYPT_P)))
+    }
+
+    /** The byte PBKDF2 inside scrypt is the same as the platform's (which opens locks from before 0.95). */
+    @Test fun pbkdf2MatchesThePlatform() {
+        val salt = ByteArray(16) { 7 }
+        assertArrayEquals(Vault.Crypto.derive("correct horse", salt, 1000), Vault.Crypto.pbkdf2("correct horse".toByteArray(), salt, 1000, 32))
+    }
+
     @Test fun passwordKeyIsStable() {
         val salt = ByteArray(16) { 7 }
         val a = Vault.Crypto.derive("correct horse", salt, 1000)

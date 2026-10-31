@@ -10,7 +10,7 @@ Item {
     anchors.fill: parent
 
     function open() {
-        if (Vault.screenLocked || !Vault.exists) { Ui.say("Unlock Chat first.", true); return }
+        if (Vault.screenLocked || !Vault.exists) { Ui.say("Unlock Huginn first.", true); return }
         field.text = ""
         row = 0
         visible = true
@@ -53,7 +53,7 @@ Item {
         y: Theme.px(90)
         width: Math.min(parent.width - Theme.px(80), Theme.px(620))
         height: col.implicitHeight + Theme.px(28)
-        radius: Theme.px(12)
+        radius: Theme.radius
         color: Theme.panel
         border.color: Theme.lineStrong
         MouseArea { anchors.fill: parent }
@@ -73,7 +73,7 @@ Item {
                 placeholderTextColor: Theme.textMuted
                 font.family: Theme.body
                 font.pixelSize: Theme.fs(18)
-                background: Rectangle { radius: Theme.px(8); color: Theme.ground; border.color: Theme.accent }
+                background: Rectangle { radius: Theme.radius; color: Theme.ground; border.color: Theme.accent }
                 onTextChanged: sw.row = 0
                 Keys.onPressed: event => {
                     if (event.key === Qt.Key_Down) { sw.row = Math.min(sw.shown.length - 1, sw.row + 1); event.accepted = true }
@@ -87,7 +87,7 @@ Item {
                 Rectangle {
                     width: col.width
                     height: Theme.px(44)
-                    radius: Theme.px(8)
+                    radius: Theme.radius
                     color: index === sw.row ? Theme.tile : hitHover.hovered ? Theme.raised : "transparent"
                     border.width: index === sw.row ? 1 : 0
                     border.color: Theme.accent

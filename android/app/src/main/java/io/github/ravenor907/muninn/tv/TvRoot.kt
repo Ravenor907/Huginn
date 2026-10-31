@@ -60,6 +60,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -140,6 +141,7 @@ fun TvRoot(app: Muninn) {
                 else -> TvKids(app, cfg)
             }
         }
+        TvReconnectBanner(Modifier.align(Alignment.TopCenter))
         TvToast(Modifier.align(Alignment.BottomCenter))
         val ask by Ui.ask.collectAsState()
         ask?.let { AskDialog(it) }
@@ -212,7 +214,7 @@ private fun TvPairing(app: Muninn) {
                 Text("This TV has no lock: anyone in the room can read the messages on it.", style = tvText(15.sp, Palette.textMuted),
                     modifier = Modifier.padding(top = 4.dp))
                 Spacer(Modifier.height(24.dp))
-                TvChip("Delete messages after: ${ageName(after)}", first) {
+                TvChip("Delete messages after: ${ageName(after)}", null) {
                     after = nextAge(after); app.identity.deleteAfter = after
                 }
                 // Once a parent has paired this TV, only they can let it be used normally (Disconnect on their phone).
@@ -228,7 +230,7 @@ private fun TvPairing(app: Muninn) {
             if (code.isNotEmpty()) Qr(Contacts.link(code), 260.dp)
         }
     }
-    LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+    // Nothing is picked at first, so OK on the remote can't change a setting by accident.
 }
 
 // Every chat deletes messages after 7 days (cap d1); a day is the only sooner choice.
@@ -250,6 +252,71 @@ private fun TvChip(text: String, requester: FocusRequester?, quiet: Boolean = fa
     }
 }
 
+/** While someone asked to look after this TV (k6): always on screen, so nobody misses it. */
+@Composable
+private fun TvReconnectBanner(modifier: Modifier) {
+    val j by TvReconnect.joiner.collectAsState()
+    val joiner = j ?: return
+    val left = ((TvReconnect.WAIT_MS - (System.currentTimeMillis() - joiner.at)) / 3_600_000L).coerceAtLeast(0)
+    Row(modifier.padding(16.dp).clip(RoundedCornerShape(13.dp)).background(Palette.dangerFill).padding(horizontal = 22.dp, vertical = 12.dp)) {
+        Text(if (joiner.orphan) "${joiner.n} is taking over this TV." else "${joiner.n} asked to look after this TV. Unless a parent says no, they will in about $left hours.",
+            style = tvText(17.sp, Palette.danger))
+    }
+}
+
+/** Opens only after OK is held for 5 seconds on the remote, so a child doesn't wander in. */
+@Composable
+private fun TvHoldChip(text: String, onHeld: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    var down by remember { mutableLongStateOf(0L) }
+    val shape = RoundedCornerShape(13.dp)
+    Box(Modifier.onFocusChanged { focused = it.isFocused; if (!it.isFocused) down = 0L }
+        .onPreviewKeyEvent { e ->
+            if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+            when (e.type) {
+                KeyEventType.KeyDown -> { if (down == 0L) down = System.currentTimeMillis(); true }
+                KeyEventType.KeyUp -> {
+                    val held = if (down == 0L) 0L else System.currentTimeMillis() - down
+                    down = 0L
+                    if (held >= HOLD_MS) onHeld() else Ui.say("Hold OK for 5 seconds.")
+                    true
+                }
+                else -> false
+            }
+        }
+        .focusable()
+        .heightIn(min = 52.dp).clip(shape).background(if (!focused) Color.Transparent else Palette.field)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .padding(horizontal = 22.dp, vertical = 12.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(text, style = tvText(18.sp, Palette.textMuted, FontWeight.Medium))
+    }
+}
+
+private const val HOLD_MS = 5_000L
+
+/**
+ * k6: a parent whose phone was wiped scans this to look after the TV again. Every parent is told: one approves with one
+ * tap, any can block it, and if nobody blocks it in 24 hours that phone takes over and the old parents go.
+ */
+@Composable
+private fun TvConnectParent(app: Muninn, onBack: () -> Unit) {
+    val code = remember { try { TvReconnect.code(app) } catch (e: Exception) { "" } }
+    val joiner by TvReconnect.joiner.collectAsState()
+    BackHandler { onBack() }
+    TvDialog(onBack = onBack) {
+        Text("Connect a parent", style = tvTitle(28.sp))
+        Text("On the parent's phone, point the camera at this code. Every parent of this TV is told: one can approve at once, any can say no. " +
+            "If nobody says no in 24 hours, that phone looks after the TV and the other parents are taken off.", style = tvText(17.sp, Palette.textSoft), textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 12.dp, bottom = 18.dp))
+        if (code.isNotEmpty()) Qr(Contacts.link(code), 240.dp)
+        joiner?.let { Text(if (it.orphan) "${it.n} is taking over…" else "Waiting: ${it.n} looks after this TV in 24 hours unless a parent says no.",
+            style = tvText(17.sp, Palette.textMuted), modifier = Modifier.padding(top = 14.dp)) }
+        Spacer(Modifier.height(18.dp))
+        TvChip("Close", null) { onBack() }
+    }
+}
+
 // ------------------------------------------------------------------ the kids' screens
 
 @Composable
@@ -264,16 +331,18 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     LaunchedEffect(Unit) { if (!TvUpdate.setupShown(context)) { TvUpdate.markSetupShown(context); if (TvUpdate.needs(context).isNotEmpty()) setup = true } }
     // Someone a parent just took off the list: back to the people who are still on it.
     var micLevel by remember { mutableStateOf(false) }
-    if (person == null) TvHome(app, cfg, last, needs.isNotEmpty(), onSetup = { setup = true }, onMic = { micLevel = true }) { TvNav.show(it) }
-    else TvTalk(app, cfg, person, onMic = { micLevel = true }) { TvNav.home() }
+    var noise by remember { mutableStateOf(false) }
+    if (person == null) TvHome(app, cfg, last, needs.isNotEmpty(), onSetup = { setup = true }) { TvNav.show(it) }
+    else TvTalk(app, cfg, person) { TvNav.home() }
     if (micLevel) TvMicDialog(app) { micLevel = false }
-    if (setup) TvSetup(needs) { setup = false }
+    if (noise) TvNoiseDialog(app) { noise = false }
+    if (setup) TvSetup(needs, onMic = { setup = false; micLevel = true }, onNoise = { setup = false; noise = true }) { setup = false }
     TvUpdatePrompt { setup = true }
 }
 
 /** For a parent, once on the TV: what to allow so the TV can ring over a show, notify and update itself. */
 @Composable
-private fun TvSetup(needs: List<TvUpdate.Need>, onDone: () -> Unit) {
+private fun TvSetup(needs: List<TvUpdate.Need>, onMic: () -> Unit, onNoise: () -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
     var asked by remember { mutableStateOf<String?>(null) }
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { asked = null }
@@ -288,11 +357,15 @@ private fun TvSetup(needs: List<TvUpdate.Need>, onDone: () -> Unit) {
                     when (n.id) {
                         "mic" -> { asked = n.id; perm.launch(Manifest.permission.RECORD_AUDIO) }
                         "notify" -> { asked = n.id; if (android.os.Build.VERSION.SDK_INT >= 33) perm.launch(Manifest.permission.POST_NOTIFICATIONS) }
-                        else -> if (!TvUpdate.open(context, n.id)) Ui.say("This TV doesn't have that screen. A parent can turn it on in the TV's Settings, under Apps, Muninn.", true)
+                        else -> if (!TvUpdate.open(context, n.id)) Ui.say("This TV doesn't have that screen. A parent can turn on “${n.title}” in the TV's Settings, under Apps, Muninn.", true)
                     }
                 }
             }
-            BigButton("Done", requester = if (needs.isEmpty()) first else null, onClick = onDone)
+            val level by KidTv.micLevel.collectAsState()
+            val nr by KidTv.noise.collectAsState()
+            BigButton("Microphone level", sub = "$level of 100", requester = if (needs.isEmpty()) first else null, onClick = onMic)
+            BigButton("Noise removal", sub = noiseName(nr), onClick = onNoise)
+            BigButton("Done", onClick = onDone)
         }
         LaunchedEffect(needs.size) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
     }
@@ -333,7 +406,7 @@ private fun unreadCount(list: List<Chat.Msg>, unread: Boolean): Int {
 }
 
 @Composable
-private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Boolean, onSetup: () -> Unit, onMic: () -> Unit, onOpen: (String) -> Unit) {
+private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Boolean, onSetup: () -> Unit, onOpen: (String) -> Unit) {
     val convs by app.chat.conversations.collectAsState()
     val unread by app.chat.unread.collectAsState()
     val people = remember(cfg) { ordered(cfg) }
@@ -342,6 +415,7 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
     val focusAt = people.indexOfFirst { it.k == focusKey }.coerceAtLeast(0)
     val first = remember { FocusRequester() }
     val list = rememberLazyListState()
+    var connect by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         TvHeader()
         Text("Who do you want to talk to?", style = tvTitle(32.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 30.dp))
@@ -359,12 +433,12 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         }
         Spacer(Modifier.weight(1f))
         Latest(people, convs, onOpen)
-        val level by KidTv.micLevel.collectAsState()
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TvChip("Microphone: $level", null, quiet = true, onClick = onMic)
-            if (setupLeft) TvChip("For a parent: finish setting up this TV", null, quiet = true, onClick = onSetup)
+            TvChip(if (setupLeft) "For a parent: finish setting up this TV" else "For a parent", null, quiet = true, onClick = onSetup)
+            TvHoldChip("Connect a parent (hold OK)") { connect = true }
         }
     }
+    if (connect) TvConnectParent(app) { connect = false }
     LaunchedEffect(people) {
         if (people.isEmpty()) return@LaunchedEffect
         try { list.scrollToItem(focusAt) } catch (_: Exception) {}
@@ -437,7 +511,7 @@ private sealed interface Overlay {
 }
 
 @Composable
-private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onMic: () -> Unit, onBack: () -> Unit) {
+private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) {
     val context = LocalContext.current
     val convs by app.chat.conversations.collectAsState()
     val msgs = convs[p.k].orEmpty().filter { it.unsent.isEmpty() }
@@ -537,10 +611,6 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onMic: () -> Unit, o
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 if (msgs.isEmpty()) Text("Pick a message to send to ${p.n}.", style = tvText(17.sp, Palette.textMuted))
                 msgs.takeLast(5).forEach { TalkBubble(app, it, p.n, playing) { viewing = it.id } }
-                if (mic) Box(Modifier.padding(top = 6.dp)) {
-                    val level by KidTv.micLevel.collectAsState()
-                    TvChip("Microphone: $level", null, quiet = true, onClick = onMic)
-                }
             }
         }
         LazyVerticalGrid(GridCells.Fixed(2), Modifier.weight(1f).fillMaxHeight(),
@@ -549,8 +619,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onMic: () -> Unit, o
             if (calls) item(key = "call") {
                 BigButton("Call ${p.n}", icon = "call", sub = if (mic) null else "No microphone on this TV", enabled = mic, requester = req("call")) { call() }
             }
-            if (dictate) item(key = "say") { BigButton("Say something", icon = "mic", requester = req("say")) { listen() } }
-            if (mic) item(key = "rec") { BigButton("Send a voice message", icon = "mic", requester = req("rec")) { record() } }
+            if (dictate) item(key = "say") { BigButton("Say it as text", icon = "mic", requester = req("say")) { listen() } }
+            if (mic) item(key = "rec") { BigButton("Record a voice message", icon = "mic", requester = req("rec")) { record() } }
             items(cfg.quick, key = { it.id }) { q ->
                 BigButton(q.text, icon = if (sent == q.id) "check" else null, sub = if (sent == q.id) "Sent" else null, requester = req(q.id)) {
                     app.chat.sendPrivate(p.k, q.text); sent = q.id
@@ -602,9 +672,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onMic: () -> Unit, o
 private fun Status(app: Muninn, key: String) {
     val route by produceState(app.chat.route(key), key) { while (true) { delay(5000); value = app.chat.route(key) } }
     val (on, text) = when (route) {
-        "close", "wifi" -> true to "Can hear you now"
-        "internet" -> true to "Gets your messages"
-        else -> false to "Can't be reached right now"
+        "close", "wifi" -> true to "Nearby"
+        "internet" -> true to "Online"
+        else -> false to "Away"
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) Palette.online else Palette.textFaint))
@@ -746,4 +816,32 @@ internal fun DialogButtons(buttons: List<Pair<String, () -> Unit>>) {
         }
     }
     LaunchedEffect(buttons.map { it.first }) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+}
+
+/** The four noise removal choices (k5, 7.10), in plain words. */
+internal fun noiseName(nr: Int): String = when (nr) {
+    TvRules.NR_NONE -> "None"
+    TvRules.NR_STANDARD -> "Standard"
+    TvRules.NR_STRONG -> "Strong"
+    else -> "Both (the usual)"
+}
+
+/** For a parent › Noise removal: picked on the TV; a parent's phone can change it too, and the last change counts. */
+@Composable
+private fun TvNoiseDialog(app: Muninn, onClose: () -> Unit) {
+    val nr by KidTv.noise.collectAsState()
+    val first = remember { FocusRequester() }
+    TvDialog(onBack = onClose) {
+        Text("Noise removal", style = tvTitle(30.sp))
+        Text(if (TvVoice.available) "Takes the room's noise out of the kids' voice on calls, voice messages and speech to text."
+            else "This TV can't run Muninn's noise removal, so it uses the TV's own whenever this isn't None.",
+            style = tvText(18.sp, Palette.textMuted), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp, bottom = 16.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(TvRules.NR_NONE to "Off", TvRules.NR_STANDARD to "Light, for a quiet room", TvRules.NR_STRONG to "Strong, for a noisy room",
+                TvRules.NR_BOTH to "Both together, the best").forEachIndexed { i, (v, why) ->
+                BigButton(noiseName(v), icon = if (nr == v) "check" else null, sub = why, requester = if (v == nr) first else null) { KidTv.setNoise(app, v); onClose() }
+            }
+        }
+        LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+    }
 }

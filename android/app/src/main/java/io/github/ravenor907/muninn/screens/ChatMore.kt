@@ -30,6 +30,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -140,7 +142,7 @@ internal fun PollCard(poll: More.Poll, votes: Map<String, More.Vote>, me: String
         poll.options.forEachIndexed { i, o ->
             val picked = i in mine
             val share = if (total == 0) 0f else counts[i].toFloat() / total
-            Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp))
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                 .background(if (picked) Palette.goldTint else Palette.groundDeep)
                 .clickable(enabled = onVote != null, role = if (poll.multi) Role.Checkbox else Role.RadioButton) {
                     val next = when {
@@ -184,14 +186,14 @@ internal fun PreviewCard(lp: More.Preview) {
     val context = LocalContext.current
     val thumb = remember(lp.url) { lp.thumb?.let { decode(it, 240) } }
     val host = More.host(lp.url)
-    Row(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp).widthIn(max = 280.dp).clip(RoundedCornerShape(10.dp)).background(Palette.groundDeep)
+    Row(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp).widthIn(max = 280.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
         .clickable(role = Role.Button) {
             Ui.sure(Ask("Open $host?", lp.url, "Open", onConfirm = {
                 try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(lp.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 catch (_: Exception) { Ui.say("No app here opens web links.", true) }
             }))
         }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        thumb?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp))) }
+        thumb?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(56.dp).clip(io.github.ravenor907.muninn.ui.Corner)) }
         Column(Modifier.padding(start = if (thumb != null) 10.dp else 2.dp)) {
             Text(lp.title, style = Type.normal.copy(color = Palette.text, fontWeight = FontWeight.SemiBold), maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (lp.description.isNotEmpty()) Text(lp.description, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -229,7 +231,7 @@ internal fun videoFrame(bytes: ByteArray?): ImageBitmap? {
 @Composable
 internal fun VideoThumb(m: Chat.Msg, bytes: () -> ByteArray?) {
     val frame by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { videoFrame(bytes()) } }
-    Box(Modifier.size(200.dp, 260.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(200.dp, 260.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Color.Black), contentAlignment = Alignment.Center) {
         frame?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         Box(Modifier.size(52.dp).clip(CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) { MIcon("play", Color.White, 24.dp, filled = true) }
         Text(io.github.ravenor907.muninn.net.Voice.length(m.video), style = Type.small.copy(color = Color.White),
@@ -288,7 +290,7 @@ internal fun AlbumGrid(photos: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, 
             Row(Modifier.fillMaxWidth()) {
                 row.forEach { m ->
                     val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(bytes(m), 360) } }
-                    Box(Modifier.weight(1f).aspectRatio(1f).padding(2.dp).clip(RoundedCornerShape(8.dp)).background(Palette.groundDeep)
+                    Box(Modifier.weight(1f).aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
                         .clickable(role = Role.Image) { onTap(m) }, contentAlignment = Alignment.Center) {
                         bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                     }
@@ -322,54 +324,73 @@ internal fun albumsOf(msgs: List<Chat.Msg>): Pair<Set<String>, Map<String, List<
 internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onOpen: (Chat.Msg) -> Unit, close: () -> Unit) {
     BackHandler { close() }
     var tab by remember { mutableStateOf("media") }
-    val media = msgs.filter { it.photo.isNotEmpty() && it.unsent.isEmpty() && it.voice == 0 }.reversed()
-    val links = msgs.filter { it.unsent.isEmpty() && (it.preview != null || More.firstLink(it.text) != null) }.reversed()
-    val voices = msgs.filter { it.voice > 0 && it.unsent.isEmpty() }.reversed()
+    val media = remember(msgs) { msgs.filter { it.photo.isNotEmpty() && it.unsent.isEmpty() && it.voice == 0 }.reversed() }
+    val links = remember(msgs) { msgs.filter { it.unsent.isEmpty() && (it.preview != null || More.firstLink(it.text) != null) }.reversed() }
+    val voices = remember(msgs) { msgs.filter { it.voice > 0 && it.unsent.isEmpty() }.reversed() }
+    // Loads in pages: the newest first, and the next page only once the list is scrolled near its end.
+    var shown by remember(tab) { mutableStateOf(SHARED_PAGE) }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             MButton("Back", icon = "back") { close() }
             Text(title, style = Type.big, modifier = Modifier.padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Photos and videos (${media.size})", kind = if (tab == "media") Kind.Accent else Kind.Normal) { tab = "media" }
             MButton("Links (${links.size})", kind = if (tab == "links") Kind.Accent else Kind.Normal) { tab = "links" }
             MButton("Voice (${voices.size})", kind = if (tab == "voice") Kind.Accent else Kind.Normal) { tab = "voice" }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) {
-            when (tab) {
-                "media" -> if (media.isEmpty()) Text("No photos or videos yet.", style = Type.normal) else media.chunked(3).forEach { row ->
-                    Row(Modifier.fillMaxWidth()) {
-                        row.forEach { m ->
-                            val bmp by produceState<ImageBitmap?>(null, m.id) {
-                                value = withContext(Dispatchers.IO) { if (m.video > 0) videoFrame(bytes(m)) else decode(bytes(m), 360) }
-                            }
-                            Box(Modifier.weight(1f).aspectRatio(1f).padding(2.dp).clip(RoundedCornerShape(6.dp)).background(Palette.groundDeep)
-                                .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
-                                bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                                if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
-                            }
-                        }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+        val total = when (tab) { "media" -> media.size; "links" -> links.size; else -> voices.size }
+        if (tab == "media") {
+            val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+            val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 9 } }
+            LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
+            if (media.isEmpty()) Text("No photos or videos yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
+            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Fixed(3), Modifier.weight(1f).padding(10.dp), state = grid) {
+                items(media.take(shown).size, key = { media[it].id }) { i ->
+                    val m = media[i]
+                    val bmp by produceState<ImageBitmap?>(null, m.id) {
+                        value = withContext(Dispatchers.IO) { if (m.video > 0) videoFrame(bytes(m)) else decode(bytes(m), 360) }
+                    }
+                    Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
+                        .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
+                        bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                        if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
                     }
                 }
-                "links" -> if (links.isEmpty()) Text("No links yet.", style = Type.normal) else links.forEach { m ->
-                    val lp = m.preview
-                    if (lp != null) PreviewCard(lp)
-                    else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
-                        Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
-                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-                        }))
-                    } }
-                }
-                else -> if (voices.isEmpty()) Text("No voice messages yet.", style = Type.normal) else voices.forEach { m ->
-                    VoiceNote(m, { bytes(m) }, io.github.ravenor907.muninn.net.Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), Type.small)
-                    Spacer(Modifier.width(1.dp).height(8.dp))
+            }
+        } else {
+            val list = androidx.compose.foundation.lazy.rememberLazyListState()
+            val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 5 } }
+            LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(12.dp), state = list) {
+                if (tab == "links") {
+                    if (links.isEmpty()) item { Text("No links yet.", style = Type.normal) }
+                    items(links.take(shown).size, key = { links[it].id }) { i ->
+                        val m = links[i]
+                        val lp = m.preview
+                        if (lp != null) PreviewCard(lp)
+                        else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
+                            Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
+                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                            }))
+                        } }
+                    }
+                } else {
+                    if (voices.isEmpty()) item { Text("No voice messages yet.", style = Type.normal) }
+                    items(voices.take(shown).size, key = { voices[it].id }) { i ->
+                        val m = voices[i]
+                        VoiceNote(m, { bytes(m) }, io.github.ravenor907.muninn.net.Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), Type.small)
+                        Spacer(Modifier.width(1.dp).height(8.dp))
+                    }
                 }
             }
         }
     }
 }
+
+/** How many the Shared page shows at a time. */
+private const val SHARED_PAGE = 60
 
 /**
  * Tap phones together to add each other. Both phones open this screen and touch backs: each hands over a code that
@@ -438,7 +459,7 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
 internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
     val context = LocalContext.current
     Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 260.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("file", Palette.accent, 22.dp) }
+        Box(Modifier.size(40.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("file", Palette.accent, 22.dp) }
         Column(Modifier.weight(1f).padding(start = 10.dp)) {
             Text(m.file, style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(if (m.mine) "Sent" else "Tap Save to keep it", style = Type.small)
@@ -461,7 +482,7 @@ internal fun DirectFiles(peer: String) {
     if (mine.isEmpty()) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         mine.forEach { f ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(10.dp)).background(Palette.panel).padding(10.dp),
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.panel).padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 MIcon(if (f.mine) "upload" else "download", Palette.accent, 20.dp)
                 Column(Modifier.weight(1f).padding(start = 10.dp)) {

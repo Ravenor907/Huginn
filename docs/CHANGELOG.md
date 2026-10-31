@@ -2,6 +2,25 @@
 
 Newest first. Huginn and Muninn are released together, with the same version number.
 
+## 0.95
+
+| | |
+|---|---|
+| **Lighter on the battery** | A message that's waiting for someone is sent again at 1 hour and 6 hours instead of every 5 minutes for a day. One "delivered" per message, no reconnecting over and over with no signal, no downloading old mail again, far fewer writes, faster checks. Group messages no longer keep the phone fully awake. |
+| **One battery choice** | Fastest, Balanced or Extreme battery saver. Even Extreme keeps one light connection, so calls still ring almost at once. The battery report also shows how often the message servers woke the phone. |
+| **Smaller downloads** | Muninn.apk is about 6.9 MB (was 11.5) and the Huginn .exe zip about 36 MB (was 43). |
+| **Easier for everyone** | Short Settings with everything else under More, plain words on every screen, one Add someone screen that opens on the camera, and dozens of smaller fixes so nothing feels wonky. |
+| **A new look** | Sharp corners with a touch of noble Norse and Gothic on a clean, modern layout. Four looks in both apps: Dark, True black, Light and Brushed metal. |
+| **Press and hold a person** | On a phone, or right-click on a computer: their role (Family, Work, Folk), what they may do (calls and video, files, seeing when you're active, Always right away), and where the chat sits (pin, move, mute, archive, unread). |
+| **Contacts that just work** | Fixed: a chat stuck on "Waiting for…", and Call or Video missing for someone who is really a contact. Meet someone close by and both tap Keep in touch: you're contacts, no code needed. |
+| **Group invite links** | Like Discord: pick when a link expires and how many people can use it, see every link, and revoke any of them. Admins decide whether members can make links too. |
+| **Move here** | Move yourself to a new phone, tablet or computer over your home Wi-Fi, confirmed with 4 emoji. The old one locks and can come back as a linked device. |
+| **Huginn on a big screen** | The right size on 1080p, 1440p and 4K, with Size from 50% to 200% (Ctrl+= and Ctrl+-). A Discord-style layout, dialogs that fit, Contacts on the rail, and your computer's own file picker. Handheld mode is gone: the layout follows the screen, and a controller's buttons show when you press Select. |
+| **Lock where your thumb is** | The pattern sits low on the screen by default; move it in Settings › Lock and privacy. |
+| **Kids' TV** | Pick the noise removal (None, Standard, Strong or Both), a parent who reset their phone can reconnect (another parent approves, or after a 24-hour wait with every parent warned), "Say it as text" stays on the TV itself, and calls come up over a show on Google TV. |
+| **Checked top to bottom** | A full security and privacy review, and its fixes: moves only on your home network, linked devices confirmed with 4 emoji, nearby devices must prove who they are, messages can't be replayed, relays can't tell who talks to whom and get padded messages, a lock that's very slow to guess, Erase everything really erases everything. Nothing outside the apps guards your data. |
+| **More private by default** | Google Nearby is now its own switch, off unless you turn it on. Link previews are off for new installs. Muninn asks the keyboard not to learn what you type. Update checks don't say which app you use, and you can turn them off. |
+
 ## 0.94
 
 | | |

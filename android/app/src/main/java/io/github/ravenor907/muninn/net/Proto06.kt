@@ -105,7 +105,7 @@ object Proto06 {
     /** Each member's copy of one group message has its own envelope id. */
     fun envelopeId(gid: String, recipientKey: String) = gid + "-" + sha256Hex(recipientKey).take(8)
 
-    private fun lenB64url(s: String): Int = try { b64urlD(s).size } catch (e: Exception) { -1 }
+    fun lenB64url(s: String): Int = try { b64urlD(s).size } catch (e: Exception) { -1 }
     fun isMailbox(p: String) = p.length == 64 && p.all { it in '0'..'9' || it in 'a'..'f' }
 
     // ------------------------------------------------------------------ capabilities (1.1)
@@ -114,7 +114,10 @@ object Proto06 {
      * What this app says it speaks, next to the old cap:"r1" (which must stay exactly that). Groups and
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
-    const val CAPS = "r1 g1 c1 c2 k1 k2 k3 k4 t1 v1 m1 m2 i1 f1 d1"
+    // Tokens Huginn reads come first and the Kids' TV ones last: a 0.94 Huginn keeps only the first 16.
+    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 k1 k2 k3 k4 k5 k6 k7"
+    /** Cap j1: group invite links and "Members can invite" (section 17). */
+    const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
 
     // ------------------------------------------------------------------ group state (3.2, 3.3)
@@ -127,6 +130,8 @@ object Proto06 {
         val admins: List<String>, val members: List<Member>, val channels: List<Channel>, val ts: Long, val sig: String = "",
         /** Cap d1 (section 16.2): "family" or "work", empty for a Standard group; [days] 0 when it has none (7). */
         val kind: String = "", val days: Int = 0,
+        /** Cap j1 (section 17): members (not only admins) may make invite links. Left out when off. */
+        val mi: Boolean = false,
     ) {
         private fun tree(withSig: Boolean): Map<String, Any> = LinkedHashMap<String, Any>().apply {
             put("g", g); put("v", v); put("owner", owner); put("by", by); put("name", name); put("admins", admins)
@@ -135,6 +140,7 @@ object Proto06 {
             put("ts", ts)
             if (kind.isNotEmpty()) put("kind", kind)
             if (days > 0) put("days", days)
+            if (mi) put("mi", true)
             if (withSig) put("sig", sig)
         }
         fun canonUnsigned() = canon(tree(false))
@@ -163,11 +169,15 @@ object Proto06 {
     private val STATE_FIELDS = setOf("g", "v", "owner", "by", "name", "admins", "members", "channels", "ts", "sig")
     /** Cap d1: a Family or Work group's type and limit (section 16.2). */
     private val LIMIT_FIELDS = setOf("kind", "days")
+    /** Cap j1: "Members can invite" (section 17.1). */
+    private val LINK_FIELDS = setOf("mi")
 
     /** Reads a state exactly as it came. Throws [Refused] on wrong fields or types (shape and limits: [check]). */
     fun parseState(o: JSONObject): State {
         val have = o.keys().asSequence().toSet()
-        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS).containsAll(have)) throw Refused("fields")
+        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS + LINK_FIELDS).containsAll(have)) throw Refused("fields")
+        // Only ever true: off is left out, so a group that never turned it on keeps exactly the state older apps take.
+        if (o.has("mi") && o.opt("mi") != true) throw Refused("mi")
         val admins = arr(o, "admins").let { a -> (0 until a.length()).map { a.opt(it) as? String ?: throw Refused("admins") } }
         val members = arr(o, "members").let { a -> (0 until a.length()).map {
             val m = a.opt(it) as? JSONObject ?: throw Refused("member fields")
@@ -182,7 +192,7 @@ object Proto06 {
         val kind = if (o.has("kind")) str(o, "kind").also { if (it.isEmpty()) throw Refused("kind") } else ""
         val days = if (o.has("days")) int(o, "days").also { if (it !in 1..Limits.LONGEST) throw Refused("days") }.toInt() else 0
         return State(str(o, "g"), int(o, "v"), str(o, "owner"), str(o, "by"), str(o, "name"), admins, members, channels, int(o, "ts"), str(o, "sig"),
-            kind, days)
+            kind, days, o.has("mi"))
     }
 
     /** Shape and limits (reference check_state); throws [Refused]. Does not check the signature. */
@@ -223,13 +233,27 @@ object Proto06 {
         if (new.g != cur.g) return false to "other group"
         if (new.by !in cur.admins) return false to "signer is not an admin in the current state"
         if (new.owner != cur.owner && new.by != cur.owner) return false to "only the owner can hand over ownership"
+        // Cap s1 (section 21): never more than 1000 versions ahead, so no admin can push v out of everyone else's reach.
+        if (new.v > cur.v + MAX_AHEAD) return false to "too far ahead"
         if (new.v > cur.v) return true to "higher version"
-        if (new.v == cur.v && new.hash < cur.hash) return true to "same version, lower hash"
+        if (new.v == cur.v) {
+            // At the same version a state its owner signed wins, so the owner can always settle things.
+            if (byOwner(new) != byOwner(cur)) return if (byOwner(new)) true to "same version, signed by the owner" else false to "the owner's stands"
+            if (new.hash < cur.hash) return true to "same version, lower hash"
+        }
         return false to "not newer"
     }
 
-    /** The conflict rule on its own: higher v, then the lower hash. */
-    fun winner(a: State, b: State): State = if (a.v != b.v) (if (a.v > b.v) a else b) else if (a.hash <= b.hash) a else b
+    /** A group state may be at most this many versions ahead of the one it replaces (cap s1). */
+    const val MAX_AHEAD = 1000L
+    private fun byOwner(s: State) = s.by == s.owner
+
+    /** The conflict rule on its own: higher v, then the one its owner signed, then the lower hash. */
+    fun winner(a: State, b: State): State = when {
+        a.v != b.v -> if (a.v > b.v) a else b
+        byOwner(a) != byOwner(b) -> if (byOwner(a)) a else b
+        else -> if (a.hash <= b.hash) a else b
+    }
 
     fun sortedMembers(l: List<Member>) = l.sortedBy { it.k }
 
@@ -240,8 +264,35 @@ object Proto06 {
     fun code(c: Code): String = CODE_PREFIX + b64url(JSONObject().put("g", c.g).put("gn", c.gn).put("a", c.a).put("an", c.an)
         .put("p", c.p).put("i", c.i).put("x", c.x).toString().toByteArray(Charsets.UTF_8))
 
-    /** Finds a group code anywhere in [text]. Null if there is none or it's broken (expiry is the caller's). */
-    fun parseCode(text: String): Code? {
+    /**
+     * Cap j1 (section 17): an invite link is a group code ([code]) in the add page's address after "#", which browsers
+     * never send to the server. [Code.a] is the admin who counts its uses; a link that never expires says so in 100 years.
+     */
+    fun link(c: Code): String = Contacts.PAGE + code(c)
+
+    /** A link's id: shown in lists and used to revoke it, so the token itself never goes past the counting admin. */
+    fun linkId(token: String): String = sha256Hex("link|$token").take(16)
+
+    const val MAX_LINK_USES = 100
+    const val MAX_LINKS = 50
+
+    /**
+     * Whether a link still lets someone in (17.3), decided only on the admin who counts it: not revoked, not past [x]
+     * (ms, 0 never), fewer than [max] uses (0 no limit), and its maker still in the group and allowed to invite.
+     */
+    fun linkOk(x: Long, max: Int, uses: Int, off: Boolean, makerIn: Boolean, makerMay: Boolean, now: Long): Boolean =
+        !off && (x == 0L || x > now) && (max == 0 || uses < max) && makerIn && makerMay
+
+    /** Expiry choices for a link (ms; 0 never) and use limits (0 no limit). */
+    val LINK_TTL = longArrayOf(30 * 60_000L, 3_600_000L, 6 * 3_600_000L, 12 * 3_600_000L, 86_400_000L, 7 * 86_400_000L, 0L)
+    const val LINK_TTL_DEFAULT = 7 * 86_400_000L
+    val LINK_MAX = intArrayOf(1, 5, 10, 25, 50, 100, 0)
+    /** "Never" in a code's x (seconds): 100 years on, so an older app joining by it never calls it expired. */
+    const val NEVER_S = 100L * 365 * 86_400
+
+    /** Finds a group code anywhere in [text] (a pasted link too). Null if there is none or it's broken (expiry is the caller's). */
+    fun parseCode(raw: String): Code? {
+        val text = raw.replace(Regex("MUNINNG1%3A", RegexOption.IGNORE_CASE), CODE_PREFIX)
         val at = text.indexOf(CODE_PREFIX)
         if (at < 0) return null
         val body = text.substring(at + CODE_PREFIX.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }

@@ -55,7 +55,7 @@ class Muninn : Application() {
         identity = Identity(this, vault)
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
-            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; trueBlack = identity.trueBlack
+            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)
         }
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
         direct = Direct(this)
@@ -63,7 +63,6 @@ class Muninn : Application() {
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
             deleteNotificationChannel("messages")   // 0.32 and older: no vibration set
             deleteNotificationChannel("chat")       // test builds: sound not set
-            deleteNotificationChannel("forge")      // 0.5 and older: USB drive writing
             createNotificationChannel(NotificationChannel(MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "New messages. Pops up on screen, vibrates and plays a sound."
                 enableVibration(true); vibrationPattern = BUZZ
@@ -86,9 +85,9 @@ class Muninn : Application() {
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
         power.install()
+        // Moving to another device (cap x1): one under way goes on, and this device stays locked until it's done.
+        io.github.ravenor907.muninn.net.Move.init(this)
         if (vault.openDefault()) start()
-        dropOldTools()
-        dropTorFiles()
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Check the internet inbox even when Muninn is closed: every 15 minutes (Android's shortest) or every
         // hour, as Settings › Check for messages says; never for "Only when open".
@@ -112,7 +111,8 @@ class Muninn : Application() {
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) ->
             power.activity()   // Check less when it's quiet starts over
-            power.talk()       // and the conversation window opens, so the next message comes at once too
+            // A 1:1 message opens the conversation window, so the next one comes at once too. Group messages don't.
+            if (io.github.ravenor907.muninn.net.NetLogic.opensTalk(key)) power.talk()
             // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
             if (!chat.flags.arrived(key)) return@collect
             if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { buzz(); return@collect }
@@ -126,6 +126,7 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        io.github.ravenor907.muninn.net.Move.ready(this)
         // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
         chat.foreground(visible)
         power.ready()
@@ -133,43 +134,19 @@ class Muninn : Application() {
         nostr.resubscribe()
     }
 
-    /**
-     * 0.6 dropped the USB drive tools and the file browser. Clear what they left behind once:
-     * downloaded system images (often several GB), their settings, and the recent files list.
-     */
-    private fun dropOldTools() {
-        val p = getSharedPreferences("muninn", MODE_PRIVATE)
-        if (p.getBoolean("oldToolsGone", false)) return
-        Thread {
-            try { java.io.File(getExternalFilesDir(null) ?: filesDir, "iso").deleteRecursively() } catch (_: Exception) {}
-            try { deleteSharedPreferences("forge") } catch (_: Exception) {}
-            p.edit().remove("recent").remove("receiveFolder").putBoolean("oldToolsGone", true).apply()
-        }.start()
-    }
-
-    /** 0.6 ran Tor: its folders, this phone's onion key and address are no longer used. */
-    private fun dropTorFiles() {
-        val p = getSharedPreferences("muninn", MODE_PRIVATE)
-        if (p.getBoolean("torGone", false)) return
-        Thread {
-            try { getDir("TorService", MODE_PRIVATE).deleteRecursively() } catch (_: Exception) {}
-            try { java.io.File(cacheDir, "TorService").deleteRecursively() } catch (_: Exception) {}
-            try { java.io.File(filesDir, "onion.key").delete() } catch (_: Exception) {}
-            p.edit().remove("onionId").putBoolean("torGone", true).apply()
-        }.start()
-    }
-
     private var listening = false
+    /** The one sweep of the Wi-Fi network for devices (done once Muninn is on screen). */
+    private var swept = false
 
     /** Stay reachable: the relays always (even locked, to say "New message"), and the Wi-Fi side once open. */
     @Synchronized
     fun listen() {
         nostr.keepAlive = true
         nostr.connect()
-        if (!ready.value || listening) return
-        listening = true
-        net.start()
-        net.refresh()
+        if (!ready.value) return
+        if (!listening) { listening = true; net.start() }
+        // Asking every address on the Wi-Fi only once Muninn is on screen, never from the background.
+        if (visible && !swept) { swept = true; net.refresh() }
     }
 
     /** The refresh button on Chats: every relay checked again now, and anything not yet delivered sent again. */

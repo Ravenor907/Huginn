@@ -3,7 +3,9 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QRandomGenerator>
@@ -18,6 +20,8 @@ namespace
 constexpr int kMaxSeen = 2000;
 constexpr int kMaxOutbox = 200;
 constexpr int kAuthKind = 22242;
+// A sending socket closes this long after the last thing given to it.
+constexpr int kSendMs = 20000;
 
 QString compact(const QJsonArray &a)
 {
@@ -161,6 +165,12 @@ Nostr::~Nostr()
             ws->abort();
         }
     }
+    for (const Sender &l : std::as_const(m_senders)) {
+        if (QWebSocket *ws = l.ws.data()) {
+            QObject::disconnect(ws, nullptr, this, nullptr);
+            ws->abort();
+        }
+    }
 }
 
 QByteArray Nostr::secret() const
@@ -271,8 +281,9 @@ void Nostr::opened(const QString &url, QWebSocket *ws)
     ping->start();
     setLive(url, true);
     subscribe(ws);
-    for (const QString &msg : std::as_const(m_outbox))
-        ws->sendTextMessage(msg);
+    // This relay is reachable again: what still waits goes to it on a sending socket, never on this one.
+    if (!m_outbox.isEmpty())
+        send(url, m_outbox);
 }
 
 // Only the current socket for this relay counts; an old one closing changes nothing.
@@ -427,27 +438,101 @@ void Nostr::handle(const QJsonObject &ev)
 
 // ------------------------------------------------------------------ sending
 
-int Nostr::publish(const QString &mailboxHex, const QString &content)
+void Nostr::send(const QString &url, const QStringList &msgs)
+{
+    auto it = m_senders.find(url);
+    if (it == m_senders.end() || !it->ws) {
+        auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+        auto *closer = new QTimer(ws);
+        closer->setSingleShot(true);
+        closer->setInterval(kSendMs);
+        connect(closer, &QTimer::timeout, this, [this, url, ws] { dropSender(url, ws); });
+        connect(ws, &QWebSocket::connected, this, [this, url, ws] {
+            auto s = m_senders.find(url);
+            if (s == m_senders.end() || s->ws != ws) {
+                ws->close();
+                return;
+            }
+            s->open = true;
+            for (const QString &m : std::as_const(s->queue))
+                ws->sendTextMessage(m);
+            s->queue.clear();
+        });
+        connect(ws, &QWebSocket::disconnected, this, [this, url, ws] { dropSender(url, ws); });
+        connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) { dropSender(url, ws); });
+        // Only "OK" matters here. "AUTH" is never answered: signing in would name this computer's mailbox.
+        connect(ws, &QWebSocket::textMessageReceived, this, [this](const QString &text) {
+            const QJsonArray a = QJsonDocument::fromJson(text.toUtf8()).array();
+            const QString id = a.at(1).toString();
+            if (a.at(0).toString() == QLatin1String("OK") && a.at(2).toBool() && !id.isEmpty())
+                m_outbox.removeIf([&id](const QString &msg) { return msg.contains(id); });
+        });
+        it = m_senders.insert(url, Sender{ws, {}, false, closer});
+        ws->open(QUrl(url));
+    }
+    if (it->closer)
+        it->closer->start();   // starts the 20 s again
+    if (it->open && it->ws) {
+        for (const QString &m : msgs)
+            it->ws->sendTextMessage(m);
+    } else {
+        it->queue << msgs;
+    }
+}
+
+void Nostr::dropSender(const QString &url, QWebSocket *ws)
+{
+    auto it = m_senders.find(url);
+    if (it != m_senders.end() && it->ws == ws)
+        m_senders.erase(it);
+    if (!ws)
+        return;
+    QObject::disconnect(ws, nullptr, this, nullptr);
+    ws->close();
+    ws->deleteLater();
+}
+
+int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
 {
     // QJsonValue(...) keeps the inner array nested: MSVC treats QJsonArray{QJsonArray{...}} as a copy.
-    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
+    QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
+    // NIP-40: relays may drop it once the chat's message limit has passed (it's gone from both sides by then).
+    if (days > 0)
+        tags.append(QJsonValue(QJsonArray{QStringLiteral("expiration"), QString::number(now() + qint64(days) * 86400)}));
     // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
     const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), now() - QRandomGenerator::global()->bounded(600));
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
     m_outbox << msg;
     while (m_outbox.size() > kMaxOutbox)
         m_outbox.removeFirst();
-    int n = 0;
-    for (auto it = m_links.cbegin(); it != m_links.cend(); ++it) {
-        if (m_live.contains(it.key()) && it->ws && it->ws.data()->sendTextMessage(msg) > 0)
-            ++n;
-    }
+    // Every relay gets it, each on a sending socket of its own that never asks for the inbox or signs in.
+    for (const QString &url : relays())
+        send(url, {msg});
     if (m_links.isEmpty())
         connectRelays();
-    return n;
+    return int(m_live.size());
 }
 
 // ------------------------------------------------------------------ self-test
+
+int Nostr::padBucket(int n)
+{
+    for (int b : {1024, 4096, 16384, 32768})
+        if (n <= b)
+            return b;
+    return (n + 16383) / 16384 * 16384;
+}
+
+QByteArray Nostr::pad(const QByteArray &json)
+{
+    QByteArray body = json.trimmed();
+    if (!body.endsWith('}'))
+        return json;
+    const int base = int(body.size()) + 7;   // ,"z":"" adds 7 characters
+    const int target = padBucket((base + 2) / 3 * 4) / 4 * 3;
+    body.chop(1);
+    return body + ",\"z\":\"" + QByteArray(target - base, '0') + "\"}";
+}
 
 bool Nostr::selfTest(const QString &vectorsPath)
 {
@@ -491,9 +576,28 @@ bool Nostr::selfTest(const QString &vectorsPath)
     sig[5] = char(sig[5] ^ 1);
     const bool forged = good && !Schnorr::verify(msg, Schnorr::publicKey(sk), sig);
 
+    // Envelope padding (tests/pad-vectors.json, next to the Nostr vectors; section 20).
+    bool padded = false;
+    QFile pf(QFileInfo(vectorsPath).absoluteDir().filePath(QStringLiteral("pad-vectors.json")));
+    if (pf.open(QIODevice::ReadOnly)) {
+        const QJsonObject pv = QJsonDocument::fromJson(pf.readAll()).object();
+        padded = !pv.value(QStringLiteral("pad")).toArray().isEmpty();
+        for (const QJsonValue &c : pv.value(QStringLiteral("bucket")).toArray())
+            padded = padded && padBucket(c[QStringLiteral("n")].toInt()) == c[QStringLiteral("bucket")].toInt();
+        for (const QJsonValue &c : pv.value(QStringLiteral("pad")).toArray()) {
+            const int d = c[QStringLiteral("d")].toInt();
+            const QByteArray js = "{\"e\":\"" + QByteArray(60, 'A') + "\",\"n\":\"" + QByteArray(16, 'B') + "\",\"d\":\"" + QByteArray(d, 'C') + "\"}";
+            const QByteArray out = pad(js);
+            const QJsonObject o = QJsonDocument::fromJson(out).object();
+            padded = padded && out.toBase64().size() == c[QStringLiteral("content")].toInt()
+                && o.value(QStringLiteral("z")).toString().size() == c[QStringLiteral("zeros")].toInt()
+                && o.value(QStringLiteral("d")).toString().size() == d && o.size() == 4;
+        }
+    }
+
     printf("nostr self-test: BIP-340 key %s, BIP-340 signature %s, serialization %s, event id and signature %s, "
-           "survives JSON round trip %s, NIP-01 escaping %s, rejects forged signature %s\n",
+           "survives JSON round trip %s, NIP-01 escaping %s, rejects forged signature %s, envelope padding %s\n",
            officialKey ? "ok" : "WRONG", officialSig ? "ok" : "WRONG", serialized ? "ok" : "WRONG", eventOk ? "ok" : "WRONG",
-           trip ? "ok" : "WRONG", escaping ? "ok" : "WRONG", forged ? "ok" : "WRONG");
-    return officialKey && officialSig && serialized && eventOk && trip && escaping && forged;
+           trip ? "ok" : "WRONG", escaping ? "ok" : "WRONG", forged ? "ok" : "WRONG", padded ? "ok" : "WRONG");
+    return officialKey && officialSig && serialized && eventOk && trip && escaping && forged && padded;
 }

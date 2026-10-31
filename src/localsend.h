@@ -90,14 +90,23 @@ private:
         QString chatKey, chatName, app;   // set by Huginn and Muninn; plain LocalSend apps don't chat
         int port = 53317;
         QDateTime seen;
+        bool proven = false;              // cap s1: its chat key signed this certificate (without: an older app, only extra)
     };
 public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
-    struct Peer { QString base, chatKey, chatName, alias, type; };
+    // Moving to another device (cap x1): its own path on the same port, with an answer.
+    std::function<QPair<int, QByteArray>(const QByteArray &body)> moveReceive;
+    // Cap s1: my chat key's signature over my certificate's fingerprint, and the contact a hidden device's hint stands for.
+    std::function<QString(const QString &fingerprint)> chatProve;
+    std::function<QString(const QString &hint)> hintKey;
+    struct Peer { QString base, chatKey, chatName, alias, type; bool proven = false; };
     QList<Peer> chatPeers() const;
-    QString baseFor(const QString &chatKey) const;
+    // Where to reach chatKey: a device whose chat key proved its certificate, newest first; one that couldn't (an
+    // older app) only when not strict. Never by name order, which anyone can game.
+    QString baseFor(const QString &chatKey, bool strict = false) const;
+    bool provenFor(const QString &chatKey) const;
     // A sent file name as folders under the save folder: never "..", a drive or an absolute path.
     static QStringList safeParts(const QString &name);
     static bool selfTest();
@@ -191,5 +200,9 @@ private:
     QString m_error;
     QString m_status;
     int m_scanLeft = 0;
+    QHash<QString, qint64> m_asked;              // address -> last register sent there (at most one every 10 s)
+    QHash<QString, QList<qint64>> m_prompts;     // address -> "wants to send" boxes lately
+    bool asking(const QString &ip);
+    void turnedDown(const QString &ip);
     QList<QVariantMap> m_history;   // finished incoming files, newest last
 };

@@ -23,9 +23,12 @@ object Ratchet {
     private const val INFO_RK = "huginn-muninn ratchet"
     private const val INFO_MSG = "huginn-muninn message"
 
-    /** What travels in the clear next to each message. b = session base, d = sender's ratchet key. */
-    data class Header(val b: String, val d: String, val pn: Int, val n: Int) {
-        fun aad(): ByteArray = "v1|$b|$d|$pn|$n".toByteArray(Charsets.UTF_8)
+    /**
+     * What travels in the clear next to each message. b = session base, d = sender's ratchet key.
+     * [bind]: cap s1, the envelope's bound clear fields ([Proof.bound]), sealed in too; never sent as part of the header.
+     */
+    data class Header(val b: String, val d: String, val pn: Int, val n: Int, val bind: String = "") {
+        fun aad(): ByteArray = "v1|$b|$d|$pn|$n".toByteArray(Charsets.UTF_8).let { if (bind.isEmpty()) it else Proof.ratchetAad(it, bind) }
         fun toJson(): JSONObject = JSONObject().put("b", b).put("d", d).put("pn", pn).put("n", n)
 
         companion object {
@@ -55,11 +58,11 @@ object Ratchet {
             skipped.clear(); skipped.putAll(o.skipped)
         }
 
-        fun encrypt(plain: ByteArray): Pair<Header, ByteArray> {
+        fun encrypt(plain: ByteArray, bind: String = ""): Pair<Header, ByteArray> {
             val ck = cks ?: throw IllegalStateException("no sending chain yet")
             val (mk, next) = kdfCk(ck)
             cks = next
-            val h = Header(base, pubB64(dhs.public), pn, ns)
+            val h = Header(base, pubB64(dhs.public), pn, ns, bind)
             ns++
             return h to seal(mk, h, plain)
         }
@@ -167,10 +170,10 @@ object Ratchet {
         fun session(base: String): Session? = sessions[base]
         val bases: List<String> get() = sessions.keys.toList()
 
-        fun encrypt(plain: ByteArray, sk: ByteArray, theirStaticB64: String, newKey: () -> KeyPair): Pair<Header, ByteArray> {
+        fun encrypt(plain: ByteArray, sk: ByteArray, theirStaticB64: String, newKey: () -> KeyPair, bind: String = ""): Pair<Header, ByteArray> {
             val s = active?.let { sessions[it] }?.takeIf { it.cks != null }
                 ?: Session.alice(sk, theirStaticB64, newKey()).also { put(it); active = it.base }
-            return s.encrypt(plain)
+            return s.encrypt(plain, bind)
         }
 
         fun decrypt(h: Header, cipher: ByteArray, sk: ByteArray, myStatic: KeyPair, newKey: () -> KeyPair): ByteArray? {

@@ -10,13 +10,16 @@
 #include <QPointer>
 #include <QSet>
 #include <QStringList>
+#include <QTimer>
 
 class QWebSocket;
 
 // Messages for people who aren't nearby, through public Nostr relays (no accounts, no server to
 // run). Each device has a Nostr key; its public half is its mailbox. A message is an event of
-// kind 1059 addressed to the mailbox, signed by a throwaway key so relays can't tell who sent it.
-// The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text.
+// kind 1059 addressed to the mailbox, signed by a throwaway key, so the event itself doesn't name its sender.
+// The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text, padded
+// to a few fixed sizes (Chat::wrap). Sending uses its own short-lived sockets that never ask for the inbox
+// or sign in as this computer's mailbox; the internet address can still link the two unless a VPN is used.
 // Same behaviour and wire format as Muninn's Nostr.kt.
 class Nostr : public QObject
 {
@@ -53,8 +56,9 @@ public:
     Q_INVOKABLE void resubscribe();
     // Closes every relay and turns keepAlive off. Hides QObject::disconnect; call that one as QObject::disconnect.
     Q_INVOKABLE void disconnect();
-    // Sends sealed content to someone's mailbox through every relay. Returns how many relays are connected now.
-    Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content);
+    // Sends sealed content to someone's mailbox through every relay, on sending sockets of their own.
+    // days: the chat's message limit, for the NIP-40 expiration tag (0: none). Returns how many relays are connected now.
+    Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content, int days = 0);
 
     // NIP-01: the event id is the SHA-256 of [0,pubkey,created_at,kind,tags,content] as compact JSON.
     static QByteArray serialize(const QString &pubkey, qint64 createdAt, int kind, const QJsonArray &tags, const QString &content);
@@ -62,7 +66,11 @@ public:
     // A signed event. createdAt < 0 means now; empty aux means random.
     static QJsonObject event(int kind, const QJsonArray &tags, const QString &content, const QByteArray &secret,
                              qint64 createdAt = -1, const QByteArray &aux = QByteArray());
-    // Checks tests/nostr-vectors.json; prints what it found. Returns true when everything matches.
+    // Envelope padding (docs/protocol-0.6.md section 20): the size a relay sees is one of 1 KB, 4 KB, 16 KB, 32 KB,
+    // then 16 KB steps. pad() adds a "z" field of zeros to the wrapping JSON so its base64 is exactly that size.
+    static int padBucket(int n);
+    static QByteArray pad(const QByteArray &json);
+    // Checks tests/nostr-vectors.json (and pad-vectors.json next to it); prints what it found. Returns true when everything matches.
     static bool selfTest(const QString &vectorsPath);
 
 Q_SIGNALS:
@@ -75,6 +83,17 @@ private:
         QPointer<QWebSocket> ws;
         bool ponged = true;
     };
+
+    // A socket that only sends: no REQ, no AUTH. Closes 20 s after the last thing given to it.
+    struct Sender {
+        QPointer<QWebSocket> ws;
+        QStringList queue;
+        bool open = false;
+        QPointer<QTimer> closer;
+    };
+    void send(const QString &url, const QStringList &msgs);
+    void dropSender(const QString &url, QWebSocket *ws);
+    QHash<QString, Sender> m_senders;
 
     QByteArray secret() const;
     void open(const QString &url);

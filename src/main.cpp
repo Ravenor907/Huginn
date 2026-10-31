@@ -28,8 +28,11 @@
 #include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
+#include "livelist.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "proof.h"
+#include "move.h"
 #include "morewire.h"
 #include "linkpreview.h"
 #include "videomsg.h"
@@ -75,18 +78,6 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
     if (s_previous)
         s_previous(type, ctx, msg);
 }
-}
-
-// 0.6 ran Tor: its data folder and this computer's onion key (in the chat folder) are no longer
-// used. Gone once; after that there is nothing left to find.
-static void dropTorFiles()
-{
-    const QString data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (data.isEmpty())
-        return;
-    QDir(data + QStringLiteral("/tor")).removeRecursively();
-    for (const char *f : {"/chat/tor-onion.key", "/chat/tor-onion.key.damaged"})
-        QFile::remove(data + QLatin1String(f));
 }
 
 int main(int argc, char *argv[])
@@ -147,7 +138,10 @@ int main(int argc, char *argv[])
         const bool f = LinkPreview::selfTest();
         const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
         const bool h = Trust::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("i1f1-vectors.json")));
-        return selfTested(a && b && c && d && e && f && g && h);
+        // 0.95: moving (x1), invite links (j1) and "mi" in a group state.
+        const bool i = MoveWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("p95-vectors.json")));
+        const bool j = Proof::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("s1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h && i && j);
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
@@ -168,8 +162,6 @@ int main(int argc, char *argv[])
         Platform::noStartLog();
         return 0;
     }
-    if (!quiet)
-        dropTorFiles();
     Platform::startStep(QStringLiteral("single instance claimed"));
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
@@ -182,18 +174,24 @@ int main(int argc, char *argv[])
     auto *settings = new Settings(&app);
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
-    auto *transfer = new TransferServer(settings, &app);
+    auto *transfer = new Transfer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
     Chat *chat = nullptr;
     auto *ble = new Ble([&chat] {
         if (!chat || !chat->ready())
             return QByteArray();
-        // Hidden from people nearby: no name. The chat key still goes out, or contacts close by
-        // couldn't find this computer, so whoever already knows the key can tell it's here.
-        return QJsonDocument(QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
-                                         {QStringLiteral("chatKey"), chat->chatKey()}, {QStringLiteral("mailbox"), chat->mailbox()},
-                                         {QStringLiteral("app"), QStringLiteral("huginn")}}).toJson(QJsonDocument::Compact);
+        // Hidden from people nearby: no name, chat key or mailbox, only a daily hint that contacts (who have the key)
+        // can match (cap s1), so nobody can follow this computer from place to place.
+        QJsonObject o{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
+                      {QStringLiteral("app"), QStringLiteral("huginn")}};
+        if (chat->visibleNearby()) {
+            o.insert(QStringLiteral("chatKey"), chat->chatKey());
+            o.insert(QStringLiteral("mailbox"), chat->mailbox());
+        } else {
+            o.insert(QStringLiteral("hint"), Proof::hintNow(chat->chatKey()));
+        }
+        return QJsonDocument(o).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
     if (quiet && !vault->exists())
@@ -235,6 +233,7 @@ int main(int argc, char *argv[])
         return false;
     };
     cs->onHasCap = [chat](const QString &k, const QString &c) { return chat->hasCap(k, c); };
+    cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.
@@ -251,6 +250,9 @@ int main(int argc, char *argv[])
     files->trusted = [calls](const QString &k) { return calls->trusted(k); };
     auto *linked = new Link(chat, &app);
     chat->setExtras(trust, files, linked);
+    // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
+    auto *mover = new Move(chat, vault, linked, localSend, &app);
+    localSend->moveReceive = [mover](const QByteArray &body) { return mover->handle(body); };
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
@@ -265,7 +267,7 @@ int main(int argc, char *argv[])
             if (t - last > 5 * 60000) {
                 last = t;
                 sound->play();
-                Q_EMIT chat->notice(QStringLiteral("New message. Open Chat and unlock it to read."));
+                Q_EMIT chat->notice(QStringLiteral("New message. Unlock Huginn to read it."));
             }
             return false;
         };
@@ -282,7 +284,8 @@ int main(int argc, char *argv[])
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
-        if (looking)
+        // A muted chat makes no sound; an archived one comes back to the list.
+        if (!chat->notifyFor(key) || looking)
             return;
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
@@ -316,6 +319,7 @@ int main(int argc, char *argv[])
     QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
     auto *talkKey = new TalkKey(settings, rooms, &app);
 
+    qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);
@@ -333,6 +337,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Mover", mover);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
 
     QQmlApplicationEngine engine;

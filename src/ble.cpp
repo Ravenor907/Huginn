@@ -1,4 +1,5 @@
 #include "ble.h"
+#include "proof.h"
 
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QBluetoothLocalDevice>
@@ -160,7 +161,8 @@ QVariantList Ble::peers() const
         out << QVariantMap{{QStringLiteral("address"), l->address},
                            {QStringLiteral("name"), l->name},
                            {QStringLiteral("chatKey"), l->chatKey},
-                           {QStringLiteral("mailbox"), l->mailbox}};
+                           {QStringLiteral("mailbox"), l->mailbox},
+                           {QStringLiteral("proven"), l->proven}};
     }
     return out;
 }
@@ -359,8 +361,21 @@ void Ble::connectTo(const QString &address)
             if (c.uuid() != kOutbox || l->chatKey.isEmpty())
                 return;
             std::string msg;
-            if (l->in.add(value.toStdString(), &msg) == BleFrames::Reassembler::Complete)
-                Q_EMIT message(l->chatKey, QByteArray::fromStdString(msg));
+            if (l->in.add(value.toStdString(), &msg) != BleFrames::Reassembler::Complete)
+                return;
+            const QByteArray json = QByteArray::fromStdString(msg);
+            // Cap s1: the phone signs the number in our hello. A wrong signature: not who it says, so no chat key at all.
+            if (json.size() < 1024 && json.contains("\"proof\"")) {
+                const QJsonObject o = QJsonDocument::fromJson(json).object();
+                if (o.value(QStringLiteral("t")).toString() == QLatin1String("proof")) {
+                    l->proven = Proof::closeOk(l->chatKey, l->myNonce, o.value(QStringLiteral("sig")).toString());
+                    if (!l->proven)
+                        l->chatKey.clear();
+                    Q_EMIT changed();
+                    return;
+                }
+            }
+            Q_EMIT message(l->chatKey, json);
         });
         connect(l->svc, &QLowEnergyService::errorOccurred, l->ctx, [this, l](QLowEnergyService::ServiceError) { drop(l, true); });
         // Values are skipped here because only HELLO is needed, and it's read on its own next.
@@ -396,20 +411,27 @@ void Ble::onServiceState(Link *l)
 void Ble::onHello(Link *l, const QByteArray &value)
 {
     const QJsonObject o = QJsonDocument::fromJson(value).object();
-    const QString key = o.value(QStringLiteral("chatKey")).toString();
+    // Hidden from people nearby, a phone sends a daily hint instead of its key: only a contact's can be matched.
+    QString key = o.value(QStringLiteral("chatKey")).toString();
+    if (key.isEmpty() && hintKey)
+        key = hintKey(o.value(QStringLiteral("hint")).toString());
     if (o.value(QStringLiteral("app")).toString() != QLatin1String("muninn") || key.isEmpty()) {
-        // Something else using our UUID, or a broken Muninn: leave it alone for a while.
+        // Something else using our UUID, a broken Muninn, or a hidden phone that isn't a contact: leave it alone for a while.
         drop(l, true, 10 * 60 * 1000);
         return;
     }
-    // Android changes its Bluetooth address now and then, so the same phone can show up twice.
+    // Android changes its Bluetooth address now and then, so the same phone can show up twice. Only a link that
+    // proved it's that key (cap s1) keeps a new one out: anyone can claim a key.
     for (const Link *other : std::as_const(m_links)) {
-        if (other != l && other->ready && other->chatKey == key) {
+        if (other != l && other->ready && other->proven && other->chatKey == key) {
             drop(l, false, kForgetAfterMs);
             return;
         }
     }
     l->chatKey = key;
+    const QString n = o.value(QStringLiteral("n")).toString();
+    l->theirNonce = Proof::isNonce(n) ? n : QString();
+    l->myNonce = Proof::newNonce();
     l->name = o.value(QStringLiteral("name")).toString();
     l->mailbox = o.value(QStringLiteral("mailbox")).toString();
 
@@ -431,7 +453,7 @@ void Ble::onReady(Link *l)
     s.retryAtMs = 0;
     // Our hello always goes first on a new link. While Chat is locked there's none yet: then the
     // link waits (unused) until sayHello() runs at unlock.
-    const QByteArray hello = m_hello ? m_hello() : QByteArray();
+    const QByteArray hello = helloFor(l);
     if (!hello.isEmpty()) {
         queue(l, hello);
         l->said = true;
@@ -441,15 +463,50 @@ void Ble::onReady(Link *l)
 
 void Ble::sayHello()
 {
-    const QByteArray hello = m_hello ? m_hello() : QByteArray();
-    if (hello.isEmpty())
-        return;
     for (Link *l : std::as_const(m_links))
         if (l->ready && !l->said) {
+            const QByteArray hello = helloFor(l);
+            if (hello.isEmpty())
+                return;
             queue(l, hello);
             l->said = true;
         }
     Q_EMIT changed();
+}
+
+// Our hello for this link (empty while Chat is locked). Cap s1: our number for the phone to sign, and our signature
+// over the number in its HELLO.
+QByteArray Ble::helloFor(Link *l) const
+{
+    const QByteArray hello = m_hello ? m_hello() : QByteArray();
+    if (hello.isEmpty())
+        return hello;
+    QJsonObject o = QJsonDocument::fromJson(hello).object();
+    o.insert(QStringLiteral("n"), l->myNonce);
+    const QString sig = prove && !l->theirNonce.isEmpty() ? prove(l->theirNonce) : QString();
+    if (!sig.isEmpty())
+        o.insert(QStringLiteral("proof"), sig);
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+Ble::Link *Ble::linkFor(const QString &chatKey, bool strict) const
+{
+    Link *best = nullptr;
+    for (Link *l : std::as_const(m_links)) {
+        if (!l->ready || !l->said || l->chatKey != chatKey || (strict && !l->proven))
+            continue;
+        if (!best || (l->proven && !best->proven))
+            best = l;
+    }
+    return best;
+}
+
+bool Ble::has(const QString &chatKey, bool strict) const { return linkFor(chatKey, strict) != nullptr; }
+
+bool Ble::proven(const QString &chatKey) const
+{
+    const Link *l = linkFor(chatKey, true);
+    return l != nullptr;
 }
 
 int Ble::linkMtu(Link *l) const
@@ -461,20 +518,16 @@ int Ble::linkMtu(Link *l) const
     return qBound(BleFrames::kMinMtu, mtu, BleFrames::kMaxMtu);
 }
 
-bool Ble::send(const QString &chatKey, const QByteArray &json)
+bool Ble::send(const QString &chatKey, const QByteArray &json, bool strict)
 {
     if (json.size() > int(BleFrames::kMaxMessage))
         return false;
-    for (Link *l : std::as_const(m_links)) {
-        if (l->ready && l->said && l->chatKey == chatKey) {
-            // Bluetooth is slow: past about 2 MB waiting, say no so other routes carry it.
-            if (l->frames.size() > 4096)
-                return false;
-            queue(l, json);
-            return true;
-        }
-    }
-    return false;
+    Link *l = linkFor(chatKey, strict);
+    // Bluetooth is slow: past about 2 MB waiting, say no so other routes carry it.
+    if (!l || l->frames.size() > 4096)
+        return false;
+    queue(l, json);
+    return true;
 }
 
 void Ble::queue(Link *l, const QByteArray &json)

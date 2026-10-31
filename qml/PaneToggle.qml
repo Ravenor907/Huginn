@@ -7,10 +7,10 @@ Rectangle {
     id: toggle
     property string which: "list"
     readonly property bool on: which === "list" ? Settings.showList : Settings.showMembers
-    visible: Theme.desktop
+    visible: !Theme.portrait
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-    width: Theme.px(34); height: width
-    radius: Theme.px(8)
+    width: Theme.px(32); height: width
+    radius: Theme.radius
     color: hover.hovered ? Theme.raised : "transparent"
     border.width: on ? 1 : 0
     border.color: Theme.line

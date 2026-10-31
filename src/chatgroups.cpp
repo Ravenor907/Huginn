@@ -405,9 +405,27 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         if (want.value(QStringLiteral("kind")) == cur.value(QStringLiteral("kind")) && want.value(QStringLiteral("days")) == cur.value(QStringLiteral("days")))
             return QString();
         next = want;
+    } else if (what == QLatin1String("invites")) {
+        // Cap j1 (17.1): members may make invite links too. Older apps refuse a state with "mi", so everyone needs j1 first.
+        const bool on = op.value(QStringLiteral("on")).toBool();
+        if (on == cur.value(QStringLiteral("mi")).toBool())
+            return QString();
+        if (on) {
+            QStringList old;
+            for (const QJsonObject &m : std::as_const(members))
+                if (m.value(QStringLiteral("k")).toString() != me && !hasJ1(m.value(QStringLiteral("k")).toString()))
+                    old << m.value(QStringLiteral("n")).toString();
+            if (!old.isEmpty())
+                return QStringLiteral("Everyone needs Muninn or Huginn 0.95 first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+            next.insert(QStringLiteral("mi"), true);
+        } else {
+            next.remove(QStringLiteral("mi"));
+        }
     } else if (what == QLatin1String("add")) {
         if (GroupWire::isMember(cur, k))
             return QString();
+        if (cur.value(QStringLiteral("mi")).toBool() && !hasJ1(k))
+            return QStringLiteral("They need Muninn or Huginn 0.95 to join, because members can invite in this group.");
         // An app without d1 refuses a Family or Work group's state.
         if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
             return QStringLiteral("They need Muninn or Huginn 0.94 to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
@@ -567,7 +585,7 @@ QVariantMap Chat::parseGroupCode(const QString &text) const
 QString Chat::joinWithCode(const QString &text)
 {
     if (!m_ready)
-        return QStringLiteral("Open Chat and unlock it first.");
+        return QStringLiteral("Open Huginn and unlock it first.");
     const QVariantMap c = parseGroupCode(text);
     if (c.isEmpty())
         return QStringLiteral("That isn't a group code. It starts with MUNINNG1.");
@@ -640,6 +658,8 @@ void Chat::sendControl(const QString &g, const QString &to, QJsonObject msg)
 
 void Chat::queueGroup(const QString &g, const QString &to, const QString &room, const QString &logical, const QByteArray &plain)
 {
+    if (m_moving)
+        return;
     if (to.isEmpty() || to == myKey())
         return;
     const QString envId = GroupWire::envelopeId(logical, to);
@@ -665,6 +685,8 @@ void Chat::queueGroupBodies(const QString &g, const QString &to, const QString &
 
 void Chat::groupAttempt(const QString &envId)
 {
+    if (m_moving)
+        return;
     const auto it = m_gout.find(envId);
     if (it == m_gout.end())
         return;
@@ -691,27 +713,29 @@ void Chat::groupAttempt(const QString &envId)
             }
         });
     };
+    // Cap s1: only a route that proved it's them keeps a big photo off the internet or counts as sent.
     bool any = false;
     bool ble = true;
     for (const QByteArray &b : bodies)
-        ble = ble && m_ble->send(o.to, b);
-    if (ble) {
+        ble = ble && sendBle(o.to, b);
+    if (ble && m_ble->proven(o.to)) {
         any = true;
         sent();
         if (media)
             m_gout[envId].next = qMax(m_gout[envId].next, now() + qint64(bodies.size()) * 3000);
     }
-    const QString base = m_net->baseFor(o.to);
+    const QString base = baseTo(o.to);
     if (!base.isEmpty()) {
-        any = true;
+        const bool proven = m_net->provenFor(o.to);
+        any = any || proven;
         for (const QByteArray &b : bodies)
-            post(base, b, [sent](int code) {
-                if (code == 200)
+            post(base, b, [sent, proven](int code) {
+                if (code == 200 && proven)
                     sent();
             });
     }
     if ((!media || !any || o.count >= 2) && bodies.size() <= Photos::kInternetPieces)
-        sendInternet(o.to, bodies, mailboxOf(o.to), sent);
+        sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g));
 }
 
 void Chat::groupRetry()
@@ -1117,7 +1141,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     }
     if (room == QLatin1String("gmsg")) {
         const QString logical = envId.section(QLatin1Char('-'), 0, 0);
-        if (GroupWire::isLogicalId(logical) && gmsgKnown(logical)) {
+        if (GroupWire::isLogicalId(logical) && (gmsgKnown(logical) || m_unsentBy.value(logical) == fromKey)) {
             const QString g = m_gidx.value(logical);
             if (!g.isEmpty())
                 groupReceipt(g, fromKey, {logical}, QStringLiteral("delivered"));
@@ -1152,7 +1176,8 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     // Who may send what: contacts, members of that group, the admin being joined through, and
     // (for a group code) whoever brings a live token made here.
     bool allowed = isContact(fromKey) || member || str(m_joining.value(g), "admin") == fromKey;
-    if (!allowed && room == QLatin1String("group") && t == QLatin1String("join") && tokenOk(p.value(QStringLiteral("inv")).toString(), g))
+    if (!allowed && room == QLatin1String("group") && t == QLatin1String("join")
+        && (tokenOk(p.value(QStringLiteral("inv")).toString(), g) || !liveLink(p.value(QStringLiteral("inv")).toString(), g).isEmpty()))
         allowed = true;
     if (!allowed && room == QLatin1String("gmsg") && have && p.value(QStringLiteral("sv")).toInteger() > ver(git->state))
         allowed = true;   // maybe added in a version not seen here yet: held below
@@ -1274,7 +1299,9 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     } else if (t == QLatin1String("join")) {
         const QString inv = p.value(QStringLiteral("inv")).toString();
         const QVariantMap tok = m_gtokens.value(inv);
-        if (have && GroupWire::isAdmin(git->state, me) && tokenOk(inv, g) && (str(tok, "for").isEmpty() || str(tok, "for") == fromKey)) {
+        // Cap j1: an invite link this computer counts (17.3).
+        const bool byLink = !tokenOk(inv, g) && !liveLink(inv, g).isEmpty();
+        if (have && GroupWire::isAdmin(git->state, me) && (byLink || (tokenOk(inv, g) && (str(tok, "for").isEmpty() || str(tok, "for") == fromKey)))) {
             if (GroupWire::isMember(git->state, fromKey)) {
                 sendStateTo(g, fromKey);   // they missed it: once more
             } else {
@@ -1288,11 +1315,16 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                                                {QStringLiteral("p"), pm}});
                 if (!err.isEmpty())
                     Q_EMIT notice(QStringLiteral("%1 tried to join %2: %3").arg(name, groupName(g), err));
+                else if (byLink && m_groups.contains(g) && GroupWire::isMember(m_groups.value(g).state, fromKey))
+                    linkUsed(inv, g);
             }
             if (!str(tok, "for").isEmpty())
                 m_gtokens.remove(inv);   // a contact's invite is used once; a group code lasts its hour
             saveGroupsSoon();
         }
+    } else if (t == QLatin1String("link") || t == QLatin1String("linkoff") || t == QLatin1String("links")) {
+        if (!takeLinkControl(g, fromKey, p))
+            return 403;
     } else if (t == QLatin1String("decline")) {
         const QString inv = p.value(QStringLiteral("inv")).toString();
         if (str(m_gtokens.value(inv), "for") == fromKey && str(m_gtokens.value(inv), "g") == g) {
@@ -1329,8 +1361,12 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                 m.insert(QStringLiteral("voice"), 0);
                 m.insert(QStringLiteral("unsent"), name);
             });
-            if (!found && !m_gidx.contains(gone))
-                forget({gone});   // still on its way: it never shows
+            // Still on its way: a later copy from that very sender never shows (from anyone else it still does).
+            if (!found && !m_gidx.contains(gone)) {
+                if (m_unsentBy.size() > 2000)
+                    m_unsentBy.clear();
+                m_unsentBy.insert(gone, fromKey);
+            }
             groupReceipt(g, fromKey, {gone}, QStringLiteral("unsent"));
         }
     } else {
@@ -1349,7 +1385,7 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
     const QJsonValue textValue = p.value(QStringLiteral("text"));
     if (!GroupWire::isLogicalId(id) || !textValue.isString() || GroupWire::length(textValue.toString()) > kMax || !RichWire::ok(QStringLiteral("gmsg"), p))
         return 400;
-    if (gmsgKnown(id)) {
+    if (gmsgKnown(id) || m_unsentBy.value(id) == from) {
         groupReceipt(g, from, {id}, QStringLiteral("delivered"));
         return 200;
     }
@@ -1418,7 +1454,7 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     const auto git = m_groups.constFind(g);
     if (git == m_groups.cend() || git->state.isEmpty() || git->removed || git->left || !GroupWire::isMember(git->state, fromKey))
         return 403;
-    if (gmsgKnown(gid)) {
+    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey) {
         groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
         return 200;
     }
@@ -1594,8 +1630,14 @@ void Chat::refreshGroupPeers()
         for (const QJsonValue &v : members) {
             const QJsonObject m = v.toObject();
             const QString k = m.value(QStringLiteral("k")).toString();
-            if (k == me || k.isEmpty() || isContact(k))
+            if (k == me || k.isEmpty())
                 continue;
+            // A contact in a group's state runs an app with groups and calls (3.7): what it speaks is known from that too.
+            if (isContact(k)) {
+                if (!m_caps.value(k).contains(QStringLiteral("g1")))
+                    noteCaps(k, true, {QStringLiteral("r1"), QStringLiteral("g1"), QStringLiteral("c1")});
+                continue;
+            }
             keep.insert(k);
             QVariantMap pe = m_gpeers.value(k);
             const QVariantMap was = pe;

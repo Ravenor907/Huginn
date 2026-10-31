@@ -25,7 +25,7 @@ extern const char kCap[];   // "r1"
 // no k1 or k2 (managing a kids' TV is Muninn only), or 0.6 peers would try it and fail. t1: takes a
 // kids' TV card (7.6), so a parent can invite someone on Huginn to talk with the kids. v1: voice
 // rooms and group calls (section 6).
-extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1"
+extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1"
 
 // The ratchet is for private-room and group payloads to a contact (or group peer) that said it
 // can read it.
@@ -37,14 +37,16 @@ QStringList capsOf(const QJsonObject &o, bool *present = nullptr);
 
 // Adds "cap" and "caps" and seals plain into the envelope fields (room, fromKey, fromName, mailbox, id, ...).
 // With a peer the ratchet is used and the peer moves on (save it before sending); when the
-// ratchet can't make a message, v1 is used instead.
+// ratchet can't make a message, v1 is used instead. bind: cap s1, the clear fields are sealed in too
+// ("aad":"s1", see Proof), only for someone whose app said s1.
 QJsonObject seal(QJsonObject fields, const QByteArray &sk, const QString &theirKey, const QByteArray &plain, Ratchet::Peer *peer,
-                 const Ratchet::NewKey &newKey);
+                 const Ratchet::NewKey &newKey, bool bind = false);
 
 // Opens either kind. An "rh" message needs the sender's peer, which moves on only when the
 // message opens: pass a copy and keep it once the message is accepted. ok false on any failure.
+// A bound envelope (cap s1) also needs myKey: it was sealed to that key and no other.
 QByteArray open(const QJsonObject &o, const QByteArray &sk, const ChatCrypto::KeyPair &me, Ratchet::Peer *peer,
-                const Ratchet::NewKey &newKey, bool *ok);
+                const Ratchet::NewKey &newKey, bool *ok, const QString &myKey = QString());
 
 // Sealed envelopes kept for resending (a day at most), so every retry and every route sends
 // the very same bytes and the ratchet never seals one message twice.
@@ -79,9 +81,14 @@ public:
     void add(const QString &from, const QString &id, qint64 now, const QString &note = QString());
     QString note(const QString &from, const QString &id) const;
     void prune(qint64 now, qint64 maxAge, size_t max);
+    // Kept on disk too (only a hash of who and which), so a restart doesn't let an old copy in again.
+    bool dirty() const { return m_dirty; }
+    QByteArray save();
+    void load(const QByteArray &json, qint64 now, qint64 maxAge);
 
 private:
     std::map<QString, std::pair<qint64, QString>> m_ids;
+    bool m_dirty = false;
 };
 
 // Envelopes, v1 and r1 both ways, the capability upgrade, resends, duplicates and nicknames.

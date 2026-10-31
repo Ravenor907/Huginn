@@ -48,7 +48,7 @@ QtObject {
     // A link that works for one person: copied, for any app or email.
     function inviteLink() {
         const link = Trust.inviteLink(24)
-        if (link === "") { Ui.say("Unlock Chat first.", true); return }
+        if (link === "") { Ui.say("Unlock Huginn first.", true); return }
         Chat.copyText(link)
         Ui.say("One-time invite link copied. The first person to use it within a day is added straight away.")
     }
@@ -60,9 +60,8 @@ QtObject {
     // ------------------------------------------------------------- f1: files over the internet
 
     function sendFile(k) {
-        const sections = System.sendableFiles(15)
-        if (!sections.length) { Ui.say("No files found in Downloads, Documents, Pictures, Videos or Music. You can also drop one on the chat.", true); return }
-        Ui.pickFrom("Send a file to " + Chat.nameOf(k), sections, url => sendUrl(k, url))
+        if (Ui.main && Ui.main.touring) return
+        System.pickFiles().forEach(p => sendUrl(k, p))
     }
     function sendUrl(k, url) {
         const path = Chat.localPath(url)
@@ -90,22 +89,33 @@ QtObject {
     // ------------------------------------------------------------- linked devices (section 15)
 
     function linkedDevices() {
-        if (!Chat.ready) { Ui.say("Open Chat and unlock it first.", true); return }
+        if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
         const items = []
         const ph = Linked.phone
         if (ph.key) items.push({ name: "Linked to " + ph.name, detail: "Its chats show in Direct messages while it's online. Choose to unlink", url: "ph" })
         else items.push({ name: "Use as a companion", detail: "Show a code for your phone: Settings › Linked devices there. Its chats then show here", url: "code" })
         items.push({ name: "Link a device", detail: "Paste the code another device shows, and it mirrors this computer's chats", url: "link" })
         Linked.companions.forEach(c => items.push({ name: "Unlink " + c.name, detail: "It mirrors this computer's chats", url: "u:" + c.key }))
-        Ui.pickFrom("Linked devices", [{ header: "Contacts see nothing new: messages still come from and go to the phone", items: items }], a => {
-            if (a === "code") {
+        // Cap x1: everything moves here instead, and the old device is locked out.
+        const move = [{ name: "Move here", detail: "You, your contacts, groups and chats come to this computer over the Wi-Fi. The old device is locked out", url: "movehere" },
+                      { name: "Move from this computer", detail: "Paste the code the new device shows (it starts with MUNINNM1)", url: "moveaway" }]
+        Ui.pickFrom("Linked devices", [{ header: "Use on both: contacts see nothing new, messages still come from and go to the phone", items: items },
+                                       { header: "Move to another device", items: move }], a => {
+            if (a === "movehere") {
+                const code = Mover.showCode()
+                if (code === "") { Ui.say("Connect to your home network first: moving only works there.", true); return }
+                Chat.copyText(code)
+                Ui.sure("Move code copied", "On your old device: Settings › Linked devices › Move from this device, and paste it. Keep both on the same Wi-Fi. Both screens then show the same 4 emoji.\n\n" + code, "Done", () => {}, false, false)
+            } else if (a === "moveaway") {
+                Ui.ask("Move from this computer", "Paste the code the new device shows (it starts with MUNINNM1). Only continue if the other device is yours and in front of you.", "", "Next", t => Mover.take(t))
+            } else if (a === "code") {
                 const code = Linked.newCode()
                 Chat.copyText(code)
                 Ui.sure("Link code copied", "Paste it on your phone in Settings › Linked devices within 10 minutes. It works once.\n\n" + code, "Done", () => {}, false, false)
             } else if (a === "link") {
                 Ui.ask("Link a device", "Paste the code it shows (it starts with MUNINNL1)", "", "Link", t => {
                     const r = Linked.link(t)
-                    Ui.say(r === "" ? "Linked. It shows this computer's chats while Huginn is open." : r, r !== "")
+                    Ui.say(r === "" ? "Now check the 4 emoji on both screens." : r, r !== "")
                 })
             } else if (a === "ph") {
                 Ui.sure("Unlink " + ph.name + "?", "Its chats leave this computer. Link again any time with a new code.", "Unlink", () => Linked.unlink(ph.key), false, true)

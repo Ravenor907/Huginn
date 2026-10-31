@@ -62,12 +62,18 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
 | `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
 | `k4` | kids' TV `apps` (7.9): a parent sends an app to the TV. Muninn only. |
+| `k5` | kids' TV config field `nr`, the TV's noise removal (7.10). Muninn only. |
 | `t1` | takes a kids' TV card (7.6): someone invited to talk with the kids. Muninn and Huginn. |
 | `m1` | replies, reactions, edits, typing, active status, and being put straight in a group by a contact (section 11). Muninn and Huginn. |
 | `m2` | photo albums, video messages, polls and link previews (section 12). Implies `m1`. Muninn from 0.93. |
 | `i1` | room `intro`: introductions and group members asking to be contacts (section 13). Muninn from 0.93, Huginn from 0.94. |
 | `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
 | `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn from 0.94. |
+| `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only, from 0.95. |
+| `k7` | kids' TV config field `upd`, automatic update checks (7.12). Muninn only, from 0.95. |
+| `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn from 0.95. |
+| `x1` | moving to another device (section 18). Muninn and Huginn from 0.95. |
+| `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn from 0.95. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet today. Tokens are never removed by an envelope that lacks them unless
@@ -85,11 +91,22 @@ A 0.5 app accepts it and does nothing. A 0.6 app answers with `{"ids": [], "s": 
 whose envelope carries its `caps`. At most one probe per contact per hour. Apps SHOULD probe when the user
 opens a contact's chat and the caps are unknown.
 
+From 0.95:
+- **Hello after adding.** Right after anyone becomes a contact (a code, an introduction, a Family offer, Keep in
+  touch, an invite link, an accepted request, a key change), the app sends this probe once, outside the hourly
+  limit. Its envelope carries the sender's caps and the answer carries the other side's, so both learn them at once.
+- **Caps come from more places.** Besides 1:1 envelopes: authentic group envelopes (they open like any other),
+  envelopes from someone met close by who isn't a contact yet (kept with them and carried over when they become
+  a contact), and group states: a contact listed as a member of an accepted state has at least `r1 g1 c1` (3.7).
+- **Unknown caps count as current in the screens.** Call, Video and video messages show for someone whose caps
+  aren't known yet (a probe goes out). The wire rules of 1.3 still hold for anything whose caps are known; an old
+  app sent a call simply doesn't answer.
+
 ### 1.3 Fallback for 0.5 peers
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `m1` for rooms `rich`, `mx` and
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `k7` for a config with `upd`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
@@ -213,7 +230,8 @@ Given the current state `cur` and an incoming state `new` (reference `accept_sta
 4. `new.by` is in `cur.admins`. (An admin removed in `cur` can't sign anything you will take.)
 5. `new.owner == cur.owner`, unless `new.by == cur.owner` (only the owner hands ownership over).
 6. Conflict rule: accept if `new.v > cur.v`, or `new.v == cur.v` and `hash(new) < hash(cur)` (string compare of
-   the lowercase hex). Otherwise refuse.
+   the lowercase hex). Otherwise refuse. From 0.95 (section 21.5): refuse `new.v > cur.v + 1000`, and at the same
+   version a state signed by its owner (`by == owner`) wins over one that isn't, before the hash decides.
 
 Versions may jump (v3 to v7) as long as rule 4 holds against `cur`. If rule 4 fails only because you are
 behind (the signer became an admin in a version you missed), send `sync` (3.6) to the envelope sender and
@@ -896,8 +914,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`
-(7.5); `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr` and the k7 field `upd`
+(7.5, 7.10, 7.12); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1055,6 +1073,60 @@ Android still asks on the TV before it installs. A TV used normally (not in kids
 files it receives out of Downloads and asks "Install …?" first; anyone the person accepts files from can
 send one there, with no `apps` needed.
 
+### 7.10 Noise removal on the TV (`k5`)
+
+A TV whose app says `k5` takes one more optional config field. A parent's app puts it in only for such a TV.
+
+| field | value | absent means | what the TV does |
+|---|---|---|---|
+| `nr` | integer 0 to 3 | 3 | the noise removal on its microphone, for calls, voice messages and speech to text: 0 none, 1 Standard (WebRTC's noise suppressor), 2 Strong (RNNoise), 3 both, Standard first |
+
+Anything else (a boolean, text, out of range) makes the config malformed. Anyone at the TV can also pick it in
+the TV's "For a parent" screen; like the microphone level (7.7), the TV keeps its own choice until a config
+arrives whose `nr` differs from the one before (a parent changed it), and the last change wins. A TV that can't
+run its voice library uses Android's own noise suppressor whenever `nr` is not 0. The echo canceller and
+automatic gain are not affected. Vectors: `tv.configs.cfg5` (`nr` 1) and step 8 of `tv.accept`.
+
+### 7.11 A parent reconnects after a wipe (`k6`)
+
+A parent whose phone was wiped or reinstalled has a new chat key, so the TV no longer knows them. All messages are in
+room `tvconfig`, and the TV and the parents send them on every route at once, the internet included, so nobody nearby
+can stand in the way. Reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-vectors.json`.
+
+1. On the TV, holding OK on the remote for 5 seconds on "Connect a parent" shows a code: the TV's contact code (no
+   invite) with `"tv": 2` and `"r"`, a token of its own (16 random bytes as hex, an hour, once). A child can't open it by
+   pressing around.
+2. The parent's phone adds the TV from it and sends `{"t":"rejoin","n":<name>,"r":<token>}`. The TV takes it only with
+   that token, in time, once, from someone who isn't a parent, and keeps them as the **joiner** (key, name, mailbox of the
+   envelope, when). One joiner at a time.
+3. The TV warns every parent: `{"t":"ask","k":<joiner key>,"n":<name>}`, again every 6 hours. While a joiner waits the
+   TV shows a banner that says so. A parent's phone asks its person: **Approve** sends `{"t":"approve","k"}`, **Block**
+   sends `{"t":"block","k"}`.
+4. `approve` from a parent: the TV answers that parent `{"t":"swap","k","n","p"}` and the parent's phone signs the next
+   config with the joiner added as a parent. Nobody is taken off.
+5. `block` from any parent ends it: the TV forgets the joiner and tells them `{"t":"blocked"}`.
+6. If no parent blocks within 24 hours of `rejoin` (vectors: `due`), the TV sends the joiner `{"t":"orphan","cfg":<its
+   signed config>}` (again every 6 hours until it answers). The joiner's phone takes it only for a TV it asked, checks it
+   (7.2, signed by its `by`, for this TV) and signs the next version with itself as the only parent and the same people,
+   messages and settings. The TV takes that one config from the joiner with the joiner as the only parent (as in
+   pairing, 7.1 step 3). This takeover is the only path that removes parents.
+7. A config that lists the joiner ends it.
+
+Well-formed (reference `tv_ok`): exactly the fields above, keys are base64 text, names 1 to 40 characters, `r` 16 to 64
+characters, `p` empty or 64 hex, `cfg` an object.
+
+### 7.12 Automatic update checks on the TV (`k7`)
+
+A TV whose app says `k7` takes one more optional config field. A parent's app puts it in only for such a TV (and only
+next to the k2 fields), set to that phone's own "Check for updates automatically".
+
+| field | value | absent means | what the TV does |
+|---|---|---|---|
+| `upd` | true or false | true | true: it looks for a new release on its own (at start and once a day). false: it never asks GitHub by itself; a parent's `update` (7.5) still makes it check |
+
+Anything else (a number, text) makes the config malformed. When the parent changes the switch, the parent's app sends
+a new config to every TV that said `k7`. Vectors: `tv.configs.cfg6` (`upd` false) and step 9 of `tv.accept`.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -1136,6 +1208,17 @@ Each app's unit tests should:
 `intro` and `file` messages are well-formed, the file key from both one-off keys, sealed packets byte for byte, acks,
 and what a `MUNINNL1:` link code carries. Muninn checks it in `I1F1VectorsTest`, Huginn in `--chat-selftest` (which
 also sends a file between two copies of FileLink on 127.0.0.1, losing some pieces on the way).
+
+`python3 tools/p95_ref.py` writes `tests/p95-vectors.json` (sections 7.11, 17 and 18): the move key from the two one-off
+keys and the code's secret on both sides, the 4 emoji, the hello, ready and status checks, a sealed part and the sealed
+link code, the payload layout and part counts; link ids and when a link lets someone in; `mi` in a group state; which
+Kids' TV reconnect messages are well-formed. Muninn checks it in `P95VectorsTest`, Huginn in `--chat-selftest` (the file
+next to `chat-vectors.json`).
+
+`python3 tools/s1_ref.py` writes `tests/s1-vectors.json` (section 21): route proofs that check out and ones that don't,
+hints for three days and which match, bound fields for good and malformed envelopes, a bound v1 envelope (byte for
+byte from its nonce) with the changed copies that must not open, a bound ratchet envelope Bob opens on a new session,
+and the group state cases. Muninn checks it in `S1Test`, Huginn in `--chat-selftest`.
 
 `python3 tools/m1_ref.py` writes `tests/m1-vectors.json` (section 11): every `good` payload is well-formed for its
 room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
@@ -1381,6 +1464,12 @@ message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again)
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
 
+**Checking the pair (0.95).** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
+the person taps "They match" on each. Until then the phone sends nothing (`chat`, `msg`) and takes nothing (`send`,
+`sync`) from that companion, and the companion shows nothing from the phone; on "They match" the companion sends `sync`.
+Devices linked before 0.95 stay as they were. While a phone's chats are mirrored anywhere, its chat list says "Mirrored
+to [name]".
+
 ## 16. Message limits (cap `d1`)
 
 Messages don't stay forever. Every chat, 1:1 and group, has a **limit in days**: messages older than that are deleted on
@@ -1438,3 +1527,264 @@ group's members with older apps keep their messages until they update; the group
 Chats that already exist get their limit on the first run of 0.94: anything older is deleted then, and the chat list
 shows once: "Messages now disappear after 7 days".
 
+## 17. Group invite links (cap `j1`)
+
+Discord-style links to join a group, for people who aren't contacts yet. They sit beside the group codes of 3.5 (which
+keep working) and use the same join path, so an app without `j1` can join by a link too.
+
+### 17.1 Who may make one: "Members can invite"
+
+Admins always may. A group state may carry `"mi": true` ("Members can invite"): then members may make links too. It is
+only ever `true`; off is left out, so a group that never turned it on keeps exactly the state older apps take (vectors:
+`mi`). An app without `j1` refuses a state with `mi`, so an admin's app turns it on only when every other member's caps
+include `j1`, and while it is on only people whose caps include `j1` are added (others: "Needs Muninn or Huginn 0.95").
+The change is an admin's signed state like any other (3.4, `op` hint `invites`). Family and Work groups still need `d1`
+(16.2).
+
+### 17.2 The link and who counts it
+
+A link is the add page with a group code (3.5) after `#`, which browsers never send to the server:
+
+```
+https://ravenor907.github.io/Huginn-Muninn/add/#MUNINNG1:<base64url {"g","gn","a","an","p","i","x"}>
+```
+
+`a` is the **counting admin**: the only device that holds the token `i`, counts its uses and lets people in by it. An
+admin's own link is counted by that admin; a member's by the group's owner. `x` is when it stops (seconds); a link that
+never expires says 100 years from now, so an older app joining by it never calls it expired. The add page opens the app
+(`muninn://add/MUNINNG1:...` on Android); Huginn takes the pasted link.
+
+Expiry: 30 minutes, 1, 6 or 12 hours, 1 day, 7 days (the default) or never. Uses: 1, 5, 10, 25, 50, 100 or no limit.
+
+Control messages in room `group` (3.4), only to members whose caps include `j1`:
+
+| t | sent by, to | fields | effect |
+|---|---|---|---|
+| `link` | a member, to the counting admin | `inv` (the token), `lx` (expiry ms, 0 never), `max` (0 to 100, 0 no limit) | the admin keeps it if the sender may invite (an admin, or `mi`) |
+| `linkoff` | the link's maker or an admin, to the counting admin | `lid` | revoked |
+| `links` | the counting admin, to every admin and to each link's maker (their own only) | `list`: `[{"lid","by","x","max","uses"}]` | what the group's screens show |
+
+`lid` is the first 16 hex of SHA-256(UTF-8(`"link|"` + token)) (vectors: `ids`): lists and revokes name a link without
+its token.
+
+### 17.3 Joining by a link
+
+The joiner sends `join` with `inv` = the token to `a` (3.4), exactly as for a group code. The counting admin takes it
+only while the link is live (reference `link_ok`, vectors: `ok`): not revoked, not past its expiry, fewer uses than its
+maximum, and its maker still in the group and still allowed to invite. It then adds the person as for a code and counts
+one use, only when they really were added (someone already in gets the state again, uncounted).
+
+Expiry, uses and revoking are decided only on the counting admin's device, never trusted from the joiner. **One admin
+counts each link**, so two admins can never let in more people than its maximum at once: no other admin has the token.
+If the counting admin stops being an admin or leaves, its links stop working.
+
+## 18. Moving to another device (cap `x1`)
+
+"Move here": everything moves to a new phone, tablet or computer (any of Muninn and Huginn), straight over the home
+Wi-Fi, never the internet. Contacts don't re-add or re-verify: the identity, its mailbox and the ratchets move. The old
+device is then locked out with its keys erased. Reference `tools/p95_ref.py` (`move`), vectors `tests/p95-vectors.json`.
+
+### 18.1 The code and the key
+
+The new device shows `MUNINNM1:` + base64url of `{"v":1, "a":["ip:port", ...], "e": a one-off P-256 public key (base64
+SPKI), "s": 16 random bytes (base64url), "n": its name, "app": "muninn" or "huginn"}`, also as the add page with it after
+`#` (so a camera opens Muninn). The old device takes it and makes its own one-off key. Both get
+
+```
+K = SHA-256("huginn-muninn move v1" || ECDH x of the two one-off keys || s || SHA-256(new key) || SHA-256(old key))
+```
+
+and both show the 4 emoji of K (13.5). Nothing is moved until the person taps "They match" on both.
+
+**Only on the home network.** `a` may only hold IPv4 literals in 10/8, 172.16/12, 192.168/16 or link-local 169.254/16
+with a port (vectors: `lan`); anything else (a name, a public address) is dropped when the code is read, and a code with
+none left isn't a move code. The old device also only uses addresses on its own network (its own address and prefix,
+vectors: `sameNetwork`). A move code is only taken when it is scanned or pasted inside the Move screen, never from a link
+or the add page, and that screen says "Only continue if the other device is yours and in front of you." The hello's `n`
+is the device's or person's chat name, never a computer's host name.
+
+### 18.2 Messages
+
+JSON `POST /api/huginn/v1/move` to `a`, on the port Wi-Fi messages use (HTTPS with any certificate, or HTTP: everything
+that matters is sealed with K or checked with it). `mac(t)` is base64 HMAC-SHA256(K, UTF-8(t)); sealed is base64 of a
+12-byte nonce, then AES-256-GCM(K) ciphertext and tag, with the named additional data.
+
+| t | from | fields | answer |
+|---|---|---|---|
+| `hello` | old | `e` (its one-off key), `n` (name), `app`, `m` = mac("hello\|" + e) | `{"m": mac("ready\|" + e)}` |
+| `part` | old | `i`, `n` (parts), `h` (SHA-256 hex of the payload), `d` sealed with additional data `"move\|i\|n\|h"` | `{"have": parts here}` |
+| `status` | old | | `{"state", "missing": [up to 64 part numbers], "m": mac("status\|" + state + "\|" + h)}` |
+| `link` | old, after the move | `d`: a linked-device code (15) sealed with additional data `"move\|link"` | 200 when linked |
+
+`state` is `need` (parts missing; `h` is empty before the first part arrived), `confirm` (all here, its person hasn't
+tapped "They match"), `taking`, or `done`. Parts are 512 KB of the payload; the last is shorter. The old device only
+believes a status whose `m` checks out, so nobody else on the Wi-Fi can tell it to erase itself.
+
+### 18.3 The steps
+
+1. The old device's person taps "They match": from now on it is **locked**. It takes nothing in, seals nothing and sends
+   nothing as you (the ratchets go with the move). It packs the payload, keeps it sealed with K until the move is done,
+   and asks `status`, sends the missing parts, and asks again, until `done`.
+2. The new device keeps the parts as they came. With all of them and its person's "They match", it checks `h`, takes
+   everything in, marks itself `done` and starts again as you.
+3. On `done` the old device erases everything (keys, contacts, chats) and shows "Moved to [name]", with **Use as a
+   linked device** (it starts fresh and sends `link` with its new link code, 15) or **Start fresh**.
+4. Interrupted (Wi-Fi gone, an app closed): both keep their side and go on where they stopped; parts already there aren't
+   sent again. K, the one-off keys and the payload are kept in each app's vault (the parts on the new device stay sealed
+   with K until they're taken in); only what is shown before the vault opens is kept outside it. The old device stays
+   locked until `done`, unless its person stops it with their own password or pattern, or an hour passes with no
+   checked status from the new device: then it is theirs again, as before. Moving back is the same thing the other way.
+5. `link` is taken only within 10 minutes of `done`, and only after the new device's person says yes to "Link [name]?";
+   the new device keeps its `done` state (with when) in the vault it just took in. The old device keeps K only for those
+   10 minutes (Start fresh, the time running out or Erase all drop it).
+
+### 18.4 The payload
+
+Entries one after another: `[uint32 BE name length][name, UTF-8][uint32 BE data length][data]` (vectors: `payload`).
+Between two of the same app it is the whole backup (each app's backup files, with its settings entry). Between Muninn
+and Huginn it is one entry, `@move.json`:
+
+```
+{"v":1, "me":{"name","pub","priv","nostr"}, "contacts":[{k,n,p,v,i,r,nick,kc,go,cp,[xc,xf,xa]}], "ratchets":{key: ratchet},
+ "chats":{key:[{id,peer,name,text,mine,time,failed,via,state,photo:"",unsent,voice:0}]},
+ "groups":[{"s": state, "h":[older states]}], "gchats":{g:[{id,ch,f,n,x,m,t,st}]}, "folders":{"folders":[{id,n,k,c}],"top":[]}}
+```
+
+`priv` is the chat key (PKCS#8, base64), `nostr` the inbox secret (hex). A ratchet is written as Muninn keeps it
+(`dhsPriv`, `dhsPub`, `null` where Huginn writes ""). Photos, voice, video and files stay behind: their messages
+become words ("Photo"). `xc`, `xf`, `xa` are the local choices no calls, no files and active status hidden.
+
+## 19. Per person, on the device only (0.95)
+
+Set on the press-and-hold sheet, kept in the encrypted contacts, never on the wire: calls and video allowed (off: a
+1:1 `offer` or a group `vring` from them is dropped), files allowed (off: their room `file` and `kind:"file"` pieces are
+dropped), and whether they see my active status (off: no `active` goes to them). Pin, archive, mute and mark unread
+are kept per chat beside them.
+
+A new key that carries an existing contact's mailbox (from nearby, Keep in touch, an invite link, an introduction or a
+group) is never a quiet key change: it becomes a request that says "says it replaces [name]", and only the person's
+accept (or a code they scanned or pasted themselves) replaces the key. The local ids of group members' `add` requests
+(13) are kept apart from introducers' ids, and a match needs the group and the person too.
+
+Keep in touch (0.5): a `keep` yes from someone who is already a contact is answered with this device's own yes, once,
+so the side still waiting becomes a contact too. Two people who both said yes are contacts at once, not verified; the 4
+emoji check is offered. Someone met close by can be called while on the same Wi-Fi or close by.
+
+## 20. Relay envelopes: padding, sending sockets, expiry (0.95)
+
+Three changes to how a sealed envelope travels over the Nostr relays, so a relay learns less about who talks to whom.
+None changes what a receiver must understand, so there is **no cap token**: apps from before 0.95 read these events
+exactly as before. `tools/pad_ref.py` is the reference and writes `tests/pad-vectors.json`; Muninn checks it in
+`SecDataTest`, Huginn in `--nostr-selftest` (the file next to `nostr-vectors.json`).
+
+### 20.1 Padding
+
+The event's `content` is base64 of the outer wrapping `{"e": .., "n": .., "d": ..}` (the throwaway key, the nonce and the
+sealed envelope). From 0.95 the wrapping gets one more field, `"z"`, a string of `0` characters, so that the base64 is
+exactly one of these lengths:
+
+- 1024, 4096, 16384 or 32768 characters, the smallest that fits;
+- above that, the next multiple of 16384.
+
+The steps stay at 16 KB above 32 KB because many relays refuse events over 64 KB: a photo piece (about 42 KB) becomes
+48 KB, never 64 KB.
+
+How: write the wrapping as JSON text `w` (any field order). `base = bytes(w) + 7` (the 7 characters of `,"z":""`).
+`target = bucket(4 * ceil(base / 3)) / 4 * 3`. The new text is `w` without its last `}`, then `,"z":"`, then
+`target - base` zeros, then `"}`. Its base64 is then exactly `bucket` characters. The padding sits outside the seal and
+means nothing; receivers ignore `z` (as they ignore any unknown field), and apps from before 0.95 already did.
+
+### 20.2 Sending sockets
+
+Events are published on short-lived sockets that only send: they never send `REQ` and never answer `AUTH`, so a relay
+can't tie a published event to the mailbox the same app subscribes to (and may sign in as, NIP-42) on its listening
+socket. Every relay gets every event, each on a sending socket of its own, which closes about 20 s after the last event
+given to it. Events still waiting when a relay's listening socket comes back are sent on a new sending socket. The
+retry rules (every relay; again at 1 h and 6 h while not delivered) are unchanged. The relay still sees the internet
+address on both kinds of socket; only a VPN or Tor hides that.
+
+### 20.3 Expiry (NIP-40)
+
+Each event carries `["expiration", "<unix seconds>"]`: the time of sending plus the chat's message limit in days
+(section 16; a group's limit for group messages), so relays that follow NIP-40 drop it once it is gone from the devices
+anyway. Receivers ignore the tag.
+
+## 21. Proven routes and bound envelopes (cap `s1`)
+
+From 0.95. Everything here is in `tools/s1_ref.py`, which writes `tests/s1-vectors.json`.
+
+### 21.1 Every route, always
+
+Every message, receipt and control message goes on every route at once and **always to the internet too** (the
+contact's mailbox, when there is one), as section 0 says. A close-by or Wi-Fi route that answers is never a reason
+to skip the internet. A route counts as having taken a message ("sent") only when it is **proven** (21.2); an
+unproven one is only ever an extra copy. Among several devices that claim the same chat key, a proven one is used
+first, then the one seen most recently. Never pick one by its name or by list order.
+
+### 21.2 Route proofs
+
+A proof is a signed object (2.2) by the chat key, without the object itself on the wire: only its `sig` travels.
+
+- **Wi-Fi.** The LocalSend info (announce, `register` and its answer, `prepare-upload`) carries
+  `"chatProof": sig` over domain `"huginn-muninn route v1"` and `{"fp": <the device's certificate fingerprint,
+  64 uppercase hex>, "k": <chat key>}`. A device is learned only from a certificate it really showed over TLS (the
+  answer to my `register`, or the client certificate on a request to me). A multicast announce or a request without
+  a certificate is never believed: it is answered with a `register` to that address (at most one every 10 s per
+  address). `chatKey` is taken as that device's only if `chatProof` verifies with it against the certificate it
+  showed. A wrong proof means no chat key at all; no proof at all is an older app (unproven).
+- **Bluetooth LE and Nearby.** Each side puts a fresh one-off number in its hello, `"n": <16 random bytes as 32
+  lowercase hex>`, one per connection. The other side signs it over domain `"huginn-muninn close v1"` and
+  `{"k": <chat key>, "n": <that number>}`. Nearby: each phone answers the other's hello with
+  `{"t":"proof","sig":...}`. Bluetooth LE: Muninn's HELLO characteristic carries `n`; Huginn's hello (its first
+  frame) carries its own `n` and `"proof"` over Muninn's; Muninn answers with a `{"t":"proof","sig":...}` frame.
+  Only a number that is exactly 32 lowercase hex characters is ever signed, so a Wi-Fi proof and a close-by proof can
+  never stand in for each other.
+- Someone whose caps include `s1` always proves: for them an unproven route is never used at all.
+
+### 21.3 Hidden from people nearby
+
+Hidden, a device sends no name, `chatKey` or `mailbox` in announces and hellos. Instead it sends
+`"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]`, where day is the
+number of whole days since 1970 (UTC). A contact matches it against each contact's key for yesterday, today and
+tomorrow and, on a match, treats the device as that contact (its proof must still check out). Anyone else learns
+nothing they can follow from place to place.
+
+### 21.4 Bound envelopes
+
+To someone whose caps include `s1`, the envelope also carries `"aad": "s1"` and the clear fields are sealed in:
+
+- `bound` = canonical JSON (2.1) of `{"toKey": <the recipient's chat key>}` plus each of `room`, `id`, `fromKey`,
+  `mailbox`, `caps`, `invite` (strings) and `days` (an integer) that the envelope has. A field of the wrong type
+  makes the envelope malformed.
+- v1: AES-GCM associated data `"huginn-muninn s1\n" + bound` instead of `"huginn-muninn"`.
+- Ratchet: the header's associated data, then `"\n"`, then the same as v1.
+- `"aad"` with any other value is refused. An envelope without it opens the old way.
+- A day after a sender's envelopes first came bound (time for anything they sealed the old way to arrive), only bound
+  envelopes are taken from them, and v1 in a room their app always ratchets (2.4) is refused. A sender seals again
+  anything it kept from before (an Outbox copy) that isn't bound when the other side says `s1`.
+
+So nobody can change `days`, `room`, `mailbox` or `caps`, send a copy again under a new `id`, or send someone's
+envelope back to them or on to someone else.
+
+Also, without a new token: envelope ids already handled (receipts, unsends, keeps and the rest) are kept on disk for
+two days (by a hash of sender and id), so a restart doesn't let a copy in again; a linked companion's `send`
+(section 15) carries an `id` and the phone sends each id once; and after 20 ratchet envelopes from one key that
+don't open within a minute, more from that key wait a while before any ratchet work is done.
+
+### 21.5 Group states
+
+Accepting a state (3.3) refuses `new.v > cur.v + 1000`, and at the same version a state signed by its owner wins
+over one that isn't (then the hash decides as before). So no admin can push `v` out of the owner's reach. Also:
+an `unsend` for a group message that hasn't arrived yet only stops later copies **from that member**; `sync` (3.6)
+is answered only for members of the current state.
+
+### 21.6 Limits on the local routes (no wire change)
+
+- Wi-Fi: only from addresses on this very home network (a private address inside a subnet of one of the device's
+  own private addresses); at most 32 connections at once; a chat envelope body at most 96 KB, any other request
+  2 MB, read as it arrives; an upload never more than the size accepted; after 3 "wants to send" prompts from one
+  address are turned down or left unanswered in 10 minutes, that address waits (429).
+- Nearby files: only as many as the accepted offer named, from that phone, none bigger than its biggest; anything
+  else is stopped, not written.
+- The Nearby room: at most 10 messages in 10 seconds from one address or connection, whatever keys it uses.
+- A stranger's private message close by shows as `"Name" · Not a contact · nearby`, in lists and notifications.

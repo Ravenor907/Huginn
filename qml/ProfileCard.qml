@@ -111,7 +111,7 @@ Item {
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(60), Theme.px(420))
         height: body.implicitHeight + banner.height + Theme.px(24)
-        radius: Theme.px(12)
+        radius: Theme.radius
         color: Theme.panel
         border.width: 1
         border.color: Theme.line
@@ -268,7 +268,7 @@ Item {
         readonly property bool focused: !!card.actions[card.focusIndex] && card.actions[card.focusIndex].id === action.id
         width: abRow.implicitWidth + Theme.px(24)
         height: Theme.px(primary ? 46 : 36)
-        radius: Theme.px(8)
+        radius: Theme.radius
         opacity: action.on ? 1 : 0.45
         color: primary && action.on ? (abHover.hovered ? Theme.accentFill : Theme.raised) : abHover.hovered ? Theme.tile : Theme.raised
         border.width: focused ? Theme.focusWidth : 1

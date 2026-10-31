@@ -15,7 +15,7 @@ object Backup {
     const val PREFS_ENTRY = "@prefs.json"
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
-    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "receiveFolder", "recent", "oldToolsGone")
+    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone")
 
     fun fileName(): String = "muninn-backup-${java.time.LocalDate.now()}.mbk"
 
@@ -26,6 +26,11 @@ object Backup {
         val out = context.contentResolver.openOutputStream(uri, "w") ?: throw IllegalStateException("Couldn't write there.")
         return BackupFormat.write(out, password, entries, progress = progress)
     }
+
+    /** Everything a backup holds, read now (moving to another device, cap x1). */
+    fun entries(context: Context, vault: Vault): List<Pair<String, ByteArray>> =
+        vault.sealedFiles().filter { it.first != "move-out.bin" }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
+            (PREFS_ENTRY to prefsJson(context).toByteArray())
 
     /** Reads and checks a backup. Throws [BackupFormat.WrongPassword] or [BackupFormat.NotABackup]. */
     fun open(context: Context, uri: Uri, password: String): BackupFormat.Opened {
@@ -56,7 +61,7 @@ object Backup {
         Runtime.getRuntime().exit(0)
     }
 
-    private fun prefsJson(context: Context): String {
+    internal fun prefsJson(context: Context): String {
         val o = JSONObject()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).all.forEach { (k, v) ->
             if (k in phoneOnly || v == null) return@forEach

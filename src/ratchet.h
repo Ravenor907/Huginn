@@ -23,6 +23,8 @@ struct Header {
     QString d;   // the sender's current ratchet key (base64 SPKI DER)
     int pn = 0;  // how many messages the sender sent on its previous key
     int n = 0;   // this message's number on the current key
+    // Cap s1: the envelope's bound clear fields (Proof::bound), sealed in too; never part of the header on the wire.
+    QByteArray bind;
 
     QByteArray aad() const;
     QJsonObject toJson() const;
@@ -54,7 +56,7 @@ public:
 
     bool canSend() const { return cks.size() == 32; }
     // Empty cipher when this session can't send yet.
-    std::pair<Header, QByteArray> encrypt(const QByteArray &plain);
+    std::pair<Header, QByteArray> encrypt(const QByteArray &plain, const QByteArray &bind = QByteArray());
     // Works on a copy and keeps it only when the message checks out; on any failure the
     // session is left exactly as it was and ok is false.
     QByteArray decrypt(const Header &h, const QByteArray &cipher, const NewKey &newKey, bool *ok);
@@ -72,7 +74,7 @@ public:
 
     // Sends on the active session, or starts a new one as Alice. Empty cipher on failure.
     std::pair<Header, QByteArray> encrypt(const QByteArray &sk, const QString &theirStaticB64, const QByteArray &plain,
-                                          const NewKey &newKey);
+                                          const NewKey &newKey, const QByteArray &bind = QByteArray());
     // Finds the session by header.b, or starts one as Bob. A message that opens makes its
     // session the active one, so two sides that started at once settle on one session.
     QByteArray decrypt(const QByteArray &sk, const ChatCrypto::KeyPair &myStatic, const Header &h, const QByteArray &cipher,

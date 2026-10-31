@@ -16,12 +16,19 @@ import java.util.concurrent.ConcurrentHashMap
  * [caps]: what their app said it speaks ("caps" in their envelopes: r1 g1 c1 k1), empty until known.
  * [days]: how long their app keeps our chat ("days" in their envelopes, cap d1), 0 until they say.
  * [keep]: how long I chose to keep it (only for someone in my Family or Work folder), 0 for the usual 7 days.
+ * [boundAt]: cap s1, when their envelopes first came sealed with their clear fields (0: never). A day later (time for
+ *   anything they sealed the old way to arrive), one that isn't sealed so is refused.
  */
 data class Contact(
     val chatKey: String, val name: String, val mailbox: String?, val verified: Boolean, val invite: String? = null,
     val ratchet: Boolean = false, val nickname: String? = null, val keyChanged: Boolean = false,
     val groupOnly: Boolean = false, val caps: Set<String> = emptySet(), val days: Int = 0, val keep: Int = 0,
+    /** Local only, set on the press-and-hold sheet: no calls or video from them, no files from them, they don't see when I'm active. */
+    val noCalls: Boolean = false, val noFiles: Boolean = false, val hideActive: Boolean = false,
+    val boundAt: Long = 0,
 ) {
+    /** Cap s1: only envelopes sealed with their clear fields are taken from them now. */
+    fun bound(now: Long = System.currentTimeMillis()) = Proof.strictSince(boundAt, now)
     /** What this phone shows for them. */
     val shown: String get() = nickname ?: name
 }
@@ -53,15 +60,21 @@ object ChatWire {
         JSONObject().put("room", room).put("fromKey", fromKey).put("fromName", fromName).put("fromId", fromId)
             .put("mailbox", mailbox).put("id", msgId).put("cap", CAP).put("caps", Proto06.CAPS)
 
-    /** Ratchet when [peer] is given (the caller saves it afterwards), else v1. Always the same plaintext bytes. */
-    fun seal(o: JSONObject, plain: ByteArray, sk: ByteArray, theirKey: String, peer: Ratchet.Peer?, newKey: () -> KeyPair): JSONObject {
+    /**
+     * Ratchet when [peer] is given (the caller saves it afterwards), else v1. Always the same plaintext bytes.
+     * [bind]: cap s1, the clear fields are sealed in too ("aad":"s1"); only for someone whose app said s1.
+     */
+    fun seal(o: JSONObject, plain: ByteArray, sk: ByteArray, theirKey: String, peer: Ratchet.Peer?, newKey: () -> KeyPair,
+             bind: Boolean = false): JSONObject {
         o.put("cap", CAP)
+        if (bind) o.put(Proof.MARK, Proof.CAP) else o.remove(Proof.MARK)
+        val text = if (bind) Proof.bound(o, theirKey) ?: "".also { o.remove(Proof.MARK) } else ""
         if (peer != null) {
-            val (h, c) = peer.encrypt(plain, sk, theirKey, newKey)
+            val (h, c) = peer.encrypt(plain, sk, theirKey, newKey, text)
             o.remove("nonce")
             return o.put("rh", h.toJson()).put("data", ChatCrypto.b64(c))
         }
-        val s = ChatCrypto.sealBytes(sk, plain)
+        val s = ChatCrypto.sealBytes(sk, plain, if (text.isEmpty()) null else Proof.aad(text))
         o.remove("rh")
         return o.put("nonce", s.nonce).put("data", s.data)
     }
@@ -71,15 +84,18 @@ object ChatWire {
     /**
      * The plaintext, or null if it isn't authentic. With "rh" it needs the contact's [peer]
      * (left unchanged on failure; on success the caller decides whether to keep the new state).
+     * A bound envelope (cap s1) also needs [myKey]: it was sealed to that key and no other.
      */
-    fun open(o: JSONObject, sk: ByteArray, myStatic: KeyPair, peer: Ratchet.Peer?, newKey: () -> KeyPair): ByteArray? {
+    fun open(o: JSONObject, sk: ByteArray, myStatic: KeyPair, peer: Ratchet.Peer?, newKey: () -> KeyPair, myKey: String = ""): ByteArray? {
+        if (o.has(Proof.MARK) && !Proof.isBound(o)) return null
+        val text = if (Proof.isBound(o)) Proof.bound(o, myKey) ?: return null else ""
         if (!o.has("rh")) {
             if (!o.has("nonce") || !o.has("data")) return null
-            return ChatCrypto.openBytes(sk, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data")))
+            return ChatCrypto.openBytes(sk, ChatCrypto.Sealed(o.optString("nonce"), o.optString("data")), if (text.isEmpty()) null else Proof.aad(text))
         }
         val p = peer ?: return null
         return try {
-            val h = Ratchet.Header.fromJson(o.getJSONObject("rh"))
+            val h = Ratchet.Header.fromJson(o.getJSONObject("rh")).copy(bind = text)
             p.decrypt(h, ChatCrypto.b64d(o.getString("data")), sk, myStatic, newKey)
         } catch (e: Exception) { null }
     }
@@ -108,11 +124,13 @@ object ChatWire {
     fun contactToJson(c: Contact): JSONObject = JSONObject().put("k", c.chatKey).put("n", c.name).put("p", c.mailbox ?: "")
         .put("v", c.verified).put("i", c.invite ?: "").put("r", c.ratchet).put("nick", c.nickname ?: "").put("kc", c.keyChanged)
         .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" "))
-        .apply { if (c.days > 0) put("dd", c.days); if (c.keep > 0) put("dk", c.keep) }
+        .apply { if (c.days > 0) put("dd", c.days); if (c.keep > 0) put("dk", c.keep); if (c.boundAt > 0) put("sb", c.boundAt) }
+        .apply { if (c.noCalls) put("xc", true); if (c.noFiles) put("xf", true); if (c.hideActive) put("xa", true) }
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
         o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
-        o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"))
+        o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"),
+        o.optBoolean("xc"), o.optBoolean("xf"), o.optBoolean("xa"), boundAt = o.optLong("sb"))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
@@ -121,7 +139,10 @@ object ChatWire {
             invite = c.invite ?: old.invite, ratchet = c.ratchet || old.ratchet, nickname = c.nickname ?: old.nickname, keyChanged = kc,
             // Adding a group peer as a contact just clears groupOnly; a contact never turns into a group peer.
             groupOnly = old.groupOnly && c.groupOnly, caps = old.caps + c.caps,
-            days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep)
+            days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep,
+            // What they may do stays as chosen when they're added again.
+            noCalls = old.noCalls || c.noCalls, noFiles = old.noFiles || c.noFiles, hideActive = old.hideActive || c.hideActive,
+            boundAt = Proof.firstBound(old.boundAt, c.boundAt))
     }
 
     /**
@@ -187,9 +208,14 @@ class Outbox(private val dir: File, private val read: (File) -> String?, private
         return e
     }
 
-    /** The cached envelopes for [id], or [make]s them once and keeps them. Never two encryptions for one id. */
-    fun getOrMake(id: String, now: Long = System.currentTimeMillis(), make: () -> List<String>?): List<String>? = synchronized(lock) {
-        get(id, now)?.let { return it }
+    /**
+     * The cached envelopes for [id], or [make]s them once and keeps them. Never two encryptions for one id, unless
+     * [stale] says the cached ones were sealed the old way (cap s1: before their app said it seals its clear fields).
+     */
+    fun getOrMake(id: String, now: Long = System.currentTimeMillis(), make: () -> List<String>?): List<String>? = fresh(id, null, now, make)
+
+    fun fresh(id: String, stale: ((String) -> Boolean)?, now: Long = System.currentTimeMillis(), make: () -> List<String>?): List<String>? = synchronized(lock) {
+        get(id, now)?.let { e -> if (stale == null || e.isEmpty() || !stale(e[0])) return e; drop(id) }
         val e = make() ?: return null
         memo[id] = now to e
         try {
@@ -211,14 +237,55 @@ class Outbox(private val dir: File, private val read: (File) -> String?, private
     fun clear() { memo.clear(); dir.deleteRecursively() }
 }
 
-/** Envelope ids already handled (receipts, unsends, keeps), so a copy from another route is dropped before opening. */
-class Seen(private val ttl: Long = 2 * ChatWire.DAY) {
+/**
+ * Envelope ids already handled (receipts, unsends, keeps), so a copy from another route is dropped before opening.
+ * With [read] and [write] they're kept on disk too (by a hash of "key|id"), so a restart doesn't let an old copy in again.
+ */
+class Seen(private val ttl: Long = 2 * ChatWire.DAY, read: (() -> String?)? = null, private val write: ((String) -> Unit)? = null) {
     private val map = ConcurrentHashMap<String, Pair<Long, String>>()
+    @Volatile private var dirty = false
+
+    init {
+        try {
+            read?.invoke()?.let { JSONObject(it) }?.let { o ->
+                val now = System.currentTimeMillis()
+                for (k in o.keys()) o.optJSONArray(k)?.let { a -> if (now - a.optLong(0) <= ttl) map[k] = a.optLong(0) to a.optString(1) }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun h(key: String) = ChatWire.hex(MessageDigest.getInstance("SHA-256").digest(key.toByteArray())).take(32)
+
     /** What was noted when it was first handled, or null if it's new. */
-    fun get(key: String, now: Long = System.currentTimeMillis()): String? = map[key]?.takeIf { now - it.first <= ttl }?.second
+    fun get(key: String, now: Long = System.currentTimeMillis()): String? = map[h(key)]?.takeIf { now - it.first <= ttl }?.second
     fun add(key: String, note: String = "", now: Long = System.currentTimeMillis()) {
-        map[key] = now to note
+        map[h(key)] = now to note
+        dirty = true
         if (map.size > 5000) map.entries.removeIf { now - it.value.first > ttl }
+    }
+
+    /** Writes what changed since the last time (the chat's minute loop calls this). */
+    fun save(now: Long = System.currentTimeMillis()) {
+        val w = write ?: return
+        if (!dirty) return
+        dirty = false
+        val o = JSONObject()
+        for ((k, v) in map) if (now - v.first <= ttl) o.put(k, org.json.JSONArray().put(v.first).put(v.second))
+        try { w(o.toString()) } catch (_: Exception) { dirty = true }
+    }
+}
+
+/** Envelopes that didn't open, per sender: past [max] in [window] ms, that sender waits before more work is done. */
+class Failures(private val max: Int = 20, private val window: Long = 60_000) {
+    private val map = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    fun ok(key: String, now: Long = System.currentTimeMillis()): Boolean {
+        val q = map[key] ?: return true
+        synchronized(q) { while (q.isNotEmpty() && now - q.first() > window) q.removeFirst(); return q.size < max }
+    }
+    fun add(key: String, now: Long = System.currentTimeMillis()) {
+        if (map.size > 1000) map.clear()
+        val q = map.getOrPut(key) { ArrayDeque() }
+        synchronized(q) { q.addLast(now); while (q.size > max) q.removeFirst() }
     }
 }
 

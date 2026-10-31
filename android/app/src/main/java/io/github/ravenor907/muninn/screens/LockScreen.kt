@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.Vault
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.AskDialog
 import io.github.ravenor907.muninn.ui.Brand
@@ -32,6 +33,7 @@ import io.github.ravenor907.muninn.ui.Panel
 import io.github.ravenor907.muninn.ui.PatternPad
 import io.github.ravenor907.muninn.ui.patternSecret
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.LaunchedEffect
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
@@ -51,10 +53,22 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     val scope = rememberCoroutineScope()
     val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
     val pattern = remember { app.vault.usesPattern }
-    // After every 5 wrong tries, wait 30 seconds (kept across restarts), so guessing is slow.
-    var waitUntil by remember { mutableStateOf(prefs.getLong("lockUntil", 0L)) }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(waitUntil) { while (System.currentTimeMillis() < waitUntil) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(500) }; now = System.currentTimeMillis() }
+    // After every 5 wrong tries, wait (kept across restarts), so guessing is slow. Timed by the time since
+    // start-up and the boot count (LockWait), so changing the clock doesn't skip it.
+    fun bootCount() = try { android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) } catch (_: Exception) { 0 }
+    fun elapsed() = android.os.SystemClock.elapsedRealtime()
+    fun storedLeft(): Long {
+        val s = io.github.ravenor907.muninn.net.LockWait.State(prefs.getLong("lockAt", 0L), prefs.getLong("lockWait", 0L), prefs.getInt("lockBoot", -1))
+        val boot = bootCount()
+        val left = io.github.ravenor907.muninn.net.LockWait.left(s, elapsed(), boot)
+        // Restarted since: the wait starts again from now, in this start-up's time.
+        if (left > 0 && s.boot != boot) prefs.edit().putLong("lockAt", elapsed() + left).putInt("lockBoot", boot).apply()
+        return left
+    }
+    remember { prefs.edit().remove("lockUntil").apply() }   // the old wall-clock wait (before 0.95)
+    var waitUntil by remember { mutableStateOf(elapsed() + storedLeft()) }
+    var now by remember { mutableStateOf(elapsed()) }
+    LaunchedEffect(waitUntil) { while (elapsed() < waitUntil) { now = elapsed(); kotlinx.coroutines.delay(500) }; now = elapsed() }
     val waiting = now < waitUntil
     fun tryIt(secret: String = pw) {
         if (waiting || busy) return
@@ -62,16 +76,18 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         scope.launch {
             val ok = withContext(Dispatchers.Default) { app.vault.unlock(secret) }   // the key stretching takes a moment
             busy = false
-            if (ok) { pw = ""; prefs.edit().putInt("lockFails", 0).apply(); io.github.ravenor907.muninn.ui.Panic.unlocked(); done(true) }
-            else {
+            if (ok) {
+                pw = ""; prefs.edit().putInt("lockFails", 0).remove("lockAt").remove("lockWait").remove("lockBoot").apply()
+                io.github.ravenor907.muninn.ui.Panic.unlocked(); done(true)
+            } else {
                 wrong = true
                 shakes++
                 val fails = prefs.getInt("lockFails", 0) + 1
                 prefs.edit().putInt("lockFails", fails).apply()
-                // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour.
-                if (fails % 5 == 0) {
-                    val wait = minOf(3_600_000L, 30_000L shl minOf(fails / 5 - 1, 7))
-                    waitUntil = System.currentTimeMillis() + wait; prefs.edit().putLong("lockUntil", waitUntil).apply()
+                val wait = io.github.ravenor907.muninn.net.LockWait.after(fails)
+                if (wait > 0) {
+                    waitUntil = elapsed() + wait
+                    prefs.edit().putLong("lockAt", waitUntil).putLong("lockWait", wait).putInt("lockBoot", bootCount()).apply()
                 }
             }
         }
@@ -87,8 +103,29 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             while (taps.isNotEmpty() && t - taps.first() > 5_000) taps.removeFirst()
             if (taps.size >= 10) { taps.clear(); showErase = true }
         })
-        // Scrolls, so with larger size and text settings the pad and buttons can always be reached.
-        Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // A pattern: the dots sit where Settings › Lock and privacy says (Lower unless changed), for one-handed use.
+        if (pattern) Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+            Text("Draw your pattern to open", style = Type.big)
+            Text(when {
+                waiting -> "Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s."
+                busy -> "Opening…"
+                wrong -> "That's not it. Try again."
+                else -> "Your messages, contacts and keys stay encrypted until you do."
+            }, style = Type.small.copy(color = if (waiting || wrong) Palette.danger else Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
+            val (top, bottom) = padWeights(app.identity.patternPos)
+            Spacer(Modifier.weight(top))
+            PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes) { dots -> tryIt(patternSecret(dots)) }
+            Spacer(Modifier.weight(bottom))
+            if (showErase) {
+                Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
+                MButton("Erase everything", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Danger) {
+                    Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
+                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                }
+            }
+        }
+        // A password: scrolls, so with larger size and text settings the field and buttons can always be reached.
+        else Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
                 Text(if (pattern) "Draw your pattern. Your messages, contacts and keys stay encrypted until you do."
@@ -120,12 +157,15 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     ask?.let { AskDialog(it) }
 }
 
+/** Space above and below the pattern for Top, Middle and Lower (the mockup's proportions). */
+internal fun padWeights(pos: String): Pair<Float, Float> = when (pos) { "top" -> 0.15f to 1f; "middle" -> 1f to 1f; else -> 1f to 0.12f }
+
 /**
- * Choose and confirm a lock: a 9-dot pattern (at least 4 dots) or a password (at least 4 characters).
+ * Choose and confirm a lock: a 9-dot pattern (at least 6 dots) or a password (at least 6 characters).
  * Used on first open (required) and for Settings › Change lock. [onCancel] null = can't skip.
  */
 @Composable
-fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
+fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     var usePattern by remember { mutableStateOf(true) }
     var first by remember { mutableStateOf<List<Int>?>(null) }
@@ -143,7 +183,8 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
             onDone()
         }
     }
-    Column {
+    // [fill]: the rest of the screen is ours, so the pattern sits where Settings › Lock and privacy says.
+    Column(if (fill) Modifier.fillMaxSize() else Modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
         androidx.compose.foundation.layout.Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Pattern", Modifier.weight(1f), if (usePattern) Kind.Accent else Kind.Normal) { usePattern = true; first = null; note = "" }
             MButton("Password", Modifier.weight(1f), if (!usePattern) Kind.Accent else Kind.Normal) { usePattern = false; first = null; note = "" }
@@ -152,25 +193,29 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
             Text(when {
                 saving -> "Saving…"
                 note.isNotEmpty() -> note
-                first == null -> "Draw a pattern: connect at least 4 dots."
+                first == null -> "Draw a pattern: connect at least 6 dots."
                 else -> "Draw it again to confirm."
             }, style = Type.normal.copy(color = if (note.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
+            val (top, bottom) = padWeights(app.identity.patternPos)
+            if (fill) Spacer(Modifier.weight(top))
             Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 PatternPad(error = note.isNotEmpty(), enabled = !saving, shake = shakes) { dots ->
                     val f = first
                     when {
-                        dots.size < 4 -> { note = "Connect at least 4 dots."; shakes++ }
+                        dots.size < Vault.LockRules.MIN -> { note = "Connect at least 6 dots."; shakes++ }
                         f == null -> { first = dots; note = "" }
                         f != dots -> { first = null; note = "That didn't match. Start over."; shakes++ }
                         else -> save(patternSecret(dots), true)
                     }
                 }
             }
+            if (fill) Spacer(Modifier.weight(bottom))
         } else {
             Field(pw1, { pw1 = it }, "New password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
             Field(pw2, { pw2 = it }, "Type it again", Modifier.padding(top = 8.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+            if (pw1.isNotEmpty() && pw1.length < Vault.LockRules.MIN) Text("At least 6 characters.", style = Type.small.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
             if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-            MButton(if (saving) "Saving…" else "Save password", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw1.length >= 4 && pw1 == pw2 && !saving) { save(pw1, false) }
+            MButton(if (saving) "Saving…" else "Save password", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw1.length >= Vault.LockRules.MIN && pw1 == pw2 && !saving) { save(pw1, false) }
         }
         if (onCancel != null) MButton("Cancel", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
     }
@@ -179,16 +224,13 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, onDone: () -> Unit) {
 /** First open (and installs from before the lock was required): set a lock before anything else. */
 @Composable
 fun FirstLock(app: Muninn, done: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()
-        .verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()) {
         Brand {}
-        Column(Modifier.padding(16.dp)) {
-            Panel {
-                Text("Protect Muninn", style = Type.big)
-                Text("Muninn opens with your pattern or password. Everything it keeps (messages, photos, voice, contacts, keys) is encrypted with it: " +
-                    "without it, nobody can read them, not even Muninn. There's no way to recover it, so pick one you'll remember.", style = Type.normal)
-                LockSetup(app, onCancel = null) { done() }
-            }
+        Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+            Text("Protect Muninn", style = Type.big)
+            Text("Muninn opens with your pattern or password, and everything it keeps is encrypted with it. There's no way to recover it, so pick one you'll remember.",
+                style = Type.small)
+            LockSetup(app, onCancel = null, fill = true) { done() }
         }
     }
 }

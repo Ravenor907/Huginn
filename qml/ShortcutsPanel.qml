@@ -1,8 +1,8 @@
 import QtQuick
 import Huginn
 
-// Every keyboard shortcut in one place (Ctrl+/). B, Esc or a click outside closes it; the left stick
-// or Up and Down scroll it.
+// Every keyboard shortcut in one place (Ctrl+/), in two columns like the mockup: getting around and
+// messages, then calls and voice and the look. Esc, B or a click outside closes it; Up and Down scroll.
 Item {
     id: panel
     visible: false
@@ -16,117 +16,130 @@ Item {
         return true
     }
 
-    readonly property var groups: [
-        { title: "Moving around", keys: [
-            ["Ctrl+K", "Jump to any chat or channel"],
-            ["Ctrl+/", "This list"],
-            ["Tab / Shift+Tab", "Next or previous section"],
-            ["Arrow keys", "Move the highlight"],
-            ["Enter", "Open, choose, or write a message"],
-            ["Esc / Backspace", "Back"],
-            ["Space", "Options"],
-            ["Page Up / Page Down", "Scroll a screenful"],
-            ["F1", "Settings"],
-            ["Ctrl+,", "Settings › Appearance"] ] },
-        { title: "Writing", keys: [
-            ["Enter", "Send"],
-            ["Shift+Enter", "A new line"],
-            ["Up (empty box)", "Edit your last message"],
-            ["Esc", "Stop replying or editing"],
-            ["Ctrl+V", "Paste a picture to send it"],
-            ["@name", "Mention someone in a group"] ] },
-        { title: "Voice rooms", keys: [
-            ["Ctrl+Shift+M", "Mute or unmute"],
-            ["Ctrl+Shift+D", "Deafen or undeafen"],
-            ["Ctrl+Shift+H", "Leave the voice room"],
-            [TalkKey.keyName + " (hold)", Settings.pushToTalk ? "Push to talk" : "Push to talk (turn it on in Settings › Calls)"] ] },
-        { title: "Panels and text", keys: [
-            ["Ctrl+Shift+L", "Show or hide the list beside the rail"],
-            ["Ctrl+Shift+U", "Show or hide a group's member list"],
-            ["Ctrl+= / Ctrl+-", "Bigger or smaller message text"],
-            ["Ctrl+0", "Message text back to normal"],
-            ["Drag a panel's edge", "Resize it (double-click puts it back)"] ] }
+    readonly property var columns: [
+        [{ title: "GETTING AROUND", keys: [
+            ["Find or start a chat", "Ctrl+K"],
+            ["Next or previous section", "Tab"],
+            ["Hide the list", "Ctrl+Shift+L"],
+            ["Hide members", "Ctrl+Shift+U"],
+            ["Settings", "Ctrl+,"],
+            ["Scroll a screenful", "Page Up"],
+            ["Back", "Esc"] ] },
+         { title: "MESSAGES", keys: [
+            ["Send", "Enter"],
+            ["New line", "Shift+Enter"],
+            ["Edit your last message", "Up"],
+            ["Stop replying or editing", "Esc"],
+            ["Paste a picture to send it", "Ctrl+V"],
+            ["Mention someone in a group", "@name"] ] }],
+        [{ title: "CALLS AND VOICE", keys: [
+            ["Mute", "Ctrl+Shift+M"],
+            ["Deafen", "Ctrl+Shift+D"],
+            ["Leave", "Ctrl+Shift+H"],
+            [Settings.pushToTalk ? "Push to talk" : "Push to talk (Settings › Calls and voice)", "hold " + TalkKey.keyName],
+            ["In a call: mute", "Space"] ] },
+         { title: "LOOK AND LOCK", keys: [
+            ["Bigger", "Ctrl+="],
+            ["Smaller", "Ctrl+-"],
+            ["Normal size", "Ctrl+0"],
+            ["Lock Huginn now", "Ctrl+Shift+Q"],
+            ["This list", "Ctrl+/"] ] }]
     ]
 
-    Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.85) }
+    Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: panel.close() }
 
     Rectangle {
+        id: box
+        readonly property bool narrow: width < Theme.px(620)
         anchors.centerIn: parent
-        width: Math.min(parent.width - Theme.px(80), Theme.px(900))
-        height: Math.min(parent.height - Theme.px(100), view.contentHeight + head.height + Theme.px(30))
-        radius: Theme.radius + 1
+        width: Math.min(parent.width - Theme.px(32), Theme.px(760))
+        height: Math.min(parent.height - Theme.px(32), head.height + grid.implicitHeight + Theme.px(44))
+        radius: Theme.radius
         color: Theme.panel
-        border.width: 1
         border.color: Theme.line
-        Accessible.role: Accessible.Dialog
-        Accessible.name: "Keyboard shortcuts"
+        clip: true
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
-
-        PageHeader {
+        Item {
             id: head
-            width: parent.width
-            title: "Keyboard shortcuts"
-            subtitle: "A controller or TV remote works too"
-            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; implicitHeight: Theme.px(36); onClicked: panel.close() }
+            x: Theme.px(24); y: Theme.px(20)
+            width: parent.width - Theme.px(48); height: Theme.px(28)
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "KEYBOARD SHORTCUTS"
+                color: Theme.text
+                font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
+            }
+            Text {
+                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                text: "Esc closes"
+                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+            }
         }
         Flickable {
             id: view
-            anchors.top: head.bottom; anchors.topMargin: Theme.px(14)
+            anchors.top: head.bottom; anchors.topMargin: Theme.px(16)
             anchors.left: parent.left; anchors.leftMargin: Theme.px(24)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(24)
-            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(14)
-            contentWidth: width
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(8)
             contentHeight: grid.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             Grid {
                 id: grid
                 width: view.width
-                columns: view.width > Theme.px(640) ? 2 : 1
-                columnSpacing: Theme.px(28)
-                rowSpacing: Theme.px(18)
+                columns: box.narrow ? 1 : 2
+                columnSpacing: Theme.px(32)
+                rowSpacing: Theme.px(20)
                 Repeater {
-                    model: panel.groups
+                    model: panel.columns
                     Column {
-                        width: (grid.width - grid.columnSpacing * (grid.columns - 1)) / grid.columns
-                        spacing: Theme.px(6)
-                        Text {
-                            text: modelData.title.toUpperCase()
-                            color: Theme.accent
-                            font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
-                        }
+                        readonly property var groups: modelData
+                        width: box.narrow ? grid.width : (grid.width - grid.columnSpacing) / 2
+                        spacing: Theme.px(20)
                         Repeater {
-                            model: modelData.keys
-                            Item {
+                            model: parent.groups
+                            Column {
                                 width: parent.width
-                                height: Math.max(keyCap.height, what.implicitHeight) + Theme.px(2)
-                                Rectangle {
-                                    id: keyCap
-                                    width: Math.min(parent.width * 0.48, keyText.implicitWidth + Theme.px(16))
-                                    height: Theme.px(26)
-                                    radius: Theme.px(5)
-                                    color: Theme.raised
-                                    border.width: 1; border.color: Theme.lineMuted
-                                    Text {
-                                        id: keyText
-                                        anchors.centerIn: parent
-                                        width: Math.min(implicitWidth, parent.width - Theme.px(12))
-                                        elide: Text.ElideRight
-                                        text: modelData[0]
-                                        color: Theme.text
-                                        font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
-                                    }
-                                }
+                                spacing: Theme.px(2)
                                 Text {
-                                    id: what
-                                    anchors.left: parent.left; anchors.leftMargin: parent.width * 0.5
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: keyCap.verticalCenter
-                                    wrapMode: Text.WordWrap
-                                    text: modelData[1]
-                                    color: Theme.textSoft
-                                    font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                                    bottomPadding: Theme.px(6)
+                                    text: modelData.title
+                                    color: Theme.textMuted
+                                    font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
+                                }
+                                Repeater {
+                                    model: modelData.keys
+                                    Item {
+                                        width: parent.width
+                                        height: Theme.px(34)
+                                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam }
+                                        Text {
+                                            anchors.left: parent.left
+                                            anchors.right: cap.left; anchors.rightMargin: Theme.px(10)
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            elide: Text.ElideRight
+                                            text: modelData[0]
+                                            color: Theme.textSoft
+                                            font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                                        }
+                                        Rectangle {
+                                            id: cap
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: capText.implicitWidth + Theme.px(14); height: Theme.px(24)
+                                            radius: Theme.radius
+                                            color: Theme.raised
+                                            border.color: Theme.lineStrong
+                                            Text {
+                                                id: capText
+                                                anchors.centerIn: parent
+                                                text: modelData[1]
+                                                color: Theme.text
+                                                font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

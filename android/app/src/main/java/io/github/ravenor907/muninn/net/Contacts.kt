@@ -36,8 +36,10 @@ class Contacts(context: Context, private val vault: Vault) {
         val old = get(chatKey)
         if (old != null && !old.groupOnly) return
         val mb = mailbox.takeIf { it.length == 64 } ?: old?.mailbox
-        val c = Contact(chatKey, name.take(40).ifBlank { old?.name ?: "Someone" }, mb, verified = false, ratchet = true,
-            groupOnly = true, caps = setOf("r1", "g1", "c1"))
+        // Keep what was already learned about them (caps, the s1 binding, their message limit): a group change
+        // must never forget it, or messages to them go out in a form their app has stopped taking.
+        val c = (old ?: Contact(chatKey, "", mb, verified = false)).copy(name = name.take(40).ifBlank { old?.name ?: "Someone" },
+            mailbox = mb, ratchet = true, groupOnly = true, caps = old?.caps.orEmpty() + setOf("r1", "g1", "c1"))
         if (old == c) return
         _all.value = _all.value.filterNot { it.chatKey == chatKey } + c
         save()
@@ -336,7 +338,9 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
 class ChatFlags(private val read: () -> String?, private val write: (String) -> Unit) {
     data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet(),
                      /** A color for my bubbles in that chat ([COLORS] names; none is the usual grey). */
-                     val colors: Map<String, String> = emptyMap())
+                     val colors: Map<String, String> = emptyMap(),
+                     /** Pinned to the top of the chat list, in the order shown there. */
+                     val pinned: List<String> = emptyList())
 
     private val _all = MutableStateFlow(load())
     val all: StateFlow<State> = _all.asStateFlow()
@@ -346,15 +350,18 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         val m = o.optJSONObject("muted")
         fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
         val c = o.optJSONObject("colors")
+        val p = o.optJSONArray("pinned")
         State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"),
-            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { it in COLORS }.orEmpty())
+            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { it in COLORS }.orEmpty(),
+            if (p == null) emptyList() else (0 until p.length()).map { p.getString(it) }.distinct())
     } catch (e: Exception) { State() }
 
     private fun set(s: State) {
         _all.value = s
         try {
             write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
-                .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>)).toString())
+                .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>))
+                .put("pinned", JSONArray(s.pinned)).toString())
         } catch (_: Exception) {}
     }
 
@@ -383,6 +390,16 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     @Synchronized
     fun color(key: String, name: String) = set(_all.value.let { it.copy(colors = if (name in COLORS) it.colors + (key to name) else it.colors - key) })
 
+    /** Pins [key] to the top of the chat list (newest pin first), or unpins it. */
+    @Synchronized
+    fun pin(key: String, on: Boolean) = set(_all.value.let { it.copy(pinned = if (on) listOf(key) + (it.pinned - key) else it.pinned - key) })
+
+    fun pinned(key: String) = key in _all.value.pinned
+
+    /** The pinned chats in a new order (moving one up or down among them). */
+    @Synchronized
+    fun orderPinned(keys: List<String>) = set(_all.value.let { s -> s.copy(pinned = keys.filter { it in s.pinned }.distinct() + s.pinned.filter { it !in keys }) })
+
     /** A message from [key] arrived: an archived chat comes back unless it's muted. Returns whether to notify. */
     @Synchronized
     fun arrived(key: String, now: Long = System.currentTimeMillis()): Boolean {
@@ -395,7 +412,8 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     @Synchronized
     fun forget(key: String) {
         val s = _all.value
-        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors) set(State(s.muted - key, s.archived - key, s.unread - key, s.colors - key))
+        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors || key in s.pinned)
+            set(State(s.muted - key, s.archived - key, s.unread - key, s.colors - key, s.pinned - key))
     }
 
     companion object {

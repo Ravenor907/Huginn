@@ -99,8 +99,9 @@ QString ChatCrypto::pairingCode(const QByteArray &key)
     return QStringLiteral("%1").arg(n % 1000000, 6, 10, QLatin1Char('0'));
 }
 
-void ChatCrypto::seal(const QByteArray &key, const QByteArray &plain, QByteArray *nonce, QByteArray *data)
+void ChatCrypto::seal(const QByteArray &key, const QByteArray &plain, QByteArray *nonce, QByteArray *data, const QByteArray &aadIn)
 {
+    const QByteArray &ad = aadIn.isEmpty() ? kAad : aadIn;
     if (nonce->size() != 12) {
         nonce->resize(12);
         for (int i = 0; i < 12; ++i)
@@ -113,7 +114,7 @@ void ChatCrypto::seal(const QByteArray &key, const QByteArray &plain, QByteArray
     const bool ok = c && EVP_EncryptInit_ex(c, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) > 0
         && EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) > 0
         && EVP_EncryptInit_ex(c, nullptr, nullptr, reinterpret_cast<const unsigned char *>(key.constData()), reinterpret_cast<const unsigned char *>(nonce->constData())) > 0
-        && EVP_EncryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(kAad.constData()), kAad.size()) > 0
+        && EVP_EncryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(ad.constData()), int(ad.size())) > 0
         && EVP_EncryptUpdate(c, reinterpret_cast<unsigned char *>(out.data()), &len, reinterpret_cast<const unsigned char *>(plain.constData()), plain.size()) > 0
         && (total = len, EVP_EncryptFinal_ex(c, reinterpret_cast<unsigned char *>(out.data()) + total, &len) > 0)
         && (total += len, EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_GET_TAG, 16, out.data() + total) > 0);
@@ -122,8 +123,9 @@ void ChatCrypto::seal(const QByteArray &key, const QByteArray &plain, QByteArray
         *data = out.left(total + 16);
 }
 
-QByteArray ChatCrypto::open(const QByteArray &key, const QByteArray &nonce, const QByteArray &data, bool *ok)
+QByteArray ChatCrypto::open(const QByteArray &key, const QByteArray &nonce, const QByteArray &data, bool *ok, const QByteArray &aadIn)
 {
+    const QByteArray &ad = aadIn.isEmpty() ? kAad : aadIn;
     *ok = false;
     if (key.size() != 32 || nonce.size() != 12 || data.size() < 16)
         return {};
@@ -135,7 +137,7 @@ QByteArray ChatCrypto::open(const QByteArray &key, const QByteArray &nonce, cons
     const bool good = c && EVP_DecryptInit_ex(c, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) > 0
         && EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr) > 0
         && EVP_DecryptInit_ex(c, nullptr, nullptr, reinterpret_cast<const unsigned char *>(key.constData()), reinterpret_cast<const unsigned char *>(nonce.constData())) > 0
-        && EVP_DecryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(kAad.constData()), kAad.size()) > 0
+        && EVP_DecryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(ad.constData()), int(ad.size())) > 0
         && EVP_DecryptUpdate(c, reinterpret_cast<unsigned char *>(out.data()), &len, reinterpret_cast<const unsigned char *>(body.constData()), body.size()) > 0
         && (total = len, EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_TAG, 16, tag.data()) > 0)
         && EVP_DecryptFinal_ex(c, reinterpret_cast<unsigned char *>(out.data()) + total, &len) > 0;

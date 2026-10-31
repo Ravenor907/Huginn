@@ -1,59 +1,72 @@
 import QtQuick
 import Huginn
 
-// In a voice room or group call on the desktop: at the foot of the list column, like Discord. Which
-// room, who you're talking with (a gold ring while they talk, dimmed while muted), and Mute, Deafen,
-// Share screen, Open and Leave. With push to talk on, it says which key to hold and lights up while
-// it's held. A handheld (and a hidden list) uses the bar along the bottom instead (RoomBar).
+// You, at the bottom left under the rail and the list, like Discord: your name and status with Mute,
+// Deafen and Settings. In a voice room or group call it grows a top part: which room, who you're
+// talking with (a gold ring while they talk, dimmed while muted), push to talk, Share and Leave.
 Rectangle {
     id: panel
     property bool tour: false              // the screenshot tour shows how it looks
     property var roomBar: null             // shows someone's shared screen above the conversation
-    readonly property bool shown: Rooms.inRoom || tour
+    readonly property bool inVoice: Rooms.inRoom || tour
     readonly property var people: tour ? [{ key: "me", name: Chat.username, me: true, speaking: false, muted: false, state: "live" },
                                           { key: "j", name: "Jake", speaking: true, state: "live" },
                                           { key: "s", name: "Sam", muted: true, state: "live" }]
                                        : Rooms.people
     readonly property var others: people.filter(p => !p.me)
-    readonly property bool muted: !tour && Rooms.muted
+    readonly property bool muted: !tour && (Rooms.inRoom ? Rooms.muted : Calls.inCall && Calls.muted)
     readonly property bool deafened: !tour && Rooms.deafened
-    height: col.implicitHeight + Theme.px(20)
-    color: Theme.groundDeep
-    Rectangle { width: parent.width; height: 1; color: Theme.seam }
+    readonly property bool talking: tour || Rooms.inRoom || Calls.inCall
+    height: (voice.visible ? voice.implicitHeight : 0) + me.height
+    radius: Theme.radius
+    color: Theme.raised
+    border.color: Theme.line
     // Clicks here never reach the page underneath.
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+    Brushed {}
 
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
 
     Column {
-        id: col
-        x: Theme.px(14); y: Theme.px(10)
-        width: parent.width - Theme.px(28)
-        spacing: Theme.px(8)
+        id: voice
+        visible: panel.inVoice
+        x: Theme.px(10)
+        width: parent.width - Theme.px(20)
+        spacing: Theme.px(6)
+        topPadding: Theme.px(8)
+        bottomPadding: Theme.px(8)
 
         Row {
             width: parent.width
-            spacing: Theme.px(10)
-            Icon { anchors.verticalCenter: parent.verticalCenter; name: "speaker"; size: Theme.px(20); color: Theme.online }
+            spacing: Theme.px(8)
             Column {
                 anchors.verticalCenter: parent.verticalCenter
-                width: parent.width - Theme.px(30)
+                width: parent.width - leaveBtn.width - Theme.px(8)
                 Text {
                     width: parent.width
                     elide: Text.ElideRight
                     text: Rooms.note !== "" && !panel.tour ? Rooms.note : "Voice connected"
                     color: Rooms.note !== "" && !panel.tour ? Theme.danger : Theme.online
-                    font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
                 }
                 Text {
                     width: parent.width
                     elide: Text.ElideRight
-                    text: panel.tour ? "Lounge · Gaming Crew" : Rooms.title + (Rooms.groupName ? " · " + Rooms.groupName : "")
-                    color: Theme.textSoft
-                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    text: panel.tour ? "Lounge / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: if (!panel.tour) Ui.openPage("g:" + Rooms.group, { voice: true }) }
                 }
+            }
+            HButton {
+                id: leaveBtn
+                anchors.verticalCenter: parent.verticalCenter
+                implicitHeight: Theme.px(28)
+                fontSize: 12
+                kind: "danger"
+                text: "Leave"
+                onClicked: if (!panel.tour) Rooms.leave()
             }
         }
 
@@ -108,8 +121,8 @@ Rectangle {
         Rectangle {
             visible: Settings.pushToTalk
             width: parent.width
-            height: Theme.px(26)
-            radius: Theme.px(6)
+            height: Theme.px(24)
+            radius: Theme.radius
             color: !panel.tour && Rooms.talking ? Theme.accentFill : "transparent"
             border.width: 1
             border.color: !panel.tour && Rooms.talking ? Theme.accent : Theme.line
@@ -125,29 +138,100 @@ Rectangle {
         }
         Row {
             id: buttons
+            visible: Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar)
             spacing: Theme.px(6)
-            PanelButton {
-                icon: panel.muted ? "micoff" : "mic"; label: panel.muted ? "Unmute" : "Mute"; lit: panel.muted
-                onClicked: Rooms.toggleMute()
-            }
-            PanelButton {
-                icon: panel.deafened ? "deafened" : "headphones"; label: panel.deafened ? "Undeafen" : "Deafen"; lit: panel.deafened
-                onClicked: Rooms.toggleDeafen()
-            }
-            PanelButton {
+            HButton {
                 visible: Rooms.canShare || panel.tour
-                icon: "screen"; label: Rooms.sharing ? "Stop" : "Share"; lit: Rooms.sharing
-                onClicked: Rooms.toggleShare()
+                implicitHeight: Theme.px(28); fontSize: 12
+                text: Rooms.sharing ? "Stop sharing" : "Share screen"
+                onClicked: if (!panel.tour) Rooms.toggleShare()
             }
-            PanelButton {
+            HButton {
                 visible: !panel.tour && Rooms.sharerName !== "" && !!panel.roomBar
-                icon: "screen"; label: panel.roomBar && panel.roomBar.screenShown ? "Hide" : "Watch"
-                lit: !!panel.roomBar && panel.roomBar.screenShown
+                implicitHeight: Theme.px(28); fontSize: 12
+                text: panel.roomBar && panel.roomBar.screenShown ? "Hide their screen" : "Watch their screen"
                 onClicked: panel.roomBar.screenShown = !panel.roomBar.screenShown
             }
+        }
+        Rectangle { width: parent.width; height: 1; color: Theme.line }
+    }
+
+    // You: name and status, then Mute, Deafen and Settings.
+    Item {
+        id: me
+        anchors.bottom: parent.bottom
+        width: parent.width
+        height: Theme.px(52)
+        Rectangle {
+            id: meFace
+            x: Theme.px(10)
+            anchors.verticalCenter: parent.verticalCenter
+            width: Theme.px(32); height: width; radius: width / 2
+            color: Theme.avatar(Chat.username, true).bg
+            Text {
+                anchors.centerIn: parent
+                text: panel.initial(Chat.username)
+                color: Theme.avatar(Chat.username, true).fg
+                font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+            }
+            Rectangle {
+                anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.margins: -Theme.px(2)
+                width: Theme.px(12); height: width; radius: width / 2
+                color: Vault.screenLocked ? Theme.textFaint : Theme.online
+                border.width: Theme.px(2); border.color: Theme.raised
+            }
+        }
+        Column {
+            anchors.left: meFace.right; anchors.leftMargin: Theme.px(8)
+            anchors.right: meButtons.left; anchors.rightMargin: Theme.px(4)
+            anchors.verticalCenter: parent.verticalCenter
+            Text {
+                width: parent.width; elide: Text.ElideRight
+                text: Chat.username
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+            }
+            Text {
+                width: parent.width; elide: Text.ElideRight
+                text: Vault.screenLocked ? "Locked" : Settings.pushToTalk && panel.inVoice ? "Push to talk: " + TalkKey.keyName : "Online"
+                color: Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(12)
+            }
+        }
+        Row {
+            id: meButtons
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Theme.px(2)
             PanelButton {
-                icon: "hangup"; label: "Leave"; danger: true
-                onClicked: Rooms.leave()
+                icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute" : "Mute") + " (Ctrl+Shift+M)"; lit: panel.muted
+                enabled: panel.talking
+                onClicked: Rooms.inRoom ? Rooms.toggleMute() : Calls.toggleMute()
+            }
+            PanelButton {
+                icon: panel.deafened ? "deafened" : "headphones"; label: (panel.deafened ? "Undeafen" : "Deafen") + " (Ctrl+Shift+D)"; lit: panel.deafened
+                enabled: panel.inVoice
+                onClicked: Rooms.toggleDeafen()
+            }
+            // Settings: the valknut.
+            Rectangle {
+                width: Theme.px(32); height: width
+                radius: Theme.radius
+                color: setHover.hovered || (Ui.main && Ui.main.section === "settings") ? Theme.tile : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Settings (Ctrl+,)"
+                Accessible.onPressAction: Ui.openPage("settings", {})
+                Image {
+                    anchors.centerIn: parent
+                    source: "assets/valknut.png"
+                    width: Theme.px(20); height: width
+                    sourceSize.width: 64; sourceSize.height: 64
+                    smooth: true; mipmap: true
+                }
+                HoverHandler { id: setHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: Ui.openPage("settings", {}) }
+                Tip { shown: setHover.hovered; text: "Settings (Ctrl+,)" }
             }
         }
     }
@@ -157,24 +241,32 @@ Rectangle {
         property string icon
         property string label
         property bool lit: false
-        property bool danger: false
+        property bool enabled: true
         signal clicked()
-        width: Math.max(Theme.px(56), pbText.implicitWidth + Theme.px(14))
-        height: Theme.px(46)
-        radius: Theme.px(8)
-        color: danger ? (pbHover.hovered ? Theme.dangerLine : Theme.dangerFill) : lit ? Theme.accentFill : pbHover.hovered ? Theme.tile : Theme.raised
-        border.width: lit ? 1 : 0
-        border.color: Theme.accent
+        width: Theme.px(32); height: width
+        radius: Theme.radius
+        opacity: enabled ? 1 : 0.4
+        color: lit ? Theme.dangerFill : pbHover.hovered && enabled ? Theme.tile : "transparent"
         Accessible.role: Accessible.Button
         Accessible.name: label
-        Accessible.onPressAction: if (!panel.tour) clicked()
-        Column {
-            anchors.centerIn: parent
-            spacing: Theme.px(1)
-            Icon { anchors.horizontalCenter: parent.horizontalCenter; name: pb.icon; size: Theme.px(18); color: pb.danger ? Theme.danger : pb.lit ? Theme.accent : Theme.textSoft }
-            Text { id: pbText; anchors.horizontalCenter: parent.horizontalCenter; text: pb.label; color: pb.danger ? Theme.danger : pb.lit ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
-        }
-        HoverHandler { id: pbHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: if (!panel.tour) pb.clicked() }
+        Accessible.onPressAction: if (!panel.tour && enabled) clicked()
+        Icon { anchors.centerIn: parent; name: pb.icon; size: Theme.px(18); color: pb.lit ? Theme.danger : Theme.textSoft }
+        HoverHandler { id: pbHover; cursorShape: pb.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
+        TapHandler { enabled: pb.enabled; onTapped: if (!panel.tour) pb.clicked() }
+        Tip { shown: pbHover.hovered; text: pb.label }
+    }
+    // A small label over a button while the pointer is on it.
+    component Tip: Rectangle {
+        property bool shown: false
+        property string text
+        visible: shown
+        z: 10
+        anchors.bottom: parent.top; anchors.bottomMargin: Theme.px(4)
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: tipText.implicitWidth + Theme.px(12); height: tipText.implicitHeight + Theme.px(8)
+        radius: Theme.radius
+        color: Theme.groundDeep
+        border.color: Theme.line
+        Text { id: tipText; anchors.centerIn: parent; text: parent.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
     }
 }

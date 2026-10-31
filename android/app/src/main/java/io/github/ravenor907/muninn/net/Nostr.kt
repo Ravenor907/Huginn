@@ -19,8 +19,11 @@ import kotlin.random.Random
 /**
  * Messages for people who aren't nearby, through public Nostr relays (no accounts, no server to
  * run). Each phone has a Nostr key; its public half is its mailbox. A message is an event of
- * kind 1059 addressed to the mailbox, signed by a throwaway key so relays can't tell who sent it.
- * The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text.
+ * kind 1059 addressed to the mailbox, signed by a throwaway key, so the event itself doesn't name its sender.
+ * The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text, padded to
+ * a few fixed sizes (EnvelopePad). Sending uses its own short-lived sockets that never ask for my inbox or
+ * sign in as my mailbox, so a relay can't tie what I send to who I am from the socket. The internet address
+ * still can link them (the relay sees the same address on both), unless a VPN or Tor app is in use.
  */
 class Nostr(private val context: Context, private val secretHex: () -> String?) {
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
@@ -57,6 +60,26 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** For the battery report: a check sent ([PING]), an alarm that woke the phone ([WAKE]), a connection made again ([RECONNECT]). */
     @Volatile var counted: (String) -> Unit = {}
+    /** For the battery report: checks the relays sent on their own (WebSocket pings), as they're counted. */
+    @Volatile var countedPings: (Int) -> Unit = {}
+    /** Failures in a row across every relay: swapping to another relay slows down too (see [NetLogic.swapMs]). */
+    private val streak = java.util.concurrent.atomic.AtomicInteger()
+    /** When each socket was last asked whether it's alive (the keepalive check). */
+    private val askedAt = ConcurrentHashMap<String, Long>()
+    /** Per relay: when it last finished sending what it held (EOSE, seconds), so a new connection asks only for what's newer. */
+    private val eoseAt = ConcurrentHashMap<String, Long>()
+    /** Relays whose inbox request finished at least once on the socket open now. */
+    private val subscribed = ConcurrentHashMap<String, Boolean>()
+    /** Something was handed over and not taken (Muninn locked): don't move [eoseAt] on until it's read. */
+    @Volatile private var refused = false
+    /** Relay-side pings: per socket, how many were counted already; per relay, the total and the time connected. */
+    private val pingsSeen = ConcurrentHashMap<WebSocket, Int>()
+    private val relayPings = ConcurrentHashMap<String, Int>()
+    private val relayMs = ConcurrentHashMap<String, Long>()
+    private val liveSince = ConcurrentHashMap<String, Long>()
+    /** The seen list and the cursors, in their own small file, written at most every [SAVE_EVERY_S] seconds. */
+    private val stateFile = java.io.File(context.filesDir, "nostr-state.json")
+    private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
     var onEnvelope: ((String) -> Boolean)? = null
@@ -75,7 +98,34 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     init {
-        prefs.getString("nostrSeen", "")!!.split(',').filter { it.isNotEmpty() }.forEach { seen.add(it) }
+        try {
+            if (stateFile.exists()) {
+                val o = JSONObject(stateFile.readText())
+                o.optJSONArray("seen")?.let { a -> for (i in 0 until a.length()) seen.add(a.getString(i)) }
+                o.optJSONObject("eose")?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
+            } else {
+                // Before 0.95 the seen list lived in the settings, rewritten on every message.
+                prefs.getString("nostrSeen", "")!!.split(',').filter { it.isNotEmpty() }.forEach { seen.add(it) }
+                prefs.edit().remove("nostrSeen").remove("nostrSince").apply()
+                if (seen.isNotEmpty()) saveSoon()
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** Writes the seen list and the cursors within [SAVE_EVERY_S] seconds (one write for many changes). */
+    private fun saveSoon() {
+        if (!saving.compareAndSet(false, true)) return
+        timer.schedule(Runnable {
+            saving.set(false)
+            try {
+                val o = JSONObject()
+                synchronized(seen) { o.put("seen", JSONArray(seen.toList())) }
+                o.put("eose", JSONObject(HashMap<String, Long>(eoseAt) as Map<*, *>))
+                val tmp = java.io.File(stateFile.path + ".tmp")
+                tmp.writeText(o.toString())
+                tmp.renameTo(stateFile)
+            } catch (_: Exception) {}
+        }, SAVE_EVERY_S, TimeUnit.SECONDS)
     }
 
     // ------------------------------------------------------------------ relays
@@ -90,7 +140,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     private fun health(all: List<String>) = all.associateWith {
-        PowerLogic.Health(retries[it] ?: 0, connectMs[it], live[it] == true)
+        PowerLogic.Health(retries[it] ?: 0, connectMs[it], live[it] == true, NetLogic.perHour(relayPings[it] ?: 0, relayMs[it] ?: 0L))
     }
 
     fun connect() { for (url in targets()) open(url); tick() }
@@ -102,17 +152,27 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     fun plan(count: Int?, ping: Long) {
         val changed = count != keep || ping != pingMs
         keep = count; pingMs = ping
-        chosen = null
         if (!changed) return
+        chosen = null
         val want = targets().toSet()
         synchronized(sockets) {
             for (url in sockets.keys.toList()) if (url !in want && !burst.containsKey(url)) {
-                sockets.remove(url)?.close(1000, null)
+                sockets.remove(url)?.let { ended(url, it); it.close(1000, null) }
                 live.remove(url)
             }
         }
         _connected.value = live.size
         if (keepAlive) for (url in want) open(url)
+        tick()
+    }
+
+    /**
+     * The screen went off: check the open sockets as rarely as [ping] says from now on, on an alarm that also runs
+     * while the phone sleeps. Sockets close later, after the grace ([plan]).
+     */
+    fun pingEarly(ping: Long) {
+        if (ping == pingMs) return
+        pingMs = ping
         tick()
     }
 
@@ -133,7 +193,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             if (android.os.SystemClock.elapsedRealtime() < (burstUntil[url] ?: 0L)) return@Runnable   // used again meanwhile
             burst.remove(url); burstUntil.remove(url)
             if (keepAlive && url in targets()) return@Runnable   // one of the relays kept open anyway
-            synchronized(sockets) { sockets.remove(url)?.close(1000, null); live.remove(url); _connected.value = live.size }
+            synchronized(sockets) { sockets.remove(url)?.let { ended(url, it); it.close(1000, null) }; live.remove(url); _connected.value = live.size }
         }, BURST_SECONDS, TimeUnit.SECONDS)
     }
 
@@ -193,19 +253,28 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         main.post { tick() }
     }
 
-    private fun probe() {
+    /** [all]: ask every socket, even one heard from just now (the network just changed under it). */
+    private fun probe(all: Boolean = false) {
         if (!keepAlive || keep == 0) return
-        val before = probedAt
         val now = android.os.SystemClock.elapsedRealtime()
+        countServerPings()
+        var asked = false
         for (url in targets()) {
             val ws = sockets[url]
-            if (ws == null) { open(url); continue }
+            if (ws == null) { if (online()) open(url); continue }
             if (live[url] != true) continue
-            if (PowerLogic.silent(before, heardAt[url] ?: 0L) && (openedAt[url] ?: 0L) < before) { replace(url, ws); continue }
+            val before = askedAt[url] ?: 0L
+            val heard = heardAt[url] ?: 0L
+            if (PowerLogic.silent(before, heard) && (openedAt[url] ?: 0L) < before) { replace(url, ws); continue }
+            // Heard from within the last minute (a message, an answer): it's alive, no need to ask.
+            if (!all && NetLogic.aliveRecently(now - heard)) continue
             val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", System.currentTimeMillis() / 1000).put("limit", 0)   // only my mailbox: never anyone else's traffic
+            askedAt[url] = now
             ws.send(JSONArray().put("REQ").put(PROBE).put(filter).toString())
+            asked = true
         }
         probedAt = now
+        if (!asked) { release(); return }
         counted(PING)
         // One missed check is enough: look again once the answers should be in. Usually they all are within
         // a second or two; then the phone may sleep again at once.
@@ -213,7 +282,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         timer.schedule(Runnable { verify(now) }, PowerLogic.ANSWER_MS, TimeUnit.MILLISECONDS)
     }
 
-    private fun answered(at: Long) = targets().all { url -> live[url] != true || (heardAt[url] ?: 0L) >= at }
+    private fun answered(at: Long) = targets().all { url -> live[url] != true || askedAt[url] != at || (heardAt[url] ?: 0L) >= at }
 
     private fun release() { try { if (wake.isHeld) wake.release() } catch (_: Exception) {} }
 
@@ -224,7 +293,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         var replaced = false
         for (url in targets()) {
             val ws = sockets[url] ?: continue
-            if (live[url] != true) continue
+            if (live[url] != true || askedAt[url] != at) continue
             if (PowerLogic.dead(at, heardAt[url] ?: 0L, openedAt[url] ?: 0L, now)) { replace(url, ws); replaced = true }
         }
         // A replaced socket keeps the phone awake a few seconds more (the wake lock's own timeout) to connect.
@@ -233,6 +302,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     private fun replace(url: String, ws: WebSocket) {
         synchronized(sockets) { if (!sockets.remove(url, ws)) return; live.remove(url); _connected.value = live.size }
+        ended(url, ws)
         ws.cancel()
         retries.remove(url)
         counted(RECONNECT)
@@ -251,33 +321,37 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** The network came back: drop dead connections and connect again now. */
     fun reconnectNow() {
         if (!keepAlive && sockets.isEmpty()) return
+        streak.set(0)
         for (url in targets()) if (live[url] != true) {
-            synchronized(sockets) { sockets.remove(url)?.cancel() }
+            synchronized(sockets) { sockets.remove(url)?.let { ended(url, it); it.cancel() } }
             retries.remove(url)
             open(url)
         }
         // Sockets that look open may have died with the old network: ask now (a socket that doesn't answer
         // within seconds is replaced) and ask again shortly, instead of waiting for the next keepalive.
         if (keepAlive && keep != 0) timer.execute {
-            probe()
-            timer.schedule(Runnable { probe() }, 15, TimeUnit.SECONDS)
+            probe(true)
+            timer.schedule(Runnable { probe(true) }, 15, TimeUnit.SECONDS)
         }
     }
 
     /** Asks every open relay for the inbox again: after unlocking, so what came while locked is read now. */
-    fun resubscribe() { for ((url, ws) in sockets) if (live[url] == true) subscribe(ws) }
+    fun resubscribe() {
+        refused = false
+        for ((url, ws) in sockets) if (live[url] == true) subscribe(url, ws)
+    }
 
     fun disconnect() {
         keepAlive = false
         tick()
-        synchronized(sockets) { sockets.values.forEach { it.close(1000, null) }; sockets.clear() }
+        synchronized(sockets) { for ((url, ws) in sockets) { ended(url, ws); ws.close(1000, null) }; sockets.clear() }
         live.clear()
         _connected.value = 0
     }
 
-    private fun subscribe(ws: WebSocket) {
-        // Events can be backdated a little (see publish), so look back two days and skip ones already seen.
-        val since = maxOf(0L, prefs.getLong("nostrSince", 0L) - 2 * 86400)
+    private fun subscribe(url: String, ws: WebSocket) {
+        // Only what came since this relay last finished sending, less a margin for backdated events (see publish).
+        val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
         val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since)
         ws.send(JSONArray().put("REQ").put(subId).put(filter).toString())
     }
@@ -286,39 +360,51 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (sockets[url] !== webSocket) { webSocket.cancel(); return }   // replaced meanwhile
             // Only reset the back-off once it has stayed up a minute (a relay that accepts and drops at once).
-            timer.schedule({ if (sockets[url] === webSocket && live[url] == true) retries.remove(url) }, 60, java.util.concurrent.TimeUnit.SECONDS)
+            timer.schedule({ if (sockets[url] === webSocket && live[url] == true) { retries.remove(url); streak.set(0) } }, 60, java.util.concurrent.TimeUnit.SECONDS)
             val now = android.os.SystemClock.elapsedRealtime()
             connectMs[url] = now - (openedAt[url] ?: now)
             heardAt[url] = now
             live[url] = true
+            liveSince[url] = now
             _connected.value = live.size
-            subscribe(webSocket)
-            synchronized(outbox) { outbox.forEach { webSocket.send(it) } }
-            // What was just sent goes to this relay too (relays drop an event they already have).
+            subscribe(url, webSocket)
+            // This relay is reachable again: what still waits, and what was just sent, goes to it on a sending
+            // socket of its own, never on this one (relays drop an event they already have).
+            val again = ArrayList<String>()
+            synchronized(outbox) { again.addAll(outbox) }
             synchronized(recent) {
                 val now = android.os.SystemClock.elapsedRealtime()
-                recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> synchronized(outbox) { if (m !in outbox) webSocket.send(m) } }
+                recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> if (m !in again) again.add(m) }
             }
-            burst[url]?.let { m -> synchronized(m) { m.forEach { webSocket.send(it) }; m.clear() } }
+            burst[url]?.let { m -> synchronized(m) { m.forEach { if (it !in again) again.add(it) }; m.clear() } }
+            if (again.isNotEmpty()) send(url, again)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (sockets[url] === webSocket) heardAt[url] = android.os.SystemClock.elapsedRealtime()
             val a = try { JSONArray(text) } catch (e: Exception) { return }
             when (a.optString(0)) {
-                "EOSE" -> if (a.optString(1) == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
+                "EOSE" -> {
+                    if (a.optString(1) == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
+                    else if (a.optString(1) == subId) subscribed[url] = true
+                    // Everything this relay held for me has been handed over (and the inbox request is still open):
+                    // next time ask only for what's newer. Not while something waits to be read (locked).
+                    if (sockets[url] === webSocket && subscribed[url] == true && !refused && secretHex() != null) {
+                        eoseAt[url] = System.currentTimeMillis() / 1000
+                        saveSoon()
+                    }
+                }
+                // The relay ended the inbox request (it may ask to sign in first): what's newer isn't known to be read.
+                "CLOSED" -> if (a.optString(1) == subId) subscribed.remove(url)
                 "EVENT" -> a.optJSONObject(2)?.let { handle(it) }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
                     val secret = secret ?: return
                     val ev = event(22242, JSONArray().put(JSONArray().put("relay").put(url)).put(JSONArray().put("challenge").put(a.optString(1))), "", secret)
                     webSocket.send(JSONArray().put("AUTH").put(ev).toString())
-                    subscribe(webSocket)
+                    subscribe(url, webSocket)
                 }
-                "OK" -> if (a.optBoolean(2)) {
-                    synchronized(outbox) { outbox.removeAll { it.contains(a.optString(1)) } }
-                    stored.remove(a.optString(1))?.let { done -> try { done() } catch (_: Exception) {} }
-                }
+                "OK" -> if (a.optBoolean(2)) storedAt(url, a.optString(1))
             }
         }
 
@@ -331,21 +417,64 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             synchronized(sockets) { if (!sockets.remove(url, webSocket)) return }
             live.remove(url)
             _connected.value = live.size
+            ended(url, webSocket)
             if (!keepAlive || url !in targets()) return
             // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
             val n = (retries[url] ?: 0) + 1
             retries[url] = n
+            val s = streak.incrementAndGet()
             counted(RECONNECT)
+            // No network at all: nothing to try. Muninn connects again as soon as one is back (reconnectNow).
+            if (!online()) return
             // Saving battery with one relay open (or a few): one that fails gives its place to a healthier one,
-            // the only one at once.
+            // the only one at once. Many failures in a row (a bad signal) slow the swapping down too.
             if (keep != null && n >= PowerLogic.swapAfter(keep)) {
                 chosen = null
                 val now = targets()
-                for (u in now) if (u != url) open(u)
+                val wait = NetLogic.swapMs(s)
+                for (u in now) if (u != url) openLater(u, wait)
                 if (url !in now) return
             }
-            timer.schedule({ if (keepAlive) open(url) },
-                minOf(60L, 1L shl minOf(n, 6)), java.util.concurrent.TimeUnit.SECONDS)
+            openLater(url, NetLogic.reconnectMs(n, s))
+        }
+    }
+
+    /** Opens [url] after [ms] (at once for 0), if it's still wanted then. */
+    private fun openLater(url: String, ms: Long) {
+        if (ms <= 0L) { open(url); return }
+        timer.schedule({ if (keepAlive && url in targets() && online()) open(url) }, ms, TimeUnit.MILLISECONDS)
+    }
+
+    /** Some network is there (Wi-Fi, mobile data, Ethernet). */
+    private fun online(): Boolean = try {
+        context.getSystemService(android.net.ConnectivityManager::class.java)?.activeNetwork != null
+    } catch (_: Exception) { true }
+
+    /** A socket ended: its relay-side pings and time connected go into that relay's totals. */
+    private fun ended(url: String, ws: WebSocket) {
+        countPings(url, ws)
+        pingsSeen.remove(ws)
+        subscribed.remove(url)
+        askedAt.remove(url)
+        liveSince.remove(url)?.let { since -> relayMs.merge(url, android.os.SystemClock.elapsedRealtime() - since, { a, b -> a + b }) }
+    }
+
+    /** Pings this socket's relay sent since they were last counted (OkHttp answers them by itself). */
+    private fun countPings(url: String, ws: WebSocket) {
+        val total = try { (ws as? okhttp3.internal.ws.RealWebSocket)?.receivedPingCount() } catch (_: Throwable) { null } ?: return
+        val before = pingsSeen.put(ws, total) ?: 0
+        val n = total - before
+        if (n <= 0) return
+        relayPings.merge(url, n, { a, b -> a + b })
+        countedPings(n)
+    }
+
+    /** Counts the relay-side pings of every open socket now (for the battery report). */
+    fun countServerPings() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        for ((url, ws) in sockets) {
+            countPings(url, ws)
+            liveSince[url]?.let { since -> if (liveSince.replace(url, since, now)) relayMs.merge(url, now - since, { a, b -> a + b }) }
         }
     }
 
@@ -359,51 +488,115 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val locked = secretHex() == null
         if (locked && synchronized(seen) { !announced.add(id) }) { synchronized(seen) { working.remove(id) }; return }
         try {
-            // Only trust what the event's own signature covers.
-            if (idOf(ev) != id || !Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig")))) return
-            if (onEnvelope?.invoke(ev.optString("content")) != true) return
+            // Only trust what the event's own signature covers. A broken event (keys or signature that aren't hex) is
+            // dropped, never thrown up into the socket, and one whose id is its own is never looked at again.
+            val own = try { idOf(ev) == id } catch (e: Exception) { false }
+            val good = own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false }
+            if (!good) { if (own) synchronized(seen) { seen.add(id) }; return }
+            if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused = true; return }
         } finally { synchronized(seen) { working.remove(id) } }
         synchronized(seen) {
             seen.add(id)
             while (seen.size > 2000) seen.remove(seen.first())
-            prefs.edit().putString("nostrSeen", seen.joinToString(",")).putLong("nostrSince", System.currentTimeMillis() / 1000).apply()
         }
+        saveSoon()
     }
 
     // ------------------------------------------------------------------ sending
 
+    /** A relay said it stored event [id]. */
+    private fun storedAt(url: String, id: String) {
+        if (id.isEmpty()) return
+        synchronized(outbox) { outbox.removeAll { it.contains(id) } }
+        stored[id]?.let { w ->
+            // The first relay to store it: "sent". The second: it waits there safely (see NetLogic).
+            val n = synchronized(w) { if (w.relays.add(url)) w.relays.size else 0 }
+            if (n == 1) try { w.ok?.invoke() } catch (_: Exception) {}
+            if (n == NetLogic.HELD_RELAYS) { stored.remove(id); try { w.held?.invoke() } catch (_: Exception) {} }
+            if (w.held == null && n >= 1) stored.remove(id)
+        }
+    }
+
+    /**
+     * A socket that only sends: it never asks for an inbox (REQ) and never signs in (AUTH), so the relay can't
+     * tie what it carries to my mailbox. It closes [SEND_SECONDS] after the last thing given to it.
+     */
+    private inner class Sender(val url: String) : WebSocketListener() {
+        val queue = mutableListOf<String>()
+        @Volatile var ws: WebSocket? = null
+        private var open = false
+        @Volatile var until = 0L
+
+        /** Sends now if open, else once it opens. */
+        fun give(msgs: List<String>) {
+            synchronized(queue) { val w = ws; if (open && w != null) msgs.forEach { w.send(it) } else queue.addAll(msgs) }
+        }
+
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (senders[url] !== this) { webSocket.cancel(); return }
+            synchronized(queue) { open = true; queue.forEach { webSocket.send(it) }; queue.clear() }
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            val a = try { JSONArray(text) } catch (e: Exception) { return }
+            // "AUTH" is never answered here: signing in would name my mailbox.
+            if (a.optString(0) == "OK" && a.optBoolean(2)) storedAt(url, a.optString(1))
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { senders.remove(url, this) }
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); senders.remove(url, this) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { senders.remove(url, this) }
+    }
+    private val senders = ConcurrentHashMap<String, Sender>()
+
+    /** Gives [msgs] to [url]'s sending socket, opening one if needed. */
+    private fun send(url: String, msgs: List<String>) {
+        val s = synchronized(senders) {
+            senders[url] ?: Sender(url).also { n -> senders[url] = n; n.ws = client.newWebSocket(Request.Builder().url(url).build(), n) }
+        }
+        s.until = android.os.SystemClock.elapsedRealtime() + SEND_SECONDS * 1000 - 500
+        s.give(msgs)
+        timer.schedule(Runnable {
+            if (android.os.SystemClock.elapsedRealtime() < s.until) return@Runnable   // used again meanwhile
+            if (senders.remove(url, s)) s.ws?.close(1000, null)
+        }, SEND_SECONDS, TimeUnit.SECONDS)
+    }
+
     /**
      * Sends sealed content to someone's mailbox through the relays open now. Returns how many relays are
-     * connected now. [ok] runs once a relay has said it stored the event (its "OK"), not before.
+     * connected now. [ok] runs once a relay has said it stored the event (its "OK"), not before; [held] once
+     * [NetLogic.HELD_RELAYS] relays have.
      *
-     * Saving battery, relays not open now get it through a short-lived socket each, so it reaches whichever
-     * relay the other phone listens on. Sockets that connect within [RECENT_MS] get it too ([recent]).
+     * Every relay gets it through a short-lived sending socket (never the one listening for my inbox), so it
+     * reaches whichever relay the other phone listens on. A relay that connects again within [RECENT_MS] gets
+     * it too ([recent]). [days]: the chat's message limit, for the NIP-40 expiration tag (0: none).
      */
-    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null): Int {
+    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
+        // NIP-40: relays may drop it once the chat's message limit has passed (it's gone from both phones by then).
+        if (days > 0) tags.put(JSONArray().put("expiration").put((System.currentTimeMillis() / 1000 + days * 86_400L).toString()))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         val ev = event(KIND, tags, content, Schnorr.newSecret(), System.currentTimeMillis() / 1000 - Random.nextLong(0, 600))
         val msg = JSONArray().put("EVENT").put(ev).toString()
-        if (ok != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = ok }
+        if (ok != null || held != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = Waiting(ok, held) }
         synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
         synchronized(recent) {
             val now = android.os.SystemClock.elapsedRealtime()
             recent.addLast(now to msg)
             while (recent.size > 100 || (recent.isNotEmpty() && now - recent.first().first > RECENT_MS)) recent.removeFirst()
         }
-        var n = 0
-        for ((url, ws) in sockets) if (live[url] == true && ws.send(msg)) n++
-        // Every relay gets it: the other phone may be listening on just one, and not one of mine. Relays
-        // not open now get a short-lived socket that closes again after [BURST_SECONDS].
-        if (keep != null) for (url in relays) if (live[url] != true) openBurst(url, listOf(msg))
+        // Every relay gets it, each on a sending socket of its own: the other phone may be listening on
+        // just one, and not one of mine.
+        for (url in relays) send(url, listOf(msg))
         if (sockets.isEmpty()) connect()
-        return n
+        return live.size
     }
 
     /** Events sent in the last [RECENT_MS]: a relay that connects meanwhile gets them too, even once another said OK. */
     private val recent = ArrayDeque<Pair<Long, String>>()
-    /** Event id to what to do once a relay has stored it. */
-    private val stored = ConcurrentHashMap<String, () -> Unit>()
+    /** Event id to what to do once relays have stored it, and which ones have. */
+    private class Waiting(val ok: (() -> Unit)?, val held: (() -> Unit)?) { val relays = HashSet<String>() }
+    private val stored = ConcurrentHashMap<String, Waiting>()
 
     companion object {
         const val KIND = 1059
@@ -411,7 +604,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val PING = "ping"
         const val WAKE = "wake"
         const val RECONNECT = "reconnect"
+        /** A check the relay sent on its own (a WebSocket ping), for the battery report. */
+        const val SERVER_PING = "serverPing"
+        private const val SAVE_EVERY_S = 30L
         private const val BURST_SECONDS = 20L
+        /** How long a sending socket stays open after the last thing given to it. */
+        private const val SEND_SECONDS = 20L
         /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */
         private const val RECENT_MS = 60_000L
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")

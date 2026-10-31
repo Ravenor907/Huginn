@@ -24,7 +24,7 @@ class Link : public QObject
     Q_OBJECT
     // On a companion: the phone it mirrors, {key, name}, or empty.
     Q_PROPERTY(QVariantMap phone READ phone NOTIFY changed)
-    // On the phone: the devices that mirror it, [{key, name}].
+    // On the phone: the devices that mirror it, [{key, name, ok}] (ok: the 4 emoji were checked).
     Q_PROPERTY(QVariantList companions READ companions NOTIFY changed)
     // On a companion: the phone's chats, newest first: [{peer, name, last, time}].
     Q_PROPERTY(QVariantList mirror READ mirror NOTIFY changed)
@@ -48,7 +48,12 @@ public:
     // A new link code for a phone to take (a new token each time).
     Q_INVOKABLE QString newCode();
     // On the phone: link the device whose code this is. "" when done, else what to tell the person.
-    Q_INVOKABLE QString link(const QString &code);
+    // Nothing is mirrored until both screens showed the same 4 emoji and the person said so (confirm); confirmed only
+    // for a device already proven (moving, section 18).
+    Q_INVOKABLE QString link(const QString &code, bool confirmed = false);
+    // The linked devices whose emoji haven't been checked yet: [{key, name, emoji}] (a companion, or the phone).
+    Q_INVOKABLE QVariantList unchecked() const;
+    Q_INVOKABLE void confirm(const QString &key);
     Q_INVOKABLE void unlink(const QString &key);
     // On a companion: one mirrored chat's messages, oldest first: [{id, text, mine, time}].
     Q_INVOKABLE QVariantList messages(const QString &peer) const;
@@ -73,6 +78,7 @@ Q_SIGNALS:
 private:
     struct Device {
         QString key, mailbox, name;
+        bool ok = true;                     // the 4 emoji were checked (linked before 0.95: as they were)
     };
     struct M {
         QString id, text;
@@ -100,4 +106,8 @@ private:
     mutable QHash<QString, Mirror> m_mirror;
     QString m_token, m_code;
     qint64 m_tokenUntil = 0;
+    // Ids of companions' "send" already sent (two days, on disk), so none goes out twice.
+    bool firstSend(const QString &id);
+    QHash<QString, qint64> m_sends;
+    bool m_sendsLoaded = false;
 };

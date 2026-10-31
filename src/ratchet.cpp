@@ -1,4 +1,5 @@
 #include "ratchet.h"
+#include "proof.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -236,7 +237,9 @@ int intField(const QJsonObject &o, const QString &key)
 
 QByteArray Ratchet::Header::aad() const
 {
-    return QByteArray("v1|") + b.toUtf8() + '|' + d.toUtf8() + '|' + QByteArray::number(pn) + '|' + QByteArray::number(n);
+    const QByteArray head = QByteArray("v1|") + b.toUtf8() + '|' + d.toUtf8() + '|' + QByteArray::number(pn) + '|' + QByteArray::number(n);
+    // Cap s1: then the same bound fields as v1 (Proof::aad), after a line break.
+    return bind.isEmpty() ? head : head + '\n' + Proof::aad(bind);
 }
 
 QJsonObject Ratchet::Header::toJson() const
@@ -285,9 +288,10 @@ Ratchet::Session Ratchet::Session::bob(const QByteArray &sk, const ChatCrypto::K
     return s;
 }
 
-std::pair<Ratchet::Header, QByteArray> Ratchet::Session::encrypt(const QByteArray &plain)
+std::pair<Ratchet::Header, QByteArray> Ratchet::Session::encrypt(const QByteArray &plain, const QByteArray &bind)
 {
     Header h;
+    h.bind = bind;
     if (!canSend())
         return {h, QByteArray()};
     QByteArray ck = cks;
@@ -391,11 +395,11 @@ void Ratchet::Peer::touch(const QString &base)
 }
 
 std::pair<Ratchet::Header, QByteArray> Ratchet::Peer::encrypt(const QByteArray &sk, const QString &theirStaticB64, const QByteArray &plain,
-                                                              const NewKey &newKey)
+                                                              const NewKey &newKey, const QByteArray &bind)
 {
     Session *s = active.isEmpty() ? nullptr : find(active);
     if (s && s->canSend()) {
-        auto out = s->encrypt(plain);
+        auto out = s->encrypt(plain, bind);
         if (!out.second.isEmpty())
             touch(active);
         return out;
@@ -404,7 +408,7 @@ std::pair<Ratchet::Header, QByteArray> Ratchet::Peer::encrypt(const QByteArray &
     if (eph.privateDer.isEmpty() || eph.publicDer.isEmpty())
         return {Header(), QByteArray()};
     Session fresh = Session::alice(sk, theirStaticB64, eph);
-    auto out = fresh.encrypt(plain);
+    auto out = fresh.encrypt(plain, bind);
     if (out.second.isEmpty())
         return out;
     sessions.insert(sessions.begin(), std::move(fresh));

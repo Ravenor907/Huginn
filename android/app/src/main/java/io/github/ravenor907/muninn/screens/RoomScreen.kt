@@ -79,7 +79,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
         if (r == null && g != null) {
             // A group call is ringing.
             Spacer(Modifier.weight(1f))
-            Text("GROUP CALL", style = Type.section)
+            Text("VOICE ROOM", style = Type.section)
             Spacer(Modifier.height(20.dp))
             Face(if (hideNames) "?" else g.name, speaking = false, dim = false, size = 120)
             Spacer(Modifier.height(20.dp))
@@ -115,7 +115,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 val turned = sc.rotation % 180 != 0
                 val ratio = if (sc.width > 0 && sc.height > 0) (if (turned) sc.height.toFloat() / sc.width else sc.width.toFloat() / sc.height) else 16f / 9f
                 VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
-                    Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f)).clip(RoundedCornerShape(12.dp)).background(Palette.field),
+                    Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f)).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field),
                     if (hideNames) "Shared screen" else "${sc.name}'s screen")
             }
             // Group video (up to 4 people, peer to peer only): everyone with a camera on, and my own picture.
@@ -127,14 +127,14 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                     if (vid.cameraOn) RoomSelfView(Modifier.weight(1f).aspectRatio(3f / 4f))
                     showing.forEach { p ->
                         val pic = vid.pics[p.key] ?: io.github.ravenor907.muninn.net.call.RoomVideo.Pic()
-                        Box(Modifier.weight(1f).aspectRatio(3f / 4f).clip(RoundedCornerShape(12.dp)).background(Palette.field)) {
+                        Box(Modifier.weight(1f).aspectRatio(3f / 4f).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field)) {
                             VideoPicture({ io.github.ravenor907.muninn.net.call.RoomVideo.surface(p.key, it) }, pic.width, pic.height, pic.rotation,
                                 Modifier.fillMaxSize(), if (hideNames) "Someone's camera" else "${p.name}'s camera")
                             Text(if (hideNames) "?" else p.name, style = Type.small.copy(color = Palette.text), modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
                         }
                     }
                 }
-                Text("Video goes straight between phones, never through the relay. Anyone who can't connect directly stays on voice.",
+                Text("Video goes straight between phones, never through a server. Anyone who can't connect directly stays on voice.",
                     style = Type.small.copy(fontSize = 12.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
             }
             if (vid.note.isNotEmpty()) Text(vid.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
@@ -158,7 +158,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 }
             }
             Spacer(Modifier.height(20.dp))
-            Text("Up to ${RoomLogic.MAX_PEOPLE} people. Sound goes only through the relay over the internet, so nobody here sees anyone's address.",
+            Text("Up to ${RoomLogic.MAX_PEOPLE} people. Sound goes over the internet through Muninn's server, so nobody here sees anyone's internet address.",
                 style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -220,5 +220,5 @@ private fun RoomSelfView(modifier: Modifier) {
         io.github.ravenor907.muninn.net.call.RoomVideo.bindCamera(owner, view.surfaceProvider)
         onDispose { io.github.ravenor907.muninn.net.call.RoomVideo.unbindCamera(owner) }
     }
-    androidx.compose.ui.viewinterop.AndroidView(factory = { view }, modifier = modifier.clip(RoundedCornerShape(12.dp)).semantics { contentDescription = "Your camera" })
+    androidx.compose.ui.viewinterop.AndroidView(factory = { view }, modifier = modifier.clip(io.github.ravenor907.muninn.ui.Corner).semantics { contentDescription = "Your camera" })
 }

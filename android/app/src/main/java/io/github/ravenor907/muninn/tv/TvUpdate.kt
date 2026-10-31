@@ -45,7 +45,9 @@ object TvUpdate {
             try {
                 val now = System.currentTimeMillis()
                 val p = prefs(app)
-                if (now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
+                // k7 (7.12): a parent who turned automatic checks off turns them off here too; otherwise they stay on.
+                val auto = KidTv.state.value.cfg?.upd ?: true
+                if (auto && now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
                     p.edit().putLong("lastDailyCheck", now).apply()
                     checkNow(app)
                 }
@@ -130,7 +132,9 @@ object TvUpdate {
             add(Need("notify", "Allow notifications", "So new messages show while something else is on."))
         if (!Settings.canDrawOverlays(c))
             add(Need("overlay", "Show over other apps", "So a call from a parent comes up over a show or a game."))
-        if (Build.VERSION.SDK_INT >= 34 && c.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == false)
+        // "Show over other apps" already lets the call screen open by itself, and many TVs (Google TV) have no
+        // full-screen calls screen at all: only ask for it when the overlay isn't allowed either.
+        if (Build.VERSION.SDK_INT >= 34 && !Settings.canDrawOverlays(c) && c.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == false)
             add(Need("fullscreen", "Full-screen calls", "So the call screen can open by itself when someone calls."))
         if (!canInstall(c))
             add(Need("install", "Install updates and apps", "So Muninn can keep itself up to date, and install apps a parent sends."))

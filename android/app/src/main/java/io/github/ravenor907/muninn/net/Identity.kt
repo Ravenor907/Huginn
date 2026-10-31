@@ -12,6 +12,11 @@ class Identity(context: Context, private val vault: Vault) {
     private val secrets = java.io.File(context.filesDir, "secrets.json")
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
 
+    init {
+        // Link previews are off for new installs (0.95). A phone set up before that keeps them on unless it turned them off.
+        if (prefs.contains("fingerprint") && !prefs.contains("linkPreviews")) prefs.edit().putBoolean("linkPreviews", true).apply()
+    }
+
     /** Random and stable: LocalSend uses it to tell devices apart and to skip itself. */
     val fingerprint: String = prefs.getString("fingerprint", null) ?: UUID.randomUUID().toString().replace("-", "").also {
         prefs.edit().putString("fingerprint", it).apply()
@@ -43,6 +48,14 @@ class Identity(context: Context, private val vault: Vault) {
     /** The Nearby room is on: its own switch, and only while visible to people nearby. */
     val nearbyRoom: Boolean get() = nearbyChat && visibleNearby
 
+    /** Checks GitHub for a new Muninn when it opens. Off: only "Check now" does. */
+    var autoUpdate: Boolean
+        get() = prefs.getBoolean("autoUpdate", true)
+        set(v) = prefs.edit().putBoolean("autoUpdate", v).apply()
+    /** Google Nearby (Close) on top of Muninn's own Bluetooth and Wi-Fi. Off for everyone until turned on: it needs Google Play services. */
+    var useGoogleNearby: Boolean
+        get() = prefs.getBoolean("googleNearby", false)
+        set(v) = prefs.edit().putBoolean("googleNearby", v).apply()
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
@@ -101,10 +114,15 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
-    /** A pure black background: an OLED screen leaves black pixels off, which saves a little battery. */
-    var trueBlack: Boolean
-        get() = prefs.getBoolean("trueBlack", false)
-        set(v) = prefs.edit().putBoolean("trueBlack", v).apply()
+    /** The look: "dark", "black" (true black, kept from the old True black switch), "light" or "metal". */
+    var look: String
+        get() = prefs.getString("look", null) ?: if (prefs.getBoolean("trueBlack", false)) "black" else "dark"
+        set(v) = prefs.edit().putString("look", v).apply()
+
+    /** Where the lock pattern sits on the screen: "top", "middle" or "lower" (easiest one-handed). */
+    var patternPos: String
+        get() = prefs.getString("patternPos", null)?.takeIf { it in setOf("top", "middle", "lower") } ?: "lower"
+        set(v) = prefs.edit().putString("patternPos", v).apply()
 
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
@@ -121,7 +139,7 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("activeStatus", v).apply()
     /** Link previews (cap m2): this phone looks up a link I send and adds its title and picture. Never for links I get. */
     var linkPreviews: Boolean
-        get() = prefs.getBoolean("linkPreviews", true)
+        get() = prefs.getBoolean("linkPreviews", false)
         set(v) = prefs.edit().putBoolean("linkPreviews", v).apply()
     /** Notifications say only "New message" unless this is on. */
     var showPreview: Boolean
@@ -137,20 +155,13 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putLong("lockAfter", v).apply()
     val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
 
-    // Private chats: a device is trusted once both people saw the same code. Stored as key -> name.
+    // From before contacts: devices trusted once both people saw the same code, stored as key -> name.
+    // Chat moves them into contacts once, then they're dropped from here (they sat in plain settings).
     fun trusted(): Map<String, String> = prefs.getStringSet("trusted", emptySet())!!.mapNotNull {
         val i = it.indexOf('|'); if (i < 0) null else it.substring(0, i) to it.substring(i + 1)
     }.toMap()
 
-    fun trust(key: String, name: String) {
-        val set = prefs.getStringSet("trusted", emptySet())!!.filterNot { it.startsWith("$key|") }.toMutableSet()
-        set.add("$key|$name")
-        prefs.edit().putStringSet("trusted", set).apply()
-    }
-
-    fun forget(key: String) {
-        prefs.edit().putStringSet("trusted", prefs.getStringSet("trusted", emptySet())!!.filterNot { it.startsWith("$key|") }.toSet()).apply()
-    }
+    fun dropTrusted() { prefs.edit().remove("trusted").apply() }
 
     fun muted(): Set<String> = prefs.getStringSet("muted", emptySet())!!
     fun setMuted(key: String, on: Boolean) {

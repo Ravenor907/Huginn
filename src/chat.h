@@ -127,7 +127,8 @@ public:
     Q_INVOKABLE QByteArray blob(const QString &id) const;
     Q_INVOKABLE QString photoUrl(const QString &id);
     Q_INVOKABLE bool savePhoto(const QString &id);
-    Q_INVOKABLE QVariantList recentPictures() const;   // Steam screenshots and Pictures, newest first
+    // The newest pictures in Pictures, found on a worker thread; recentPicturesReady brings them back.
+    Q_INVOKABLE void loadRecentPictures();
     Q_INVOKABLE void copyLink() const;
 
     // Cap m1 (docs/protocol-0.6.md section 11, RichWire): reactions, edits, typing, active status. Calls that
@@ -156,7 +157,7 @@ public:
     // the Shared page. where: a contact's key or "g:<group>:<channel>". Calls that can fail return what to tell
     // the person, "" when done.
     Q_INVOKABLE bool hasM2(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m2")); }
-    bool linkPreviews() const { return m_settings.value(QStringLiteral("chat/linkPreviews"), true).toBool(); }
+    bool linkPreviews() const { return m_settings.value(QStringLiteral("chat/linkPreviews"), false).toBool(); }
     void setLinkPreviews(bool on) { m_settings.setValue(QStringLiteral("chat/linkPreviews"), on); Q_EMIT changed(); }
     // Several pictures at once: albums of up to 10 (one picture goes on its own).
     Q_INVOKABLE QString sendPhotos(const QString &where, const QStringList &paths, bool hd);
@@ -217,6 +218,44 @@ public:
     bool hasCap(const QString &key, const QString &cap) const { return m_caps.value(key).contains(cap); }
     Q_INVOKABLE bool canGroup(const QString &key) const;
     Q_INVOKABLE void probeCaps(const QString &key);
+    // For the screens (chatpeople.cpp): unknown caps count as a current app and a probe asks; the wire
+    // still only sends what their caps list. Call (canCall), Video and video messages use these.
+    Q_INVOKABLE bool mayHave(const QString &key, const QString &cap);
+    Q_INVOKABLE bool mayVideo(const QString &key);
+    Q_INVOKABLE bool mayVideoMessage(const QString &key);
+    static bool capIn(const QStringList &caps, const QString &cap);
+    static bool isRing(const QJsonObject &msg);
+
+    // Per person, set on the press-and-hold sheet, local only (in the encrypted contacts): they may call
+    // me (voice and video), send me files, and see when I'm active. Default yes.
+    Q_INVOKABLE bool callsAllowed(const QString &key) const;
+    Q_INVOKABLE bool filesAllowed(const QString &key) const;
+    Q_INVOKABLE bool showsActive(const QString &key) const;
+    Q_INVOKABLE void setCallsAllowed(const QString &key, bool on);
+    Q_INVOKABLE void setFilesAllowed(const QString &key, bool on);
+    Q_INVOKABLE void setShowsActive(const QString &key, bool on);
+
+    // Where a chat sits (key: a contact, or "g:" + group id), only on this computer: pinned to the top
+    // (newest pin first), archived, muted until a time (ms; 0 unmutes, a huge value is for good), marked unread.
+    Q_INVOKABLE void pinChat(const QString &key, bool on);
+    Q_INVOKABLE bool isPinnedChat(const QString &key) const { return m_pinnedChats.contains(key); }
+    Q_INVOKABLE QStringList pinnedChats() const { return m_pinnedChats; }
+    Q_INVOKABLE void orderPinned(const QStringList &keys);
+    Q_INVOKABLE void archiveChat(const QString &key, bool on);
+    Q_INVOKABLE bool isArchived(const QString &key) const { return m_archived.contains(key); }
+    Q_INVOKABLE void muteChat(const QString &key, qint64 until);
+    Q_INVOKABLE bool isMuted(const QString &key) const;
+    Q_INVOKABLE qint64 mutedUntil(const QString &key) const { return m_mutedUntil.value(key, 0); }
+    Q_INVOKABLE void markUnread(const QString &key, bool on);
+    Q_INVOKABLE bool isMarkedUnread(const QString &key) const { return m_markedUnread.contains(key); }
+    // Always right away (as Muninn's list): their messages make a sound and a notification even while muted.
+    Q_INVOKABLE bool isRightAway(const QString &key) const { return m_rightAway.contains(key); }
+    Q_INVOKABLE void setRightAway(const QString &key, bool on);
+    // A color for this chat ("" for the usual, else "#RRGGBB"), only on this computer.
+    Q_INVOKABLE QString chatColor(const QString &key) const { return m_chatColors.value(key); }
+    Q_INVOKABLE void setChatColor(const QString &key, const QString &color);
+    // A message arrived for key: false while that chat is muted (unless Always right away); an archived one comes back.
+    bool notifyFor(const QString &key);
 
     // Calls (docs/protocol-0.6.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
     // room "call" and sends it on every route at once, never through the Outbox.
@@ -271,6 +310,14 @@ public:
     Q_INVOKABLE QString handOver(const QString &g, const QString &key);
     Q_INVOKABLE QString leaveGroup(const QString &g);
     Q_INVOKABLE void forgetGroup(const QString &g);
+    // Cap j1 (grouplinks.cpp): invite links. ttlMs 0 never expires, maxUses 0 no limit; answers {link, id} or {error}.
+    // groupLinks: the active ones [{id, by, byName, x (ms, 0 never), max, uses, counter, link (only my own), mine}];
+    // admins see every link, members their own. Joining by a link is joinWithCode (a pasted link works too).
+    Q_INVOKABLE QVariantMap createGroupLink(const QString &g, qint64 ttlMs, int maxUses);
+    Q_INVOKABLE QVariantList groupLinks(const QString &g) const;
+    Q_INVOKABLE QString revokeGroupLink(const QString &g, const QString &id);
+    Q_INVOKABLE QString setMembersInvite(const QString &g, bool on);   // an admin's signed change
+    Q_INVOKABLE bool membersInvite(const QString &g) const;
 
     // Voice rooms and group calls (call/roommanager.cpp, docs/protocol-0.6.md section 6): the current
     // state of a group this device is still in (empty otherwise), a member's name in it, whether a
@@ -293,6 +340,9 @@ public:
     Q_INVOKABLE void dismissLimitsNote();
     // Before a backup: nothing past a chat's limit goes in it.
     void pruneNow() { prune(); }
+    // Moving to another device (cap x1, move.cpp): nothing is sealed, sent or taken in while true.
+    void setMoving(bool on) { m_moving = on; }
+    bool moving() const { return m_moving; }
     // Caps i1 and f1 and linked devices live in their own classes (trust.*, filelink.*, link.*), made in main.cpp.
     void setExtras(Trust *trust, FileLink *files, Link *link) { m_trust = trust; m_files = files; m_linked = link; }
 
@@ -300,6 +350,7 @@ public:
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
 
 Q_SIGNALS:
+    void recentPicturesReady(const QVariantList &pictures);
     void changed();
     void notice(const QString &text);
     // A message arrived: for the toast, sound and desktop notification. For a group message the
@@ -315,6 +366,7 @@ private:
     friend class Trust;
     friend class FileLink;
     friend class Link;
+    friend class Move;   // moving to another device reads and locks everything (move.cpp)
     Trust *m_trust = nullptr;
     FileLink *m_files = nullptr;
     Link *m_linked = nullptr;
@@ -323,7 +375,8 @@ private:
     QString sendFileBlob(const QString &key, const QByteArray &bytes, const QString &name);
 
     void start();
-    int receive(const QByteArray &body, const QString &via);
+    // from: the address or link it came over (Wi-Fi and Bluetooth), so one device can't flood the Nearby room under many keys.
+    int receive(const QByteArray &body, const QString &via, const QString &from = QString());
     int receiveEnvelope(const QJsonObject &o, const QString &via);
     int receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via);
     QJsonObject envelope(const QString &room, const QString &theirKey, const QByteArray &plain, const QString &msgId);
@@ -331,6 +384,15 @@ private:
     QByteArray open(const QJsonObject &o, const QString &fromKey, bool *ok);
     void commitPeer();
     QString deliver(const QString &key, const QJsonObject &body, const QString &mailbox);
+    // Cap s1 (docs/protocol-0.6.md section 21): someone whose app proves its routes and seals its clear fields.
+    bool strict(const QString &key) const;
+    QString baseTo(const QString &key) const;         // their Wi-Fi address: proven first, an unproven one only when not strict
+    bool sendBle(const QString &key, const QByteArray &json);
+    bool staleSealed(const QString &key, const QByteArray &body) const;   // sealed before their app said s1 (or had the ratchet)
+    void noteS1(const QString &key, bool said, bool bound);
+    bool roomRate(const QString &from);
+    // Someone who isn't a contact, in lists and notifications: the name they chose, marked so it never passes for a contact's.
+    static QString stranger(const QString &name);
     void post(const QString &base, const QByteArray &body, std::function<void(int)> done = nullptr);
     void attempt(const QString &key, const QString &id);
     void attemptUnsend(const QString &key, const QString &id);
@@ -378,9 +440,16 @@ private:
     QString mailboxOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
     // Sends over the internet: to their mailbox on the relays. False when they have none.
+    // days: how long relays may keep it (0: this chat's message limit).
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
-                      std::function<void()> sent = nullptr);
+                      std::function<void()> sent = nullptr, int days = 0);
     void noteCaps(const QString &key, bool present, const QStringList &caps);
+    // chatpeople.cpp
+    void sayHello(const QString &key);
+    void setAllowed(const QString &key, const QString &what, bool on);
+    void loadFlags();
+    void saveFlags();
+    void forgetFlags(const QString &key);
     void loadFolders();
     void saveFolders();
     // cap m1
@@ -459,6 +528,17 @@ private:
     void saveGroupChats();
     // Messages past each group's limit go; their ids are added to gone. cutoff: the oldest time kept for a limit in days.
     void pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *gone);
+    // cap j1 (grouplinks.cpp)
+    bool hasJ1(const QString &key) const;
+    void loadLinks();
+    void saveLinks();
+    QString liveLink(const QString &token, const QString &g) const;
+    void sendLinks(const QString &g);
+    bool takeLinkControl(const QString &g, const QString &from, const QJsonObject &p);
+    void linkUsed(const QString &token, const QString &g);
+    QHash<QString, QVariantMap> m_glinks;               // links counted here: token -> {g, by, x, max, uses, off}
+    QHash<QString, QVariantList> m_glinkLists;          // group -> links as their counters said
+    QHash<QString, QString> m_gmade;                    // link id -> the links made here
     // cap d1 (chatlimits.cpp)
     bool hasD1(const QString &key) const;
     bool isClose(const QString &key) const;
@@ -486,6 +566,7 @@ private:
     QHash<QString, QVariantMap> m_held;                // key -> {id -> message}, waiting on a request
     QHash<QString, QVariantMap> m_requests;            // key -> {key, name, code, mailbox}
     QHash<QString, qint64> m_deleted;
+    QHash<QString, QString> m_unsentBy;        // group message id unsent before it got here -> who unsent it
     QHash<QString, qint64> m_invites;                  // invites in my codes: token -> expiry ms
     QString m_link;
     qint64 m_linkExpires = 0;                  // ids deleted here (two days): late copies stay gone
@@ -503,6 +584,12 @@ private:
     bool m_openedCap = false, m_openedHasCaps = false;
     int m_openedDays = 0;                               // its "days" (cap d1), 0 when none
     QStringList m_openedCaps;
+    bool m_openedBound = false;                         // it came sealed with its clear fields (cap s1)
+    QString m_proofFp, m_proof;                         // cap s1: my chat key's signature over my certificate (made once)
+    QSet<QString> m_s1;                                 // keys whose app said s1
+    QHash<QString, qint64> m_bound;                     // key -> when their envelopes first came bound (cap s1)
+    QHash<QString, QList<qint64>> m_failures;           // key -> ratchet envelopes that didn't open lately
+    QHash<QString, QList<qint64>> m_roomTimes;          // address or link -> Nearby room messages lately
     QHash<QString, QStringList> m_caps;                 // key -> their caps tokens (known only)
     QHash<QString, qint64> m_probed;                    // key -> last caps probe
     QList<QVariantMap> m_folders;                       // {id, name, keys, collapsed}
@@ -521,6 +608,13 @@ private:
     QHash<QString, QVariantMap> m_mxOut;                // reactions and edits on their way: envelope id -> {key, time}
     QHash<QString, qint64> m_typing, m_active, m_typingSent;
     QHash<QString, QStringList> m_pins;                 // where -> pinned message ids (only on this computer)
+    QStringList m_pinnedChats;                          // chats pinned to the top, in order
+    QSet<QString> m_archived, m_markedUnread;
+    QHash<QString, qint64> m_mutedUntil;
+    QSet<QString> m_rightAway;
+    QHash<QString, QString> m_chatColors;
+    QSet<QString> m_keptBack;
+    bool m_moving = false;                           // contacts whose "keep" got my yes back (once each)
     bool m_front = false;
     qint64 m_activeSent = 0;
     struct Tries { int count = 0; qint64 next = 0; };

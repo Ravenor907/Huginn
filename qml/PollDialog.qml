@@ -77,7 +77,7 @@ Item {
         y: Theme.px(30)
         width: Math.min(parent.width - Theme.px(60), Theme.px(720))
         height: Math.min(parent.height - Theme.px(60), col.implicitHeight + Theme.px(40))
-        radius: Theme.radius + 1
+        radius: Theme.radius
         color: Theme.panel
         border.color: Theme.lineStrong
         Flickable {

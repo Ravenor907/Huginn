@@ -2,6 +2,7 @@
 #include "chat.h"
 #include "chatcrypto.h"
 #include "msglimits.h"
+#include "trust.h"
 #include "vault.h"
 
 #include <QDateTime>
@@ -47,7 +48,7 @@ void Link::ensureLoaded() const
     m_phone = Device();
     m_mirror.clear();
     const QJsonObject o = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link.json"))).object();
-    auto dev = [](const QJsonObject &d) { return Device{jstr(d, "k"), jstr(d, "p"), jstr(d, "n")}; };
+    auto dev = [](const QJsonObject &d) { return Device{jstr(d, "k"), jstr(d, "p"), jstr(d, "n"), d.value(QStringLiteral("ok")).toBool(true)}; };
     for (const QJsonValue &v : o.value(QStringLiteral("companions")).toArray())
         m_companions << dev(v.toObject());
     if (o.contains(QStringLiteral("phone")))
@@ -65,7 +66,7 @@ void Link::ensureLoaded() const
 
 void Link::save()
 {
-    auto devJson = [](const Device &d) { return QJsonObject{{QStringLiteral("k"), d.key}, {QStringLiteral("p"), d.mailbox}, {QStringLiteral("n"), d.name}}; };
+    auto devJson = [](const Device &d) { return QJsonObject{{QStringLiteral("k"), d.key}, {QStringLiteral("p"), d.mailbox}, {QStringLiteral("n"), d.name}, {QStringLiteral("ok"), d.ok}}; };
     QJsonArray c;
     for (const Device &d : std::as_const(m_companions))
         c.append(devJson(d));
@@ -74,6 +75,35 @@ void Link::save()
         o.insert(QStringLiteral("phone"), devJson(m_phone));
     m_chat->m_vault->write(QStringLiteral("link.json"), compact(o));
     Q_EMIT changed();
+}
+
+bool Link::firstSend(const QString &id)
+{
+    if (id.isEmpty())
+        return true;   // an older companion's: nothing to check against
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (!m_sendsLoaded) {
+        m_sendsLoaded = true;
+        const QJsonObject o = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link-sends.json"))).object();
+        for (auto it = o.begin(); it != o.end(); ++it)
+            m_sends.insert(it.key(), qint64(it.value().toDouble()));
+    }
+    m_sends.removeIf([t](const QHash<QString, qint64>::iterator it) { return t - it.value() > 2 * 86400000LL; });
+    if (m_sends.contains(id))
+        return false;
+    m_sends.insert(id, t);
+    while (m_sends.size() > 1000) {
+        auto oldest = m_sends.begin();
+        for (auto it = m_sends.begin(); it != m_sends.end(); ++it)
+            if (it.value() < oldest.value())
+                oldest = it;
+        m_sends.erase(oldest);
+    }
+    QJsonObject o;
+    for (auto it = m_sends.cbegin(); it != m_sends.cend(); ++it)
+        o.insert(it.key(), double(it.value()));
+    m_chat->m_vault->write(QStringLiteral("link-sends.json"), compact(o));
+    return true;
 }
 
 void Link::saveMirror()
@@ -108,8 +138,42 @@ QVariantList Link::companions() const
     ensureLoaded();
     QVariantList out;
     for (const Device &d : std::as_const(m_companions))
-        out << QVariantMap{{QStringLiteral("key"), d.key}, {QStringLiteral("name"), d.name}};
+        out << QVariantMap{{QStringLiteral("key"), d.key}, {QStringLiteral("name"), d.name}, {QStringLiteral("ok"), d.ok}};
     return out;
+}
+
+QVariantList Link::unchecked() const
+{
+    ensureLoaded();
+    QVariantList out;
+    auto add = [&](const Device &d) {
+        out << QVariantMap{{QStringLiteral("key"), d.key}, {QStringLiteral("name"), d.name},
+                           {QStringLiteral("emoji"), Trust::emojiCode(ChatCrypto::sharedKey(m_chat->m_priv, m_chat->m_pub, QByteArray::fromBase64(d.key.toLatin1())))}};
+    };
+    for (const Device &d : std::as_const(m_companions))
+        if (!d.ok)
+            add(d);
+    if (!m_phone.key.isEmpty() && !m_phone.ok)
+        add(m_phone);
+    return out;
+}
+
+void Link::confirm(const QString &key)
+{
+    ensureLoaded();
+    for (Device &d : m_companions)
+        if (d.key == key && !d.ok) {
+            d.ok = true;
+            save();
+            const Device copy = d;
+            syncAll(&copy);
+            return;
+        }
+    if (m_phone.key == key && !m_phone.ok) {
+        m_phone.ok = true;
+        save();
+        sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("sync")}});
+    }
 }
 
 QVariantList Link::mirror() const
@@ -179,11 +243,11 @@ QJsonObject Link::readCode(const QString &text)
     return {{QStringLiteral("k"), k}, {QStringLiteral("p"), jstr(o, "p")}, {QStringLiteral("n"), jstr(o, "n").left(40)}, {QStringLiteral("i"), jstr(o, "i")}};
 }
 
-QString Link::link(const QString &text)
+QString Link::link(const QString &text, bool confirmed)
 {
     ensureLoaded();
     if (!m_chat->ready())
-        return QStringLiteral("Unlock Chat first.");
+        return QStringLiteral("Unlock Huginn first.");
     if (text.indexOf(QString::fromLatin1(kPrefix)) < 0)
         return QStringLiteral("That isn't a link code. On the other device: Settings › Linked devices › Use as a companion.");
     const QJsonObject o = readCode(text);
@@ -195,13 +259,14 @@ QString Link::link(const QString &text)
     if (k == m_phone.key)
         return QStringLiteral("That device is the phone this one mirrors.");
     QString name = jstr(o, "n").trimmed();
-    const Device d{k, jstr(o, "p"), name.isEmpty() ? QStringLiteral("Linked device") : name};
+    const Device d{k, jstr(o, "p"), name.isEmpty() ? QStringLiteral("Linked device") : name, confirmed};
     m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == k; }), m_companions.end());
     m_companions << d;
     save();
     sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("i"), jstr(o, "i")}, {QStringLiteral("n"), m_chat->username()},
                           {QStringLiteral("p"), m_chat->mailbox()}});
-    syncAll(&d);
+    if (confirmed)
+        syncAll(&d);
     return QString();
 }
 
@@ -246,7 +311,10 @@ QJsonObject Link::mJson(const QVariantMap &m, int max) const
 // Every chat's latest messages to one device (or to every companion).
 void Link::syncAll(const Device *only)
 {
-    const QList<Device> to = only ? QList<Device>{*only} : m_companions;
+    QList<Device> to;
+    for (const Device &d : only ? QList<Device>{*only} : m_companions)
+        if (d.ok)
+            to << d;
     if (to.isEmpty())
         return;
     for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it) {
@@ -276,7 +344,8 @@ void Link::onMessage(const QString &peer, const QVariantMap &m)
     const QJsonObject json{{QStringLiteral("t"), QStringLiteral("msg")}, {QStringLiteral("peer"), peer}, {QStringLiteral("n"), m_chat->nameOf(peer)},
                            {QStringLiteral("m"), mJson(m, 2000)}, {QStringLiteral("d"), m_chat->chatDays(peer)}};
     for (const Device &d : std::as_const(m_companions))
-        sendTo(d, json);
+        if (d.ok)
+            sendTo(d, json);
 }
 
 // ------------------------------------------------------------------ room "link", either side
@@ -325,11 +394,11 @@ bool Link::receive(const QString &from, const QJsonObject &p)
         m_tokenUntil = 0;
         const QString n = jstr(p, "n").left(40).trimmed();
         const QString mb = jstr(p, "p");
-        m_phone = Device{from, mb.size() == 64 ? mb : QString(), n.isEmpty() ? QStringLiteral("Your phone") : n};
+        m_phone = Device{from, mb.size() == 64 ? mb : QString(), n.isEmpty() ? QStringLiteral("Your phone") : n, false};
         m_mirror.clear();
         save();
         saveMirror();
-        Q_EMIT m_chat->notice(QStringLiteral("Linked. %1's chats show here while it's online.").arg(m_phone.name));
+        Q_EMIT m_chat->notice(QStringLiteral("Check the 4 emoji with %1, then choose They match.").arg(m_phone.name));
         return true;
     }
     if (t == QLatin1String("unlink") && (comp || ph)) {
@@ -344,6 +413,10 @@ bool Link::receive(const QString &from, const QJsonObject &p)
         save();
         return true;
     }
+    // Nothing goes either way until this screen's emoji were checked.
+    const bool okHere = ph ? m_phone.ok : std::any_of(m_companions.cbegin(), m_companions.cend(), [&](const Device &d) { return d.key == from && d.ok; });
+    if (!okHere && (t == QLatin1String("chat") || t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("sync")))
+        return true;
     if (ph && t == QLatin1String("chat")) {
         Mirror m{jstr(p, "peer"), jstr(p, "n").left(40), {}, daysOf(p, Limits::kDefault)};
         for (const QJsonValue &v : p.value(QStringLiteral("msgs")).toArray())
@@ -383,8 +456,9 @@ bool Link::receive(const QString &from, const QJsonObject &p)
     }
     if (comp && t == QLatin1String("send")) {
         // The phone sends it as its own message, only to one of its contacts.
+        // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
         const QString peer = jstr(p, "peer"), text = jstr(p, "text").trimmed();
-        if (!text.isEmpty() && m_chat->isContact(peer))
+        if (!text.isEmpty() && m_chat->isContact(peer) && firstSend(jstr(p, "id")))
             m_chat->sendPrivate(peer, text.left(Chat::kMax));
         return true;
     }

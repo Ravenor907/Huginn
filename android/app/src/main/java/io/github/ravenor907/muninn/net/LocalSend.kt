@@ -61,6 +61,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         /** Huginn and Muninn add these; plain LocalSend apps don't chat. */
         val chatKey: String?, val chatName: String?, val app: String?,
         val seen: Long = System.currentTimeMillis(),
+        /** Cap s1: its chat key signed this certificate, so it really is that person's. Without (an older app), only an extra route. */
+        val proven: Boolean = false,
     ) {
         val canChat get() = chatKey != null
     }
@@ -82,6 +84,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     /** Extra routes (chat) served on the same port. Returns (status, json body) or null. */
     var extraRoute: ((method: String, path: String, body: String, ip: String) -> Pair<Int, String>?)? = null
+
+    /** Cap s1: the contact's chat key a hidden device's hint stands for, if it's one of mine. */
+    var hintKey: ((String) -> String?)? = null
+
+    /** Cap s1: my chat key vouching for my certificate, made once (the certificate never changes). */
+    private val proof: String? by lazy { tls?.let { Proof.route(identity.keys.private, identity.publicKey, it.fingerprint) } }
 
     private val _devices = MutableStateFlow<List<Device>>(emptyList())
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
@@ -132,7 +140,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private val stopSend = AtomicBoolean(false)
     @Volatile private var sendConn: HttpURLConnection? = null
 
-    /** Hidden from people nearby: no name goes out. The chat key still does, so contacts on the Wi-Fi find this phone. */
+    /**
+     * Hidden from people nearby: no name, chat key or mailbox goes out, only a hint that changes every day, which only
+     * contacts (who have the key) can match (cap s1). Either way the chat key's proof says this certificate is mine.
+     */
     fun info(): JSONObject = JSONObject()
         .put("alias", if (identity.visibleNearby) identity.deviceName else Identity.HIDDEN_NAME)
         .put("version", "2.1")
@@ -144,8 +155,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         .put("download", false)
         .put("chatApp", "muninn")
         .apply {
-            put("chatKey", identity.publicKey)
-            mailbox?.let { put("mailbox", it) }
+            if (identity.visibleNearby) {
+                put("chatKey", identity.publicKey)
+                mailbox?.let { put("mailbox", it) }
+            } else put("hint", Proof.hintNow(identity.publicKey))
+            proof?.let { put("chatProof", it) }
             if (identity.nearbyRoom) put("chatName", identity.username)
         }
 
@@ -193,6 +207,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
             while (running) {
                 Thread.sleep(60_000)
                 if (!running) break
+                // A sender that went quiet ends its session, whatever the Wi-Fi discovery is doing.
+                val s = session
+                if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
                 // Saving battery: off Wi-Fi nothing is announced; with the screen off only every 5 minutes.
                 val w = wifiLevel
                 if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
@@ -201,8 +218,6 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 val cutoff = System.currentTimeMillis() - 10 * 60_000
                 found.entries.removeIf { it.value.seen < cutoff }
                 publish()
-                val s = session
-                if (s != null && System.currentTimeMillis() - s.touched > 120_000) endSession(false, "${s.from} stopped sending.")
             }
         }
     }
@@ -276,17 +291,20 @@ class LocalSend(private val context: Context, val identity: Identity) {
             try {
                 val p = DatagramPacket(buf, buf.size)
                 udp?.receive(p) ?: return
+                // Only devices on this very network (not routed in from somewhere farther away).
+                if (!isNeighbour(p.address)) continue
                 val o = JSONObject(String(p.data, 0, p.length))
                 val fp = o.optString("fingerprint")
                 if (Tls.same(fp, fingerprint)) continue   // our own announcement
                 val ip = p.address.hostAddress ?: continue
-                remember(o, ip, "https")
-                if (o.optBoolean("announce", o.optBoolean("announcement", false))) {
-                    pool.execute {
-                        if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp)) {
-                            val reply = info().put("announce", false).toString().toByteArray()
-                            try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
-                        }
+                val announce = o.optBoolean("announce", o.optBoolean("announcement", false))
+                // A multicast message proves nothing: a device is only listed once its certificate answered (register).
+                if (!announce && known(ip, fp)) continue
+                if (!asking(ip)) continue
+                pool.execute {
+                    if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce) {
+                        val reply = info().put("announce", false).toString().toByteArray()
+                        try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
                     }
                 }
             } catch (e: Exception) {
@@ -321,21 +339,44 @@ class LocalSend(private val context: Context, val identity: Identity) {
         false
     }
 
-    /** [proven]: the fingerprint of a certificate the device actually showed us; it wins over what the message claims. */
+    /**
+     * [proven]: the fingerprint of a certificate the device actually showed us; it wins over what the message claims.
+     * Over HTTPS nothing is learned without one (a spoofed announce can't take over another device's entry).
+     */
     private fun remember(o: JSONObject, ip: String, fallback: String, proven: String? = null) {
+        val protocol = o.optString("protocol", fallback)
+        if (protocol == "https" && proven == null) return
         var id = proven ?: o.optString("fingerprint")
         if (id.isEmpty() || Tls.same(id, fingerprint)) return
-        val protocol = o.optString("protocol", fallback)
         if (protocol == "https") id = id.uppercase()   // certificate hashes: one spelling, so a device is listed once
         // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
         // claiming it with encryption off, which would skip the certificate check when sending.
         if (protocol != "https" && found[id]?.protocol == "https") return
+        // Cap s1: whose chat it is. A hidden device sends a hint only a contact can match; its proof must check out
+        // against this certificate. A wrong proof means it isn't theirs; no proof at all is an older app (not proven).
+        val claimed = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) }
+        val sig = o.optString("chatProof")
+        val ok = claimed != null && proven != null && sig.isNotEmpty() && Proof.routeOk(claimed, proven, sig)
+        val key = if (ok || sig.isEmpty()) claimed else null
         found[id] = Device(
             id, deviceName(o), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
             ip, o.optInt("port", PORT), protocol,
-            o.optString("chatKey").ifEmpty { null }, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null },
+            key, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null }, proven = ok,
         )
         publish()
+    }
+
+    /** Already listed at that address with that certificate. */
+    private fun known(ip: String, fp: String) = found[fp.uppercase()]?.let { it.ip == ip } == true
+
+    /** At most one register to an address every 10 s, whatever floods the multicast group. */
+    private val asked = ConcurrentHashMap<String, Long>()
+    private fun asking(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+        if (asked.size > 512) asked.entries.removeIf { now - it.value > 10_000 }
+        val last = asked[ip]
+        if (last != null && now - last < 10_000) return false
+        asked[ip] = now
+        return true
     }
 
     private fun publish() {
@@ -344,12 +385,26 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     fun device(id: String): Device? = found[id]
 
+    /**
+     * Where to reach [chatKey] on the Wi-Fi: a device whose chat key proved this certificate, newest first; one that
+     * couldn't (an older app) only when not [strict]. Never by name order, which anyone can game.
+     */
+    fun deviceFor(chatKey: String, strict: Boolean = false): Device? {
+        val all = found.values.filter { it.chatKey == chatKey }
+        return all.filter { it.proven }.maxByOrNull { it.seen } ?: if (strict) null else all.maxByOrNull { it.seen }
+    }
+
     // ------------------------------------------------------------------ server
+
+    /** At most this many connections at once: anything past it is closed straight away (nobody can pile them up). */
+    private val slots = java.util.concurrent.Semaphore(MAX_CONNECTIONS)
 
     private fun acceptLoop() {
         while (running) {
             val s: Socket = (try { server?.accept() } catch (e: Exception) { null }) ?: if (running) continue else return
-            pool.execute { try { handle(s) } catch (_: Exception) {} finally { try { s.close() } catch (_: Exception) {} } }
+            // Only devices on this very network: not over mobile data, a VPN or anything routed in from farther away.
+            if (!isNeighbour(s.inetAddress) || !slots.tryAcquire()) { try { s.close() } catch (_: Exception) {}; continue }
+            pool.execute { try { handle(s) } catch (_: Exception) {} finally { try { s.close() } catch (_: Exception) {}; slots.release() } }
         }
     }
 
@@ -381,14 +436,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun reply(out: OutputStream, code: Int, body: String = "") {
         val bytes = body.toByteArray()
         val reason = when (code) { 200 -> "OK"; 204 -> "No Content"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 403 -> "Forbidden"
-            404 -> "Not Found"; 409 -> "Conflict"; 422 -> "Unprocessable Entity"; 429 -> "Too Many Requests"; else -> "Error" }
+            404 -> "Not Found"; 409 -> "Conflict"; 413 -> "Payload Too Large"; 422 -> "Unprocessable Entity"; 429 -> "Too Many Requests"; else -> "Error" }
         out.write("HTTP/1.1 $code $reason\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
         out.write(bytes)
         out.flush()
     }
 
     private fun handle(s: Socket) {
-        s.soTimeout = 60_000
+        s.soTimeout = 15_000   // the request itself must come quickly; a transfer gets longer below
         // The certificate the sender showed, if any (LocalSend apps and newer Huginn and Muninn do).
         val peerFp: String? = if (s is SSLSocket) {
             s.soTimeout = 15_000   // a stalled handshake shouldn't hold a thread for a minute
@@ -399,9 +454,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         } else null
         // A sender that showed a certificate must claim that certificate's fingerprint, or it is
         // pretending to be another device: answer, but don't list it (LocalSend does the same).
+        // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
         val learn = { o: JSONObject, ip: String ->
             when {
-                peerFp == null -> remember(o, ip, "https")
+                peerFp == null -> if (o.optString("protocol", "https") == "https" && asking(ip))
+                    pool.execute { register(ip, o.optInt("port", PORT), "https", scan = false, expected = o.optString("fingerprint")) }
+                    else remember(o, ip, "http")
                 Tls.same(o.optString("fingerprint"), peerFp) -> remember(o, ip, "https", peerFp)
                 else -> {}
             }
@@ -411,13 +469,20 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val r = readRequest(input) ?: return
         val ip = (s.inetAddress as? Inet4Address)?.hostAddress ?: s.inetAddress.hostAddress ?: ""
         val length = r.headers["content-length"]?.toLongOrNull() ?: 0L
+        s.soTimeout = 60_000
 
         if (r.method == "POST" && r.path == "$API/upload") {
             upload(r, length, ip, out)
             return
         }
-        if (length > 8 * 1024 * 1024) { reply(out, 400); return }
-        val body = ByteArray(length.toInt()).also { var at = 0; while (at < it.size) { val n = input.read(it, at, it.size - at); if (n < 0) break; at += n } }
+        // Chat envelopes are at most 64 KB (protocol 9); other requests a little JSON. Read as it arrives, never all at once up front.
+        val most = if (r.path == "/api/huginn/v1/message") MAX_CHAT_BODY else MAX_BODY
+        if (length < 0 || length > most) { reply(out, 413); return }
+        val body = java.io.ByteArrayOutputStream(minOf(length, 64L * 1024).toInt()).also { b ->
+            val buf = ByteArray(16 * 1024)
+            var left = length
+            while (left > 0) { val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (n < 0) break; b.write(buf, 0, n); left -= n }
+        }.toByteArray()
         val text = String(body)
 
         extraRoute?.invoke(r.method, r.path, text, ip)?.let { (code, json) -> reply(out, code, json); return }
@@ -436,6 +501,20 @@ class LocalSend(private val context: Context, val identity: Identity) {
             }
             else -> reply(out, 404)
         }
+    }
+
+    /** "Wants to send" boxes turned down (or left unanswered) per address: past [PROMPTS] in 10 minutes, it has to wait. */
+    private val prompts = ConcurrentHashMap<String, ArrayDeque<Long>>()
+
+    private fun mayPrompt(ip: String, now: Long = System.currentTimeMillis()): Boolean {
+        val q = prompts[ip] ?: return true
+        synchronized(q) { while (q.isNotEmpty() && now - q.first() > 600_000) q.removeFirst(); return q.size < PROMPTS }
+    }
+
+    private fun turnedDown(ip: String, now: Long = System.currentTimeMillis()) {
+        if (prompts.size > 256) prompts.entries.removeIf { q -> synchronized(q.value) { q.value.all { now - it > 600_000 } } }
+        val q = prompts.getOrPut(ip) { ArrayDeque() }
+        synchronized(q) { q.addLast(now); while (q.size > PROMPTS) q.removeFirst() }
     }
 
     private fun prepare(text: String, ip: String, out: OutputStream, learn: (JSONObject, String) -> Unit) {
@@ -471,6 +550,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
             }
             return
         }
+        // Asking again and again from one address would keep a box up for a minute each time: past a few, wait.
+        if (!mayPrompt(ip)) { reply(out, 429); return }
         synchronized(decision) {
             pendingFiles = map; pendingFrom = alias; pendingIp = ip; answer = null
             val names = map.values.map { it.name.substringAfterLast('/') }.sorted()
@@ -481,6 +562,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             _request.value = null
             pendingFiles = null
             if (!yes) {
+                turnedDown(ip)
                 if (answer == null) messages.tryEmit(false to "No answer in a minute, so the files from $alias were turned down.")
                 reply(out, 403)
                 return
@@ -507,6 +589,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val f = sess.files[r.query["fileId"]]
         if (r.query["sessionId"] != sess.id) { reply(out, 409); return }
         if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
+        // Never more than the size it was accepted at: a sender can't fill the storage past what the person agreed to.
+        if (length > f.size) { reply(out, 413); return }
         // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg"). On a TV an
         // app waits in Muninn's own files instead, to be installed (ApkInstall) and then deleted.
         val keep = AppFiles.isApk(f.name) && (sess.kids || io.github.ravenor907.muninn.tv.KidMode.isTv(context))
@@ -564,6 +648,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val total = s.files.values.sumOf { it.size }
         val got = s.files.values.sumOf { if (it.done) it.size else it.received }
         _transfer.update { it.copy(done = got, total = total) }
+        NearbyService.progress()
         _items.value = s.files.values.map { it.toItem() } + history
     }
 
@@ -648,6 +733,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                                         val r = ins.read(buf); if (r < 0) break
                                         os.write(buf, 0, r); sent += r
                                         _transfer.update { it.copy(done = sent) }
+                                        NearbyService.progress()
                                     }
                                 }
                             }
@@ -687,7 +773,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         _transfer.value = if (active) Transfer(true, sending, status, 0, total) else Transfer()
         NearbyService.hold(context, active)
     }
-    fun closeProgress(done: Long, total: Long) = _transfer.update { it.copy(done = done, total = total) }
+    fun closeProgress(done: Long, total: Long) { _transfer.update { it.copy(done = done, total = total) }; NearbyService.progress() }
     fun closeItem(name: String, ok: Boolean, from: String = "") {
         val what = if (ok) "saved to ${Received.place(context)}" else "didn't arrive"
         history.add(0, Item(name, if (from.isEmpty()) what.replaceFirstChar { it.uppercase() } else "From $from · $what", if (ok) 1f else 0f, !ok))
@@ -749,9 +835,47 @@ class LocalSend(private val context: Context, val identity: Identity) {
         const val PORT = 53317
         const val GROUP = "224.0.0.167"
         const val API = "/api/localsend/v2"
+        /** A chat envelope (64 KB, protocol 9) with room to spare; and any other request's JSON (a long file list). */
+        const val MAX_CHAT_BODY = 96 * 1024L
+        const val MAX_BODY = 2 * 1024 * 1024L
+        const val MAX_CONNECTIONS = 32
+        const val PROMPTS = 3
+
+        /** On this very home network: a private address inside the subnet of one of this phone's own private addresses (Huginn's Lan::isNeighbour). */
+        fun isNeighbour(peer: InetAddress?): Boolean {
+            val p0 = peer ?: return false
+            val b = p0.address
+            val p = if (Lan.mapped(b)) InetAddress.getByAddress(b.copyOfRange(12, 16)) else p0
+            if (!Lan.isPrivate(p)) return false
+            return try {
+                NetworkInterface.getNetworkInterfaces().toList().any { nif ->
+                    nif.isUp && !nif.isLoopback && MOBILE.none { nif.name.startsWith(it) } &&
+                        nif.interfaceAddresses.any { e -> e.address != null && Lan.isPrivate(e.address) && Lan.inSubnet(p.address, e.address.address, e.networkPrefixLength.toInt()) }
+                }
+            } catch (e: Exception) { false }
+        }
 
         /** Devices are reached by IP and certificates carry no names: the fingerprint check replaces the name check. */
         private val anyHost = HostnameVerifier { _, _ -> true }
+
+        /**
+         * A JSON POST straight to [addr] ("ip:port") on the same network (moving to another device, cap x1): HTTPS with
+         * any certificate first (everything inside is sealed), then HTTP. (status, body), or null when it can't connect.
+         */
+        fun postTo(addr: String, path: String, json: String): Pair<Int, String>? {
+            for (scheme in listOf("https", "http")) try {
+                val c = URL("$scheme://$addr$path").openConnection() as HttpURLConnection
+                if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = anyHost }
+                c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(json.toByteArray()) }
+                val code = c.responseCode
+                val text = (if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readBytes()) } ?: ""
+                c.disconnect()
+                return code to text
+            } catch (e: Exception) {}
+            return null
+        }
 
         /** Mobile-data interfaces (often on 10.x addresses, which look like a home network). */
         private val MOBILE = listOf("rmnet", "ccmni", "pdp", "clat", "v4-", "tun", "dummy", "ifb", "r_rmnet", "seth", "usb")

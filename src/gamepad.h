@@ -53,6 +53,7 @@ Q_SIGNALS:
 
 private:
     void poll();
+    int pollInterval() const;
     void open(int index);
     void down(const QString &button, bool repeats);
     void up(const QString &button);

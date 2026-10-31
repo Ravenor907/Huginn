@@ -21,9 +21,8 @@ Rectangle {
     readonly property string status: ended ? "" : Calls.muted ? "You're muted" : ""
 
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
-    function endCall() {
-        Ui.sure("End the call?", "Your call with " + Calls.peerName + " ends for both of you.", "End call", () => Calls.hangup(), false, true)
-    }
+    // Ends at once, as on Muninn.
+    function endCall() { Calls.hangup() }
 
     MouseArea { anchors.fill: parent }   // nothing underneath takes clicks during a call
 
@@ -37,8 +36,8 @@ Rectangle {
         Row {
             spacing: Theme.px(10)
             Repeater {
-                model: (Calls.directTried ? [{ label: "Internet (direct)", on: Calls.directLive }] : [])
-                       .concat([{ label: "Internet (relay)", on: Calls.relayLive && !(Calls.directLive || Calls.wifiLive) }, { label: "Wi-Fi", on: Calls.wifiLive },
+                model: (Calls.directTried ? [{ label: "Internet, straight to them", on: Calls.directLive }] : [])
+                       .concat([{ label: "Internet", on: Calls.relayLive && !(Calls.directLive || Calls.wifiLive) }, { label: "Wi-Fi", on: Calls.wifiLive },
                                 { label: "Bluetooth", on: Calls.bleLive }])
                 Rectangle {
                     height: Theme.px(32)

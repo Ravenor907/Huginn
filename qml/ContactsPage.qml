@@ -1,8 +1,8 @@
 import QtQuick
 import Huginn
 
-// Settings › Chat › Contacts: everyone you're in touch with or met close by, who's blocked, and who's
-// in the Trash (removed, kept 30 days).
+// Contacts (on the rail): everyone you're in touch with or met close by, who's blocked, and who's
+// in the Trash (kept 30 days). A right click opens the person panel.
 // Someone renamed here shows as "Nickname (their name)".
 // Blocking lives here, not in the chat itself.
 Rectangle {
@@ -21,17 +21,19 @@ Rectangle {
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
     function stateText(p) {
         if (p.trashed) return "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left"
-        return p.blocked ? "Blocked · A to unblock" : (p.contact ? "In touch" : "Met close by") + (p.verified ? " · verified" : "")
+        return p.blocked ? "Blocked" : (p.contact ? "In touch" : "Met close by") + (p.verified ? " · verified" : "")
     }
 
     // ------------------------------------------------------------- middle column: people
     Rectangle {
         id: middle
+        // Portrait: the list on top, the rest under it.
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: Ui.dock
-        width: Theme.listWidth
+        anchors.bottomMargin: Theme.portrait ? parent.height * 0.45 : Ui.dock
+        width: Theme.portrait ? parent.width : Theme.listWidth
         color: Theme.column
+        Brushed {}
         PageHeader { id: header; width: parent.width; title: "Contacts" }
 
         ListView {
@@ -47,8 +49,8 @@ Rectangle {
             delegate: Rectangle {
                 readonly property bool on: page.active && page.row === index
                 width: list.width
-                height: Theme.px(56)
-                radius: Theme.px(10)
+                height: Theme.px(44)
+                radius: Theme.radius
                 color: on ? Theme.tile : hover.hovered ? Theme.raised : "transparent"
                 border.width: on ? Theme.focusWidth : 0
                 border.color: Theme.accent
@@ -69,7 +71,15 @@ Rectangle {
                     Text { width: parent.width; elide: Text.ElideRight; text: page.stateText(modelData); color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
                 HoverHandler { id: hover }
-                TapHandler { onTapped: { page.row = index; page.choose() } }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onTapped: (point, button) => {
+                        page.row = index
+                        if (button === Qt.RightButton && !modelData.trashed) Ui.showPerson(modelData.key, modelData.name, {})
+                        else page.choose()
+                    }
+                    onLongPressed: if (!modelData.trashed) Ui.showPerson(modelData.key, modelData.name, {})
+                }
             }
         }
         Text {
@@ -84,9 +94,9 @@ Rectangle {
 
     // ------------------------------------------------------------- main column: the person
     Item {
-        anchors.left: middle.right
+        anchors.left: Theme.portrait ? parent.left : middle.right
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: Theme.portrait ? middle.bottom : parent.top
         anchors.bottom: parent.bottom
         PageHeader { id: mainHead; width: parent.width; carved: false; title: page.person ? page.person.name : "" }
         Column {
@@ -136,34 +146,36 @@ Rectangle {
         }
         const ids = Chat.foldersOf(p.key)
         const inFolders = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
-        const items = [{ name: "Message", url: "open" }, { name: "Rename", detail: "A name only you see", url: "rename" },
+        const items = [{ name: "Message", url: "open" }, { name: "Nickname", detail: "A name only you see", url: "rename" },
+                       { name: "Role and permissions", detail: "Everything about them in one place", url: "person" },
                        { name: "Folders", detail: inFolders.length ? "In " + inFolders.join(", ") : "Family, Work, Folk or your own", url: "folders" }]
         if (!p.verified) items.push({ name: "Check code", detail: "Make sure nobody is in between", url: "code" })
-        items.push({ name: "Direct calls: " + Calls.trustText(p.key), detail: Calls.trusted(p.key) ? "Calls skip the relay when they trust you too. A turns it off"
-                                                                                                : "Calls go through the relay; neither of you sees the other's IP. A turns direct on", url: "trust" })
+        items.push({ name: "Faster calls with " + p.name + ": " + Calls.trustText(p.key), detail: Calls.trusted(p.key) ? "Calls go straight between you when they choose this too. They can see your internet address"
+                                                                                                : "Off: calls go the long way round, so neither of you sees the other's internet address", url: "trust" })
         items.push({ name: "Block", detail: "Nothing from them reaches you. They aren't told", url: "block" })
-        items.push({ name: "Remove", detail: "Goes to the Trash with your chat. Restore brings both back within 30 days", url: "remove" })
+        items.push({ name: "Move to trash", detail: "Your chat goes too. Restore brings both back within 30 days", url: "remove" })
         Ui.pickFrom(p.name, [{ header: "", items: items }], a => {
             if (a === "open") Ui.openPage("dms", { open: p.key })
+            else if (a === "person") Ui.showPerson(p.key, p.name, {})
             else if (a === "code") PeopleActions.checkCode(p.key)
             else if (a === "rename")
-                Ui.ask("Rename " + Chat.realNameOf(p.key), "Only on this computer, they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
+                Ui.ask("Nickname for " + Chat.realNameOf(p.key), "Only on this computer; they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(p.key), "Save",
                        t => Chat.setNickname(p.key, t), false, true)
             else if (a === "folders") pickFolders(p)
             else if (a === "trust") {
                 const on = !Calls.trusted(p.key)
                 Calls.setTrusted(p.key, on)
-                Ui.say(on ? "Calls with " + p.name + " go direct when they trust you too." : "Calls with " + p.name + " go through the relay only.")
+                Ui.say(on ? "Calls with " + p.name + " go straight between you when they choose this too." : "Calls with " + p.name + " go the long way round.")
             }
             else if (a === "block") { Chat.block(p.key, true); Ui.say(p.name + " blocked.") }
-            else if (a === "remove") Ui.sure("Remove " + p.name + "?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
-                                         "Remove", () => { Chat.removeContact(p.key); Ui.say(p.name + " is in the Trash.") }, false, true)
+            else if (a === "remove") Ui.sure("Move " + p.name + " to trash?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
+                                         "Move to trash", () => { Chat.removeContact(p.key); Ui.say(p.name + " is in the Trash.") }, false, true)
         })
     }
     // Folders are only on this computer; Direct messages shows them as filters.
     function pickFolders(p) {
         const ids = Chat.foldersOf(p.key)
-        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: ids.indexOf(f.id) >= 0 ? "In it · A takes them out" : "A puts them in" }))
+        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: ids.indexOf(f.id) >= 0 ? "In it · choose to take them out" : "Choose to put them in" }))
         items.push({ name: "New folder", detail: "Make one and put them in it", url: "+" })
         Ui.pickFrom("Folders for " + p.name, [{ header: "Only on this computer", items: items }], id => {
             if (id === "+") {

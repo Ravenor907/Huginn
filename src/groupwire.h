@@ -49,8 +49,11 @@ struct Verdict {
     QString why;
 };
 Verdict accept(const QJsonObject *cur, const QJsonObject &next);
-// The conflict rule on its own: true when a wins over b.
+// The conflict rule on its own: true when a wins over b (higher v, then the owner's, then the lower hash).
 bool wins(const QJsonObject &a, const QJsonObject &b);
+// Cap s1: a new state may be at most this many versions ahead; at the same version the one its owner signed wins.
+const qint64 kMaxAhead = 1000;
+bool byOwner(const QJsonObject &s);
 
 // 2.3
 QString envelopeId(const QString &logicalId, const QString &recipientKey);
@@ -80,6 +83,15 @@ QString code(const QString &g, const QString &groupName, const QString &adminKey
              const QString &token, qint64 expiresMs);
 // {g, name, admin, adminName, mailbox, token, expires (ms), expired} or empty when it isn't one.
 QVariantMap parseCode(const QString &text, qint64 nowMs);
+
+// Cap j1 (section 17): invite links. A link is the add page's address with a group code after "#".
+extern const char kAddPage[];         // "https://ravenor907.github.io/Huginn-Muninn/add/#"
+extern const qint64 kNeverS;          // "never" as a code's x: 100 years on, so older apps don't call it expired
+const int kMaxLinkUses = 100;
+const int kMaxLinks = 50;
+QString linkId(const QString &token); // first 16 hex of SHA-256("link|" + token)
+// Whether a link still lets someone in, decided only on the admin that counts it (17.3).
+bool linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool makerMay, qint64 nowMs);
 
 // Checks tests/proto06-vectors.json (group section and canonical JSON, with chat-vectors.json next
 // to it for the keys), plus state limits, signing and group codes. Prints what it found.

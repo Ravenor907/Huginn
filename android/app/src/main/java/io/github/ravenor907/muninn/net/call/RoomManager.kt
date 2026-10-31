@@ -14,7 +14,12 @@ import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Proto06
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -116,7 +121,12 @@ object RoomManager {
 
     fun init(app: Muninn) {
         this.app = app
-        exec.scheduleWithFixedDelay({ _presence.value = _presence.value + 1 }, 60, 60, TimeUnit.SECONDS)
+        // Who is in a room ages out: a screen showing it looks again every minute, only while one is showing it.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            _presence.subscriptionCount.map { it > 0 }.distinctUntilChanged().collectLatest { watched ->
+                while (watched) { delay(60_000); _presence.value = _presence.value + 1 }
+            }
+        }
     }
 
     private fun now() = System.currentTimeMillis()
