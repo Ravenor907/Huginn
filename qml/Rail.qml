@@ -150,6 +150,7 @@ Rectangle {
             color: rb.entry.kind === "raven" ? Theme.raised
                  : rb.entry.kind === "group" ? (rb.here ? Theme.accent : rb.tone.bg)
                  : rb.entry.kind === "add" ? (rb.on || hover.hovered ? Theme.raised : "transparent")
+                 : rb.entry.id === "settings" ? "transparent"
                  : rb.on || rb.here || hover.hovered ? Theme.raised : "transparent"
             border.width: rb.on ? Theme.focusWidth : 0
             border.color: rb.entry.kind === "group" && rb.here ? Theme.text : Theme.accent
@@ -189,10 +190,30 @@ Rectangle {
                     }
                 }
             }
-            // Settings: the valknut, black and grey.
+            // Settings: no tile behind the knot. Open, a soft glow comes from its centre (a touch below the middle, where the knot's weight is).
+            Shape {
+                visible: rb.entry.id === "settings" && (rb.here || hover.hovered)
+                opacity: rb.here ? 1 : 0.6
+                anchors.centerIn: parent
+                anchors.verticalCenterOffset: Theme.px(1)
+                width: Theme.px(44); height: width
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    strokeColor: "transparent"
+                    fillGradient: RadialGradient {
+                        centerX: Theme.px(22); centerY: centerX; centerRadius: centerX; focalX: centerX; focalY: centerX
+                        GradientStop { position: 0.0; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.35) }
+                        GradientStop { position: 0.5; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.12) }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                    PathAngleArc { centerX: Theme.px(22); centerY: centerX; radiusX: centerX; radiusY: centerX; startAngle: 0; sweepAngle: 360 }
+                }
+            }
+            // Settings: the valknut, black and grey, lifted 2 so it looks centred.
             Image {
                 visible: rb.entry.id === "settings"
                 anchors.centerIn: parent
+                anchors.verticalCenterOffset: -Theme.px(2)
                 source: "assets/valknut.png"
                 width: Theme.px(26); height: width
                 sourceSize.width: 128; sourceSize.height: 128

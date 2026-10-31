@@ -7,6 +7,7 @@ Newest first. Huginn and Muninn are released together, with the same version num
 | | |
 |---|---|
 | **No more pairing requests** | Fixed: a Kids' TV or phone could make PCs, phones and TVs nearby ask to pair over Bluetooth. Google Nearby is gone from Muninn completely, so it no longer leans on Google Play services. Close-by chat goes over Muninn's own Bluetooth and Wi-Fi. Update every TV and phone. |
+| **A cleaner Settings button** | No circle behind the knot, the knot sits centered, and a soft glow shows while Settings is open, on every screen of both apps. |
 
 ## 0.95
 

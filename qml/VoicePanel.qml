@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Huginn
 
 // You, at the bottom left under the rail and the list, like Discord: your name and status with Mute,
@@ -218,12 +219,32 @@ Rectangle {
             Rectangle {
                 width: Theme.px(32); height: width
                 radius: Theme.radius
-                color: setHover.hovered || (Ui.main && Ui.main.section === "settings") ? Theme.tile : "transparent"
+                color: "transparent"
                 Accessible.role: Accessible.Button
                 Accessible.name: "Settings (Ctrl+,)"
                 Accessible.onPressAction: Ui.openPage("settings", {})
+                // Settings: no tile behind the knot. Open, a soft glow comes from its centre (a touch below the middle, where the knot's weight is).
+                Shape {
+                    visible: setHover.hovered || (Ui.main && Ui.main.section === "settings")
+                    opacity: Ui.main && Ui.main.section === "settings" ? 1 : 0.6
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: Theme.px(1)
+                    width: Theme.px(36); height: width
+                    preferredRendererType: Shape.CurveRenderer
+                    ShapePath {
+                        strokeColor: "transparent"
+                        fillGradient: RadialGradient {
+                            centerX: Theme.px(18); centerY: centerX; centerRadius: centerX; focalX: centerX; focalY: centerX
+                            GradientStop { position: 0.0; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.35) }
+                            GradientStop { position: 0.5; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.12) }
+                            GradientStop { position: 1.0; color: "transparent" }
+                        }
+                        PathAngleArc { centerX: Theme.px(18); centerY: centerX; radiusX: centerX; radiusY: centerX; startAngle: 0; sweepAngle: 360 }
+                    }
+                }
                 Image {
                     anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -Theme.px(1.5)
                     source: "assets/valknut.png"
                     width: Theme.px(20); height: width
                     sourceSize.width: 64; sourceSize.height: 64
