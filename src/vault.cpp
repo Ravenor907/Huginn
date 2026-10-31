@@ -300,9 +300,7 @@ bool Vault::unlock(const QString &secret)
     m_weak = !strongSecret(secret);
     // A lock from before 0.95 (PBKDF2 only): store it again the new way, now that the secret is known.
     bool redo = o.value(QStringLiteral("kdf")).toString().isEmpty();
-#ifdef Q_OS_WIN
-    redo = redo || !dpapi;   // and on Windows, locked to this account too
-#endif
+    redo = redo || dpapi;   // a test build tied it to the Windows account: store it again without that
     if (redo)
         writeLock(secret, o.value(QStringLiteral("kind")).toString() == QLatin1String("pattern"));
     m_screenLocked = false;
@@ -355,13 +353,9 @@ bool Vault::writeLock(const QString &secret, bool pattern) const
         o.insert(QStringLiteral("r"), int(kScryptR));
         o.insert(QStringLiteral("p"), int(kScryptP));
     }
-    QByteArray wrapped = seal(kek, m_key);
-    // Windows: also locked to this Windows account on this computer, so a copied file can't be guessed at elsewhere.
-    QByteArray bound;
-    if (Platform::protect(wrapped, &bound)) {
-        wrapped = bound;
-        o.insert(QStringLiteral("dpapi"), 1);
-    }
+    // Only the lock itself guards the key: nothing outside Huginn (no Windows account binding), so the folder
+    // opens on any computer with the right pattern or password.
+    const QByteArray wrapped = seal(kek, m_key);
     o.insert(QStringLiteral("wrapped"), QString::fromLatin1(wrapped.toBase64()));
     QSaveFile f(keyFile());
     if (!f.open(QIODevice::WriteOnly))

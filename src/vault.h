@@ -12,8 +12,8 @@
 
 // Everything Huginn's chat keeps (messages, photos, voice, contacts, keys) is encrypted on disk with
 // one random 256-bit data key (AES-256-GCM). That key is locked by the person's pattern or password
-// (Argon2id, or scrypt where OpenSSL has no Argon2id; PBKDF2 before 0.95, changed on the next unlock),
-// and on Windows also by the Windows account (DPAPI). A lock is required: until one is set, or while
+// (Argon2id, or scrypt where OpenSSL has no Argon2id; PBKDF2 before 0.95, changed on the next unlock).
+// Nothing outside Huginn is involved. A lock is required: until one is set, or while
 // locked, nothing is readable, even by Huginn.
 class Vault : public QObject
 {
