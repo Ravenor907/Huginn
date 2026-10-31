@@ -45,7 +45,9 @@ object TvUpdate {
             try {
                 val now = System.currentTimeMillis()
                 val p = prefs(app)
-                if (now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
+                // k7 (7.12): a parent who turned automatic checks off turns them off here too; otherwise they stay on.
+                val auto = KidTv.state.value.cfg?.upd ?: true
+                if (auto && now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
                     p.edit().putLong("lastDailyCheck", now).apply()
                     checkNow(app)
                 }

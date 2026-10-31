@@ -70,6 +70,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. 0.5 apps ignor
 | `f1` | files over the internet: room `file` and photo pieces with `kind:"file"` (section 14). Muninn from 0.93, Huginn from 0.94. |
 | `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn from 0.94. |
 | `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only, from 0.95. |
+| `k7` | kids' TV config field `upd`, automatic update checks (7.12). Muninn only, from 0.95. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn from 0.95. |
 | `x1` | moving to another device (section 18). Muninn and Huginn from 0.95. |
 | `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn from 0.95. |
@@ -105,7 +106,7 @@ From 0.95:
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `m1` for rooms `rich`, `mx` and
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `k7` for a config with `upd`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). 0.5 would answer 400 and drop it.
 - UI: the call button on a 0.5 contact says "Needs Muninn or Huginn 0.6"; inviting a 0.5 contact to a group
   says the same and sends nothing.
@@ -913,8 +914,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic` and the k5 field `nr`
-(7.5, 7.10); `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr` and the k7 field `upd`
+(7.5, 7.10, 7.12); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1113,6 +1114,18 @@ can stand in the way. Reference `tools/p95_ref.py` (`tv`), vectors `tests/p95-ve
 
 Well-formed (reference `tv_ok`): exactly the fields above, keys are base64 text, names 1 to 40 characters, `r` 16 to 64
 characters, `p` empty or 64 hex, `cfg` an object.
+
+### 7.12 Automatic update checks on the TV (`k7`)
+
+A TV whose app says `k7` takes one more optional config field. A parent's app puts it in only for such a TV (and only
+next to the k2 fields), set to that phone's own "Check for updates automatically".
+
+| field | value | absent means | what the TV does |
+|---|---|---|---|
+| `upd` | true or false | true | true: it looks for a new release on its own (at start and once a day). false: it never asks GitHub by itself; a parent's `update` (7.5) still makes it check |
+
+Anything else (a number, text) makes the config malformed. When the parent changes the switch, the parent's app sends
+a new config to every TV that said `k7`. Vectors: `tv.configs.cfg6` (`upd` false) and step 9 of `tv.accept`.
 
 ## 8. Message types
 

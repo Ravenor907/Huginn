@@ -163,7 +163,8 @@ object TvParent {
             val me = app.identity.publicKey
             val v = maxOf(t.v, t.applied) + 1
             val quick = t.quick.filter { it.text.isNotBlank() }.take(TvRules.MAX_QUICK)
-            val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null) else null
+            val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null,
+                if (k7(app, key)) app.identity.autoUpdate else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the TV (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -286,7 +287,8 @@ object TvParent {
                     put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version))
                     if (done) tries.remove(fromKey)
                     // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
-                    resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC || (k5(app, fromKey) && t.nr != TvRules.NR_BOTH))
+                    resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC || (k5(app, fromKey) && t.nr != TvRules.NR_BOTH)
+                        || (k7(app, fromKey) && !app.identity.autoUpdate))
                 }
             }
         }
@@ -350,6 +352,14 @@ object TvParent {
 
     /** The TV's app said "k5": it takes noise removal in its config. */
     fun k5(app: Muninn, key: String): Boolean = "k5" in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The TV's app said "k7": it follows this phone's "Check for updates automatically" (7.12). */
+    fun k7(app: Muninn, key: String): Boolean = "k7" in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** This phone's "Check for updates automatically" changed: every TV that takes it gets a new config. */
+    fun autoUpdateChanged(app: Muninn) {
+        for (t in _tvs.value.values) if (!t.disconnecting && k7(app, t.key)) change(t.key) { it }
+    }
 
     /** The TV's app said "k3": it reports its level and storage and takes Clear history. */
     fun k3(app: Muninn, key: String): Boolean = "k3" in (app.contacts.get(key)?.caps ?: emptySet())

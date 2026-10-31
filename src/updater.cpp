@@ -54,6 +54,8 @@ void Updater::startAutoUpdate()
 {
     if (!System::inFlatpak() && !WinUpdate::supported())
         return;   // a development build updates by rebuilding
+    if (m_settings && !m_settings->autoUpdate())
+        return;   // "Check for updates automatically" is off: nothing asks GitHub until Check now
     fetch(false, true);
 }
 

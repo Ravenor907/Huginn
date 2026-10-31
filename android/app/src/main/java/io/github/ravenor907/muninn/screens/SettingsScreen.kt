@@ -445,13 +445,17 @@ private fun TvPage(app: Muninn) {
 @Composable
 private fun AboutPage(app: Muninn) {
     val up by app.updater.state.collectAsState()
+    var auto by remember { mutableStateOf(app.identity.autoUpdate) }
     Panel {
         Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal)
-        Text("Muninn checks for a new version every time you open it.", style = Type.small)
+        Text(if (auto) "Muninn checks for a new version every time you open it." else "Muninn only checks when you tap Check now.", style = Type.small)
         if (up.busy && up.progress > 0f) Bar(up.progress, Modifier.padding(top = 6.dp))
         MButton(if (up.ready) "Install ${up.latest}" else "Check now", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = !up.busy) {
             if (up.ready) app.updater.download() else app.updater.check()
         }
+    }
+    ToggleRow("Check for updates automatically", "Asks GitHub for a new version when Muninn opens. A Kids' TV you look after follows this", auto) {
+        auto = it; app.identity.autoUpdate = it; io.github.ravenor907.muninn.tv.TvParent.autoUpdateChanged(app)
     }
     Section("About")
     Text("Muninn ${app.updater.current}: private chat and file sharing, Huginn's phone companion. Sends and receives with LocalSend. Made by Ravenor907. GPL-3.0.", style = Type.small)
