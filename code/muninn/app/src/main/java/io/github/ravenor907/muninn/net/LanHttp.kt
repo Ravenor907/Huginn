@@ -51,7 +51,7 @@ class LanHttp private constructor(url: URL) : HttpURLConnection(url) {
     }
 
     private fun head(length: Long): ByteArray {
-        val path = (u.rawPath?.ifEmpty { null } ?: "/") + (u.rawQuery?.let { "?$it" } ?: "")
+        val path = (u.path?.ifEmpty { null } ?: "/") + (u.query?.let { "?$it" } ?: "")
         val b = StringBuilder().append(requestMethod).append(' ').append(path).append(" HTTP/1.1\r\n")
             .append("Host: ").append(u.host).append(':').append(port(u)).append("\r\n")
             .append("Connection: close\r\n")

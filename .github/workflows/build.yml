@@ -599,6 +599,8 @@ jobs:
           cat tour.log
           n=$(ls tour-windows/*.png 2>/dev/null | wc -l)
           w=$(grep -ciE "warning|qml:" tour.log || true)
+          # Each warning line as its own annotation, so they can be read without the log.
+          grep -iE "qml|warning" tour.log | head -n 25 | cut -c1-300 | tr -d '\r' | sed 's/%/%25/g' | while IFS= read -r l; do echo "::warning title=Windows tour line::$l"; done || true
           if [ $s -ne 0 ] || [ "$n" -eq 0 ]; then
             e=$(tail -n 20 tour.log | cut -c1-240 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::warning title=Windows tour (exit $s, $n screenshots)::$e"
