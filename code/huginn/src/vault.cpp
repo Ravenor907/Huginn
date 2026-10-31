@@ -1137,9 +1137,10 @@ bool Vault::backupSelfTest()
         weakS.insert(QStringLiteral("p"), 1);
         QJsonObject none = h;
         none.remove(QStringLiteral("kdf"));
-        check("weakened key settings refused", unpackBackup(withHeader(weakA), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1
-                                                   && unpackBackup(withHeader(weakS), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1
-                                                   && unpackBackup(withHeader(none), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1);
+        Files refused;
+        check("weakened key settings refused", unpackBackup(withHeader(weakA), QStringLiteral("correct horse"), QStringLiteral("huginn"), &refused, &created, &error) == 1
+                                                   && unpackBackup(withHeader(weakS), QStringLiteral("correct horse"), QStringLiteral("huginn"), &refused, &created, &error) == 1
+                                                   && unpackBackup(withHeader(none), QStringLiteral("correct horse"), QStringLiteral("huginn"), &refused, &created, &error) == 1);
     }
 
     // Restore onto another computer's chat: its own lock stays, everything else is replaced.
