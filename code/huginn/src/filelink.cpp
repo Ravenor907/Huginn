@@ -455,7 +455,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
     x->state = QStringLiteral("offered");
     x->note = QStringLiteral("Waiting for them to accept");
     put(x, true);
-    // Nothing back within 2 minutes: give up (their device may be off; send it again later).
+    // Nothing back in time: give up (their device may be off; send it again later). A big file waits
+    // longer, since the other side asks before taking it.
     x->wait = new QTimer(this);
     x->wait->setSingleShot(true);
     const QString id = x->id;
@@ -464,7 +465,7 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         if (x && x->state == QLatin1String("offered"))
             fail(x, QStringLiteral("%1 didn't answer. Try again when they're online.").arg(who(x->peer)));
     });
-    x->wait->start(120000);
+    x->wait->start(x->size < kAutoBytes ? kAnswerMs : kAskAnswerMs);
 }
 
 void FileLink::onSignal(const QString &from, const QJsonObject &p)
@@ -488,9 +489,25 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->theirs = directOf(p.value(QStringLiteral("c")).toArray());
         x->mine = false;
         x->dir = 1;
+        m_x.insert(id, x);
+        if (x->size >= kAutoBytes) {
+            // A big file asks first, as from anyone else. The sender gives up after kAskAnswerMs.
+            x->state = QStringLiteral("asking");
+            x->note = QStringLiteral("Wants to send you a big file. Accept or decline");
+            put(x, true);
+            Q_EMIT notice(QStringLiteral("%1 wants to send you %2. Accept or decline it in your chat with them.").arg(who(from), x->name));
+            x->wait = new QTimer(this);
+            x->wait->setSingleShot(true);
+            connect(x->wait, &QTimer::timeout, this, [this, id] {
+                Xfer *x = m_x.value(id);
+                if (x && x->state == QLatin1String("asking"))
+                    fail(x, QStringLiteral("Not taken in time. Ask them to send it again."), false);
+            });
+            x->wait->start(kAskAnswerMs);
+            return;
+        }
         x->state = QStringLiteral("connecting");
         x->note = QStringLiteral("From %1").arg(who(from));
-        m_x.insert(id, x);
         put(x, true);
         Q_EMIT notice(QStringLiteral("%1 is sending you %2.").arg(who(from), x->name));
         acceptOffer(x);
@@ -523,7 +540,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
             }
             return;
         }
-        fail(x, QStringLiteral("%1 can't take files directly from you. Both of you need Direct calls on for each other.").arg(who(peer)));
+        fail(x, QStringLiteral("%1 didn't take the file. They declined it, or they can't take files directly from you (both of you need Direct calls on for each other).").arg(who(peer)));
     }
 }
 
@@ -827,6 +844,32 @@ void FileLink::fail(Xfer *x, const QString &why, bool tell)
     end(x);
     if (tell)
         Q_EMIT notice(why);
+}
+
+void FileLink::accept(const QString &id)
+{
+    Xfer *x = m_x.value(id);
+    if (!x || x->mine || x->state != QLatin1String("asking"))
+        return;
+    if (x->wait) {
+        x->wait->stop();
+        x->wait->deleteLater();
+        x->wait = nullptr;
+    }
+    x->state = QStringLiteral("connecting");
+    x->note = QStringLiteral("From %1").arg(who(x->peer));
+    put(x, true);
+    acceptOffer(x);
+}
+
+void FileLink::decline(const QString &id)
+{
+    Xfer *x = m_x.value(id);
+    if (!x || x->mine || x->state != QLatin1String("asking"))
+        return;
+    signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
+    end(x);
+    dismiss(id);
 }
 
 void FileLink::cancel(const QString &id)

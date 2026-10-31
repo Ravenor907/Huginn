@@ -30,7 +30,8 @@ fun LinkCheck() {
     val phone by Link.phone.collectAsState()
     val d = companions.firstOrNull { !it.ok } ?: phone?.takeIf { !it.ok } ?: return
     val emoji = Link.emojiWith(d.key)
-    AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
+    // Back is Don't link; a tap beside the dialog does nothing.
+    AlertDialog(onDismissRequest = { Link.unlink(d.key) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
         title = { Text("Check the link with ${d.name}", style = Type.big) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("These must be the same on both screens:", style = Type.normal)

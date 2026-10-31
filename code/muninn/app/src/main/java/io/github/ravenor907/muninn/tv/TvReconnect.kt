@@ -127,6 +127,17 @@ object TvReconnect {
     /** The newcomer may sign the TV's next config by themselves: 24 hours went by and nobody blocked. */
     fun orphanFrom(k: String) = _joiner.value?.let { it.k == k && it.orphan } == true
 
+    /**
+     * The TV was disconnected: whoever was waiting to look after it goes (the banner with them), and the last
+     * "Connect a parent" code stops working, so nobody from before can take over the TV once a new parent pairs it.
+     */
+    fun clear(a: Muninn) {
+        app = a
+        token = ""; tokenUntil = 0L
+        save(a, null)
+        _requests.value = emptyList()
+    }
+
     /** A config made someone a parent: the reconnect is done. */
     fun configured(parents: Collection<String>) { val a = app ?: return; _joiner.value?.let { if (it.k in parents) save(a, null) } }
 

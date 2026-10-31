@@ -193,6 +193,8 @@ object Ringer {
     }
 
     fun missed(c: Context, name: String, key: String) {
+        // Extreme battery saver: no notifications; the Calls tab still lists it.
+        if (try { (c.applicationContext as Muninn).power.extreme } catch (_: Exception) { false }) return
         channels(c)
         val who = shown(c, name)
         val open = PendingIntent.getActivity(c, key.hashCode() + 1, Intent(c, io.github.ravenor907.muninn.MainActivity::class.java)

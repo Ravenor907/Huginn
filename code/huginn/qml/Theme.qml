@@ -10,16 +10,43 @@ QtObject {
     readonly property real textScale: Number(Settings.textSize) / 100
     readonly property bool motion: !Settings.reduceMotion
 
+    // Seasonal: each season's look and the days it runs, as month * 100 + day, both ends included (a
+    // range that wraps past the new year, like 1201 to 228, works too). The first that holds the day
+    // wins; with none, the last one. Only Autumn exists so far, so it runs all year.
+    function seasons() {
+        return [
+            { look: "autumn", name: "Autumn", from: 101, to: 1231 }
+        ]
+    }
+    function seasonOn(d) {
+        const list = seasons()
+        const md = (d.getMonth() + 1) * 100 + d.getDate()
+        for (let i = 0; i < list.length; ++i) {
+            const s = list[i]
+            if (s.from <= s.to ? (md >= s.from && md <= s.to) : (md >= s.from || md <= s.to)) return s
+        }
+        return list[list.length - 1]
+    }
+    // Checked every hour, so a new season starts without a restart.
+    property date today: new Date()
+    property Timer dayTimer: Timer { interval: 3600000; running: true; repeat: true; onTriggered: theme.today = new Date() }
+    readonly property var season: seasonOn(today)
+
     // Settings › Look: "dark" (stone, iron and aged gold), "black" (true black, for OLED screens),
-    // "light" (parchment) or "autumn" (warm bark and leaves falling behind frosted panes).
-    // High contrast wins over all four.
-    readonly property string mode: ["black", "light", "autumn"].indexOf(Settings.theme) >= 0 ? Settings.theme : "dark"
+    // "light" (parchment) or "seasonal" (a look picked by the date, see seasons). choice is what was
+    // picked; mode is the look on screen ("autumn" while Seasonal shows Autumn). High contrast wins over all.
+    readonly property string choice: Settings.theme === "autumn" ? "seasonal"
+                                   : ["black", "light", "seasonal"].indexOf(Settings.theme) >= 0 ? Settings.theme : "dark"
+    readonly property string mode: choice === "seasonal" ? (season ? season.look : "autumn") : choice
     readonly property bool light: mode === "light" && !hc
     readonly property bool black: mode === "black" && !hc
     readonly property bool autumn: mode === "autumn" && !hc
     function pick(dark, deep, parchment, contrast, leaf) { return hc ? contrast : light ? parchment : black ? deep : autumn ? (leaf || dark) : dark }
-    // A saved look that no longer exists falls back to Dark.
-    Component.onCompleted: if (["dark", "black", "light", "autumn"].indexOf(Settings.theme) < 0) Settings.theme = "dark"
+    // A saved "autumn" is Seasonal; a saved look that doesn't exist falls back to Dark.
+    Component.onCompleted: {
+        if (Settings.theme === "autumn") Settings.theme = "seasonal"
+        else if (["dark", "black", "light", "seasonal"].indexOf(Settings.theme) < 0) Settings.theme = "dark"
+    }
 
     readonly property color ground: pick("#101112", "#000000", "#F3EFE6", "#000000", "#221710")
     readonly property color groundDeep: pick("#0C0D0E", "#000000", "#E7E1D4", "#000000", "#1A110B")
@@ -50,10 +77,16 @@ QtObject {
     readonly property color dangerLine: Settings.colorBlind ? (light ? "#C79A45" : "#7A5A1E") : light ? "#D9A79E" : autumn ? "#6E3A30" : "#5A3A34"
     readonly property color dangerFill: Settings.colorBlind ? (light ? "#F6EBD4" : "#221B0E") : light ? "#F5E2DD" : autumn ? "#2E1A14" : "#1E1716"
     // Someone's status: online, idle or away, do not disturb, and in a voice room (always said in words too).
-    readonly property color online: light ? "#2F7D46" : autumn ? "#3FB27F" : "#5FB872"
-    readonly property color idle: light ? "#9A6B00" : autumn ? "#E0B44C" : "#D9A440"
+    // Color-blind friendly: blue, yellow and vermilion (a set made for color-blind eyes), told apart by lightness too,
+    // never red against green. High contrast: brighter and more saturated on its black.
+    readonly property bool cb: Settings.colorBlind
+    readonly property color online: cb ? (hc ? "#7CCBFF" : light ? "#0063A0" : "#56B4E9")
+                                       : hc ? "#5CFF8F" : light ? "#2F7D46" : autumn ? "#3FB27F" : "#5FB872"
+    readonly property color idle: cb ? (hc ? "#FFF05A" : light ? "#A88700" : "#F0E442")
+                                     : hc ? "#FFD23F" : light ? "#9A6B00" : autumn ? "#E0B44C" : "#D9A440"
     readonly property color away: idle
-    readonly property color dnd: Settings.colorBlind ? (light ? "#5A3C8C" : "#B59BE0") : light ? "#B23A32" : "#D9534F"
+    readonly property color dnd: cb ? (hc ? "#FF7A2E" : light ? "#8F2D00" : "#D55E00")
+                                    : hc ? "#FF6E66" : light ? "#B23A32" : "#D9534F"
     readonly property color offline: textFaint
 
     // The accent: a named one or any #RRGGBB from the picker. On parchment it's darkened to stay readable.

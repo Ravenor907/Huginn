@@ -324,7 +324,7 @@ bool CallManager::canCall(const QString &key) const { return available() && !key
 void CallManager::prepare(const QString &key)
 {
     const qint64 now = nowMs();
-    if (now - m_preparedAt < 60000 || !canCall(key) || !RelayConfig::configured() || m_signal->myKey().isEmpty())
+    if (now - m_preparedAt < 60000 || !Settings::internetCallsOn() || !canCall(key) || !RelayConfig::configured() || m_signal->myKey().isEmpty())
         return;
     m_preparedAt = now;
     getLogin([](const TurnLogin &, const QString &) {});
@@ -332,6 +332,11 @@ void CallManager::prepare(const QString &key)
 
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {
+    // Internet calls off: the relay Worker is never asked (and, like get(), never answers from inside).
+    if (!Settings::internetCallsOn()) {
+        QTimer::singleShot(0, this, [done = std::move(done)] { done(TurnLogin(), QStringLiteral("Internet calls are off")); });
+        return;
+    }
     m_relay->get(relayId(), std::move(done));
 }
 
@@ -364,6 +369,11 @@ QString CallManager::startCall(const QString &key, bool video)
         return QStringLiteral("Leave the voice room first.");
     if (!m_signal->canCall(key))
         return QStringLiteral("Needs Muninn or Huginn 0.6");
+    if (!Settings::internetCallsOn() && m_signal->lanHost(key).isEmpty() && !m_signal->bleReady(key))
+        return QStringLiteral("Internet calls are off in Settings › Calls. Calls work on the same Wi-Fi.");
+    // The internet route's sending sockets close after 20 s of quiet; reopening one (TLS and all)
+    // starts now, while the offer is being put together, not after it's ready.
+    m_signal->warmUp(key);
     auto *s = new CallSession(m_signal, key, [this](auto done) { getLogin(std::move(done)); }, this);
     prime(s);
     s->wantVideo = video;
@@ -605,6 +615,7 @@ void CallManager::setTrusted(const QString &key, bool on)
 void CallManager::prime(CallSession *s)
 {
     s->trusted = trusted(s->peerKey());
+    s->internet = Settings::internetCallsOn();
     s->c2Local = true;
     s->videoCodec = vpxAvailable();
     connect(s, &CallSession::mediaStarted, this, [this, s] {
@@ -652,6 +663,23 @@ void CallManager::addHistory(const QString &key, bool out, const QString &result
     m_history.prepend(e);
     while (m_history.size() > kMaxHistory)
         m_history.removeLast();
+    save();
+    Q_EMIT historyChanged();
+}
+
+void CallManager::pruneHistory(const std::function<qint64(const QString &)> &cutoff)
+{
+    if (!cutoff)
+        return;
+    QVariantList kept;
+    for (const QVariant &v : std::as_const(m_history)) {
+        const QVariantMap e = v.toMap();
+        if (e.value(QStringLiteral("started")).toLongLong() >= cutoff(e.value(QStringLiteral("key")).toString()))
+            kept << v;
+    }
+    if (kept.size() == m_history.size())
+        return;
+    m_history = kept;
     save();
     Q_EMIT historyChanged();
 }

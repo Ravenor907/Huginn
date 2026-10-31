@@ -332,9 +332,13 @@ object KidTv {
         if (s.parents.isNotEmpty() && s.cfg == null && !wiping.value) answer(app, s.parents, 0)
     }
 
-    /** Disconnect: erase the chats, contacts, config and parent keys, then back to the pairing screen. */
+    /**
+     * Disconnect: erase the chats, caches, contacts, config, parent keys and anyone waiting to look after the
+     * TV, then back to the pairing screen.
+     */
     private fun wipe(app: Muninn) = synchronized(lock) {
-        app.chat.deleteAll()
+        TvStorage.clear(app)   // every message and the caches (a downloaded update stays)
+        TvReconnect.clear(app)
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
         TvApps.clear()

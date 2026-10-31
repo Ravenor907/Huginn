@@ -681,8 +681,10 @@ Rectangle {
                         visible: !!modelData.system
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(parent.width * 0.9, noteText.implicitWidth + Theme.px(28))
+                        // As wide as the words up to 90% of the row; measured apart from noteText, whose width follows this one.
+                        width: Math.min(parent.width * 0.9, Math.ceil(noteMetrics.advanceWidth) + Theme.px(30))
                         height: noteText.implicitHeight + Theme.px(16)
+                        TextMetrics { id: noteMetrics; font: noteText.font; text: noteText.text }
                         radius: Theme.radius
                         color: Theme.dangerFill
                         border.width: 1
@@ -690,7 +692,8 @@ Rectangle {
                         Text {
                             id: noteText
                             anchors.centerIn: parent
-                            width: Math.min(implicitWidth, msg.width * 0.9 - Theme.px(28))
+                            width: Math.max(0, note.width - Theme.px(28))
+                            horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.Wrap
                             text: modelData.system ? modelData.text : ""
                             font.italic: true

@@ -138,6 +138,14 @@ void Chat::noteLimitsOnce()
     m_settings.setValue(QStringLiteral("chat/limitsNote"), any);
 }
 
+qint64 Chat::keepCutoff(const QString &key) const
+{
+    const qint64 t = now();
+    const qint64 age = deleteAfter();
+    const bool sooner = age > 0 && age < Limits::kDefault * Limits::kDay;
+    return qMax(Limits::cutoff(t, chatDays(key)), sooner ? t - age : qint64(0));
+}
+
 void Chat::pruneToLimits()
 {
     const qint64 t = now();

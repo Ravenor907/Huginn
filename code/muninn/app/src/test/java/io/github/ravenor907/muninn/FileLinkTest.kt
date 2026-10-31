@@ -71,4 +71,18 @@ class FileLinkTest {
         assertFalse(FileLink.ok(JSONObject(ok.toString()).put("id", "x")))
         assertEquals(3, FileLink.pieces(2 * FileLink.CHUNK + 1L))
     }
+
+    @Test
+    fun onlySmallFilesFromTrustedPeopleArriveByThemselves() {
+        val mb = 1024L * 1024
+        assertTrue(FileLink.arrivesByItself(10 * mb, true))
+        assertTrue(FileLink.arrivesByItself(50 * mb - 1, true))
+        // 50 MB and bigger asks Accept or Decline; Data saver on mobile data waits for a tap.
+        assertFalse(FileLink.arrivesByItself(50 * mb, true))
+        assertFalse(FileLink.arrivesByItself(2_000 * mb, true))
+        assertFalse(FileLink.arrivesByItself(1 * mb, false))
+        // The sender waits longer for an answer to a file the other phone asks about.
+        assertEquals(FileLink.ANSWER_MS, FileLink.answerMs(1 * mb))
+        assertTrue(FileLink.answerMs(60 * mb) > FileLink.ANSWER_MS)
+    }
 }

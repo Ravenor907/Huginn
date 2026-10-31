@@ -2,6 +2,7 @@
 #include "chat.h"
 #include "morewire.h"
 #include "photos.h"
+#include "platform/scratch.h"
 
 #include <QAudioInput>
 #include <QAudioOutput>
@@ -44,11 +45,8 @@ VideoMsg::~VideoMsg()
 
 QString VideoMsg::tempFile() const
 {
-    // The runtime folder is memory-backed (tmpfs) and private to Huginn's sandbox.
-    QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if (dir.isEmpty())
-        dir = QDir::tempPath();
-    return dir + QStringLiteral("/huginn-video.mp4");
+    // Linux: the memory-backed runtime folder. Windows: Huginn's private scratch folder (see Scratch).
+    return Scratch::path(QStringLiteral("huginn-video.mp4"));
 }
 
 void VideoMsg::setError(const QString &e)
@@ -120,7 +118,7 @@ bool VideoMsg::openCamera(QObject *videoOutput)
         setError(QStringLiteral("The video couldn't be recorded: ") + e);
         m_recording = false;
         m_ticker.stop();
-        QFile::remove(tempFile());
+        Scratch::shred(tempFile());
         Q_EMIT changed();
     });
     m_camera->start();
@@ -145,7 +143,7 @@ void VideoMsg::closeCamera()
     m_recorder = nullptr;
     m_input = nullptr;
     m_camera = nullptr;
-    QFile::remove(tempFile());
+    Scratch::shred(tempFile());
     if (m_playing.isEmpty())
         m_ticker.stop();
     Q_EMIT changed();
@@ -157,7 +155,7 @@ void VideoMsg::record()
         return;
     discard();
     m_error.clear();
-    QFile::remove(tempFile());
+    Scratch::shred(tempFile());
     m_recorder->setOutputLocation(QUrl::fromLocalFile(tempFile()));
     m_recorder->record();
     m_recording = true;
@@ -185,7 +183,7 @@ void VideoMsg::stopRecording()
             mp4 = f.readAll();
             f.close();
         }
-        QFile::remove(tempFile());
+        Scratch::shred(tempFile());
         closeCamera();
         if (ms < 700 || mp4.isEmpty())
             return;

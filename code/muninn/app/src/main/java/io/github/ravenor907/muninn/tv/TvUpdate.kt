@@ -1,6 +1,7 @@
 package io.github.ravenor907.muninn.tv
 
 import android.Manifest
+import android.app.Activity
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -11,6 +12,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.Muninn
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -141,9 +143,9 @@ object TvUpdate {
     }
 
     /**
-     * Opens the Android setting for [id]. False if this TV has no such screen (some TVs hide them). Never
-     * Muninn's own app page: a child can reach this list, and that page has "Clear storage", which would
-     * start the TV over.
+     * Opens the Android setting for [id]. False if this TV has no such screen (some TVs hide them). Not
+     * Muninn's own app page: that page has "Clear storage", which would start the TV over, so it only
+     * opens through [openAppPage] for a permission Android won't ask for any more.
      */
     fun open(c: Context, id: String): Boolean {
         val pkg = Uri.parse("package:${c.packageName}")
@@ -156,6 +158,38 @@ object TvUpdate {
         for (i in tries) try { c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return true } catch (_: Exception) {}
         return false
     }
+
+    /** The permission Muninn asks for in the app for the need [id] ("mic", "notify"), else null. */
+    fun permission(id: String): String? = when (id) {
+        "mic" -> Manifest.permission.RECORD_AUDIO
+        "notify" -> if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null
+        else -> null
+    }
+
+    /** What a parent picks on Muninn's app page to turn on the need [id] when Android won't ask any more. */
+    fun howTo(id: String): String = when (id) {
+        "notify" -> "Choose Permissions, then Notifications, then Allow."
+        else -> "Choose Permissions, then Microphone, then Allow."
+    }
+
+    /** Android's "Allow" box for [perm] came up (or was asked for) once on this TV. */
+    fun markAsked(c: Context, perm: String) = prefs(c).edit().putBoolean("asked:$perm", true).apply()
+
+    /** [perm] is off and Android won't show its "Allow" box any more: only Muninn's app page can turn it on. */
+    fun settingsOnly(c: Context, activity: Activity?, perm: String): Boolean {
+        if (ContextCompat.checkSelfPermission(c, perm) == PackageManager.PERMISSION_GRANTED) return false
+        val rationale = activity != null && ActivityCompat.shouldShowRequestPermissionRationale(activity, perm)
+        return TvRules.settingsOnly(prefs(c).getBoolean("asked:$perm", false), rationale)
+    }
+
+    /**
+     * Muninn's own app page in Android's settings (Permissions is on it), for a permission Android won't ask
+     * for any more. Only from For a parent, which takes OK held for 5 seconds. False if the TV has no such page.
+     */
+    fun openAppPage(c: Context): Boolean = try {
+        c.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", c.packageName, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (e: Exception) { false }
 
     private fun prefs(c: Context) = c.applicationContext.getSharedPreferences("muninn-tv", Context.MODE_PRIVATE)
     /** The setup list comes up by itself once after pairing; after that only from "For a parent". */

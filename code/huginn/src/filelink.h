@@ -31,7 +31,7 @@ class FileLink : public QObject
 {
     Q_OBJECT
     // Every transfer this run: [{id, peer, name, size, mine, state, done, note}]. state: "connecting",
-    // "offered", "sending", "done", "failed".
+    // "offered", "asking" (a big file waiting for Accept or Decline), "sending", "done", "failed".
     Q_PROPERTY(QVariantList transfers READ transfers NOTIFY changed)
 
 public:
@@ -42,6 +42,11 @@ public:
     static constexpr int kPunchMs = 20000;
     static constexpr int kIdleMs = 30000;
     static constexpr qint64 kMaxBytes = 4LL * 1024 * 1024 * 1024;
+    // From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first.
+    static constexpr qint64 kAutoBytes = 50LL * 1024 * 1024;
+    // How long an offer waits for an answer: longer for a file the other side asks about first.
+    static constexpr int kAnswerMs = 120000;
+    static constexpr int kAskAnswerMs = 10 * 60000;
     static const qint64 kRelayMax;              // the largest file the relays take (Photos' 130 pieces)
     enum Type : quint8 { Probe = 1, Data = 2, Ack = 3, Done = 4 };
 
@@ -96,6 +101,9 @@ public:
     // 2 MB or less and can't go straight. "" when it's on its way, else what to tell the person.
     Q_INVOKABLE QString send(const QString &peer, const QString &path);
     Q_INVOKABLE void cancel(const QString &id);
+    // A big file waiting ("asking"): take it now, or say no (the sender hears so and it's gone here).
+    Q_INVOKABLE void accept(const QString &id);
+    Q_INVOKABLE void decline(const QString &id);
     Q_INVOKABLE void dismiss(const QString &id);
     Q_INVOKABLE bool hasF1(const QString &peer) const { return peerHasF1 && peerHasF1(peer); }
     // A file that came through the relays (a message with "file"): saved in Downloads. "" when saved.

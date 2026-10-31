@@ -453,4 +453,42 @@ class PowerLogicTest {
         assertTrue(PowerLogic.costPercent(0, h, 13, 0) > PowerLogic.costPercent(0, h, 12, 0))
         assertTrue(PowerLogic.costPercent(0, h, 12, 2) > PowerLogic.costPercent(0, h, 12, 1))
     }
+
+    @Test
+    fun extremeBatterySaverRunsNothingInTheBackground() {
+        val away = phoneAway.copy(extreme = true)
+        val p = PowerLogic.plan(away)
+        assertEquals(Why.EXTREME, p.why)
+        assertEquals(0, p.relays)
+        assertEquals(Radio.OFF, p.radio)
+        assertEquals(Radio.OFF, p.wifi)
+        // Not even on the charger, sharing files, in a conversation or with close-by scanning switched on.
+        assertEquals(Why.EXTREME, PowerLogic.plan(away.copy(plugged = true, sharing = true, talking = true, closeBy = true)).why)
+        // No inbox job and no Listening service: the mode in use is "Only when open".
+        assertEquals(Check.OPEN, PowerLogic.effective(away))
+        assertEquals(0L, PowerLogic.jobMinutes(away))
+        assertEquals(0L, PowerLogic.jobMinutes(away.copy(quiet = Check.HOUR)))
+        assertEquals("", PowerLogic.because(away.copy(quiet = Check.HOUR)))
+        assertTrue(PowerLogic.label(Why.EXTREME).contains("No notifications"))
+    }
+
+    @Test
+    fun extremeBatterySaverStillFetchesWhileOpenAndKeepsACall() {
+        val open = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true, extreme = true))
+        assertEquals(Why.OPEN, open.why)
+        assertEquals(PowerLogic.OPEN_RELAYS, open.relays)
+        assertEquals(Why.CALL, PowerLogic.plan(phoneAway.copy(extreme = true, inCall = true)).why)
+        // A Kids' TV always listens.
+        assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(extreme = true, kidsTv = true)).why)
+        assertEquals(Check.LIVE, PowerLogic.effective(phoneAway.copy(extreme = true, kidsTv = true)))
+    }
+
+    @Test
+    fun leavingExtremeBringsTheUsualConnectionBack() {
+        assertEquals(Why.SCREEN_OFF, PowerLogic.plan(phoneAway.copy(extreme = false)).why)
+        assertEquals(PowerLogic.checkEveryMinutes(Check.LIVE), PowerLogic.jobMinutes(phoneAway))
+        // Quiet hours using "Only when open" still wake hourly to see whether they've ended.
+        assertEquals(60L, PowerLogic.jobMinutes(phoneAway.copy(quiet = Check.OPEN)))
+        assertEquals(0L, PowerLogic.jobMinutes(phoneAway.copy(check = Check.OPEN)))
+    }
 }

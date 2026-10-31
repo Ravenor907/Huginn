@@ -69,6 +69,13 @@ object NetLogic {
     /** What to ask a relay for, in seconds: since it last finished sending ([eoseAt], 0: never) less the slack. */
     fun since(eoseAt: Long, nowS: Long): Long = maxOf(0L, nowS - SINCE_MAX_S, eoseAt - SINCE_SLACK_S)
 
+    /**
+     * Locked: one more envelope of [size] characters may be kept for after unlocking, with [count] kept already
+     * ([total] characters in all), within [maxCount] and [maxTotal]. A single envelope bigger than the whole store never is.
+     */
+    fun mayHold(count: Int, total: Long, size: Long, maxCount: Int, maxTotal: Long): Boolean =
+        count < maxCount && size >= 0 && total + size <= maxTotal
+
     /** A socket heard from this recently is alive: the keepalive check skips it. */
     const val ALIVE_MS = 60_000L
 

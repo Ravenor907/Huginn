@@ -31,18 +31,7 @@ class MessageService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as Muninn
-        val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            // The "listening" channel shows on the lock screen and channels can't be changed, so it is replaced.
-            nm.deleteNotificationChannel("listening")
-            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening for messages", NotificationManager.IMPORTANCE_MIN).apply {
-                description = "Keeps Muninn connected so messages arrive right away. Turn this one off to hide it; Muninn keeps listening and message notifications still come."
-                setShowBadge(false)
-                lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
-                setSound(null, null)
-                enableVibration(false)
-            })
-        }
+        ensureChannel(this)
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle("Muninn")
             .setContentText("Listening for messages").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
@@ -77,6 +66,21 @@ class MessageService : Service() {
             // Quiet hours using a scheduled check: it takes over until "Right away" is back (Power starts it then).
             if (app.power.effective() != PowerLogic.Check.LIVE && !app.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) return
             try { ContextCompat.startForegroundService(context, Intent(context, MessageService::class.java)) } catch (_: Exception) {}
+        }
+
+        /** The quiet "Listening for messages" channel, made before anything posts to it (this service, the inbox check). */
+        fun ensureChannel(context: Context) {
+            if (Build.VERSION.SDK_INT < 26) return
+            val nm = context.getSystemService(NotificationManager::class.java) ?: return
+            // The "listening" channel shows on the lock screen and channels can't be changed, so it is replaced.
+            nm.deleteNotificationChannel("listening")
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening for messages", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "Keeps Muninn connected so messages arrive right away. Turn this one off to hide it; Muninn keeps listening and message notifications still come."
+                setShowBadge(false)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+                setSound(null, null)
+                enableVibration(false)
+            })
         }
 
         fun stop(context: Context) { context.stopService(Intent(context, MessageService::class.java)) }

@@ -69,6 +69,7 @@ import io.github.ravenor907.muninn.screens.ChatScreen
 import io.github.ravenor907.muninn.screens.ContactsScreen
 import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FirstLock
+import io.github.ravenor907.muninn.screens.lockChosen
 import androidx.compose.runtime.remember
 import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.SettingsNav
@@ -396,8 +397,8 @@ class MainActivity : ComponentActivity() {
         // Moving to another device (cap x1): locked while it moves, then "Moved to [name]".
         if (io.github.ravenor907.muninn.screens.MoveCover(app)) return
         if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }; return }
-        // A lock is required: on first open (or whenever none is set), set one before anything else.
-        var locked by remember { mutableStateOf(app.vault.hasPassword || ciSkip) }
+        // A lock is suggested on first open, before anything else (Skip goes without one).
+        var locked by remember { mutableStateOf(lockChosen(app) || ciSkip) }
         if (!locked) { FirstLock(app) { locked = true }; return }
         val request by app.net.request.collectAsState()
         val offer by app.closeFiles.pendingOffer.collectAsState()
@@ -432,9 +433,11 @@ class MainActivity : ComponentActivity() {
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Palette.ground)) {
             // Autumn: leaves fall behind everything (nothing is drawn in the other looks).
             io.github.ravenor907.muninn.ui.AutumnLeaves()
-            // The layout follows the screen's shape, not the device: held sideways (a tablet, or a phone turned on
-            // its side) it's Discord style, a rail, the chat list and the open chat; upright, one thing at a time.
-            val wide = maxWidth > maxHeight && maxWidth >= ChatNav.WIDE_MIN
+            // A tablet (smallest screen width 600 dp or more, whichever way it's held) is Discord style: a rail, the
+            // chat list and the open chat. A phone, upright or sideways, shows one thing at a time. A window too
+            // narrow for the three (split screen) is one thing at a time too.
+            val tablet = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp >= ChatNav.TABLET_SW_DP
+            val wide = tablet && maxWidth >= ChatNav.WIDE_MIN
             SideEffect { ChatNav.wide = wide }
             if (wide) TabletLayout(toast, maxWidth) else PhoneLayout(toast)
         }

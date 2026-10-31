@@ -176,7 +176,7 @@ Vault::Vault(QObject *parent)
                 returning();
                 return;
             }
-            if (lockOnLeave() && exists() && !locked() && !m_screenLocked) {
+            if (lockOnLeave() && hasLock() && !locked() && !m_screenLocked) {
                 lockScreen();
                 Q_EMIT panicked();
             }
@@ -242,6 +242,52 @@ QString Vault::keyFile() const { return dataDir() + QStringLiteral("/vault.key")
 QString Vault::path(const QString &name) const { return dataDir() + QLatin1Char('/') + name; }
 
 bool Vault::exists() const { return QFile::exists(keyFile()); }
+
+bool Vault::hasLock() const
+{
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    return QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("mode")).toString() != QLatin1String("open");
+}
+
+bool Vault::turnOffLock()
+{
+    // Only while open on screen too: not from behind the lock screen.
+    if (m_restarting || m_screenLocked || m_key.size() != 32 || !exists())
+        return false;
+    // No secret: the data key itself goes in vault.key. Nothing outside Huginn keeps it.
+    const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(m_key.toBase64())}};
+    QSaveFile f(keyFile());
+    if (!f.open(QIODevice::WriteOnly))
+        return false;
+    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    if (!f.commit())
+        return false;
+    m_weak = false;
+    m_screenLocked = false;
+    Q_EMIT changed();
+    return true;
+}
+
+void Vault::openWithoutLock()
+{
+    if (!m_key.isEmpty() || m_restarting)
+        return;
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    if (o.value(QStringLiteral("mode")).toString() != QLatin1String("open"))
+        return;
+    const QByteArray key = QByteArray::fromBase64(o.value(QStringLiteral("key")).toString().toLatin1());
+    if (key.size() != 32)
+        return;
+    m_key = key;
+    m_screenLocked = false;
+    Q_EMIT changed();
+    Q_EMIT opened();
+}
 
 bool Vault::usesPattern() const
 {
@@ -442,7 +488,8 @@ void Vault::setLockOnLeave(bool on)
 
 void Vault::panic()
 {
-    if (!panicLock() || !exists() || locked())
+    // Without a lock Huginn would only open again by itself: panic lock does nothing then.
+    if (!panicLock() || !exists() || locked() || !hasLock())
         return;
     lockScreen();
     Q_EMIT panicked();

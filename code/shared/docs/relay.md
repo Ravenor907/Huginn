@@ -87,10 +87,27 @@ Errors are JSON `{"error": "<code>"}`:
 | 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. Don't retry this call. |
 | 429 | `id_limit`, `ip_limit`, `global_limit` | Daily cap reached (per install, per internet address, or for everyone). No relay until the next UTC day. |
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
-| 503 | `limits_unavailable`, `not_configured` | Worker not set up or KV down. Retry later. |
+| 503 | `limits_unavailable`, `not_configured` | Worker not set up, or its limits storage is missing or down. Retry later. |
 
 On any error, the call goes on without a relay: only the Wi-Fi and Bluetooth paths can work, and an internet
 call fails with "Can't connect".
+
+## Daily limits (Worker side)
+
+- Caps per UTC day: 30 logins per install (`id`), 60 per internet address, 3000 for everyone.
+  An IPv6 address counts by its /64.
+- The Worker counts in one SQLite-backed Durable Object (`RelayLimits`, binding `LIMITS`). One login is
+  checked and counted in a single step inside it, so requests at the same moment can't pass a cap.
+  Each login writes 3 rows: everyone, the install's `id`, the address key.
+- The address key is HMAC-SHA256 (key: the Worker secret `TURN_KEY_API_TOKEN`) of `"ip:" + day + ":" + address`
+  (or its /64), cut to 16 bytes. Addresses themselves are never stored or logged.
+- Rows from earlier days are deleted when the first request of a new day arrives.
+- If the binding is missing or the object fails, the Worker answers 503 `limits_unavailable` and hands out
+  nothing.
+- Free plan budget per login: 1 Worker request, 1 Durable Object request, 3 rows written (later 3 or fewer
+  rows deleted). At the 3000 cap that is 3000 requests of each kind and about 18,000 rows a day, against
+  free allowances of 100,000 each.
+- The release job deploys the Worker with `wrangler.toml` (`shared/relay-worker/README.md`); test builds don't.
 
 ## Caching
 

@@ -523,6 +523,7 @@ CallSession *RoomManager::newSession(const QString &key)
     s->useDevices = false;   // this class has the microphone and the speaker
     // Two people in a room who trust each other may go direct too (5.8.2); everyone else: relay only.
     s->trusted = m_calls && m_calls->trusted(key);
+    s->internet = Settings::internetCallsOn();
     s->videoCodec = vpxAvailable();   // screen share (5.8.7)
     watchMedia(key, s);
     connect(s, &CallSession::stateChanged, this, [this, s] {

@@ -490,14 +490,17 @@ internal fun DirectFiles(peer: String) {
                     val pct = if (f.size > 0) (f.done * 100 / f.size).toInt() else 0
                     Text(when (f.state) {
                         "offered" -> "Waiting for them to accept"
-                        "waiting" -> f.note
+                        "waiting", "asking" -> f.note + " · " + io.github.ravenor907.muninn.net.LocalSend.size(f.size)
                         "connecting" -> "Connecting straight to their phone…"
                         "sending" -> "$pct% · ${io.github.ravenor907.muninn.net.LocalSend.size(f.size)}"
                         "done" -> if (f.mine) "Sent" else f.note.ifEmpty { "Saved in Downloads" }
                         else -> f.note
                     }, style = Type.small.copy(color = if (f.state == "failed") Palette.danger else Palette.textMuted))
                 }
-                if (f.state == "waiting") MButton("Download", kind = Kind.Accent) { io.github.ravenor907.muninn.net.FileLink.accept(f.id) }
+                if (f.state == "waiting" || f.state == "asking") {
+                    MButton("Decline", Modifier.padding(end = 6.dp)) { io.github.ravenor907.muninn.net.FileLink.decline(f.id) }
+                    MButton(if (f.state == "asking") "Accept" else "Download", kind = Kind.Accent) { io.github.ravenor907.muninn.net.FileLink.accept(f.id) }
+                }
             }
         }
     }

@@ -110,6 +110,9 @@ public:
     Q_INVOKABLE void deleteEntry(const QString &id);
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE QString duration(int seconds) const;
+    // Calls older than their chat's message limit go (cutoff(key): the oldest time kept, in ms).
+    // main.cpp runs it whenever Chat prunes messages.
+    void pruneHistory(const std::function<qint64(const QString &)> &cutoff);
     // Trusted contacts are called directly over the internet when both trust each other (saves the
     // relay's data); everyone else only through the relay, so they never learn your IP address.
     // Default: everyone in the Family folder. The switch overrides it, on or off.

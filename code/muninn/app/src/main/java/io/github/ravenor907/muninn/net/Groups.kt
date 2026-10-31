@@ -926,6 +926,9 @@ class Groups(
         list
     }
 
+    /** Anything still waiting for a receipt: the retry loop keeps running while there is. */
+    fun busy(): Boolean = synchronized(lock) { outs.isNotEmpty() }
+
     /** Envelopes for [to] still waiting for a receipt (tests, and the "sending" state). */
     fun waiting(to: String? = null) = synchronized(lock) { outs.filter { to == null || it.to == to }.map { it.copy() } }
 

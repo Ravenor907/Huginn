@@ -23,6 +23,8 @@
 //  bleReady(key) / sendMedia(key, packet) / mediaReceived(key, packet)
 //                          the Bluetooth LE MEDIA characteristic (5.6). Optional: without it,
 //                          bleReady is false and calls use the relay and Wi-Fi only.
+//  warmUp(key)             a call to them is about to start: open the internet routes now, so the
+//                          offer isn't held up by a connection that went quiet. Optional.
 class CallSignal : public QObject
 {
     Q_OBJECT
@@ -40,6 +42,7 @@ public:
     virtual bool mayHave(const QString &k, const QString &c) { return hasCap(k, c); }
     virtual bool bleReady(const QString &) const { return false; }
     virtual bool sendMedia(const QString &, const QByteArray &) { return false; }
+    virtual void warmUp(const QString &) {}
 
 Q_SIGNALS:
     void received(const QString &contactKey, const QJsonObject &msg);
@@ -64,6 +67,7 @@ public:
     std::function<bool(const QString &, const QString &)> onMayHave;
     std::function<bool(const QString &)> onBleReady;
     std::function<bool(const QString &, const QByteArray &)> onSendMedia;
+    std::function<void(const QString &)> onWarmUp;
 
     void send(const QString &k, const QJsonObject &m) override { if (onSend) onSend(k, m); }
     QByteArray sign(const QByteArray &b) const override { return onSign ? onSign(b) : QByteArray(); }
@@ -76,6 +80,7 @@ public:
     bool mayHave(const QString &k, const QString &c) override { return onMayHave ? onMayHave(k, c) : hasCap(k, c); }
     bool bleReady(const QString &k) const override { return onBleReady && onBleReady(k); }
     bool sendMedia(const QString &k, const QByteArray &p) override { return onSendMedia && onSendMedia(k, p); }
+    void warmUp(const QString &k) override { if (onWarmUp) onWarmUp(k); }
 
     void deliver(const QString &k, const QJsonObject &m) { Q_EMIT received(k, m); }
     void deliverMedia(const QString &k, const QByteArray &p) { Q_EMIT mediaReceived(k, p); }

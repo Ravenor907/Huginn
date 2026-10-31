@@ -12,6 +12,7 @@
 #endif
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QSet>
@@ -112,23 +113,9 @@ bool System::inFlatpak()
 
 void System::openSteamUrl(const QString &url)
 {
-#ifndef Q_OS_WIN
-    if (inFlatpak()) {
-        // The desktop's own "open this link" service (the OpenURI portal), not a program started outside the sandbox.
-        QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Desktop"), QStringLiteral("/org/freedesktop/portal/desktop"),
-                                                        QStringLiteral("org.freedesktop.portal.OpenURI"), QStringLiteral("OpenURI"));
-        m << QString() << url << QVariantMap{{QStringLiteral("ask"), false}};
-        auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m), this);
-        connect(w, &QDBusPendingCallWatcher::finished, this, [url](QDBusPendingCallWatcher *w) {
-            // No portal answered (a desktop session without it): the host's xdg-open.
-            if (w->isError())
-                QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("xdg-open"), url});
-            w->deleteLater();
-        });
-        return;
-    }
-#endif
-    QProcess::startDetached(QStringLiteral("xdg-open"), {url});
+    // Qt opens it the sandbox-safe way: inside the Flatpak through the desktop's OpenURI portal,
+    // outside it with the desktop's own handler. Nothing is started outside the sandbox.
+    QDesktopServices::openUrl(QUrl(url));
 }
 
 

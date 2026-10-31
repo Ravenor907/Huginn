@@ -7,6 +7,7 @@ namespace Platform
 bool underWine() { return false; }
 QString wineVersion() { return {}; }
 void beginStart() {}
+void startClaimed(bool) {}
 void chooseGraphics() {}
 void startStep(const QString &) {}
 void watchMainWindow(QQuickWindow *) {}
@@ -49,6 +50,11 @@ namespace
 QString s_logPath;
 FILE *s_log = nullptr;
 QMutex s_logLock;
+// Until startClaimed() the lines wait in memory: a second copy started while this one runs (or
+// updates) must not empty this one's log. Closed: nothing more is kept.
+enum class LogState { Waiting, Open, Closed };
+LogState s_state = LogState::Waiting;
+QList<QByteArray> s_waiting;
 QtMessageHandler s_next = nullptr;
 bool s_keep = false;
 bool s_shown = false;
@@ -63,9 +69,41 @@ QString exeDir()
     return QFileInfo(QDir::fromNativeSeparators(QString::fromStdWString(self))).absolutePath();
 }
 
+// Opens Huginn-start.log next to Huginn.exe (the temp folder if that can't be written) and writes
+// what waited. mode: L"w" for a fresh log, L"a" to add to one (a crash before startClaimed).
+void openLog(const wchar_t *mode)
+{
+    for (const QString &where : {exeDir(), QDir::tempPath()}) {
+        if (where.isEmpty())
+            continue;
+        s_logPath = where + QStringLiteral("/Huginn-start.log");
+        s_log = _wfopen(reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(s_logPath).utf16()), mode);
+        if (s_log)
+            break;
+    }
+    if (!s_log) {
+        s_logPath.clear();
+        s_state = LogState::Closed;
+        s_waiting.clear();
+        return;
+    }
+    s_state = LogState::Open;
+    for (const QByteArray &l : std::as_const(s_waiting)) {
+        std::fputs(l.constData(), s_log);
+        std::fputc('\n', s_log);
+    }
+    s_waiting.clear();
+    std::fflush(s_log);
+}
+
 void writeLine(const QByteArray &line)
 {
     QMutexLocker lock(&s_logLock);
+    if (s_state == LogState::Waiting) {
+        if (s_waiting.size() < 500)
+            s_waiting << line;
+        return;
+    }
     if (!s_log)
         return;
     std::fputs(line.constData(), s_log);
@@ -97,6 +135,13 @@ LONG WINAPI crashed(EXCEPTION_POINTERS *e)
     char name[MAX_PATH] = "?";
     if (at && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(at), &mod))
         GetModuleFileNameA(mod, name, MAX_PATH);
+    {
+        // Crashed before startClaimed: what waited goes to the end of the log, which is kept.
+        QMutexLocker lock(&s_logLock);
+        if (s_state == LogState::Waiting)
+            openLog(L"a");
+        s_keep = true;
+    }
     std::snprintf(line, sizeof line, "crash: exception 0x%08lx at %s+0x%llx",
                   e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul, name,
                   static_cast<unsigned long long>(reinterpret_cast<quintptr>(at) - reinterpret_cast<quintptr>(mod)));
@@ -136,6 +181,8 @@ void closeLog(bool remove)
         std::fclose(s_log);
         s_log = nullptr;
     }
+    s_state = LogState::Closed;
+    s_waiting.clear();
     if (remove && !s_logPath.isEmpty())
         QFile::remove(s_logPath);
 }
@@ -183,14 +230,6 @@ void beginStart()
 {
     s_keep = envSet("HUGINN_KEEP_START_LOG");
     const QString dir = exeDir();
-    for (const QString &where : {dir, QDir::tempPath()}) {
-        if (where.isEmpty())
-            continue;
-        s_logPath = where + QStringLiteral("/Huginn-start.log");
-        s_log = _wfopen(reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(s_logPath).utf16()), L"w");
-        if (s_log)
-            break;
-    }
     s_next = qInstallMessageHandler(messages);
     SetUnhandledExceptionFilter(crashed);
     logLine(QStringLiteral("Huginn %1 starting in %2").arg(QStringLiteral(HUGINN_VERSION), QDir::toNativeSeparators(dir)));
@@ -216,14 +255,26 @@ void beginStart()
         if (!envSet("QT_QPA_PLATFORM"))
             qputenv("QT_QPA_PLATFORM", "windows:fontengine=gdi,darkmode=0");
     }
-    // What an update moved aside and files from other folder layouts: before Qt loads any plugin.
+}
+
+void startClaimed(bool tidy)
+{
+    {
+        QMutexLocker lock(&s_logLock);
+        if (s_state == LogState::Waiting)
+            openLog(L"w");
+    }
+    if (!tidy)
+        return;
+    // What an update moved aside and files from other folder layouts. Only now: a second copy that
+    // quits on the single-instance check must not touch an update that's under way.
     WinUpdate::cleanUp();
+    // The copy that just updated us may still have been closing, holding its old Huginn.exe: once more in a while.
+    QTimer::singleShot(15000, qApp, [] { WinUpdate::cleanUp(); });
 }
 
 void chooseGraphics()
 {
-    // The copy that just updated us may still have been closing, holding its old Huginn.exe: once more in a while.
-    QTimer::singleShot(15000, qApp, [] { WinUpdate::cleanUp(); });
     const QString platform = QGuiApplication::platformName();
     logLine(QStringLiteral("Qt %1, platform %2").arg(QString::fromLatin1(qVersion()), platform));
     if (envSet("QSG_RHI_BACKEND") || envSet("QT_QUICK_BACKEND")) {

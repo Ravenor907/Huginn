@@ -13,6 +13,8 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 
 /**
  * Muninn's messaging. Three ways to reach someone, picked automatically, best first:
@@ -158,6 +160,28 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Background work that can't take the app down: a failed send just stays unsent and is retried. */
     private fun bg(f: () -> Unit) = pool.execute { try { f() } catch (e: Exception) { android.util.Log.w("Muninn", "chat", e) } }
     private val retrier = Executors.newSingleThreadExecutor()
+    private val retryScope = kotlinx.coroutines.CoroutineScope(retrier.asCoroutineDispatcher() + kotlinx.coroutines.SupervisorJob())
+    /** Wakes the retry loop when something is queued while it sleeps. */
+    private val retryWake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    /** My messages still on their way (id to chat key): the only ones the retry loop looks at. */
+    private val pending = ConcurrentHashMap<String, String>()
+
+    /** [msgId] in the chat with [peerKey] waits for a receipt (or an unsend to be confirmed): the retry loop looks after it. */
+    private fun queue(peerKey: String, msgId: String) { pending[msgId] = peerKey; wakeRetry() }
+
+    private fun wakeRetry() { retryWake.trySend(Unit) }
+
+    /** Anything for the retry loop to do: messages, reactions or group messages on their way, or something that runs out. */
+    private fun retryBusy(): Boolean = pending.isNotEmpty() || mxOut.isNotEmpty() || groups.busy() || incoming.isNotEmpty() ||
+        _typing.value.isNotEmpty() || _active.value.isNotEmpty() || (foreground && id.activeStatus)
+
+    /** My messages that still need the retry loop (after a restart, or when chats are loaded again). */
+    private fun queueWaiting() {
+        val now = System.currentTimeMillis()
+        for ((k, list) in _private.value) for (m in list)
+            if (m.mine && (m.state == "unsending" || (m.state.isNotEmpty() && m.unsent.isEmpty() && rank(m.state) < 3 && now - m.time <= DAY))) pending[m.id] = k
+        wakeRetry()
+    }
     private val store = File(context.filesDir, "chats.json")
     private val nearbyStore = File(context.filesDir, "nearby.json")
     private val metStore = File(context.filesDir, "met.json")
@@ -201,6 +225,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     init {
         load()
+        queueWaiting()
         try { vault.read(s1Store)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { s1Bound[it] = o.optLong(it) } } } catch (_: Exception) {}
         FileLink.host = object : FileLink.Host {
             override fun signal(peer: String, json: String) {
@@ -268,7 +293,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         ble.prove = { n -> Proof.close(id.keys.private, id.publicKey, n) }
         // Someone said yes while out of range: say it again when they're back.
         bg { while (true) { Thread.sleep(30_000); try { resendKeeps() } catch (_: Exception) {} } }
-        retrier.execute { while (true) { Thread.sleep(1_000); try { retryLoop() } catch (_: Exception) {} } }
+        // The retry loop: once a second while anything waits to go (or runs out), asleep while nothing does.
+        retryScope.launch {
+            while (true) {
+                val busy = try { retryBusy() } catch (_: Exception) { true }
+                if (busy) kotlinx.coroutines.delay(1_000) else retryWake.receive()
+                try { retryLoop() } catch (_: Exception) {}
+            }
+        }
         nostr.onEnvelope = { content ->
             try { unwrap(content)?.let { receive(it, "internet") }; true } catch (_: Exception) { true }
         }
@@ -670,6 +702,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val m = target ?: return
         outbox.drop(m.id)   // the message itself isn't sent again
         tries[m.id] = Tries(0, 0)
+        queue(peerKey, m.id)
         bg { attemptUnsend(m) }
     }
 
@@ -889,9 +922,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (!Rich.ok("live", p)) return 400 to "{}"
                 if (Rich.fresh(Rich.ts(p), now)) {
                     val on = p.getBoolean("on")
-                    if (p.getString("t") == "typing") _typing.update { if (on) it + (fromKey to now + Rich.TYPING_MS) else it - fromKey }
+                    if (p.getString("t") == "typing") { _typing.update { if (on) it + (fromKey to now + Rich.TYPING_MS) else it - fromKey }; wakeRetry() }
                     else if (id.activeStatus) {
                         _active.update { if (on) it + (fromKey to now + Rich.ACTIVE_MS) else it - fromKey }
+                        wakeRetry()
                         // Cap p1: the status they chose rides on the same message.
                         profile?.tookLive(fromKey, on, p)
                     }
@@ -1195,6 +1229,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                           part: ByteArray): Pair<Int, String> {
         val contact = contacts.contact(fromKey)
         val inc = incoming.getOrPut(msgId) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis()) }
+        wakeRetry()   // the loop clears half a photo that never finishes
         if (inc.from != fromKey || inc.parts.size != n) return 400 to "{}"
         synchronized(inc) {
             inc.parts[i] = part
@@ -1547,6 +1582,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val env = UUID.randomUUID().toString()
         mxOut[env] = peerKey to System.currentTimeMillis()
         tries[env] = Tries(0, 0)
+        wakeRetry()
         saveMx()
         bg {
             outbox.getOrMake(env) { listOf(envelope("mx", peerKey, plain, env).toString()) }
@@ -1582,6 +1618,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun foreground(on: Boolean) {
         if (foreground == on) return
         foreground = on
+        wakeRetry()
         if (!id.activeStatus) return
         bg { sendActive(on) }
     }
@@ -1591,7 +1628,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (id.activeStatus == on) return
         id.activeStatus = on
         if (!on) { _active.value = emptyMap(); bg { sendActive(false) } }
-        else if (foreground) bg { sendActive(true) }
+        else if (foreground) { wakeRetry(); bg { sendActive(true) } }
     }
 
     /** Cap p1: my status or custom status changed: everyone who sees my active status hears it now. */
@@ -1745,7 +1782,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
 
-    /** Runs every second: anything of mine not yet delivered (and under a day old) is tried again. */
+    /**
+     * Runs every second while anything waits ([retryBusy]): anything of mine not yet delivered (and under a day old)
+     * is tried again. Only what's [pending] is looked at, never every message.
+     */
     private fun retryLoop() {
         val now = System.currentTimeMillis()
         nearbyNow()
@@ -1761,11 +1801,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (_typing.value.values.any { it < now }) _typing.update { m -> m.filterValues { it >= now } }
         if (_active.value.values.any { it < now }) _active.update { m -> m.filterValues { it >= now } }
         if (foreground && id.activeStatus && !invisible() && now - activeSent > Rich.ACTIVE_EVERY_MS) { activeSent = now; bg { sendActive(true) } }
-        for ((_, list) in _private.value) for (m in list) {
+        val chats = _private.value
+        for ((msgId, k) in pending) {
+            val m = chats[k]?.firstOrNull { it.id == msgId }
+            // Deleted, moved to a new key, or the chat is gone: nothing more to send.
+            if (m == null) { pending.remove(msgId); if (tries.remove(msgId) != null) { outbox.drop(msgId); outbox.drop(UNSEND + msgId) }; continue }
             if (m.mine && m.state == "unsending") {
                 val t = tries.getOrPut(m.id) { Tries(1, now + RETRY[0]) }
                 // About a day of tries; after that stop (their app may not answer unsends).
-                if (t.count > 300) { update(m.peerKey, m.id) { it.copy(state = "unsent") }; tries.remove(m.id); outbox.drop(UNSEND + m.id); continue }
+                if (t.count > 300) { update(m.peerKey, m.id) { it.copy(state = "unsent") }; tries.remove(m.id); outbox.drop(UNSEND + m.id); pending.remove(m.id); continue }
                 if (now >= t.next) { t.next = NetLogic.NEVER; bg { attemptUnsend(m) } }
                 continue
             }
@@ -1773,6 +1817,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (!m.mine || m.state.isEmpty() || m.unsent.isNotEmpty() || rank(m.state) >= 3 || now - m.time > DAY) {
                 // Done with it (delivered, or a day of trying): its sealed copy goes too.
                 if (tries.remove(m.id) != null) outbox.drop(m.id)
+                pending.remove(m.id)
                 continue
             }
             val t = tries[m.id]
@@ -1867,8 +1912,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun update(peer: String, msgId: String, f: (Msg) -> Msg): Boolean = edit { map ->
         val before = map[peer] ?: return@edit false
         var changed = false
-        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true } else it }
+        var again = false
+        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true; again = n.mine && (n.state == "sending" || n.state == "unsending") } else it }
         if (changed) map[peer] = after
+        if (changed && again) queue(peer, msgId)
         changed
     }
 
@@ -1920,7 +1967,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override val myName get() = id.username
         override val myMailbox get() = nostr.publicKey
         override val readReceipts get() = id.readReceipts
-        override fun send(o: Groups.Out) = bg { sendGroupOut(o) }
+        override fun send(o: Groups.Out) { wakeRetry(); bg { sendGroupOut(o) } }
         override fun drop(env: String) = outbox.drop(env)
         override fun isContact(k: String) = this@Chat.isContact(k)
         override fun peer(k: String, name: String, mailbox: String) {
@@ -2118,6 +2165,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (incoming.size > 20 && !incoming.containsKey(key)) return 429 to "{}"
         return opened(o, fromKey, dup) { part ->
             val inc = incoming.getOrPut(key) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis()) }
+            wakeRetry()
             if (inc.from != fromKey || inc.parts.size != n) return@opened 400 to "{}"
             synchronized(inc) {
                 inc.parts[i] = part
@@ -2168,6 +2216,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val sooner = id.deleteAfter.takeIf { it in 1 until Limits.DEFAULT * DAY }
         fun cutoff(days: Int) = maxOf(Limits.cutoff(now, days), if (sooner != null) now - sooner else 0L)
         groups.pruneOlder(::cutoff)
+        // The call history goes by the same limit as each chat's messages.
+        io.github.ravenor907.muninn.net.call.CallManager.pruneOlder { k -> cutoff(chatDays(k)) }
         val near = cutoff(Limits.DEFAULT)
         synchronized(lock) {
             val n = _nearby.value.filter { it.time >= near }
@@ -2243,7 +2293,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             outbox.clear()
             mxOut.clear(); mxStore.delete()
             saveNow(); nearbyStore.delete()
+            _unread.value = emptySet()
         }
+        flags.all.value.unread.forEach { flags.read(it) }
     }
 
     /**
@@ -2303,7 +2355,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (deleted.containsKey(m.id) || list.any { it.id == m.id }) return@edit false
         map[peer] = (list + m).takeLast(1000)
         true
-    }.also { added -> if (added && isContact(peer)) bg { Link.onMessage(peer, nameOf(peer), m) } }
+    }.also { added ->
+        if (added && m.mine && m.state.isNotEmpty()) queue(peer, m.id)
+        if (added && isContact(peer)) bg { Link.onMessage(peer, nameOf(peer), m) }
+    }
 
     private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
 

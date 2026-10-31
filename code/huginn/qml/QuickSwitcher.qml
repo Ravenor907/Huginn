@@ -87,7 +87,10 @@ Item {
                 id: hits
                 width: parent.width
                 visible: sw.shown.length > 0
-                height: Math.max(0, Math.min(contentHeight, sw.height - Theme.px(32) - Theme.px(28) - askText.height - field.height - col.spacing * 2))
+                // Counted from the rows (each the same height), not read back from contentHeight, which
+                // a ListView estimates from the rows it has made so far.
+                readonly property real rowsHeight: sw.shown.length * Theme.px(44) + Math.max(0, sw.shown.length - 1) * spacing
+                height: Math.max(0, Math.min(rowsHeight, sw.height - Theme.px(32) - Theme.px(28) - askText.height - field.height - col.spacing * 2))
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 interactive: contentHeight > height

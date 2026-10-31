@@ -19,6 +19,7 @@
 #include "voice.h"
 #include "platform/chime.h"
 #include "platform/notify.h"
+#include "platform/scratch.h"
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
 #include "platform/winupdate.h"
@@ -127,6 +128,8 @@ int main(int argc, char *argv[])
     auto selfTested = [](bool ok) {
         if (ok)
             Platform::noStartLog();
+        else
+            Platform::startClaimed(false);   // a failing one keeps its log, without touching an update
         return ok ? 0 : 1;
     };
     if (args.isSet(callTest))
@@ -165,7 +168,13 @@ int main(int argc, char *argv[])
         Platform::noStartLog();
         return 0;
     }
+    // Only now the start log is written fresh and an update's leftovers are cleaned up (not by a
+    // second copy that is about to quit).
+    Platform::startClaimed(!quiet);
     Platform::startStep(QStringLiteral("single instance claimed"));
+    // A voice or video note or a pasted picture left behind by a crash mid-recording.
+    if (!quiet)
+        Scratch::clearLeftovers();
 
     QDirIterator fonts(QStringLiteral(":/qt/qml/Huginn/fonts"), {QStringLiteral("*.ttf")}, QDir::Files);
     while (fonts.hasNext())
@@ -213,6 +222,14 @@ int main(int argc, char *argv[])
         }
         return secret;
     }, &app);
+    // The internet inbox's list of events already taken: in the vault too.
+    nostr->keepSeen = [vault](const QByteArray &stored) {
+        if (!vault->locked())
+            vault->write(QStringLiteral("nostrseen.json"), stored);
+    };
+    QObject::connect(vault, &Vault::opened, nostr, [vault, nostr] { nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json"))); });
+    if (!vault->locked())
+        nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json")));
     chat = new Chat(localSend, vault, nostr, ble, &app);
     vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
@@ -225,6 +242,7 @@ int main(int argc, char *argv[])
     cs->onNameOf = [chat](const QString &k) { return chat->nameOf(k); };
     cs->onCanCall = [chat](const QString &k) { return chat->canCall(k); };
     cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
+    cs->onWarmUp = [nostr](const QString &) { nostr->warmSenders(); };
     // Trusted for direct calls by default: anyone in a folder called "Family" (shared/docs/protocol-0.6.md 5.8.1).
     cs->onInFamily = [chat](const QString &k) {
         const QStringList in = chat->foldersOf(k);
@@ -239,6 +257,8 @@ int main(int argc, char *argv[])
     cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
+    // Call history keeps as long as that chat keeps messages (7 days, up to 30 in Family and Work).
+    QObject::connect(chat, &Chat::pruned, calls, [chat, calls] { calls->pruneHistory([chat](const QString &k) { return chat->keepCutoff(k); }); });
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.
     auto *rooms = new RoomManager(cs, calls, [calls](auto done) { calls->getLogin(std::move(done)); }, &app);
     rooms->groupState = [chat](const QString &g) { return chat->groupState(g); };
@@ -357,6 +377,8 @@ int main(int argc, char *argv[])
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);
     }, Qt::QueuedConnection);
+    // The lock is off: Chat opens now, with everything above listening.
+    vault->openWithoutLock();
     Platform::startStep(QStringLiteral("loading the main screen"));
     engine.loadFromModule("Huginn", "Main");
     if (!engine.rootObjects().isEmpty())

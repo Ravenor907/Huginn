@@ -49,13 +49,15 @@ object Panic {
         return true
     }
 
-    /** Ends calls, wipes the key and ends the process; a one-shot inbox check starts a locked Muninn listening again. */
+    /** Ends calls, wipes the key and ends the process; a one-shot inbox check starts a locked Muninn listening again
+     *  (not with Extreme battery saver). */
     private fun forget(app: Muninn) {
         if (forgetting) return
         forgetting = true
         try { io.github.ravenor907.muninn.net.call.CallManager.hangup() } catch (_: Exception) {}
         try { io.github.ravenor907.muninn.net.call.RoomManager.leave() } catch (_: Exception) {}
-        try {
+        // Extreme battery saver runs nothing in the background, so nothing starts again until Muninn is opened.
+        if (!app.power.extreme) try {
             WorkManager.getInstance(app).enqueueUniqueWork("inbox-now", ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<io.github.ravenor907.muninn.net.InboxWorker>().setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
         } catch (_: Exception) {}

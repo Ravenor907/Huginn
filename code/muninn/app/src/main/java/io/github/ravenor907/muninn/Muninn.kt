@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
@@ -82,8 +83,10 @@ class Muninn : Application() {
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
             })
         }
-        // While locked, the internet inbox can still say something arrived, without opening it.
-        nostr.onEnvelope = { notify(null, null, "inbox"); false }
+        // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
+        nostr.onEnvelope = { false }
+        // While locked: one "Unlock Muninn to see new messages", with a sound only the first time.
+        nostr.onLocked = { lockedNotice() }
         // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
@@ -121,6 +124,8 @@ class Muninn : Application() {
             // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
             if (!chat.flags.arrived(key)) return@collect
             if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { buzz(); return@collect }
+            // Extreme battery saver: no notifications; the chat list shows what's new.
+            if (power.extreme) return@collect
             // Quiet hours kept open for the "Always right away" list: everyone else's messages wait quietly.
             when (power.alert(key)) {
                 io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD -> notify(name, text, key, quiet = doNotDisturb())
@@ -136,8 +141,46 @@ class Muninn : Application() {
         chat.foreground(visible)
         power.ready()
         watchIdle()
-        // Messages that came while locked were only announced: ask the relays for them again now.
-        nostr.resubscribe()
+        // Unlocked again later (the lock came due while Muninn was running): the same catching up.
+        scope.launch { vault.locked.drop(1).collect { locked -> if (!locked) unlocked() } }
+        unlocked()
+    }
+
+    /**
+     * Just unlocked: the "Unlock Muninn" notice goes, what was kept sealed while locked is opened (and deleted),
+     * and the relays are asked again for anything that had to stay with them.
+     */
+    private fun unlocked() {
+        getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove(LOCKED_ALERTED).apply()
+        NotificationManagerCompat.from(this).cancel(LOCKED_ID)
+        Thread {
+            try { nostr.openHeld() } catch (_: Exception) {}
+            nostr.resubscribe()
+        }.start()
+    }
+
+    /**
+     * Something arrived while locked. Nothing can be opened yet, so one notification says so: with a sound the
+     * first time, then silent until Muninn is unlocked. Never during Extreme battery saver (no notifications then).
+     */
+    @Synchronized
+    fun lockedNotice() {
+        if (power.extreme) return
+        val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
+        val alerted = prefs.getBoolean(LOCKED_ALERTED, false)
+        if (alerted && Build.VERSION.SDK_INT >= 23 && try {
+                getSystemService(NotificationManager::class.java).activeNotifications.any { it.id == LOCKED_ID }
+            } catch (_: Exception) { false }) return   // already showing
+        val open = PendingIntent.getActivity(this, LOCKED_ID, Intent(this, MainActivity::class.java).putExtra("chat", "inbox")
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(this, if (alerted) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Muninn").setContentText("Unlock Muninn to see new messages")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(if (alerted) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .apply { if (alerted) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
+        try { NotificationManagerCompat.from(this).notify(LOCKED_ID, n) } catch (_: SecurityException) {}
+        if (!alerted) prefs.edit().putBoolean(LOCKED_ALERTED, true).apply()
     }
 
     // ---- status: Away on its own after 10 minutes without a touch, and back to Online at the next one.
@@ -160,6 +203,9 @@ class Muninn : Application() {
             }
         }
     }
+
+    /** Extreme battery saver with Muninn not on screen: no ringing and no notifications, only the call history. */
+    fun quietUntilOpen(): Boolean = !visible && try { power.extreme } catch (_: Exception) { false }
 
     /** Do not disturb is picked on Your profile: no message sound, and calls don't ring out loud. */
     fun doNotDisturb(): Boolean = ready.value && runCatching { profile.myStatus.value == "dnd" }.getOrDefault(false)
@@ -256,6 +302,9 @@ class Muninn : Application() {
     companion object {
         const val MESSAGES = "raven_messages"
         const val QUIET = "raven_quiet"
+        /** The "Unlock Muninn to see new messages" notification (the same id the inbox notice always had). */
+        val LOCKED_ID = "inbox".hashCode()
+        private const val LOCKED_ALERTED = "lockedAlerted"
         val BUZZ = longArrayOf(0, 140, 90, 140)
         /** Without a touch this long while Online, the status goes to Away. */
         const val IDLE_MS = 10 * 60_000L

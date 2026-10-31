@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -67,6 +68,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -96,7 +98,11 @@ import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // The kids' TV screens: 1920 x 1080 is 960 x 540 dp.
 // Everything works with the D-pad, OK and Back alone: every action is a focusable tile, and focus shows as a
@@ -343,15 +349,23 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     if (micLevel) TvMicDialog(app) { micLevel = false }
     if (noise) TvNoiseDialog(app) { noise = false }
     if (setup) TvSetup(needs, onMic = { setup = false; micLevel = true }, onNoise = { setup = false; noise = true }) { setup = false }
-    TvUpdatePrompt { setup = true }
+    TvUpdatePrompt()
 }
 
 /** For a parent, once on the TV: what to allow so the TV can ring over a show, notify and update itself. */
 @Composable
 private fun TvSetup(needs: List<TvUpdate.Need>, onMic: () -> Unit, onNoise: () -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     var asked by remember { mutableStateOf<String?>(null) }
-    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { asked = null }
+    // Microphone and notifications: once Android won't show its "Allow" box any more, the button opens
+    // Muninn's app page instead, with what to pick there.
+    fun settingsOnly(id: String) = TvUpdate.permission(id)?.let { TvUpdate.settingsOnly(context, activity, it) } == true
+    var blocked by remember(needs) { mutableStateOf(needs.map { it.id }.filter { settingsOnly(it) }.toSet()) }
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        val id = asked; asked = null
+        if (!ok && id != null && settingsOnly(id)) blocked = blocked + id
+    }
     TvDialog(onBack = onDone) {
         Text("For a parent", style = tvTitle(30.sp))
         Text(if (needs.isEmpty()) "All set. This TV can ring, notify and update itself." else "Turn these on once, so calls come up over a show and Muninn keeps itself up to date.",
@@ -359,10 +373,13 @@ private fun TvSetup(needs: List<TvUpdate.Need>, onMic: () -> Unit, onNoise: () -
         val first = remember { FocusRequester() }
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             needs.forEachIndexed { i, n ->
-                BigButton(n.title, sub = n.why, requester = if (i == 0) first else null) {
-                    when (n.id) {
-                        "mic" -> { asked = n.id; perm.launch(Manifest.permission.RECORD_AUDIO) }
-                        "notify" -> { asked = n.id; if (android.os.Build.VERSION.SDK_INT >= 33) perm.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                val p = TvUpdate.permission(n.id)
+                val viaSettings = p != null && n.id in blocked
+                BigButton(n.title, sub = if (viaSettings) "Opens Muninn's settings. ${TvUpdate.howTo(n.id)}" else n.why, requester = if (i == 0) first else null) {
+                    when {
+                        viaSettings -> if (!TvUpdate.openAppPage(context))
+                            Ui.say("This TV doesn't have that screen. A parent can turn on “${n.title}” in the TV's Settings, under Apps, Muninn.", true)
+                        p != null -> { asked = n.id; TvUpdate.markAsked(context, p); perm.launch(p) }
                         else -> if (!TvUpdate.open(context, n.id)) Ui.say("This TV doesn't have that screen. A parent can turn on “${n.title}” in the TV's Settings, under Apps, Muninn.", true)
                     }
                 }
@@ -377,9 +394,12 @@ private fun TvSetup(needs: List<TvUpdate.Need>, onMic: () -> Unit, onNoise: () -
     }
 }
 
-/** A new Muninn is downloaded: OK on the remote brings up Android's Install box. */
+/**
+ * A new Muninn is downloaded: OK on the remote brings up Android's Install box. Never opens the For a parent
+ * list itself: that takes OK held for 5 seconds on its button.
+ */
 @Composable
-private fun TvUpdatePrompt(onSetup: () -> Unit) {
+private fun TvUpdatePrompt() {
     val context = LocalContext.current
     val st by TvUpdate.state.collectAsState()
     var later by remember { mutableStateOf(false) }
@@ -396,9 +416,19 @@ private fun TvUpdatePrompt(onSetup: () -> Unit) {
             Text("A new Muninn is ready", style = tvTitle(28.sp))
             Text("A parent needs to allow updates once: turn on \"Allow from this source\" for Muninn.", style = tvText(19.sp, Palette.textMuted),
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
-            DialogButtons(listOf("Open the setting" to { later = true; if (!TvUpdate.open(context, "install")) onSetup() }, "Later" to { later = true }))
+            DialogButtons(listOf("Open the setting" to {
+                later = true
+                if (!TvUpdate.open(context, "install")) Ui.say("This TV doesn't have that screen. A parent can hold OK on For a parent to finish setting up.", true)
+            }, "Later" to { later = true }))
         }
     }
+}
+
+/** The activity behind [this] (Android asks it whether a permission can still be asked for). */
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 /** Parents first, then everyone else, each by name. */
@@ -445,7 +475,7 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         }
         Latest(people, convs, onOpen)
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TvChip(if (setupLeft) "For a parent: finish setting up this TV" else "For a parent", null, quiet = true, onClick = onSetup)
+            TvHoldChip(if (setupLeft) "For a parent: finish setting up this TV (hold OK)" else "For a parent (hold OK)", onSetup)
             TvHoldChip("Connect a parent (hold OK)") { connect = true }
         }
     }
@@ -515,6 +545,7 @@ private sealed interface Overlay {
     data class Listening(val partial: String) : Overlay
     data class Heard(val text: String) : Overlay
     data object Recording : Overlay
+    data object Sending : Overlay
     data class Problem(val text: String) : Overlay
 }
 
@@ -534,12 +565,21 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     /** A photo shown full screen (its message id); Back goes back to the conversation. */
     var viewing by remember { mutableStateOf<String?>(null) }
 
+    // OK on Send, or the 5-minute limit: "Sending…" while the last of the clip is encoded off the main thread.
+    // Not tied to this screen, so a clip on its way is still sent if the screen goes.
     fun finishRecording() {
-        val r = TvRecorder.finish()
-        if (r != null) { app.chat.sendVoice(p.k, r.first, r.second); overlay = null; Ui.say("Sent to ${p.n}") }
-        else overlay = Overlay.Problem("That was too short. Keep talking a little longer next time.")
+        if (overlay != Overlay.Recording) return   // OK and the limit at once: sent once
+        overlay = Overlay.Sending
+        CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+            val r = TvRecorder.finish()
+            if (r != null) { app.chat.sendVoice(p.k, r.first, r.second); overlay = null; Ui.say("Sent to ${p.n}") }
+            else overlay = Overlay.Problem("That was too short. Keep talking a little longer next time.")
+        }
     }
-    fun cancel() { speech.close(); if (TvRecorder.recording.value) TvRecorder.cancel(); overlay = null }
+    fun cancel() {
+        if (overlay == Overlay.Sending) return   // a clip being sent finishes
+        speech.close(); if (TvRecorder.recording.value) TvRecorder.cancel(); overlay = null
+    }
 
     DisposableEffect(p.k) {
         app.openChat = p.k
@@ -568,11 +608,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     var afterMic by remember { mutableStateOf<(() -> Unit)?>(null) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val f = afterMic; afterMic = null
-        if (ok) f?.invoke() else overlay = Overlay.Problem("Muninn isn't allowed to use the microphone. Ask a parent to allow it.")
+        if (ok) f?.invoke() else overlay = Overlay.Problem("Muninn isn't allowed to use the microphone. Ask a parent to allow it under For a parent.")
     }
     fun withMic(f: () -> Unit) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) f()
-        else { afterMic = f; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
+        else { afterMic = f; TvUpdate.markAsked(context, Manifest.permission.RECORD_AUDIO); micPermission.launch(Manifest.permission.RECORD_AUDIO) }
     }
     fun listen() = withMic {
         Voice.stopPlaying()
@@ -600,8 +640,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     }
 
     val calls = cfg.calls
-    // The first button the remote lands on; never the Call button while it's off or can't work (no mic).
-    val firstId: String? = when { dictate -> "say"; mic -> "rec"; cfg.quick.isNotEmpty() -> cfg.quick.first().id; mic && calls -> "call"; else -> null }
+    // The first button the remote lands on: the Call button only when nothing else is there.
+    val firstId: String? = TvRules.firstTalkFocus(dictate, mic, calls, cfg.quick.map { it.id })
+    val focusManager = LocalFocusManager.current
     val first = remember { FocusRequester() }
     fun req(id: String) = if (id == firstId) first else null
 
@@ -638,7 +679,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             }
         }
     }
-    LaunchedEffect(firstId) { if (firstId != null) { delay(80); try { first.requestFocus() } catch (_: Exception) {} } }
+    LaunchedEffect(firstId) {
+        delay(80)
+        // No button at all: the first thing that takes focus (a voice message or photo), so the remote has a place to start.
+        try { if (firstId != null) first.requestFocus() else focusManager.moveFocus(FocusDirection.Next) } catch (_: Exception) {}
+    }
 
     viewing?.let { id ->
         val photos = msgs.filter { it.photo.isNotEmpty() && it.voice == 0 }
@@ -668,6 +713,10 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     Text("Press OK to send it to ${p.n}. Back stops without sending.", style = tvText(19.sp, Palette.textMuted),
                         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                     DialogButtons(listOf("Send" to { finishRecording() }))
+                }
+                Overlay.Sending -> {
+                    MIcon("mic", Palette.goldBright, 56.dp)
+                    Text("Sending…", style = tvTitle(28.sp), modifier = Modifier.padding(top = 14.dp))
                 }
                 is Overlay.Problem -> {
                     Text(o.text, style = tvText(24.sp), textAlign = TextAlign.Center)

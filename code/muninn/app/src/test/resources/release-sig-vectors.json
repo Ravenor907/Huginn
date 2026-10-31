@@ -1,5 +1,5 @@
 {
- "note": "Ed25519 release signatures (RFC 8032), docs/releases.md; written by tools/release_sig_ref.py",
+ "note": "Ed25519 release signatures (RFC 8032), shared/docs/releases.md; written by shared/tools/release_sig_ref.py",
  "cases": [
   {
    "name": "RFC 8032 test 1",

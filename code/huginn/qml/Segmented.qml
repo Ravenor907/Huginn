@@ -28,13 +28,13 @@ Rectangle {
             model: seg.options
             Rectangle {
                 readonly property bool on: modelData.value === seg.value
-                width: seg.squeezed ? Math.floor((seg.width - 2) / Math.max(1, seg.options.length)) : Math.max(txt.implicitWidth + Theme.px(28), seg.cell)
-                height: seg.height - 2
+                width: seg.squeezed ? Math.max(0, Math.floor((seg.width - 2) / Math.max(1, seg.options.length))) : Math.max(txt.implicitWidth + Theme.px(28), seg.cell)
+                height: Math.max(0, seg.height - 2)
                 color: on ? Theme.accentFill : "transparent"
                 Text {
                     id: txt
                     anchors.centerIn: parent
-                    width: Math.min(implicitWidth, parent.width - Theme.px(8))
+                    width: Math.max(0, Math.min(implicitWidth, parent.width - Theme.px(8)))
                     elide: Text.ElideRight
                     text: modelData.label
                     color: parent.on ? Theme.accent : Theme.textSoft

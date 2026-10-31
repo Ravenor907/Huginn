@@ -45,27 +45,105 @@ async function readBody(request) {
   }
 }
 
-// The address is never stored: only a hash of it with the day, so the KV store holds no addresses.
-async function ipKey(ip, day) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ip:" + day + ":" + ip));
-  return "i:" + day + ":" + [...new Uint8Array(digest)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+// The address is never stored or logged. The count is kept under an HMAC of the address group and the day,
+// keyed with a secret only the Worker has (TURN_KEY_API_TOKEN), so the stored key can't be reversed by trying
+// every address. IPv6 addresses count by their /64 (one home or one device), so one /64 can't dodge the cap.
+export function addressGroup(raw) {
+  const ip = String(raw || "unknown").trim().toLowerCase().split("%")[0];
+  if (!ip.includes(":")) return ip;
+  let text = ip;
+  const v4 = text.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const b = v4.slice(2).map(Number);
+    if (b.some((x) => x > 255)) return ip;
+    text = v4[1] + ((b[0] << 8) | b[1]).toString(16) + ":" + ((b[2] << 8) | b[3]).toString(16);
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return ip;
+  const groups = [...head, ...Array(Math.max(fill, 0)).fill("0"), ...tail];
+  if (!groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return ip;
+  const n = groups.map((g) => parseInt(g, 16));
+  // An IPv4 address written as IPv6 (::ffff:a.b.c.d) counts as that IPv4 address.
+  if (n.slice(0, 5).every((x) => x === 0) && n[5] === 0xffff) {
+    return [n[6] >> 8, n[6] & 255, n[7] >> 8, n[7] & 255].join(".");
+  }
+  return n.slice(0, 4).map((x) => x.toString(16)).join(":") + "::/64";
 }
 
-async function takeQuota(kv, id, ip, nowSec) {
+async function ipKey(secret, ip, day) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, enc.encode("ip:" + day + ":" + addressGroup(ip)));
+  return [...new Uint8Array(mac)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// One SQLite-backed Durable Object keeps every daily count. All counting for one login happens in one
+// synchronous step inside it, so two requests at the same moment can't both slip under a cap.
+// Each login writes 3 rows (everyone, this install, this address). Rows from earlier days are deleted
+// the first time the object sees a new day.
+export const SQL = {
+  schema:
+    "CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, k)) WITHOUT ROWID",
+  wipe: "DELETE FROM counts WHERE day < ?",
+  read: "SELECT k, n FROM counts WHERE day = ? AND k IN (?, ?, ?)",
+  bump: "INSERT INTO counts (day, k, n) VALUES (?, ?, 1) ON CONFLICT (day, k) DO UPDATE SET n = n + 1",
+};
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export class RelayLimits {
+  constructor(ctx) {
+    this.sql = ctx.storage.sql;
+    this.sql.exec(SQL.schema);
+    this.wipedBefore = null;
+  }
+
+  take(day, id, ip) {
+    if (this.wipedBefore === null || day > this.wipedBefore) {
+      this.sql.exec(SQL.wipe, day);
+      this.wipedBefore = day;
+    }
+    const g = "g";
+    const u = "u:" + id;
+    const i = "i:" + ip;
+    const have = new Map(this.sql.exec(SQL.read, day, g, u, i).toArray().map((r) => [r.k, Number(r.n)]));
+    if ((have.get(g) || 0) >= GLOBAL_DAILY) return "global";
+    if ((have.get(i) || 0) >= PER_IP_DAILY) return "ip";
+    if ((have.get(u) || 0) >= PER_ID_DAILY) return "id";
+    for (const k of [g, u, i]) this.sql.exec(SQL.bump, day, k);
+    return "ok";
+  }
+
+  async fetch(request) {
+    let body;
+    try {
+      body = JSON.parse(await request.text());
+    } catch {
+      return json(400, { error: "bad_request" });
+    }
+    const { day, id, ip } = body || {};
+    if (typeof day !== "string" || !DAY.test(day) || typeof id !== "string" || !HEX64.test(id) || typeof ip !== "string" || !/^[0-9a-f]{32}$/.test(ip)) {
+      return json(400, { error: "bad_request" });
+    }
+    return json(200, { result: this.take(day, id, ip) });
+  }
+}
+
+async function takeQuota(env, id, ip, nowSec) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
-  const gKey = "g:" + day;
-  const uKey = "u:" + day + ":" + id;
-  const iKey = await ipKey(ip, day);
-  const [gRaw, uRaw, iRaw] = await Promise.all([kv.get(gKey), kv.get(uKey), kv.get(iKey)]);
-  const g = parseInt(gRaw || "0", 10) || 0;
-  const u = parseInt(uRaw || "0", 10) || 0;
-  const i = parseInt(iRaw || "0", 10) || 0;
-  if (g >= GLOBAL_DAILY) return "global";
-  if (i >= PER_IP_DAILY) return "ip";
-  if (u >= PER_ID_DAILY) return "id";
-  const opts = { expirationTtl: 172800 };
-  await Promise.all([kv.put(gKey, String(g + 1), opts), kv.put(uKey, String(u + 1), opts), kv.put(iKey, String(i + 1), opts)]);
-  return "ok";
+  const stub = env.LIMITS.get(env.LIMITS.idFromName("limits"));
+  const res = await stub.fetch("https://limits/take", {
+    method: "POST",
+    body: JSON.stringify({ day, id, ip: await ipKey(env.TURN_KEY_API_TOKEN, ip, day) }),
+  });
+  if (res.status !== 200) throw new Error("limits");
+  const { result } = await res.json();
+  if (!["ok", "global", "ip", "id"].includes(result)) throw new Error("limits");
+  return result;
 }
 
 async function handleTurn(request, env, nowSec) {
@@ -82,12 +160,12 @@ async function handleTurn(request, env, nowSec) {
   if (Math.abs(nowSec - t) > SKEW) return json(401, { error: "stale" });
   if (!(await verifySig(env.APP_SECRET, id, t, sig))) return json(401, { error: "bad_sig" });
 
-  // Without the KV store the limits can't be kept (memory resets whenever Cloudflare restarts the Worker),
-  // so nothing is handed out: the daily caps are the only thing guarding the TURN account.
+  // Without the limits object the caps can't be kept, so nothing is handed out:
+  // the daily caps are the only thing guarding the TURN account.
   if (!env.LIMITS) return json(503, { error: "limits_unavailable" });
   let quota;
   try {
-    quota = await takeQuota(env.LIMITS, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec);
+    quota = await takeQuota(env, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec);
   } catch {
     return json(503, { error: "limits_unavailable" });
   }

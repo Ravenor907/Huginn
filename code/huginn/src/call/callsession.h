@@ -99,6 +99,7 @@ public:
     // Set before start() or takeOffer():
     bool c2Local = true;      // this side speaks c2 (the self-test turns it off to act without c2)
     bool trusted = false;     // this side trusts the peer: direct internet path allowed (5.8.1)
+    bool internet = true;     // false (Settings › Internet calls off): no relay, no STUN, no direct path
     bool videoCodec = false;  // this build has VP8 (Huginn on Windows; Muninn always)
     bool wantVideo = false;   // start with the camera on (a video call)
     QString stunHost;         // self-test: another STUN server ("host:port")

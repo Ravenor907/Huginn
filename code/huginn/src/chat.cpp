@@ -15,6 +15,7 @@
 #include "nostr.h"
 #include "photos.h"
 #include "vault.h"
+#include "platform/scratch.h"
 
 #include <QPointer>
 #include <QThreadPool>
@@ -90,6 +91,8 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     if (m_settings.contains(QStringLiteral("chat/pub")) && !m_settings.contains(QStringLiteral("chat/linkPreviews")))
         m_settings.setValue(QStringLiteral("chat/linkPreviews"), true);
     connect(&m_http, &QNetworkAccessManager::sslErrors, this, [](QNetworkReply *r, const QList<QSslError> &) { r->ignoreSslErrors(); });
+    // Hidden from people nearby: nearby sharing sends nothing about this computer on its own (even while locked).
+    m_net->silent = [this] { return !visibleNearby(); };
     // Nothing is readable until the vault is open: start then.
     connect(m_vault, &Vault::opened, this, &Chat::start);
     // Erase everything: the ratchet state and kept envelopes go with the vault's files.
@@ -112,6 +115,9 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
             m_trash.clear();
             m_mxOut.clear();
             m_pins.clear();
+            m_prefs = QJsonObject();
+            m_prefsLoaded = false;
+            m_tempName.clear();
         }
     });
     if (!m_vault->locked())
@@ -140,6 +146,7 @@ void Chat::start()
     }
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
+    loadPrefs();
     load();
     m_seen.load(m_vault->read(QStringLiteral("seen.json")), now(), 2 * kDay);
     // Cap s1 for everyone (contacts, linked devices, group peers): who said it, and since when their envelopes come bound.
@@ -163,13 +170,12 @@ void Chat::start()
 
     m_net->chatInfo = [this] {
         QJsonObject o{{QStringLiteral("chatApp"), QStringLiteral("huginn")}};
-        // Hidden from people nearby: no name at all, not even the computer's (LocalSend's alias), and no chat key or
-        // mailbox either: a hint that changes every day, which only contacts (who have the key) can match (cap s1).
+        // Hidden from people nearby: no name at all, not even the computer's (LocalSend's alias), no chat key,
+        // no mailbox and no hint either. Nearby sharing announces nothing then (LocalSend::silent).
         if (visibleNearby()) {
             o.insert(QStringLiteral("chatKey"), myKey());
             o.insert(QStringLiteral("mailbox"), m_nostr->publicKey());
         } else {
-            o.insert(QStringLiteral("hint"), Proof::hintNow(myKey()));
             o.insert(QStringLiteral("alias"), QStringLiteral("Huginn"));
         }
         if (nearbyOn())
@@ -234,13 +240,52 @@ void Chat::start()
 
 // ------------------------------------------------------------------ identity
 
+void Chat::loadPrefs()
+{
+    m_prefs = QJsonDocument::fromJson(m_vault->read(QStringLiteral("prefs.json"))).object();
+    m_prefsLoaded = true;
+    // Found in plain settings (a restore or a move puts them there, so they win): moved into the
+    // vault, then removed there.
+    bool moved = false;
+    const QString name = m_settings.value(QStringLiteral("chat/username")).toString();
+    if (!name.isEmpty()) {
+        m_prefs.insert(QStringLiteral("username"), name);
+        moved = true;
+    }
+    const QStringList plainBlocked = m_settings.value(QStringLiteral("chat/muted")).toStringList();
+    if (!plainBlocked.isEmpty()) {
+        QStringList all = blockedKeys();
+        for (const QString &k : plainBlocked)
+            if (!all.contains(k))
+                all << k;
+        m_prefs.insert(QStringLiteral("muted"), QJsonArray::fromStringList(all));
+        moved = true;
+    }
+    // Only dropped from plain settings once the vault really has them.
+    if (moved && !m_vault->write(QStringLiteral("prefs.json"), QJsonDocument(m_prefs).toJson(QJsonDocument::Compact)))
+        return;
+    m_settings.remove(QStringLiteral("chat/username"));
+    m_settings.remove(QStringLiteral("chat/muted"));
+}
+
+void Chat::savePrefs() const
+{
+    if (m_prefsLoaded)
+        m_vault->write(QStringLiteral("prefs.json"), QJsonDocument(m_prefs).toJson(QJsonDocument::Compact));
+}
+
 QString Chat::username() const
 {
-    QString n = m_settings.value(QStringLiteral("chat/username")).toString();
+    QString n = m_prefs.value(QStringLiteral("username")).toString();
     if (n.isEmpty()) {
-        // Random until the person picks one, so nobody is named by default.
-        n = QStringLiteral("Raven %1").arg(QRandomGenerator::global()->bounded(1000, 10000));
-        const_cast<QSettings &>(m_settings).setValue(QStringLiteral("chat/username"), n);
+        // Random until the person picks one, so nobody is named by default. Kept once the vault is open.
+        if (m_tempName.isEmpty())
+            m_tempName = QStringLiteral("Raven %1").arg(QRandomGenerator::global()->bounded(1000, 10000));
+        n = m_tempName;
+        if (m_prefsLoaded) {
+            m_prefs.insert(QStringLiteral("username"), n);
+            savePrefs();
+        }
     }
     return n;
 }
@@ -250,7 +295,9 @@ void Chat::setUsername(const QString &v)
     const QString t = v.trimmed().left(24);
     if (t.isEmpty() || t == username())
         return;
-    m_settings.setValue(QStringLiteral("chat/username"), t);
+    m_tempName = t;
+    m_prefs.insert(QStringLiteral("username"), t);
+    savePrefs();
     m_net->announce();
     Q_EMIT changed();
 }
@@ -1011,15 +1058,16 @@ void Chat::declineRequest(const QString &key)
     Q_EMIT changed();
 }
 
-bool Chat::isBlocked(const QString &key) const { return m_settings.value(QStringLiteral("chat/muted")).toStringList().contains(key); }
+bool Chat::isBlocked(const QString &key) const { return blockedKeys().contains(key); }
 
 void Chat::block(const QString &key, bool on)
 {
-    QStringList m = m_settings.value(QStringLiteral("chat/muted")).toStringList();
+    QStringList m = blockedKeys();
     m.removeAll(key);
     if (on)
         m << key;
-    m_settings.setValue(QStringLiteral("chat/muted"), m);
+    m_prefs.insert(QStringLiteral("muted"), QJsonArray::fromStringList(m));
+    savePrefs();
     if (on) {
         m_requests.remove(key);
         m_held.remove(key);
@@ -2048,7 +2096,7 @@ void Chat::sendNearby(const QString &text)
         return;
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     addNearby(message(id, myKey(), username(), t, true, QString()));
-    const QStringList muted = m_settings.value(QStringLiteral("chat/muted")).toStringList();
+    const QStringList muted = blockedKeys();
     QSet<QString> done;
     for (const QVariant &v : m_ble->peers()) {
         const QString k = str(v.toMap(), "chatKey");
@@ -2590,6 +2638,7 @@ void Chat::prune()
         pruneTrash();
     // Every chat's message limit (cap d1, chatlimits.cpp); runs at start too.
     pruneToLimits();
+    Q_EMIT pruned();
 }
 
 void Chat::save()
@@ -2807,7 +2856,7 @@ QVariantList Chat::people() const
             out << QVariantMap{{QStringLiteral("key"), it.key()}, {QStringLiteral("name"), shown(it.key())}, {QStringLiteral("contact"), false},
                                {QStringLiteral("verified"), isVerified(it.key())}, {QStringLiteral("blocked"), isBlocked(it.key())}};
         }
-    for (const QString &k : m_settings.value(QStringLiteral("chat/muted")).toStringList())
+    for (const QString &k : blockedKeys())
         if (!seen.contains(k) && !isTrashed(k))
             out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), shown(k)}, {QStringLiteral("contact"), false},
                                {QStringLiteral("verified"), false}, {QStringLiteral("blocked"), true}};
@@ -3167,12 +3216,14 @@ bool Chat::pasteImage(const QString &where)
     const QImage img = c ? c->image() : QImage();
     if (img.isNull())
         return false;
-    const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
-        QStringLiteral("huginn-paste-%1.png").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-    if (!img.save(path, "PNG"))
+    // Linux: the memory-backed runtime folder. Windows: Huginn's private scratch folder (see Scratch).
+    const QString path = Scratch::path(QStringLiteral("huginn-paste-%1.png").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!img.save(path, "PNG")) {
+        Scratch::shred(path);
         return false;
+    }
     const bool ok = sendPhoto(where, path, false);   // a contact, or "g:<group>:<channel>"
-    QFile::remove(path);
+    Scratch::shred(path);
     return ok;
 }
 

@@ -2,6 +2,7 @@
 
 #include "vault.h"
 
+#include <QHash>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QObject>
@@ -103,7 +104,10 @@ private:
     Vault *m_vault;
     Link *m_link;
     LocalSend *m_net;
-    QSettings m_settings;
+    QSettings m_settings;          // only to move anything found under move/ into the vault, then drop it
+    QHash<QString, QJsonObject> m_mem;   // in and out while the vault is locked or erased (this run only)
+    void vaultOpened();
+    void resume();                 // a move that was under way when Huginn closed goes on
     QNetworkAccessManager m_http;
     QTimer m_timer;
     QVariantMap m_in, m_out;

@@ -20,7 +20,12 @@ QList<QHostAddress> addresses();
 // The first private IPv4 address on a LAN interface (what goes in the QR code and the scan); empty if none.
 QString firstIPv4();
 // True when the address is inside one of the LAN interfaces' own subnets: someone on the same Wi-Fi.
+// IPv4 and IPv6 alike (an IPv4 peer seen through an IPv6 socket counts as IPv4).
 bool isNeighbour(const QHostAddress &peer);
+// A peer's address as text: dotted IPv4 (also for ::ffff:a.b.c.d), otherwise IPv6 with its scope.
+QString text(const QHostAddress &peer);
+// The same, ready for a URL's host: IPv6 in brackets, its scope written %25.
+QString urlHost(const QString &ip);
 // The LAN interfaces themselves (for multicast).
 QList<QNetworkInterface> interfaces();
 // Checks the address and interface rules (for CI); prints what it found.

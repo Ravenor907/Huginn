@@ -14,8 +14,9 @@ Rectangle {
     anchors.horizontalCenter: parent.horizontalCenter
     y: Theme.px(84)
     z: 50
-    // As wide as the words, up to the window; longer ones wrap onto a few lines.
-    width: Math.min(msg.implicitWidth + Theme.px(48), parent.width - Theme.px(32))
+    // As wide as the words, up to the window; longer ones wrap onto a few lines. The words are measured
+    // on their own (not from msg, whose width follows this one).
+    width: Math.max(Theme.px(48), Math.min(Math.ceil(natural.advanceWidth) + Theme.px(50), parent.width - Theme.px(32)))
     height: Math.max(Theme.px(52), msg.height + Theme.px(24))
     radius: Theme.radius
     color: Theme.panel
@@ -35,5 +36,6 @@ Rectangle {
         font.family: Theme.body
         font.pixelSize: Theme.fs(17)
     }
+    TextMetrics { id: natural; font: msg.font; text: msg.text }
     Timer { id: hide; interval: 3200; onTriggered: toast.opacity = 0 }
 }

@@ -180,6 +180,16 @@ object CallManager {
     /** Clears an ended call from the screen. */
     fun dismiss() { if (_call.value?.phase == CallSession.Phase.ENDED) _call.value = null }
 
+    /**
+     * Calls follow their chat's message limit, like messages (Chat.prune, every minute): a call from before
+     * [cutoff] for that person (ms) goes from the history.
+     */
+    fun pruneOlder(cutoff: (String) -> Long) = exec.execute {
+        val before = _history.value
+        val keep = before.filter { l -> l.at >= try { cutoff(l.peerKey) } catch (_: Exception) { 0L } }
+        if (keep.size != before.size) { _history.value = keep; app?.let { save(it) } }
+    }
+
     fun deleteLog(id: String) = exec.execute { _history.value = _history.value.filterNot { it.id == id }; app?.let { save(it) } }
     fun clearHistory() = exec.execute { _history.value = emptyList(); app?.let { save(it) } }
 
@@ -209,6 +219,8 @@ object CallManager {
             }
             if (!remember(s.call)) return@execute   // an old call's late retry
             if (a.chat.blocked.value.contains(fromKey)) return@execute
+            // Extreme battery saver: calls ring only while Muninn is open. Otherwise it's in the call history as missed.
+            if (a.quietUntilOpen()) { addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed")); return@execute }
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
             CallVideo.attach(a, ns, false)
             session = ns

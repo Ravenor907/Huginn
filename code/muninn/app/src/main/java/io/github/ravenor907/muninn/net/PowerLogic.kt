@@ -31,13 +31,16 @@ package io.github.ravenor907.muninn.net
  * - The "Always right away" list ([rightAway]: the Family folder to start with, plus or minus anyone): low
  *   battery, quiet hours and checking less never hold their messages or notifications back. While anyone is
  *   on it, the one connection keeps its 5-minute check.
+ * - Extreme battery saver ([Inputs.extreme]): fully manual. Nothing in the background at all: no connection, no
+ *   inbox checks, no alarms, so no notifications. Messages arrive when Muninn is opened or Chats is refreshed, and
+ *   calls ring only while Muninn is open. A call already under way and a Kids' TV still stay connected.
  * - Bluetooth and Nearby look for phones close by only while Muninn is open, unless "Find phones close by in
  *   the background" is on. Wi-Fi discovery runs fully only on the Files tab, in a transfer or Direct connect.
  */
 object PowerLogic {
     enum class Radio { FULL, LOW, OFF }
 
-    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, TALKING, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN }
+    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, TALKING, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN, EXTREME }
 
     /** Settings › Notifications › Check for messages. */
     enum class Check(val key: String, val title: String) {
@@ -85,7 +88,12 @@ object PowerLogic {
         val rightAway: Boolean = false,
         /** A message was sent or received in the last [TALK_MS]: the conversation window. */
         val talking: Boolean = false,
+        /** Extreme battery saver: nothing in the background, Muninn only fetches while open (see [manual]). */
+        val extreme: Boolean = false,
     )
+
+    /** Extreme battery saver is in charge: nothing runs in the background (a Kids' TV always listens). */
+    fun manual(i: Inputs): Boolean = i.extreme && !i.kidsTv
 
     /** Check less when it's quiet: how drowsy Muninn is now (0 awake, 1 after [DROWSY_MS], 2 after twice that). */
     fun drowsy(i: Inputs): Int = when {
@@ -122,6 +130,7 @@ object PowerLogic {
      * A low battery never changes it (it checks the one connection less often instead).
      */
     fun effective(i: Inputs): Check {
+        if (manual(i)) return Check.OPEN
         val q = i.quiet
         if (q == null || quietHeld(i)) return i.check
         return if (q.ordinal > i.check.ordinal) q else i.check
@@ -136,7 +145,17 @@ object PowerLogic {
     }
 
     /** Why [effective] isn't the person's own choice: "quiet", else "". */
-    fun because(i: Inputs): String = if (effective(i) != i.check) "quiet" else ""
+    fun because(i: Inputs): String = if (!manual(i) && effective(i) != i.check) "quiet" else ""
+
+    /**
+     * How often the background inbox job runs (0: never). Quiet hours that use "Only when open" still wake Muninn
+     * hourly, only to see whether they've ended; Extreme battery saver never runs it.
+     */
+    fun jobMinutes(i: Inputs): Long = when {
+        manual(i) -> 0L
+        effective(i) == Check.OPEN && i.check != Check.OPEN -> 60L
+        else -> everyMinutes(i)
+    }
 
     /**
      * [relays]: how many relay sockets stay open (null: all of them, 0: none). [pingMs]: how often
@@ -203,6 +222,8 @@ object PowerLogic {
             i.inCall -> full(Why.CALL)
             i.kidsTv -> full(Why.KIDS_TV)
             i.foreground -> Plan(Why.OPEN, OPEN_RELAYS, FAST_PING_MS, Radio.FULL, wifiOpen)
+            // Fully manual: nothing at all until Muninn is opened again, charging or not, sharing or not.
+            manual(i) -> Plan(Why.EXTREME, 0, AWAY_PING_MS, Radio.OFF, Radio.OFF)
             // Nothing in the background, not even on the charger: Muninn catches up when it's opened.
             check == Check.OPEN -> Plan(Why.ONLY_OPEN, 0, AWAY_PING_MS, Radio.OFF, Radio.OFF, why)
             i.alwaysFull && check == Check.LIVE -> full(Why.ALWAYS)
@@ -251,6 +272,7 @@ object PowerLogic {
         Why.EVERY_15 -> "Checking for messages about every 15 minutes. Calls in between show as missed"
         Why.EVERY_HOUR -> "Checking for messages about once an hour. Calls in between show as missed"
         Why.ONLY_OPEN -> "Not checking until you open Muninn. No notifications or calls until then"
+        Why.EXTREME -> "Extreme battery saver: nothing runs in the background. No notifications. Messages arrive when you open Muninn or refresh. Calls ring only while Muninn is open"
     }
 
     /** How a message that arrived is shown: with sound and on screen, quietly in the list, or not until Muninn opens. */

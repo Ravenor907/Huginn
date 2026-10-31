@@ -2,7 +2,8 @@ import QtQuick
 import Huginn
 
 // Files going straight to or from one person over the internet (cap f1): what each is doing, with Stop
-// while it runs and a close button once it's over. Empty (and no height) when there are none.
+// while it runs and a close button once it's over. A big file from them (50 MB or more) waits with
+// Accept and Decline. Empty (and no height) when there are none.
 Column {
     id: strip
     property string peer: ""
@@ -14,6 +15,7 @@ Column {
         model: strip.items
         delegate: Rectangle {
             readonly property bool running: modelData.state !== "done" && modelData.state !== "failed"
+            readonly property bool asking: modelData.state === "asking" && !modelData.mine
             width: strip.width
             height: Theme.px(52)
             radius: Theme.radius
@@ -39,7 +41,7 @@ Column {
             }
             Column {
                 anchors.left: fileIcon.right; anchors.leftMargin: Theme.px(10)
-                anchors.right: stop.left; anchors.rightMargin: Theme.px(10)
+                anchors.right: take.visible ? take.left : stop.left; anchors.rightMargin: Theme.px(10)
                 anchors.verticalCenter: parent.verticalCenter
                 Text {
                     width: parent.width; elide: Text.ElideMiddle
@@ -54,13 +56,23 @@ Column {
                 }
             }
             HButton {
+                id: take
+                visible: parent.asking
+                anchors.right: stop.left; anchors.rightMargin: Theme.px(6)
+                anchors.verticalCenter: parent.verticalCenter
+                height: Theme.px(36); fontSize: 14
+                text: "Accept"
+                kind: "primary"
+                onClicked: FileLink.accept(modelData.id)
+            }
+            HButton {
                 id: stop
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
                 anchors.verticalCenter: parent.verticalCenter
                 height: Theme.px(36); fontSize: 14
-                text: parent.running ? "Stop" : "Close"
+                text: parent.asking ? "Decline" : parent.running ? "Stop" : "Close"
                 kind: parent.running ? "danger" : "normal"
-                onClicked: parent.running ? FileLink.cancel(modelData.id) : FileLink.dismiss(modelData.id)
+                onClicked: parent.asking ? FileLink.decline(modelData.id) : parent.running ? FileLink.cancel(modelData.id) : FileLink.dismiss(modelData.id)
             }
         }
     }

@@ -70,7 +70,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val eoseAt = ConcurrentHashMap<String, Long>()
     /** Relays whose inbox request finished at least once on the socket open now. */
     private val subscribed = ConcurrentHashMap<String, Boolean>()
-    /** Something was handed over and not taken (Muninn locked): don't move [eoseAt] on until it's read. */
+    /** Something was handed over and not taken (locked with the store full): don't move [eoseAt] on until it's read. */
     @Volatile private var refused = false
     /** Relay-side pings: per socket, how many were counted already; per relay, the total and the time connected. */
     private val pingsSeen = ConcurrentHashMap<WebSocket, Int>()
@@ -83,6 +83,50 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** Every envelope that arrives for this phone (content of the event). Return false to see it again later. */
     var onEnvelope: ((String) -> Boolean)? = null
+    /** Something arrived while Muninn is locked (kept to open after unlocking, or left on the relays when the store is full). */
+    var onLocked: (() -> Unit)? = null
+
+    /**
+     * Envelopes that arrived while locked, kept as they came (still sealed, exactly what the relays hold) in Muninn's
+     * private files, so the relays don't hand them over again at every reconnect. Opened and deleted after unlocking
+     * ([openHeld]). At most [HELD_MAX] envelopes and [HELD_BYTES] in all; beyond that they stay on the relays.
+     */
+    private val heldFile = java.io.File(context.filesDir, "nostr-held.json")
+    private val heldLock = Any()
+
+    /** Keeps [content] for after unlocking. False when the store is full. */
+    private fun hold(content: String): Boolean = synchronized(heldLock) {
+        val list = readHeld()
+        if (content in list) return true
+        if (!NetLogic.mayHold(list.size, list.sumOf { it.length.toLong() }, content.length.toLong(), HELD_MAX, HELD_BYTES)) return false
+        list.add(content)
+        writeHeld(list)
+    }
+
+    private fun readHeld(): MutableList<String> = try {
+        if (!heldFile.exists()) mutableListOf() else JSONArray(heldFile.readText()).let { a -> MutableList(a.length()) { a.getString(it) } }
+    } catch (_: Exception) { mutableListOf() }
+
+    private fun writeHeld(list: List<String>): Boolean = try {
+        val tmp = java.io.File(heldFile.path + ".tmp")
+        tmp.writeText(JSONArray(list).toString())
+        tmp.renameTo(heldFile)
+    } catch (_: Exception) { false }
+
+    /**
+     * Unlocked: everything kept while locked goes to [onEnvelope] now, oldest first, and the store is deleted
+     * once it's all been handed over. Run off the main thread.
+     */
+    fun openHeld() {
+        val list = synchronized(heldLock) { readHeld() }
+        if (list.isEmpty()) { heldFile.delete(); return }
+        for (content in list) try { onEnvelope?.invoke(content) } catch (_: Exception) {}
+        synchronized(heldLock) {
+            // Anything kept meanwhile (locked again already) stays for the next unlock.
+            val rest = readHeld().filter { it !in list }
+            if (rest.isEmpty()) heldFile.delete() else writeHeld(rest)
+        }
+    }
 
     private val _connected = MutableStateFlow(0)
     val connected: StateFlow<Int> = _connected.asStateFlow()
@@ -338,6 +382,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Asks every open relay for the inbox again: after unlocking, so what came while locked is read now. */
     fun resubscribe() {
         refused = false
+        synchronized(seen) { announced.clear() }
         for ((url, ws) in sockets) if (live[url] == true) subscribe(url, ws)
     }
 
@@ -388,8 +433,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     if (a.optString(1) == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
                     else if (a.optString(1) == subId) subscribed[url] = true
                     // Everything this relay held for me has been handed over (and the inbox request is still open):
-                    // next time ask only for what's newer. Not while something waits to be read (locked).
-                    if (sockets[url] === webSocket && subscribed[url] == true && !refused && secretHex() != null) {
+                    // next time ask only for what's newer. Not while something had to stay on the relays (locked, with the
+                    // locked store full): it must come again after unlocking.
+                    if (sockets[url] === webSocket && subscribed[url] == true && !refused) {
                         eoseAt[url] = System.currentTimeMillis() / 1000
                         saveSoon()
                     }
@@ -478,7 +524,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }
     }
 
-    /** Events already announced while locked (not opened yet): say "New message" once, not per relay. */
+    /** Events left on the relays while locked (the store was full): handled once, not once per relay. */
     private val announced = HashSet<String>()
 
     private fun handle(ev: JSONObject) {
@@ -486,14 +532,20 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         // The same event comes from every relay at once: only one copy is handled at a time.
         synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
         val locked = secretHex() == null
-        if (locked && synchronized(seen) { !announced.add(id) }) { synchronized(seen) { working.remove(id) }; return }
+        // Already said once that it's waiting on the relays (the store was full): not again for every relay.
+        if (locked && synchronized(seen) { id in announced }) { synchronized(seen) { working.remove(id) }; return }
         try {
             // Only trust what the event's own signature covers. A broken event (keys or signature that aren't hex) is
             // dropped, never thrown up into the socket, and one whose id is its own is never looked at again.
             val own = try { idOf(ev) == id } catch (e: Exception) { false }
             val good = own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false }
             if (!good) { if (own) synchronized(seen) { seen.add(id) }; return }
-            if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused = true; return }
+            if (locked) {
+                // Kept sealed until unlocking, and counted as read here, so the relays don't send it again.
+                val kept = hold(ev.optString("content"))
+                try { onLocked?.invoke() } catch (_: Exception) {}
+                if (!kept) { synchronized(seen) { announced.add(id) }; refused = true; return }
+            } else if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused = true; return }
         } finally { synchronized(seen) { working.remove(id) } }
         synchronized(seen) {
             seen.add(id)
@@ -607,6 +659,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         /** A check the relay sent on its own (a WebSocket ping), for the battery report. */
         const val SERVER_PING = "serverPing"
         private const val SAVE_EVERY_S = 30L
+        /** Envelopes kept while locked: at most this many, and this many characters in all. */
+        const val HELD_MAX = 500
+        const val HELD_BYTES = 4_000_000L
         private const val BURST_SECONDS = 20L
         /** How long a sending socket stays open after the last thing given to it. */
         private const val SEND_SECONDS = 20L

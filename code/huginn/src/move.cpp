@@ -429,6 +429,17 @@ Move::Move(Chat *chat, Vault *vault, Link *link, LocalSend *net, QObject *parent
     m_linkTimer.setSingleShot(true);
     m_linkTimer.setInterval(int(kLinkMs));
     connect(&m_linkTimer, &QTimer::timeout, this, [this] { m_movedK.clear(); publish(); });
+    connect(m_vault, &Vault::opened, this, &Move::vaultOpened);
+    if (!m_vault->locked())
+        vaultOpened();
+    else
+        publish();
+}
+
+void Move::resume()
+{
+    if (m_locked)
+        return;
     const QJsonObject out = load(QStringLiteral("out"));
     if (jstr(out, "state") == QLatin1String("moving")) {
         // Moving was under way when Huginn closed: still locked, and it goes on.
@@ -437,10 +448,47 @@ Move::Move(Chat *chat, Vault *vault, Link *link, LocalSend *net, QObject *parent
         m_lastHeard = QDateTime::currentMSecsSinceEpoch();
         m_timer.start();
     }
+}
+
+// Everything about a move is kept in the vault ("move.json"). Anything found in plain settings
+// (under move/) is moved in once the vault opens and removed from there; what is stored while the
+// vault is locked waits in memory until then.
+void Move::vaultOpened()
+{
+    QJsonObject all = QJsonDocument::fromJson(m_vault->read(QStringLiteral("move.json"))).object();
+    bool changedAll = false;
+    for (const QString &k : {QStringLiteral("in"), QStringLiteral("out")}) {
+        const QString key = QStringLiteral("move/") + k;
+        if (!all.contains(k) && m_settings.contains(key)) {
+            const QJsonObject o = QJsonDocument::fromJson(m_settings.value(key).toByteArray()).object();
+            if (!o.isEmpty()) {
+                all.insert(k, o);
+                changedAll = true;
+            }
+        }
+        if (m_mem.contains(k)) {
+            const QJsonObject o = m_mem.take(k);
+            if (o.isEmpty())
+                all.remove(k);
+            else
+                all.insert(k, o);
+            changedAll = true;
+        }
+    }
+    bool kept = true;
+    if (changedAll && all.isEmpty())
+        m_vault->remove(QStringLiteral("move.json"));
+    else if (changedAll)
+        kept = m_vault->write(QStringLiteral("move.json"), compact(all));
+    // Only dropped from plain settings once the vault really has it.
+    if (kept && m_settings.childGroups().contains(QStringLiteral("move"))) {
+        m_settings.remove(QStringLiteral("move"));
+        m_settings.sync();
+    }
+    resume();
     publish();
 }
 
-// The secrets (K, the one-off keys) are kept in the vault ("move.json"); QSettings only mirrors what's shown before it opens.
 QJsonObject Move::load(const QString &k) const
 {
     if (!m_vault->locked()) {
@@ -448,7 +496,7 @@ QJsonObject Move::load(const QString &k) const
         if (all.contains(k))
             return all.value(k).toObject();
     }
-    return QJsonDocument::fromJson(m_settings.value(QStringLiteral("move/") + k).toByteArray()).object();
+    return m_mem.value(k);
 }
 
 void Move::store(const QString &k, const QJsonObject &o)
@@ -463,14 +511,10 @@ void Move::store(const QString &k, const QJsonObject &o)
             m_vault->remove(QStringLiteral("move.json"));
         else
             m_vault->write(QStringLiteral("move.json"), compact(all));
+        m_mem.remove(k);
+    } else {
+        m_mem.insert(k, o);   // an empty one too: cleared when the vault opens
     }
-    if (o.isEmpty())
-        m_settings.remove(QStringLiteral("move/") + k);
-    else
-        m_settings.setValue(QStringLiteral("move/") + k, compact({{QStringLiteral("state"), o.value(QStringLiteral("state"))}, {QStringLiteral("to"), o.value(QStringLiteral("to"))},
-                                                                    {QStringLiteral("from"), o.value(QStringLiteral("from"))}, {QStringLiteral("emoji"), o.value(QStringLiteral("emoji"))},
-                                                                    {QStringLiteral("at"), o.value(QStringLiteral("at"))}}));
-    m_settings.sync();
     publish();
 }
 
@@ -892,8 +936,9 @@ void Move::finishMoved()
     m_linkTimer.start();
     m_vault->remove(QStringLiteral("move.json"));
     m_vault->eraseAll();
-    m_settings.setValue(QStringLiteral("move/out"), compact({{QStringLiteral("state"), QStringLiteral("moved")}, {QStringLiteral("to"), m_movedTo}}));
-    m_settings.sync();
+    // The vault is gone: "Moved to" is shown from memory for the rest of this run, and nothing about
+    // where the chats went stays on this computer.
+    m_mem.insert(QStringLiteral("out"), QJsonObject{{QStringLiteral("state"), QStringLiteral("moved")}, {QStringLiteral("to"), m_movedTo}});
     m_blob.clear();
     m_locked = false;
     m_busy = false;

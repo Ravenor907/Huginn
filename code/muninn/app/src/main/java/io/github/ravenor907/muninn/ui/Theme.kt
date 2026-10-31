@@ -34,19 +34,62 @@ object Access {
     var contrast by androidx.compose.runtime.mutableStateOf(false)
     var colorBlind by androidx.compose.runtime.mutableStateOf(false)
     var reduceMotion by androidx.compose.runtime.mutableStateOf(false)
-    /** The look: [Looks.DARK] (the usual), [Looks.BLACK], [Looks.LIGHT] (parchment) or [Looks.AUTUMN] (falling leaves). */
+    /** The look: [Looks.DARK] (the usual), [Looks.BLACK], [Looks.LIGHT] (parchment) or [Looks.SEASONAL] (by the time of year). */
     var look by androidx.compose.runtime.mutableStateOf(Looks.DARK)
 }
 
-/** The four looks, the same as Huginn's. Their keys are what Settings saves; an unknown saved key means Dark. */
+/**
+ * The four looks. Their keys are what Settings saves; an unknown saved key means Dark, and a saved "autumn" (one
+ * season's own key) means Seasonal.
+ */
 object Looks {
     const val DARK = "dark"
     const val BLACK = "black"
     const val LIGHT = "light"
-    const val AUTUMN = "autumn"
-    val ALL = listOf(DARK to "Dark", BLACK to "True black", LIGHT to "Light", AUTUMN to "Autumn (Experimental)")
-    fun of(key: String?): String = ALL.firstOrNull { it.first == key }?.first ?: DARK
+    /** Seasonal: the look of the season it is now ([Seasons]). */
+    const val SEASONAL = "seasonal"
+    val ALL = listOf(DARK to "Dark", BLACK to "True black", LIGHT to "Light", SEASONAL to "Seasonal")
+    fun of(key: String?): String = if (key == Seasons.AUTUMN) SEASONAL else ALL.firstOrNull { it.first == key }?.first ?: DARK
     fun name(key: String): String = ALL.firstOrNull { it.first == key }?.second ?: "Dark"
+}
+
+/**
+ * The seasons the Seasonal look shows, each over a range of dates (month and day, both included; a range may run
+ * past the new year). The first range that covers today wins. Autumn is the only season so far, so it covers the
+ * whole year; a new season gets its own range here and its own shades in [Palette].
+ */
+object Seasons {
+    const val AUTUMN = "autumn"
+
+    /** [season] from [fromMonth]/[fromDay] to [toMonth]/[toDay] (months 1 to 12). */
+    data class Span(val season: String, val fromMonth: Int, val fromDay: Int, val toMonth: Int, val toDay: Int) {
+        fun covers(month: Int, day: Int): Boolean {
+            val at = month * 100 + day
+            val from = fromMonth * 100 + fromDay
+            val to = toMonth * 100 + toDay
+            return if (from <= to) at in from..to else at >= from || at <= to
+        }
+    }
+
+    val SPANS = listOf(Span(AUTUMN, 1, 1, 12, 31))
+
+    /** The season on [month]/[day]: the first span that covers it, else the first season. */
+    fun at(month: Int, day: Int, spans: List<Span> = SPANS): String =
+        spans.firstOrNull { it.covers(month, day) }?.season ?: spans.first().season
+
+    @Volatile private var day = -1L
+    @Volatile private var season = AUTUMN
+
+    /** The season today (worked out once a day). */
+    val now: String get() {
+        val today = System.currentTimeMillis() / 86_400_000L
+        if (today != day) {
+            val c = java.util.Calendar.getInstance()
+            season = at(c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH))
+            day = today
+        }
+        return season
+    }
 }
 
 /**
@@ -59,8 +102,8 @@ object Palette {
     /** The parchment look is on (and high contrast is off): dark text on light paper. */
     val light get() = Access.look == Looks.LIGHT && !hc
     private val black get() = Access.look == Looks.BLACK && !hc
-    /** The Autumn look is on (and high contrast is off): rounded shapes, frosted panels, leaves behind everything. */
-    val autumn get() = Access.look == Looks.AUTUMN && !hc
+    /** Seasonal in autumn (and high contrast is off): rounded shapes, frosted panels, leaves behind everything. */
+    val autumn get() = Access.look == Looks.SEASONAL && Seasons.now == Seasons.AUTUMN && !hc
     /** Picks the shade for the look in use: dark, true black, parchment, autumn, high contrast. */
     private fun pick(dark: Long, deep: Long, parchment: Long, autumn: Long, contrast: Long) =
         Color(if (hc) contrast else if (light) parchment else if (black) deep else if (this.autumn) autumn else dark)
@@ -111,13 +154,19 @@ object Palette {
     val track get() = pick(0xFF44484E, 0xFF44484E, 0xFFA69D8B, 0xFF5E4430, 0xFF9A9A9A)
     /** The thin line under a conversation's top bar. */
     val hairline get() = pick(0xFF1F2125, 0xFF16181A, 0xFFD9D2C4, 0xFF3A2718, 0xFF9A9A9A)
-    /** Online dot and the encrypted shield. Color-blind friendly: blue, so it never depends on green. */
-    val online get() = if (Access.colorBlind) (if (light) Color(0xFF2F5F9E) else Color(0xFF6FB3F0))
+    /**
+     * The status dots (online, away, do not disturb) and the encrypted shield. Color-blind friendly uses blue, yellow
+     * and vermilion, which stay apart without telling red from green; high contrast makes each brighter on black. The
+     * status is always said in words too, and do not disturb has a bar across its dot.
+     */
+    val online get() = if (Access.colorBlind) Color(if (hc) 0xFF9FD3FF else if (light) 0xFF2F5F9E else 0xFF6FB3F0)
         else pick(0xFF7FB08A, 0xFF7FB08A, 0xFF2F7D46, 0xFF3FB27F, 0xFF9BE0A8)
-    /** The away status dot (amber). */
-    val away get() = pick(0xFFD9A440, 0xFFD9A440, 0xFF9A6B00, 0xFFE0B44C, 0xFFFFD27A)
-    /** The do-not-disturb status dot (red; a bar across it says it without color). */
-    val dnd get() = pick(0xFFD9534F, 0xFFD9534F, 0xFFA23B2C, 0xFFD9534F, 0xFFFFB4A8)
+    /** The away status dot (amber; yellow when color-blind friendly). */
+    val away get() = if (Access.colorBlind) Color(if (hc) 0xFFFFF176 else if (light) 0xFF7A6200 else 0xFFF0E442)
+        else pick(0xFFD9A440, 0xFFD9A440, 0xFF9A6B00, 0xFFE0B44C, 0xFFFFD84D)
+    /** The do-not-disturb status dot (red; vermilion when color-blind friendly). */
+    val dnd get() = if (Access.colorBlind) Color(if (hc) 0xFFFF9E66 else if (light) 0xFFB34700 else 0xFFE8743B)
+        else pick(0xFFD9534F, 0xFFD9534F, 0xFFA23B2C, 0xFFD9534F, 0xFFFF7A7A)
     /** The offline status dot. */
     val offline get() = pick(0xFF6E6A62, 0xFF6E6A62, 0xFF877F71, 0xFF7E6548, 0xFFC8C8C8)
 

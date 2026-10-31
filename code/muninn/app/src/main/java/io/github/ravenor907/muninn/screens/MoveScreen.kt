@@ -79,7 +79,8 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
     val code = remember { Move.showCode(app) }
     val inc by Move.incoming.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
+    // Back is Cancel (once everything is here, there's nothing to cancel); a tap beside the dialog does nothing.
+    AlertDialog(onDismissRequest = { if (inc?.state != "done") { Move.cancelHere(app); onDone() } }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
         title = { Text(when (inc?.state) { "hello", "receiving" -> "Moving from ${inc?.from}"; "done" -> "Moved here"; else -> "Move here" }, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -123,7 +124,8 @@ fun MoveCover(app: Muninn): Boolean {
     var unlocking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     ask?.let { name ->
-        AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
+        // Back is Don't link.
+        AlertDialog(onDismissRequest = { Move.answerLink(app, false) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
             title = { Text("Link $name?", style = Type.big) },
             text = { Text("$name, the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
             confirmButton = { MButton("Link", kind = Kind.Accent) { Move.answerLink(app, true) } },
@@ -137,7 +139,8 @@ fun MoveCover(app: Muninn): Boolean {
     }
     when (o.state) {
         "checking" -> {
-            AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
+            // Back is Cancel.
+            AlertDialog(onDismissRequest = { Move.cancelOut(app) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
                 title = { Text("Moving to ${o.to}", style = Type.big) },
                 text = { Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Check these are the same on both screens, then tap They match on both:", style = Type.normal)

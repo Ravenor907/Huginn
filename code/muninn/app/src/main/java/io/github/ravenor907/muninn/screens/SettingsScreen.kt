@@ -138,7 +138,11 @@ private fun ShortList(app: Muninn) {
     val ra = app.power.rightAwayKeys().size
     PageRow("Notifications", (if (notifyOn) "On" else "Off") + if (ra > 0) ", $ra right away" else "") { SettingsNav.folder = "notify" }
     PageRow("Look and text size", "${io.github.ravenor907.muninn.ui.Looks.name(Access.look)}, ${pct(Access.text)} text") { SettingsNav.folder = "look" }
-    PageRow("Lock and privacy", if (app.vault.usesPattern) "Pattern position: ${posName(id.patternPos)}" else "Password, read receipts, screenshots") { SettingsNav.folder = "lock" }
+    PageRow("Lock and privacy", when {
+        !app.vault.hasPassword -> "No lock set. Read receipts, screenshots"
+        app.vault.usesPattern -> "Pattern position: ${posName(id.patternPos)}"
+        else -> "Password, read receipts, screenshots"
+    }) { SettingsNav.folder = "lock" }
     PageRow("Keep messages for", if (id.deleteAfter in 1 until 7 * DAY) "1 day, every chat" else "7 days, Family and Work up to 30") { SettingsNav.folder = "keep" }
 
     // Nearby as one switch: on, people close by or on the same Wi-Fi can find you; the details are under More.
@@ -195,7 +199,7 @@ private fun posName(p: String) = when (p) { "top" -> "Top"; "middle" -> "Middle"
 private enum class BatteryChoice(val title: String, val help: String) {
     FASTEST("Fastest", "Always fully connected. Messages and calls arrive in seconds. Uses the most battery."),
     BALANCED("Balanced", "Messages and calls still arrive in seconds. Muninn saves power while the screen is off."),
-    EXTREME("Extreme battery saver", "Keeps one light connection, so calls still ring almost at once. Bluetooth stops looking while closed, link previews and big downloads wait.");
+    EXTREME("Extreme battery saver", "No notifications. Messages arrive when you open Muninn or refresh. Calls ring only while Muninn is open. Nothing runs in the background.");
 
     fun apply(app: Muninn) {
         val p = app.power
@@ -228,8 +232,13 @@ private fun NotifyPage(app: Muninn) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var preview by remember { mutableStateOf(id.showPreview) }
     Panel {
-        Text("Messages arrive on time", style = Type.normal.copy(color = Palette.text))
-        Text("Muninn keeps one light connection open, so you hear about messages right away without draining your battery.", style = Type.small)
+        if (app.power.extreme) {
+            Text("Extreme battery saver is on", style = Type.normal.copy(color = Palette.text))
+            Text("No notifications. Messages arrive when you open Muninn or refresh. Calls ring only while Muninn is open.", style = Type.small)
+        } else {
+            Text("Messages arrive on time", style = Type.normal.copy(color = Palette.text))
+            Text("Muninn keeps one light connection open, so you hear about messages right away without draining your battery.", style = Type.small)
+        }
     }
     Spacer(Modifier.height(8.dp))
     val on = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
@@ -238,6 +247,16 @@ private fun NotifyPage(app: Muninn) {
             ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                 .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
         } catch (_: Exception) {}
+    }
+    // Android 14 and newer: without "Full-screen notifications" an incoming call is only a notification.
+    var fullOff by remember { mutableStateOf(fullScreenOff(ctx)) }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx) }
+    if (fullOff) {
+        Panel(Modifier.padding(bottom = 8.dp)) {
+            Text("Calls can't fill the screen", style = Type.normal.copy(color = Palette.danger))
+            Text("Android isn't letting Muninn show full-screen calls, so an incoming call only shows as a notification, and not over the lock screen.", style = Type.small)
+            MButton("Turn on full-screen calls", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { openFullScreenSetting(ctx) }
+        }
     }
     ToggleRow("Show the message", "Off: only “New message”, not who it's from or what it says", preview) { preview = it; id.showPreview = it }
     PageRow("Sound and vibration", "Uses the phone's settings for Muninn") {
@@ -255,13 +274,13 @@ private fun LookPage(app: Muninn) {
     val id = app.identity
     Text("Look", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
     val looks = io.github.ravenor907.muninn.ui.Looks.ALL
-    // Two a line; one a line at a large text size, so "Autumn (Experimental)" never breaks mid-word.
+    // Two a line; one a line at a large text size, so no name breaks mid-word.
     ChoiceRow(looks.size, Modifier.padding(top = 6.dp), minWidth = 140.dp, max = 2) { i, m ->
         val (k, n) = looks[i]
         MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
     }
-    Help("True black saves a little battery on OLED screens. Light is parchment, like Huginn's. Autumn is still being worked on.")
-    if (Access.look == io.github.ravenor907.muninn.ui.Looks.AUTUMN) io.github.ravenor907.muninn.ui.AutumnControls()
+    Help("True black saves a little battery on OLED screens. Light is parchment, like Huginn's. Seasonal follows the time of year: autumn's falling leaves for now.")
+    if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL && io.github.ravenor907.muninn.ui.Palette.autumn) io.github.ravenor907.muninn.ui.AutumnControls()
     Text("Size of everything", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
     val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
     ChoiceRow(sizes.size, Modifier.padding(top = 6.dp)) { i, m ->
@@ -297,8 +316,23 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     var previews by remember { mutableStateOf(id.linkPreviews) }
     var trail by remember { mutableStateOf(id.patternTrail) }
     var privateKeys by remember { mutableStateOf(id.privateKeyboard) }
-    Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
-    MButton("Change lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
+    var hasLock by remember { mutableStateOf(app.vault.hasPassword) }
+    if (hasLock) {
+        Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
+        MButton("Change lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
+        MButton("Turn off the lock", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
+            Ui.sure(Ask("Turn off the lock?", "Anyone who can use this phone could open Muninn and read your chats, contacts and keys. " +
+                "They stay encrypted, but the key sits on the phone beside them, unprotected. Panic lock stops working too.",
+                "Turn off", danger = true) {
+                try { app.vault.setPassword(null) } catch (_: Exception) {}
+                hasLock = app.vault.hasPassword
+                if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off. Muninn opens without a pattern or password.") }
+            })
+        }
+    } else {
+        Text("Muninn opens without a lock. Anyone who can use this phone can open it and read your chats.", style = Type.normal.copy(color = Palette.danger))
+        MButton("Set a lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
+    }
     if (app.vault.usesPattern) {
         Text("Pattern position", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
         val places = listOf("top", "middle", "lower")
@@ -315,7 +349,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
             val (ms, label) = afters[i]
             MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
         }
-        Help("While locked, messages still arrive as “New message” and open once you unlock.")
+        Help("While locked, one notification says new messages are waiting. They open once you unlock.")
         var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
         var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
         ToggleRow("Panic lock", if (onTv) "Lock Muninn at once from its icon's menu. Any call ends and notifications are cleared"
@@ -343,7 +377,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
 @Composable
 private fun ChangeLock(app: Muninn) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        FolderHeader("Change lock") { SettingsNav.folder = "lock" }
+        FolderHeader(if (app.vault.hasPassword) "Change lock" else "Set a lock") { SettingsNav.folder = "lock" }
         LockSetup(app, onCancel = { SettingsNav.folder = "lock" }, fill = true) { SettingsNav.folder = "lock" }
     }
 }

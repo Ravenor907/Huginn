@@ -38,6 +38,10 @@ public:
 
     // Every envelope that arrives for this device (content of the event). Return false to see it again later.
     std::function<bool(const QString &content)> onEnvelope;
+    // The events already taken are kept in the vault (main.cpp): keepSeen saves the list, restoreSeen
+    // reads it back when the vault opens (and moves in a list found in plain settings, removing it there).
+    std::function<void(const QByteArray &stored)> keepSeen;
+    void restoreSeen(const QByteArray &stored);
 
     int connected() const { return int(m_live.size()); }
     // The mailbox (x-only public key in hex). Cached, so it still works while locked; empty if never unlocked.
@@ -59,6 +63,9 @@ public:
     // Sends sealed content to someone's mailbox through every relay, on sending sockets of their own.
     // days: the chat's message limit, for the NIP-40 expiration tag (0: none). Returns how many relays are connected now.
     Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content, int days = 0);
+    // Opens the sending sockets now (a call is starting), so the next publish goes out at once.
+    // They close after the usual 20 s of quiet: nothing is sent to keep them open.
+    void warmSenders();
 
     // NIP-01: the event id is the SHA-256 of [0,pubkey,created_at,kind,tags,content] as compact JSON.
     static QByteArray serialize(const QString &pubkey, qint64 createdAt, int kind, const QJsonArray &tags, const QString &content);

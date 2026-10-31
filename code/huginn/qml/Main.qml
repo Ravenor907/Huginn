@@ -298,10 +298,12 @@ Window {
             if (incomingCall.visible) return incomingCall.prompts
             if (callPage.visible) return callPage.prompts
             const lb = [{ key: "lb", label: "Next section" }]
+            // Select only ever shows or hides this legend (Main.press), so that's all it says here.
+            const hide = [{ key: "back", label: "Hide buttons" }]
             if (app.focusZone === "rail")
-                return lb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }])
-            const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts : []
-            return lb.concat(p)
+                return lb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }], hide)
+            const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts.filter(x => x.key !== "back") : []
+            return lb.concat(p, hide)
         }
         // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section.
         onPrompt: k => k === "lb" && !app.overlay() ? app.stepSection(1) : app.press(k)
@@ -428,7 +430,7 @@ Window {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: Math.min(implicitWidth, app.width - Theme.px(32))
+                width: app.width - Theme.px(32)
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 text: "UPDATING HUGINN TO " + Updater.latest.toUpperCase()
@@ -440,7 +442,7 @@ Window {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: Math.min(implicitWidth, app.width - Theme.px(32))
+                width: app.width - Theme.px(32)
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 text: Updater.status
@@ -681,7 +683,9 @@ Window {
         }
         Keys.onPressed: event => {
             app.noteInput()
-            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space)) return
+            // A held Esc or Backspace is one press too (B asks twice before a call ends or a send stops).
+            if (event.isAutoRepeat && (event.key === Qt.Key_Return || event.key === Qt.Key_Space
+                                       || event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace)) return
             const map = {}
             map[Qt.Key_Up] = "up"; map[Qt.Key_Down] = "down"; map[Qt.Key_Left] = "left"; map[Qt.Key_Right] = "right"
             map[Qt.Key_Return] = "a"; map[Qt.Key_Enter] = "a"; map[Qt.Key_Escape] = "b"; map[Qt.Key_Backspace] = "b"
@@ -743,11 +747,13 @@ Window {
             { page: "settings", section: "more", file: "22-more-settings" },
             { page: "g:tour-crew", zone: "messages", theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
             { page: "dms", zone: "messages", theme: "black", file: "24-true-black" },
-            { page: "g:tour-crew", zone: "messages", theme: "autumn", density: "spacious", file: "25-autumn" },
+            { page: "g:tour-crew", zone: "messages", theme: "seasonal", density: "spacious", file: "25-autumn" },
             { page: "g:tour-crew", zone: "messages", size: "150", file: "26-size-150" },
             { page: "dms", zone: "messages", portrait: true, file: "27-portrait" },
             { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
-            { page: "dms", changeLock: true, file: "29-lock" }
+            { page: "dms", changeLock: true, file: "29-lock" },
+            // A small window (1024 by 768): the squeezed layouts, as on a laptop or handheld screen.
+            { page: "settings", section: "look", small: true, file: "30-small-window" }
         ]
         interval: 1500
         repeat: true
@@ -766,7 +772,7 @@ Window {
             const theme = s.theme || savedTheme, density = s.density || savedDensity, size = s.size || savedSize
             Qt.callLater(() => { Settings.theme = theme; Settings.density = density; Settings.uiSize = size })
             // A portrait window: the one-column layout.
-            if (s.portrait) { app.width = 900; app.height = 1200 } else { app.width = 1920; app.height = 1080 }
+            if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
             const args = { tour: true }
             if (s.section) args.section = s.section

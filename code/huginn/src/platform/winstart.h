@@ -12,10 +12,14 @@ namespace Platform
 bool underWine();
 QString wineVersion();   // "9.0" and so on; empty on Windows
 
-// First thing in main(), before QApplication: opens Huginn-start.log next to Huginn.exe (the temp
-// folder if that can't be written), logs every Qt warning and a crash into it, cleans up after an
-// update, and under Wine picks Qt settings that work there. Nothing to undo.
+// First thing in main(), before QApplication: starts the start log (its lines wait in memory until
+// startClaimed), logs every Qt warning and a crash into it, and under Wine picks Qt settings that
+// work there. Nothing to undo.
 void beginStart();
+// Once this copy holds the single instance (or runs on its own, like the screenshot tour): writes
+// Huginn-start.log next to Huginn.exe (the temp folder if that can't be written), fresh, and with
+// tidy, cleans up after an update.
+void startClaimed(bool tidy);
 // Right after QApplication: picks a Qt Quick graphics backend that actually starts here (Direct3D 11
 // on Windows, OpenGL under Wine, the software renderer if neither does), unless one was set already.
 void chooseGraphics();

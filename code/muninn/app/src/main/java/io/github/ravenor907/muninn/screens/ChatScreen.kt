@@ -162,11 +162,13 @@ object ChatNav {
     /** People picked on the chat list for a new group (Start a group from the sheet, then tap more). */
     var pick by mutableStateOf(setOf<String>())
     /**
-     * Held sideways (wider than tall) and at least this wide, Muninn uses the landscape layout (rail, chat list,
-     * conversation); upright, a conversation takes the whole screen.
+     * On a tablet ([TABLET_SW_DP]) and at least this wide, Muninn uses the tablet layout (rail, chat list,
+     * conversation); on a phone, a conversation takes the whole screen.
      */
     val WIDE_MIN = 480.dp
-    /** True while the landscape layout is showing: the list stays beside the conversation, so no back arrow. */
+    /** A tablet: Android's smallest screen width of 600 dp (sw600dp) or more. */
+    const val TABLET_SW_DP = 600
+    /** True while the tablet layout is showing: the list stays beside the conversation, so no back arrow. */
     var wide by mutableStateOf(false)
     /** Tablets: what the rail has picked, "" for direct messages or a group's id. */
     var space by mutableStateOf("")

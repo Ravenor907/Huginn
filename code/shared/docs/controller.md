@@ -41,4 +41,12 @@ Everything there works with a controller too:
   (click it with the right stick's pointer).
 - Push to talk (Settings › Calls) is a keyboard key: it works while Huginn is in front.
 
+## Calls and files
+
+- In a call, A mutes, Y changes the output and B ends the call. B asks first: the first press shows "Press B again
+  to hang up" for 3 seconds, and a second press in that time hangs up. On a voice call X does the same as B; on a
+  video call X turns the camera on or off. On a keyboard, Esc or Backspace is B and Space mutes.
+- In Files, Direct connect is a row under Pick files to send and Clear the list: move to it with the D-pad and press A.
+  While files are being sent, B asks first too ("Press B again to cancel").
+
 Ctrl+/ lists every keyboard shortcut.

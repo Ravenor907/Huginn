@@ -128,6 +128,20 @@ bool isNeighbour(const QHostAddress &peer)
     return false;
 }
 
+QString text(const QHostAddress &peer)
+{
+    return plain(peer).toString();
+}
+
+QString urlHost(const QString &ip)
+{
+    if (!ip.contains(QLatin1Char(':')))
+        return ip;
+    QString h = ip;
+    h.replace(QLatin1Char('%'), QStringLiteral("%25"));
+    return QLatin1Char('[') + h + QLatin1Char(']');
+}
+
 bool selfTest()
 {
     bool all = true;

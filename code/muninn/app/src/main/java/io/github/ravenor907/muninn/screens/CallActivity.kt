@@ -11,6 +11,10 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import io.github.ravenor907.muninn.MainActivity
@@ -27,6 +31,8 @@ import kotlinx.coroutines.launch
  * does the Call button in a chat ([call]). It asks for the microphone when needed, then shows [CallScreen].
  */
 class CallActivity : ComponentActivity() {
+    /** The phone's own lock screen is up: looked at again on every return, focus change and every second while shown. */
+    private var keyguard by mutableStateOf(false)
     private var pending: (() -> Unit)? = null
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val p = pending; pending = null
@@ -67,14 +73,18 @@ class CallActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }
         else @Suppress("DEPRECATION") window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val privateName = { !((application as? Muninn)?.identity?.showPreview ?: false) && isLocked() }
+        keyguard = isLocked()
         setContent {
+            // The name hides the moment Muninn is panic-locked or the phone locks, and shows again once both are over.
+            val panic by Panic.locked.collectAsState()
+            io.github.ravenor907.muninn.ui.EveryWhileShown(1000) { keyguard = isLocked() }
+            val previews = (application as? Muninn)?.identity?.showPreview ?: false
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
                 if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() })
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                }, onAnswer = { answer(false) }, hideName = Panic.locked.value || privateName(),
+                }, onAnswer = { answer(false) }, hideName = panic || (!previews && keyguard),
                     onAnswerVideo = { answer(true) },
                     onCamera = { on -> if (on) withCamera({ CallManager.setCamera(true) }) else CallManager.setCamera(false) })
             }
@@ -85,6 +95,10 @@ class CallActivity : ComponentActivity() {
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
+
+    override fun onResume() { super.onResume(); keyguard = isLocked() }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); keyguard = isLocked() }
 
     /** Kids' TV: back to the show that was on when the call came (not to Muninn); else just closes. */
     private fun close() { if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallFocus.leave(this) else finish() }

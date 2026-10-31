@@ -95,6 +95,9 @@ private:
 public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
+    // Hidden from people nearby (Chat's setting): no multicast announcement at all, no answer to anyone
+    // else's, and no chat proof or hint in what is sent. Look again still finds devices and files still go out.
+    std::function<bool()> silent;
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
     // Moving to another device (cap x1): its own path on the same port, with an answer.
     std::function<QPair<int, QByteArray>(const QByteArray &body)> moveReceive;

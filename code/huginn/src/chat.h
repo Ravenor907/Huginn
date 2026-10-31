@@ -333,6 +333,9 @@ public:
     // Message limits (cap d1, chatlimits.cpp): how many days a chat keeps messages. limitInfo: {days, mine,
     // theirs, close (in my Family or Work folder), d1, older (their app keeps everything), choices}.
     Q_INVOKABLE int chatDays(const QString &key) const;
+    // The oldest time (ms) a 1:1 chat with key keeps: its message limit, or sooner with "Delete messages
+    // after: A day". Call history follows it too (main.cpp, on pruned()).
+    qint64 keepCutoff(const QString &key) const;
     Q_INVOKABLE QVariantMap limitInfo(const QString &key) const;
     Q_INVOKABLE void setKeep(const QString &key, int days);
     // A group's {kind, kindName, days, older (names whose apps keep everything), choices}; admins change it.
@@ -363,6 +366,7 @@ Q_SIGNALS:
     void arrived(const QString &name, const QString &text, const QString &key);
     // An authentic room "call" envelope from a contact or group peer (at most 30 in 10 s each).
     void callMessage(const QString &fromKey, const QJsonObject &msg);
+    void pruned();   // messages past their chats' limits went (every minute, and when a limit changes)
     void liveChanged();
 
 private:
@@ -562,6 +566,13 @@ private:
     Nostr *m_nostr;
     Ble *m_ble;
     QSettings m_settings;
+    // Your chat name and who you blocked: in the vault (prefs.json), read when it opens.
+    mutable QJsonObject m_prefs;
+    bool m_prefsLoaded = false;
+    mutable QString m_tempName;   // a name for this run only, while the vault isn't open yet
+    void loadPrefs();
+    void savePrefs() const;
+    QStringList blockedKeys() const { return m_prefs.value(QStringLiteral("muted")).toVariant().toStringList(); }
     QNetworkAccessManager m_http;
     QTimer m_retry, m_prune;
     bool m_ready = false;

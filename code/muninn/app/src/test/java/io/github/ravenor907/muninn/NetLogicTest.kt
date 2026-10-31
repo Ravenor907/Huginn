@@ -126,4 +126,14 @@ class NetLogicTest {
         assertEquals(listOf("a"), PowerLogic.pick(relays, health + ("b" to PowerLogic.Health(failures = 1, pingsPerHour = 0)) +
             ("c" to PowerLogic.Health(live = false)), 1))
     }
+
+    @Test
+    fun lockedStoreStaysBounded() {
+        assertTrue(NetLogic.mayHold(0, 0, 1_000, 500, 4_000_000))
+        assertTrue(NetLogic.mayHold(499, 3_999_000, 1_000, 500, 4_000_000))
+        // Full by count or by size: it stays on the relays instead.
+        assertFalse(NetLogic.mayHold(500, 0, 10, 500, 4_000_000))
+        assertFalse(NetLogic.mayHold(10, 3_999_500, 1_000, 500, 4_000_000))
+        assertFalse(NetLogic.mayHold(0, 0, 5_000_000, 500, 4_000_000))
+    }
 }

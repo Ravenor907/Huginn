@@ -13,9 +13,11 @@ Rectangle {
     property bool tour: false
     readonly property var devices: LocalSend.devices
     readonly property var incoming: LocalSend.items
-    // Rows in the middle column: the two actions, then one per device.
+    // Rows in the middle column: the three actions, then one per device.
+    readonly property int actionCount: 3
     readonly property var rows: [{ kind: "pick", name: "Pick files to send", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "Pick one or several" },
-                                 { kind: "clear", name: "Clear the list", detail: Transfer.sharedCount > 0 ? "Start over" : "Nothing picked yet" }]
+                                 { kind: "clear", name: "Clear the list", detail: Transfer.sharedCount > 0 ? "Start over" : "Nothing picked yet" },
+                                 { kind: "direct", name: Direct.on ? "Stop Direct connect" : "Direct connect", detail: Direct.on ? "Back to your usual Wi-Fi" : "No shared Wi-Fi? Make one for the phone" }]
         .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, type: d.type,
                                     detail: d.model ? d.model : d.app === "muninn" ? "Muninn" : d.app === "huginn" ? "Huginn" : d.type === "mobile" ? "Phone" : "Computer" })))
     readonly property var sharedNames: {
@@ -28,10 +30,16 @@ Rectangle {
     function setArgs(a) { tour = !!a.tour }
     Component.onCompleted: LocalSend.refresh()
 
-    readonly property var prompts: LocalSend.sending ? [{ key: "b", label: "Stop sending" }]
+    readonly property var prompts: LocalSend.sending ? [{ key: "b", label: cancelArmed ? "Stop now" : "Stop sending" }]
         : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Choose" },
-           { key: "y", label: "Look again" }, { key: "back", label: Direct.on ? "Stop Direct connect" : "Direct connect" },
-           { key: "b", label: "Back" }]
+           { key: "y", label: "Look again" }, { key: "b", label: "Back" }]
+    // B while a send is going: the first press says to press again, a second one within 3 s cancels.
+    property bool cancelArmed: false
+    Timer { id: cancelTimer; interval: 3000; onTriggered: page.cancelArmed = false }
+    Connections {
+        target: LocalSend
+        function onProgressChanged() { if (!LocalSend.sending && page.cancelArmed) { page.cancelArmed = false; cancelTimer.stop() } }
+    }
     readonly property string status: ""
 
     // ============================================================= middle column
@@ -69,10 +77,10 @@ Rectangle {
                     Item {
                         width: rowList.width
                         // "Nearby" label above the first device.
-                        height: (index === 2 ? label.height : 0) + tile.height
+                        height: (index === page.actionCount ? label.height : 0) + tile.height
                         Text {
                             id: label
-                            visible: index === 2
+                            visible: index === page.actionCount
                             height: visible ? Theme.px(34) : 0
                             x: Theme.px(10)
                             verticalAlignment: Text.AlignBottom
@@ -104,7 +112,7 @@ Rectangle {
                                 Icon {
                                     anchors.centerIn: parent
                                     size: Theme.px(18)
-                                    name: modelData.kind === "pick" ? "plus" : modelData.kind === "clear" ? "back" : modelData.type === "mobile" ? "phone" : "network"
+                                    name: modelData.kind === "pick" ? "plus" : modelData.kind === "clear" ? "back" : modelData.kind === "direct" ? "qr" : modelData.type === "mobile" ? "phone" : "network"
                                     color: tile.on ? Theme.accent : Theme.textMuted
                                 }
                             }
@@ -323,6 +331,7 @@ Rectangle {
         if (!r) return
         if (r.kind === "pick") pickFiles()
         else if (r.kind === "clear") { if (Transfer.sharedCount > 0) { Transfer.clearShared(); Ui.say("The list is clear.") } }
+        else if (r.kind === "direct") toggleDirect()
         else sendTo(r)
     }
 
@@ -334,7 +343,11 @@ Rectangle {
     }
     function handleButton(b) {
         if (LocalSend.sending) {
-            if (b === "b") { LocalSend.cancelSend(); return true }
+            if (b === "b") {
+                if (cancelArmed) { cancelArmed = false; cancelTimer.stop(); LocalSend.cancelSend() }
+                else { cancelArmed = true; cancelTimer.restart(); Ui.say("Press B again to cancel") }
+                return true
+            }
             return b !== "left"
         }
         switch (b) {
@@ -342,7 +355,6 @@ Rectangle {
         case "down": current = Math.min(rows.length - 1, current + 1); return true
         case "a": choose(); return true
         case "y": LocalSend.refresh(); return true
-        case "back": toggleDirect(); return true
         }
         return false   // Left and B: back to the rail
     }

@@ -3,8 +3,9 @@ import QtMultimedia
 import Huginn
 
 // The call on screen, over everything else while it lasts: who, how long, which ways the sound is
-// travelling (never an address), and mute, output and end. Controller: A mute, Y output, B or X end
-// (asks first), X camera on or off in a video call (shared/docs/protocol-0.6.md 5.8.5). With a camera on, the
+// travelling (never an address), and mute, output and end. Controller: A mute, Y output, B ends (press it
+// twice: the first press says "Press B again to hang up" for 3 seconds), X camera on or off in a video
+// call (shared/docs/protocol-0.6.md 5.8.5), otherwise X ends like B. With a camera on, the
 // picture fills the top (yours small in its corner), a strip under it shows the name, the ways and the
 // time, and the buttons sit below that. Main.qml shows it while Calls.inCall.
 Rectangle {
@@ -17,11 +18,22 @@ Rectangle {
     readonly property bool videoUp: Calls.peerCamera && !ended
     readonly property var prompts: ended ? [] : [{ key: "a", label: Calls.muted ? "Unmute" : "Mute" }, { key: "y", label: "Output" }]
                                                .concat(Calls.videoPossible ? [{ key: "x", label: Calls.cameraOn ? "Camera off" : "Camera on" }] : [])
-                                               .concat([{ key: "b", label: "End call" }])
+                                               .concat([{ key: "b", label: hangArmed ? "Hang up now" : "End call" }])
     readonly property string status: ended ? "" : Calls.muted ? "You're muted" : ""
 
-    // Ends at once, as on Muninn.
-    function endCall() { Calls.hangup() }
+    // The End call button ends at once, as on Muninn.
+    function endCall() { hangArmed = false; hangTimer.stop(); Calls.hangup() }
+    // B (and Esc or Backspace, and X on a voice call): the first press only says to press again;
+    // a second press within 3 seconds hangs up.
+    property bool hangArmed: false
+    Timer { id: hangTimer; interval: 3000; onTriggered: page.hangArmed = false }
+    function pressHangup() {
+        if (hangArmed) { endCall(); return }
+        hangArmed = true
+        hangTimer.restart()
+        Ui.say("Press B again to hang up")
+    }
+    onVisibleChanged: if (!visible) { hangArmed = false; hangTimer.stop() }
 
     MouseArea { anchors.fill: parent }   // nothing underneath takes clicks during a call
 
@@ -65,7 +77,7 @@ Rectangle {
                         id: chip
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(25)
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, parent.width - Theme.px(34))
+                        width: Math.max(0, Math.min(implicitWidth, parent.width - Theme.px(34)))
                         elide: Text.ElideRight
                         text: modelData.label
                         color: modelData.on ? Theme.text : Theme.textMuted
@@ -86,7 +98,7 @@ Rectangle {
             readonly property var shown: [muteBtn, outputBtn, cameraBtn, switchBtn, endBtn].filter(b => b.visible)
             readonly property real natural: shown.reduce((w, b) => w + b.implicitWidth, 0) + spacing * Math.max(0, shown.length - 1)
             readonly property bool squeezed: natural > avail
-            readonly property real share: (avail - spacing * Math.max(0, shown.length - 1)) / Math.max(1, shown.length)
+            readonly property real share: Math.max(Theme.px(40), (avail - spacing * Math.max(0, shown.length - 1)) / Math.max(1, shown.length))
             HButton {
                 id: muteBtn
                 width: buttonRow.squeezed ? buttonRow.share : implicitWidth
@@ -295,8 +307,8 @@ Rectangle {
         switch (b) {
         case "a": Calls.toggleMute(); break
         case "y": Calls.nextOutput(); break
-        case "x": if (Calls.videoPossible) Calls.toggleCamera(); else endCall(); break
-        case "b": endCall(); break
+        case "x": if (Calls.videoPossible) Calls.toggleCamera(); else pressHangup(); break
+        case "b": pressHangup(); break
         }
         return true
     }

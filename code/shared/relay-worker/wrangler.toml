@@ -1,0 +1,21 @@
+# The relay Worker: https://huginn-relay.ravenor907.workers.dev
+# Deployed by the release job in .github/workflows/build.yml (npx wrangler deploy, run in this folder).
+name = "huginn-relay"
+main = "worker.js"
+compatibility_date = "2025-10-01"
+workers_dev = true
+
+# The daily counts: one SQLite-backed Durable Object (works on the free plan).
+[[durable_objects.bindings]]
+name = "LIMITS"
+class_name = "RelayLimits"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayLimits"]
+
+# Secrets, set once in the Cloudflare dashboard (Worker > Settings > Variables and Secrets), never in this file:
+#   TURN_KEY_ID
+#   TURN_KEY_API_TOKEN
+#   APP_SECRET
+# A deploy keeps them.

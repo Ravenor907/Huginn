@@ -113,10 +113,20 @@ class Power(private val app: Muninn) {
         get() = prefs.getBoolean("dataSaver", true)
         set(v) { prefs.edit().putBoolean("dataSaver", v).apply() }
 
-    /** Settings › Battery › Extreme battery saver was picked (the light connection stays, so calls still ring at once). */
+    /**
+     * Settings › Battery › Extreme battery saver: fully manual. Nothing in the background (no connection, no inbox
+     * checks, no alarms, no notifications); messages arrive when Muninn is opened or refreshed, calls ring only while
+     * it's open. Switching it off brings the usual connection back at once.
+     */
     var extreme: Boolean
         get() = prefs.getBoolean("extremeSaver", false)
-        set(v) { prefs.edit().putBoolean("extremeSaver", v).apply() }
+        set(v) {
+            if (v == extreme) return
+            prefs.edit().putBoolean("extremeSaver", v).apply()
+            followed = null; followedEvery = -1L   // the schedule and the Listening service follow at once
+            refresh()
+            if (!v) main.post { caughtUpAt = 0L; catchUp(opened = true) }
+        }
 
     /** Something arrived or Muninn was opened: wide awake again (Check less when it's quiet starts over). */
     fun activity() {
@@ -169,7 +179,7 @@ class Power(private val app: Muninn) {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { catchUp(opened) }; return }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - caughtUpAt < CATCH_UP_GAP_MS) return
-        if (!opened && check == PowerLogic.Check.OPEN) return
+        if (!opened && (check == PowerLogic.Check.OPEN || extreme)) return
         caughtUpAt = now
         try {
             app.nostr.reconnectNow()
@@ -220,9 +230,9 @@ class Power(private val app: Muninn) {
     /**
      * The background inbox check, as often as the mode in use says. "Only when open" chosen by the person
      * checks nothing; quiet hours that use it still wake Muninn hourly, only to see whether they've ended.
+     * Extreme battery saver never runs it.
      */
-    fun schedule(now: PowerLogic.Check = effective(), minutes: Long = PowerLogic.everyMinutes(inputs())) {
-        val every = if (now == PowerLogic.Check.OPEN && check != PowerLogic.Check.OPEN) 60L else minutes
+    fun schedule(every: Long = PowerLogic.jobMinutes(inputs())) {
         try {
             val wm = WorkManager.getInstance(app)
             if (every == 0L) wm.cancelUniqueWork("inbox")
@@ -279,7 +289,7 @@ class Power(private val app: Muninn) {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 // Back on a network: connect again once (catching up does it, or only that with "Only when open").
                 override fun onAvailable(network: Network) {
-                    main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN) app.nostr.reconnectNow() else catchUp() }
+                    main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN || extreme) app.nostr.reconnectNow() else catchUp() }
                 }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     val w = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
@@ -335,7 +345,7 @@ class Power(private val app: Muninn) {
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
             battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),
             idleMs = if (started > 0) 0 else idle, adaptive = adaptive,
-            rightAway = prefs.getBoolean(RIGHT_AWAY_ANY, false), talking = talking(),
+            rightAway = prefs.getBoolean(RIGHT_AWAY_ANY, false), talking = talking(), extreme = extreme,
         )
     }
 
@@ -344,7 +354,7 @@ class Power(private val app: Muninn) {
         val i = inputs()
         val next = PowerLogic.plan(i)
         _away.value = PowerLogic.whenAway(i)
-        follow(PowerLogic.effective(i), i.kidsTv, PowerLogic.everyMinutes(i))
+        follow(PowerLogic.effective(i), i.kidsTv, PowerLogic.jobMinutes(i))
         // Quiet hours start and end on the hour, and Check less when it's quiet steps down hourly: look again then.
         main.removeCallbacks(onTheHour)
         main.postDelayed(onTheHour, 3_600_000L - System.currentTimeMillis() % 3_600_000L + 1_000L)
@@ -468,7 +478,7 @@ class Power(private val app: Muninn) {
         val modeChanged = now != followed
         followed = now
         followedEvery = every
-        schedule(now, every)
+        schedule(every)
         if (!modeChanged) return
         if (kids) return   // a Kids' TV always listens (KidMode keeps the service)
         if (now == PowerLogic.Check.LIVE) MessageService.start(app) else MessageService.stop(app)
@@ -484,7 +494,7 @@ class Power(private val app: Muninn) {
         radios(p)
         // No live connections now: check the inbox once at once, then the scheduled check carries on
         // ("Only when open" checks nothing until Muninn is opened again).
-        if (p.relays == 0 && before?.relays != 0 && p.why != PowerLogic.Why.ONLY_OPEN) try {
+        if (p.relays == 0 && before?.relays != 0 && p.why != PowerLogic.Why.ONLY_OPEN && p.why != PowerLogic.Why.EXTREME) try {
             WorkManager.getInstance(app).enqueueUniqueWork("inbox-now", ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<InboxWorker>().setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).build())
         } catch (_: Exception) {}

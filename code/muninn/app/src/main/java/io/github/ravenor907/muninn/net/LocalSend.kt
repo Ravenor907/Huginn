@@ -249,7 +249,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     // ------------------------------------------------------------------ discovery
 
+    /**
+     * Hidden from people nearby: nothing at all goes out about this phone on the Wi-Fi (no announcement, no answer to
+     * a scan, no certificate shown when asking others). It still finds others and can send to them.
+     */
+    private fun silent(): Boolean = !identity.visibleNearby
+
     fun announce() {
+        if (silent()) return
         val msg = info().put("announce", true).toString().toByteArray()
         pool.execute {
             // Send on each Wi-Fi interface: left alone, Android sends multicast out the mobile-data
@@ -302,7 +309,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 if (!announce && known(ip, fp)) continue
                 if (!asking(ip)) continue
                 pool.execute {
-                    if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce) {
+                    if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce && !silent()) {
                         val reply = info().put("announce", false).toString().toByteArray()
                         try { udp?.send(DatagramPacket(reply, reply.size, InetAddress.getByName(GROUP), PORT)) } catch (_: Exception) {}
                     }
@@ -318,11 +325,16 @@ class LocalSend(private val context: Context, val identity: Identity) {
      * scan, which can't know it yet: then the certificate it shows becomes its identity.
      */
     private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = try {
-        val c = open("$protocol://$ip:$port$API/register", if (scan) 1500 else 5000, expected.ifEmpty { null })
-        c.requestMethod = "POST"
-        c.doOutput = true
-        c.setRequestProperty("Content-Type", "application/json")
-        c.outputStream.use { it.write(info().toString().toByteArray()) }
+        val quiet = silent()
+        // Hidden: only asks for their info, without saying who this phone is or showing its certificate.
+        val c = open("$protocol://$ip:$port$API/" + (if (quiet) "info" else "register"), if (scan) 1500 else 5000, expected.ifEmpty { null }, anonymous = quiet)
+        if (quiet) c.requestMethod = "GET"
+        else {
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            c.outputStream.use { it.write(info().toString().toByteArray()) }
+        }
         val ok = c.responseCode == 200
         if (ok) {
             val o = JSONObject(c.inputStream.bufferedReader().readText())
@@ -490,9 +502,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
         when (r.path) {
             "$API/register", "/api/localsend/v1/register" -> {
                 try { learn(JSONObject(text), ip) } catch (_: Exception) {}
-                reply(out, 200, info().toString())
+                // Hidden: no answer that says anything about this phone.
+                if (silent()) reply(out, 404) else reply(out, 200, info().toString())
             }
-            "$API/info", "/api/localsend/v1/info" -> reply(out, 200, info().toString())
+            "$API/info", "/api/localsend/v1/info" -> if (silent()) reply(out, 404) else reply(out, 200, info().toString())
             "$API/prepare-upload" -> prepare(text, ip, out, learn)
             "$API/cancel" -> {
                 val sess = session
@@ -820,10 +833,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
      * require one) and only goes ahead if the device's certificate has the [expected] fingerprint
      * (any certificate when null, for a scan).
      */
-    private fun open(url: String, timeout: Int, expected: String?): HttpURLConnection {
-        val c = URL(url).openConnection() as HttpURLConnection
+    /** [anonymous]: no client certificate (hidden from people nearby: nothing that names this phone). */
+    private fun open(url: String, timeout: Int, expected: String?, anonymous: Boolean = false): HttpURLConnection {
+        // Plain HTTP (a LocalSend app without TLS) only ever to a home-network address (LanHttp).
+        val c = LanHttp.open(URL(url))
         if (c is HttpsURLConnection) {
-            c.sslSocketFactory = tls?.client(expected) ?: Tls.anonymousClient(expected)
+            c.sslSocketFactory = (if (anonymous) null else tls?.client(expected)) ?: Tls.anonymousClient(expected)
             c.hostnameVerifier = anyHost
         }
         c.connectTimeout = minOf(timeout, 4000)
@@ -864,7 +879,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
          */
         fun postTo(addr: String, path: String, json: String): Pair<Int, String>? {
             for (scheme in listOf("https", "http")) try {
-                val c = URL("$scheme://$addr$path").openConnection() as HttpURLConnection
+                val c = LanHttp.open(URL("$scheme://$addr$path"))
                 if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = anyHost }
                 c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json")

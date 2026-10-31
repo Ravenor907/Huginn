@@ -1,5 +1,6 @@
 #include "voice.h"
 #include "chat.h"
+#include "platform/scratch.h"
 
 #include <QAudioInput>
 #include <QAudioOutput>
@@ -34,11 +35,8 @@ Voice::~Voice()
 
 QString Voice::tempFile() const
 {
-    // The runtime folder is memory-backed (tmpfs) and private to Huginn's sandbox.
-    QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if (dir.isEmpty())
-        dir = QDir::tempPath();
-    return dir + QStringLiteral("/huginn-voice.aac");
+    // Linux: the memory-backed runtime folder. Windows: Huginn's private scratch folder (see Scratch).
+    return Scratch::path(QStringLiteral("huginn-voice.aac"));
 }
 
 int Voice::elapsed() const { return m_recording ? int(QDateTime::currentMSecsSinceEpoch() - m_started) : 0; }
@@ -81,7 +79,7 @@ bool Voice::start(const QString &key)
             cancel();
         });
     }
-    QFile::remove(tempFile());
+    Scratch::shred(tempFile());
     m_recorder->setOutputLocation(QUrl::fromLocalFile(tempFile()));
     m_recorder->record();
     m_recording = true;
@@ -110,7 +108,7 @@ void Voice::finish(const QString &key)
             aac = f.readAll();
             f.close();
         }
-        QFile::remove(tempFile());
+        Scratch::shred(tempFile());
         if (ms >= 700 && !aac.isEmpty())
             m_chat->sendVoice(key, aac, ms);
         m_sendTo.clear();
@@ -127,7 +125,7 @@ void Voice::cancel()
     m_recording = false;
     m_sendTo.clear();
     m_target.clear();
-    QFile::remove(tempFile());
+    Scratch::shred(tempFile());
     m_ticker.stop();
     Q_EMIT changed();
 }

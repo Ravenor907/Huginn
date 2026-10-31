@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -96,7 +97,8 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     // (or a curious kid) can't find it, and it still needs the hold-to-confirm.
     var showErase by remember { mutableStateOf(false) }
     val taps = remember { ArrayDeque<Long>() }
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()) {
+    // Clear of the gesture bar too, so the pattern and Erase never sit under it.
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
         Brand(onLogo = {
             val t = android.os.SystemClock.elapsedRealtime()
             taps.addLast(t)
@@ -162,10 +164,11 @@ internal fun padWeights(pos: String): Pair<Float, Float> = when (pos) { "top" ->
 
 /**
  * Choose and confirm a lock: a 9-dot pattern (at least 6 dots) or a password (at least 6 characters).
- * Used on first open (required) and for Settings › Change lock. [onCancel] null = can't skip.
+ * Used on first open (suggested, with Skip) and for Settings › Change lock. [onCancel] null = no Cancel button.
+ * [cancelText]: what the Cancel button says.
  */
 @Composable
-fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false, onDone: () -> Unit) {
+fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false, cancelText: String = "Cancel", onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     var usePattern by remember { mutableStateOf(true) }
     var first by remember { mutableStateOf<List<Int>?>(null) }
@@ -221,20 +224,34 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
             if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
             MButton(if (saving) "Saving…" else "Save password", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw1.length >= Vault.LockRules.MIN && pw1 == pw2 && !saving) { save(pw1, false) }
         }
-        if (onCancel != null) MButton("Cancel", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
+        if (onCancel != null) MButton(cancelText, Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
     }
 }
 
-/** First open (and whenever no lock is set): set a lock before anything else. */
+/** First open: a lock is suggested before anything else, with Skip to go without one. */
 @Composable
 fun FirstLock(app: Muninn, done: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding()) {
+    val ask by Ui.ask.collectAsState()
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
         Brand {}
         Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
             Text("Protect Muninn", style = Type.big)
             Text("Muninn opens with your pattern or password, and everything it keeps is encrypted with it. There's no way to recover it, so pick one you'll remember.",
                 style = Type.small)
-            LockSetup(app, onCancel = null, fill = true) { done() }
+            LockSetup(app, onCancel = {
+                Ui.sure(Ask("Skip the lock?", "Without a lock, anyone who can use this phone can open Muninn and read your chats. " +
+                    "You can set one any time in Settings › Lock and privacy.", "Skip") { skipLock(app); done() })
+            }, fill = true, cancelText = "Skip") { done() }
         }
     }
+    ask?.let { AskDialog(it) }
 }
+
+/** The person chose no lock: first open doesn't suggest one again. */
+fun skipLock(app: Muninn) = app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().putBoolean(LOCK_SKIPPED, true).apply()
+
+/** Whether a lock is set, or the person chose to go without one. */
+fun lockChosen(app: Muninn): Boolean = app.vault.hasPassword ||
+    app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).getBoolean(LOCK_SKIPPED, false)
+
+private const val LOCK_SKIPPED = "lockSkipped"

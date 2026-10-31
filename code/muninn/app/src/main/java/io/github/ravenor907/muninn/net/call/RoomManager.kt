@@ -460,6 +460,8 @@ object RoomManager {
                 if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, from); return }
                 val a = app ?: return
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
+                // Extreme battery saver: group calls ring only while Muninn is open.
+                if (a.quietUntilOpen()) return
                 _ring.value = Ring(group, room, from, who, grp, now())
                 RoomRinger.ring(a, who, grp)
                 ringTimer = exec.schedule(Runnable {

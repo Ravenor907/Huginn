@@ -30,6 +30,7 @@ class InboxWorker(context: Context, params: WorkerParameters) : Worker(context, 
 
     /** Before Android 12 an urgent check runs as a short foreground job, which needs a notification. */
     override fun getForegroundInfo(): ForegroundInfo {
+        MessageService.ensureChannel(applicationContext)
         val n = NotificationCompat.Builder(applicationContext, MessageService.CHANNEL).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Muninn").setContentText("Checking for messages").setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN).build()

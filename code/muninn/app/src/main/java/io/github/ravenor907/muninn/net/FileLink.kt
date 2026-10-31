@@ -38,6 +38,17 @@ object FileLink {
     const val PUNCH_MS = 20_000L
     const val IDLE_MS = 30_000L
     const val MAX_BYTES = 4L * 1024 * 1024 * 1024
+    /** From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first. */
+    const val AUTO_BYTES = 50L * 1024 * 1024
+    /** How long an offer waits for an answer: longer for a file the other phone asks about first. */
+    const val ANSWER_MS = 120_000L
+    const val ASK_ANSWER_MS = 10 * 60_000L
+
+    /** An offered file of [size] downloads by itself (small enough, and Data saver doesn't say wait). */
+    fun arrivesByItself(size: Long, mayDownload: Boolean): Boolean = size < AUTO_BYTES && mayDownload
+
+    /** How long the sender waits for an answer to a file of [size]. */
+    fun answerMs(size: Long): Long = if (size < AUTO_BYTES) ANSWER_MS else ASK_ANSWER_MS
 
     const val PROBE: Byte = 1
     const val DATA: Byte = 2
@@ -131,7 +142,10 @@ object FileLink {
 
     // ------------------------------------------------------------------ transfers
 
-    /** One transfer, as the chat shows it. [state]: "offered", "waiting" (data saver), "connecting", "sending", "done", "failed". */
+    /**
+     * One transfer, as the chat shows it. [state]: "offered", "asking" (a big file: Accept or Decline), "waiting" (data
+     * saver), "connecting", "sending", "done", "failed".
+     */
     data class Progress(val id: String, val peer: String, val name: String, val size: Long, val mine: Boolean, val state: String,
                         val done: Long = 0, val note: String = "")
 
@@ -179,8 +193,9 @@ object FileLink {
                 h.signal(peer, JSONObject().put("t", "offer").put("id", id).put("name", name).put("size", size).put("sha", sha)
                     .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", candsJson(cands)).toString())
                 put(Progress(id, peer, name, size, true, "offered", note = "Waiting for them to accept"))
-                // Nothing back within 2 minutes: give up (the other phone may be off; they can ask again).
-                Thread.sleep(120_000)
+                // Nothing back in time: give up (the other phone may be off; they can ask again). A big file waits
+                // longer, since the other phone asks before taking it.
+                Thread.sleep(answerMs(size))
                 if (_all.value[id]?.state == "offered") { outs.remove(id)?.sock?.close(); fail(id, "They didn't answer. Try again when they're online.") }
             } catch (e: Exception) { fail(id, "That file couldn't be sent.") }
         }
@@ -196,7 +211,14 @@ object FileLink {
                 if (!h.trusted(from)) { h.signal(from, JSONObject().put("t", "decline").put("id", id).toString()); return }
                 val inc = In(from, p.getString("name"), p.getLong("size"), p.getString("sha"), p.getString("e"), CallLogic.directOf(p.getJSONArray("c")))
                 ins[id] = inc
-                if (h.mayDownload()) accept(id) else put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download"))
+                when {
+                    arrivesByItself(inc.size, h.mayDownload()) -> accept(id)
+                    inc.size >= AUTO_BYTES -> {
+                        put(Progress(id, from, inc.name, inc.size, false, "asking", note = "Wants to send you a big file. Accept or decline"))
+                        h.notice("A big file is waiting for you to accept: ${inc.name}")
+                    }
+                    else -> put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download"))
+                }
             }
             "accept" -> {
                 val o = outs[id] ?: return
@@ -205,8 +227,15 @@ object FileLink {
                 val key = key(ChatCrypto.sharedKey(o.keys.private, o.keys.public, theirs), id)
                 work.execute { runSender(id, o, key, CallLogic.directOf(p.getJSONArray("c"))) }
             }
-            "decline" -> { outs.remove(id)?.let { it.sock.close(); fail(id, "They can't take files directly from you. Both of you need Direct calls on for each other.") } }
+            "decline" -> { outs.remove(id)?.let { it.sock.close(); fail(id, "They didn't take the file. They declined it, or they can't take files directly from you (both of you need Direct calls on for each other).") } }
         }
+    }
+
+    /** No to a waiting file: the sender hears so, and it's gone from the chat. */
+    fun decline(id: String) {
+        val inc = ins.remove(id) ?: return
+        host?.signal(inc.peer, JSONObject().put("t", "decline").put("id", id).toString())
+        _all.value = _all.value - id
     }
 
     /** Download a waiting file now (tapped, or on Wi-Fi). */

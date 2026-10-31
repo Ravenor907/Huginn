@@ -114,7 +114,7 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
-    /** The look: "dark", "black" (true black, also from the "trueBlack" switch), "light" or "autumn". Any other saved value opens as "dark". */
+    /** The look: "dark", "black" (true black, also from the "trueBlack" switch), "light" or "seasonal" ("autumn" opens as "seasonal"). Any other saved value opens as "dark". */
     var look: String
         get() = prefs.getString("look", null) ?: if (prefs.getBoolean("trueBlack", false)) "black" else "dark"
         set(v) = prefs.edit().putString("look", v).apply()

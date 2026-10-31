@@ -13,14 +13,17 @@
 // Everything Huginn's chat keeps (messages, photos, voice, contacts, keys) is encrypted on disk with
 // one random 256-bit data key (AES-256-GCM). That key is locked by the person's pattern or password
 // (Argon2id, or scrypt where OpenSSL has no Argon2id; a PBKDF2 lock is rewrapped on the next unlock).
-// Nothing outside Huginn is involved. A lock is required: until one is set, or while
-// locked, nothing is readable, even by Huginn.
+// Nothing outside Huginn is involved. A lock is set up first; while locked, nothing is readable, even
+// by Huginn. The lock can be turned off in Settings (with a warning): the data key then sits in
+// vault.key itself ("mode": "open"), in Huginn's own data folder, and Huginn opens without asking.
 class Vault : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool exists READ exists NOTIFY changed)
     Q_PROPERTY(bool locked READ locked NOTIFY changed)
     Q_PROPERTY(bool usesPattern READ usesPattern NOTIFY changed)
+    // A pattern or password guards the data key (false: no vault yet, or the lock is off).
+    Q_PROPERTY(bool hasLock READ hasLock NOTIFY changed)
     Q_PROPERTY(int waitSeconds READ waitSeconds NOTIFY changed)
 
 public:
@@ -29,6 +32,12 @@ public:
     bool exists() const;          // a lock has been set
     bool locked() const { return m_key.isEmpty(); }
     bool usesPattern() const;
+    bool hasLock() const;
+    // Turns the lock off (must be unlocked): the data key is kept beside the chats, unprotected.
+    // Panic lock and locking when away stop working. setSecret() turns it on again.
+    Q_INVOKABLE bool turnOffLock();
+    // At start (main.cpp, once everything listens for opened()): a vault without a lock opens by itself.
+    void openWithoutLock();
     int waitSeconds() const;      // after too many wrong tries, seconds until the next try
 
     // Opens with the pattern ("pattern:0,3,6,...") or password. False if wrong.
@@ -40,7 +49,8 @@ public:
     Q_INVOKABLE bool askStronger();
     // Shows the lock screen again; the data key stays in memory while Huginn runs, so incoming
     // messages are still saved (encrypted) in the background.
-    Q_INVOKABLE void lockScreen() { m_screenLocked = true; Q_EMIT changed(); }
+    // Without a lock there is nothing to unlock with, so nothing happens.
+    Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; Q_EMIT changed(); }
     // Leaving Chat (or Huginn going to the background) starts the clock; back after a minute = locked again.
     // The lock also goes up while still away, once the minute is past, so the window's last picture
     // (shown again on wake before Huginn draws) is already the lock and never the chat.

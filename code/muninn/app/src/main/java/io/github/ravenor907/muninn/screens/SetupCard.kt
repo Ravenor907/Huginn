@@ -56,6 +56,9 @@ private fun missing(ctx: Context, app: Muninn): List<Missing> {
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled())
             add(Missing("notify", "Notifications", "So you see new messages and calls.",
                 if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null))
+        // Android 14 and newer: a call only fills the screen (also over the lock screen) with this allowed.
+        if (fullScreenOff(ctx))
+            add(Missing(FULL_SCREEN, "Full-screen calls", "So an incoming call fills the screen, even when the phone is locked.", null))
         // Messages only arrive right away if Android lets Muninn run in the background (unrestricted battery use).
         if (app.identity.stayConnected && !MessageService.unrestricted(ctx))
             add(Missing("battery", "Unrestricted background use",
@@ -64,6 +67,21 @@ private fun missing(ctx: Context, app: Muninn): List<Missing> {
                     "the phone only for a short check about every 5 minutes. No Google servers. On the next screen, tap Allow.", null))
     }.filter { it.id !in hidden }
 }
+
+/** Android 14 and newer only: whether incoming calls are kept from filling the screen. */
+fun fullScreenOff(ctx: Context): Boolean = Build.VERSION.SDK_INT >= 34 &&
+    try { ctx.getSystemService(android.app.NotificationManager::class.java)?.canUseFullScreenIntent() == false } catch (_: Exception) { false }
+
+/** Android's "Full-screen notifications" switch for Muninn (Android 14 and newer), else Muninn's notification settings. */
+fun openFullScreenSetting(ctx: Context) {
+    if (Build.VERSION.SDK_INT >= 34) try {
+        ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return
+    } catch (_: Exception) {}
+    openAppSettings(ctx, true)
+}
+
+private const val FULL_SCREEN = "fullscreen"
 
 /** Muninn's page in Android's settings: where a permission Android won't ask for again is turned on. */
 private fun openAppSettings(ctx: Context, notifications: Boolean) {
@@ -109,6 +127,7 @@ fun SetupCard(app: Muninn, modifier: Modifier = Modifier) {
                 MButton("Allow", Modifier.padding(start = 8.dp), Kind.Accent) {
                     when {
                         m.id == "battery" -> MessageService.askUnrestricted(ctx)
+                        m.id == FULL_SCREEN -> openFullScreenSetting(ctx)
                         m.permission != null -> { asking = m; askedAt = System.currentTimeMillis(); ask.launch(m.permission) }
                         else -> openAppSettings(ctx, m.id == "notify")
                     }

@@ -18,6 +18,7 @@ class Settings : public QObject
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
     Q_PROPERTY(QString transferFolder READ transferFolder WRITE setTransferFolder NOTIFY changed)
     Q_PROPERTY(bool noiseRemoval READ noiseRemoval WRITE setNoiseRemoval NOTIFY changed)
+    Q_PROPERTY(bool internetCalls READ internetCalls WRITE setInternetCalls NOTIFY changed)
     // Settings › Appearance (the desktop layout): theme, message density and size, and the panels.
     // Their own signal, so a resize or a theme change doesn't wake everything that follows changed().
     Q_PROPERTY(QString theme READ theme WRITE setTheme NOTIFY appearanceChanged)
@@ -59,6 +60,10 @@ public:
     // Settings › Calls › Noise removal (on unless switched off). Off: calls keep the echo canceller and level
     // control but leave background noise in, for a voice the noise suppressor turns down too far.
     bool noiseRemoval() const { return saved("noiseRemoval", true).toBool(); }
+    // Settings › Calls › Internet calls (on unless switched off). Off: calls go only over Wi-Fi and
+    // Bluetooth; the relay Worker, the TURN relay and the STUN server are never asked.
+    bool internetCalls() const { return saved("internetCalls", true).toBool(); }
+    static bool internetCallsOn() { return saved(QStringLiteral("internetCalls"), true).toBool(); }
     // "dark", "black" (true black, for OLED screens) or "light".
     QString theme() const { return value("theme", "dark").toString(); }
     // "compact" (more messages on screen, no pictures of people), "cozy" (the default) or "spacious".
@@ -95,6 +100,7 @@ public:
     void setNearbySharing(bool v) { set("nearbySharing", v); }
     void setTransferFolder(const QString &v) { set("transferFolder", v); }
     void setNoiseRemoval(bool v) { set("noiseRemoval", v); }
+    void setInternetCalls(bool v) { set("internetCalls", v); }
     void setTheme(const QString &v) { setLook("theme", v); }
     void setDensity(const QString &v) { setLook("density", v); }
     void setLockPosition(const QString &v) { setLook("lockPosition", v); }

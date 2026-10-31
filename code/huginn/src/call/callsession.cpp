@@ -104,7 +104,7 @@ void CallSession::sendThrice(const QJsonObject &o)
 bool CallSession::shareDirect() const
 {
     // Only to someone this side trusts, and as the callee only when the caller asked for it (5.8.1).
-    return c2Local && trusted && (m_offerer || m_peerP2p);
+    return c2Local && trusted && internet && (m_offerer || m_peerP2p);
 }
 
 QJsonArray CallSession::cands() const
@@ -240,7 +240,7 @@ QJsonObject CallSession::signedPart(const QString &t)
 void CallSession::startRelay()
 {
     ++m_relayTries;
-    if (!m_getLogin) {
+    if (!m_getLogin || !internet) {
         m_relayDone = true;
         relayReady();
         return;
@@ -505,7 +505,7 @@ void CallSession::answer()
         return;
     m_answered = true;
     m_eph = CallCrypto::newEphemeral();
-    m_directOn = m_c2 && m_peerC2 && trusted && m_peerP2p;
+    m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p;
     if (!startMedia()) {
         hangup(QStringLiteral("error"));
         return;
@@ -641,7 +641,7 @@ void CallSession::handle(const QJsonObject &msg)
         m_theirEph = QByteArray::fromBase64(eph.toLatin1());
         readC2(msg);
         // Direct only when both trust each other: we asked (p2p in the offer), they answered with theirs.
-        m_directOn = m_c2 && m_peerC2 && trusted && m_peerP2p;
+        m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p;
         applyCands(msg);
         if (!startMedia()) {
             hangup(QStringLiteral("error"));

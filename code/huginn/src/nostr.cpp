@@ -6,7 +6,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QRandomGenerator>
 #include <QSettings>
@@ -151,9 +153,30 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
     , m_secret(std::move(secret))
 {
     m_subId = QStringLiteral("huginn-") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
-    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    m_seen = s.value(QStringLiteral("nostr/seen")).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
-    m_seenSet = QSet<QString>(m_seen.begin(), m_seen.end());
+}
+
+void Nostr::restoreSeen(const QByteArray &stored)
+{
+    QStringList all = QJsonDocument::fromJson(stored).object().value(QStringLiteral("seen")).toVariant().toStringList();
+    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    const QStringList plain = s.value(QStringLiteral("nostr/seen")).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    QSet<QString> have(all.begin(), all.end());
+    // Then what plain settings had, then what came while the vault was locked.
+    const QStringList mem = m_seen;
+    for (const QString &id : plain + mem)
+        if (!have.contains(id)) {
+            have.insert(id);
+            all << id;
+        }
+    while (all.size() > kMaxSeen)
+        have.remove(all.takeFirst());
+    m_seen = all;
+    m_seenSet = have;
+    if (!plain.isEmpty() || s.contains(QStringLiteral("nostr/seen"))) {
+        if (keepSeen)
+            keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
+        s.remove(QStringLiteral("nostr/seen"));
+    }
 }
 
 Nostr::~Nostr()
@@ -431,8 +454,9 @@ void Nostr::handle(const QJsonObject &ev)
     m_seenSet.insert(id);
     while (m_seen.size() > kMaxSeen)
         m_seenSet.remove(m_seen.takeFirst());
+    if (keepSeen)
+        keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
     QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    s.setValue(QStringLiteral("nostr/seen"), m_seen.join(QLatin1Char(',')));
     s.setValue(QStringLiteral("nostr/since"), now());
 }
 
@@ -478,6 +502,12 @@ void Nostr::send(const QString &url, const QStringList &msgs)
     } else {
         it->queue << msgs;
     }
+}
+
+void Nostr::warmSenders()
+{
+    for (const QString &url : relays())
+        send(url, {});
 }
 
 void Nostr::dropSender(const QString &url, QWebSocket *ws)

@@ -1,15 +1,54 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import assert from "node:assert/strict";
-import worker, { handle } from "./worker.js";
+import worker, { handle, addressGroup, RelayLimits, SQL } from "./worker.js";
 
 const SECRET = "test-app-secret";
 const ID = "a".repeat(64);
 const NOW = 1_800_000_000;
 
-class FakeKV {
-  constructor() { this.map = new Map(); this.fail = false; }
-  async get(k) { if (this.fail) throw new Error("kv down"); return this.map.has(k) ? this.map.get(k) : null; }
-  async put(k, v) { if (this.fail) throw new Error("kv down"); this.map.set(k, v); }
+const DAY = new Date(NOW * 1000).toISOString().slice(0, 10);
+
+// In-memory stand-in for the Durable Object's SQLite storage: it answers exactly the statements in SQL.
+// Rows are kept as "day|key" -> count. `written` counts rows written, as Cloudflare bills them.
+class FakeSql {
+  constructor() { this.rows = new Map(); this.fail = false; this.written = 0; }
+  exec(q, ...b) {
+    if (this.fail) throw new Error("storage down");
+    const out = [];
+    if (q === SQL.schema) {
+      // nothing to do
+    } else if (q === SQL.wipe) {
+      for (const key of [...this.rows.keys()]) if (key.split("|")[0] < b[0]) { this.rows.delete(key); this.written++; }
+    } else if (q === SQL.read) {
+      const [day, ...keys] = b;
+      for (const k of keys) if (this.rows.has(day + "|" + k)) out.push({ k, n: this.rows.get(day + "|" + k) });
+    } else if (q === SQL.bump) {
+      const key = b[0] + "|" + b[1];
+      this.rows.set(key, (this.rows.get(key) || 0) + 1);
+      this.written++;
+    } else {
+      throw new Error("unexpected SQL: " + q);
+    }
+    return { toArray: () => out };
+  }
+}
+
+// Stand-in for the Durable Object namespace binding: one real RelayLimits object over FakeSql.
+class FakeLimits {
+  constructor() { this.sql = new FakeSql(); this.obj = null; this.calls = 0; }
+  idFromName(name) { return name; }
+  get(id) {
+    assert.equal(id, "limits");
+    return {
+      fetch: async (url, init) => {
+        this.calls++;
+        if (this.sql.fail) throw new Error("object down");
+        this.obj = this.obj || new RelayLimits({ storage: { sql: this.sql } });
+        return this.obj.fetch(new Request(url, init));
+      },
+    };
+  }
+  keys() { return [...this.sql.rows.keys()]; }
 }
 
 const upstreamCalls = [];
@@ -32,8 +71,8 @@ globalThis.fetch = async (url, init) => {
   }), { status: 201, headers: { "content-type": "application/json" } });
 };
 
-function env(kv = new FakeKV()) {
-  return { TURN_KEY_ID: "kid", TURN_KEY_API_TOKEN: "tok", APP_SECRET: SECRET, LIMITS: kv };
+function env(limits = new FakeLimits()) {
+  return { TURN_KEY_ID: "kid", TURN_KEY_API_TOKEN: "tok", APP_SECRET: SECRET, LIMITS: limits };
 }
 
 function sign(id, t, secret = SECRET) {
@@ -132,10 +171,105 @@ await test("per address cap of 60 per day, whatever the ids", async () => {
 });
 
 await test("addresses are never stored as they are", async () => {
-  const kv = new FakeKV();
-  await call(env(kv), { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip: "203.0.113.99" });
-  for (const k of kv.map.keys()) assert.ok(!k.includes("203.0.113.99"), k);
-  assert.equal([...kv.map.keys()].filter((k) => k.startsWith("i:")).length, 1);
+  const lim = new FakeLimits();
+  await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip: "203.0.113.99" });
+  await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip: "2001:db8:aa:bb::99" });
+  for (const k of lim.keys()) {
+    assert.ok(!k.includes("203.0.113") && !k.includes("2001") && !k.includes("db8"), k);
+  }
+  assert.equal(lim.keys().filter((k) => k.includes("|i:")).length, 2);
+});
+
+await test("address keys are keyed with the Worker secret, not a plain hash", async () => {
+  const ip = "203.0.113.42";
+  const lim = new FakeLimits();
+  await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip });
+  const stored = lim.keys().find((k) => k.includes("|i:")).split("|i:")[1];
+  assert.match(stored, /^[0-9a-f]{32}$/);
+  const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 32);
+  for (const guess of [ip, "ip:" + DAY + ":" + ip, DAY + ":" + ip]) assert.notEqual(stored, sha(guess));
+  assert.equal(stored, createHmac("sha256", "tok").update("ip:" + DAY + ":" + ip).digest("hex").slice(0, 32));
+  // Another secret gives another key for the same address.
+  const lim2 = new FakeLimits();
+  const e2 = env(lim2);
+  e2.TURN_KEY_API_TOKEN = "other";
+  await call(e2, { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip });
+  assert.notEqual(lim2.keys().find((k) => k.includes("|i:")).split("|i:")[1], stored);
+});
+
+await test("IPv6 addresses group by /64", async () => {
+  assert.equal(addressGroup("2001:DB8:0:0:1:2:3:4"), "2001:db8:0:0::/64");
+  assert.equal(addressGroup("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(addressGroup("2001:db8:1:2::"), "2001:db8:1:2::/64");
+  assert.equal(addressGroup("fe80::1%eth0"), "fe80:0:0:0::/64");
+  assert.equal(addressGroup("::ffff:203.0.113.7"), "203.0.113.7");
+  assert.equal(addressGroup("203.0.113.7"), "203.0.113.7");
+  assert.notEqual(addressGroup("2001:db8:1:2::1"), addressGroup("2001:db8:1:3::1"));
+});
+
+await test("one IPv6 /64 shares one address cap", async () => {
+  const e = env();
+  for (let i = 0; i < 60; i++) {
+    const id = i.toString(16).padStart(64, "7");
+    const ip = "2001:db8:1:2:" + (i + 1).toString(16) + "::" + (i * 7 + 1).toString(16);
+    assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip })).status, 200);
+  }
+  const id = "8".repeat(64);
+  const r = await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:1:2:ffff:ffff:ffff:ffff" });
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "ip_limit");
+  assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:1:3::1" })).status, 200);
+});
+
+await test("requests at the same moment can't go over a cap", async () => {
+  const e = env();
+  const same = await Promise.all(Array.from({ length: 45 }, () => call(e, { id: ID, t: NOW, sig: sign(ID, NOW) })));
+  assert.equal(same.filter((r) => r.status === 200).length, 30);
+  assert.ok(same.filter((r) => r.status === 429).every((r) => r.data.error === "id_limit"));
+  const e2 = env();
+  const many = await Promise.all(Array.from({ length: 90 }, (_, i) => {
+    const id = i.toString(16).padStart(64, "9");
+    return call(e2, { id, t: NOW, sig: sign(id, NOW) }, { ip: "198.51.100.20" });
+  }));
+  assert.equal(many.filter((r) => r.status === 200).length, 60);
+});
+
+await test("each login writes 3 rows; earlier days are wiped", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) });
+  assert.equal(lim.sql.written, 3);
+  await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) });
+  assert.equal(lim.sql.written, 6);
+  assert.equal(lim.calls, 2);
+  const tomorrow = NOW + 86400;
+  await call(e, { id: ID, t: tomorrow, sig: sign(ID, tomorrow) }, { now: tomorrow });
+  const day2 = new Date(tomorrow * 1000).toISOString().slice(0, 10);
+  assert.equal(lim.keys().length, 3);
+  assert.ok(lim.keys().every((k) => k.startsWith(day2 + "|")));
+});
+
+await test("the SQL runs on real SQLite", async () => {
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    console.log("    (node:sqlite not in this Node, checked with the fake only)");
+    return;
+  }
+  const db = new DatabaseSync(":memory:");
+  const sql = { exec: (q, ...b) => {
+    const st = db.prepare(q);
+    const rows = /^SELECT/.test(q) ? st.all(...b) : (st.run(...b), []);
+    return { toArray: () => rows };
+  } };
+  const obj = new RelayLimits({ storage: { sql } });
+  const ipk = "0".repeat(32);
+  for (let i = 0; i < 30; i++) assert.equal(obj.take(DAY, ID, ipk), "ok");
+  assert.equal(obj.take(DAY, ID, ipk), "id");
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
+  assert.equal(obj.take("2099-01-01", ID, ipk), "ok");
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
 });
 
 await test("no address header still counts (as one shared address)", async () => {
@@ -149,15 +283,14 @@ await test("no address header still counts (as one shared address)", async () =>
 });
 
 await test("global cap of 3000 per day", async () => {
-  const kv = new FakeKV();
-  const day = new Date(NOW * 1000).toISOString().slice(0, 10);
-  kv.map.set("g:" + day, "3000");
-  const r = await call(env(kv), { id: ID, t: NOW, sig: sign(ID, NOW) });
+  const lim = new FakeLimits();
+  lim.sql.rows.set(DAY + "|g", 3000);
+  const r = await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "global_limit");
 });
 
-await test("no KV bound or broken KV: fails closed", async () => {
+await test("no limits object bound, or a broken one: fails closed", async () => {
   const e = env();
   delete e.LIMITS;
   upstreamCalls.length = 0;
@@ -165,9 +298,11 @@ await test("no KV bound or broken KV: fails closed", async () => {
   assert.equal(r.status, 503);
   assert.equal(r.data.error, "limits_unavailable");
   assert.equal(upstreamCalls.length, 0);
-  const kv = new FakeKV();
-  kv.fail = true;
-  assert.equal((await call(env(kv), { id: ID, t: NOW, sig: sign(ID, NOW) })).status, 503);
+  const lim = new FakeLimits();
+  lim.sql.fail = true;
+  const r2 = await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) });
+  assert.equal(r2.status, 503);
+  assert.equal(r2.data.error, "limits_unavailable");
   assert.equal(upstreamCalls.length, 0);
 });
 

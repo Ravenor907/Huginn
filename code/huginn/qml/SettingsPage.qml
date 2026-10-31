@@ -30,12 +30,12 @@ Rectangle {
     // The desktop's list column edge, so Main.qml can put the resize handle on it.
     readonly property int listEdge: middle.visible ? middle.width : 0
 
-    readonly property var themeNames: ({ dark: "Dark", black: "True black", light: "Light", autumn: "Autumn" })
+    readonly property var themeNames: ({ dark: "Dark", black: "True black", light: "Light", seasonal: "Seasonal" })
     readonly property var mainItems: [
         { id: "notify", title: "Notifications", note: Chat.showPreview ? "On, with the message text" : "On, without the text" },
-        { id: "look", title: "Look and text size", note: (themeNames[Theme.mode] || "Dark") + ", " + (Theme.compact ? "compact" : Theme.spacious ? "spacious" : "default") + ", " + Settings.uiSize + "%" },
-        { id: "calls", title: "Calls and voice", note: Settings.pushToTalk ? "Push to talk: hold " + TalkKey.keyName : "Noise removal " + (Settings.noiseRemoval ? "on" : "off") },
-        { id: "lock", title: "Lock and privacy", note: Vault.exists ? (Vault.usesPattern ? "Pattern" : "Password") + ", " + (Settings.lockPosition === "top" ? "at the top" : Settings.lockPosition === "middle" ? "in the middle" : "in the lower half") : "No lock yet" },
+        { id: "look", title: "Look and text size", note: (themeNames[Theme.choice] || "Dark") + (Theme.choice === "seasonal" ? " (" + Theme.season.name + ")" : "") + ", " + (Theme.compact ? "compact" : Theme.spacious ? "spacious" : "default") + ", " + Settings.uiSize + "%" },
+        { id: "calls", title: "Calls and voice", note: !Settings.internetCalls ? "Internet calls off" : Settings.pushToTalk ? "Push to talk: hold " + TalkKey.keyName : "Noise removal " + (Settings.noiseRemoval ? "on" : "off") },
+        { id: "lock", title: "Lock and privacy", note: Vault.exists && !Vault.hasLock ? "Lock off" : Vault.exists ? (Vault.usesPattern ? "Pattern" : "Password") + ", " + (Settings.lockPosition === "top" ? "at the top" : Settings.lockPosition === "middle" ? "in the middle" : "in the lower half") : "No lock yet" },
         { id: "keep", title: "Keep messages for", note: Chat.deleteAfter > 0 ? "A day on this computer" : "Each chat's own limit (7 days, or 30 in Family and Work)" },
         { id: "more", title: "More settings", note: "Everything else" }
     ]
@@ -73,8 +73,8 @@ Rectangle {
         case "look": return [
             { kind: "button", key: "picture", title: "Your picture", note: "Shown beside your name. Sent only to your contacts and the groups you're in, encrypted like a message",
               label: Profile.hasMyPicture ? "Change" : "Choose" },
-            { kind: "segmented", key: "theme", title: "Theme", note: Theme.mode === "autumn" ? "Autumn is new and still settling in: leaves fall behind the panes" : "True black saves power on OLED screens",
-              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }, { value: "autumn", label: "Autumn (Experimental)" }] },
+            { kind: "segmented", key: "theme", title: "Theme", note: Theme.choice === "seasonal" ? "Seasonal follows the time of year. Now: " + Theme.season.name + (Theme.mode === "autumn" ? ", with leaves falling behind the panes" : "") : "True black saves power on OLED screens",
+              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }, { value: "seasonal", label: "Seasonal" }] },
             // Autumn only: the leaves.
             { kind: "slider", key: "leafSize", hide: Theme.mode !== "autumn", title: "Leaf size: " + Settings.leafSize + "%", note: "From half size to twice", from: 50, to: 200, step: 5 },
             { kind: "slider", key: "leafCount", hide: Theme.mode !== "autumn", title: "How many: " + Settings.leafCount + "%", note: "Fewer leaves use less of the computer", from: 25, to: 200, step: 5 },
@@ -89,29 +89,36 @@ Rectangle {
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal", note: Settings.noiseRemoval
                 ? "Background noise is taken out of your voice. Turn it off if people say you sound quiet"
                 : "Off: background sound comes through with your voice. Echo is still removed" },
+            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: Settings.internetCalls
+                ? "Calls reach people anywhere through the encrypted relay. Off: only the same Wi-Fi or Bluetooth close by"
+                : "Off: calls go only over the same Wi-Fi or Bluetooth close by. The relay is never asked" },
             { kind: "toggle", key: "pushToTalk", title: "Push to talk", note: "In a voice room your microphone only sends while you hold the key" },
             { kind: "button", key: "talkKey", title: "Push to talk key: " + TalkKey.keyName, note: TalkKey.capturing ? "Press the key you want to use. Esc keeps " + TalkKey.keyName
                 : "Hold it to talk", label: TalkKey.capturing ? "Press a key" : "Change" },
             { kind: "button", key: "callHistory", title: "Call history", note: Calls.missedCount > 0 ? (Calls.missedCount === 1 ? "1 missed call" : Calls.missedCount + " missed calls") : "Calls you made, answered or missed", label: "Open" }
         ]
         case "lock": return [
-            { kind: "button", key: "changeLock", title: "Lock", note: "Huginn opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is locked with it", label: "Change", enabled: Vault.exists },
+            { kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
+              note: Vault.exists && !Vault.hasLock ? "Huginn opens without a lock. Anyone who can use this computer can open it and read your chats"
+                  : "Huginn opens with your " + (Vault.usesPattern ? "pattern" : "password") + ". Everything it keeps is locked with it",
+              label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
+            { kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", note: "Huginn would open without a pattern or password. Not recommended", label: "Turn off" },
             { kind: "segmented", key: "lockPosition", title: "Where the pattern sits", note: "On the lock screen. Lower is easiest to reach",
               options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
             { kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw", note: "The line and the lit dots don't show while you draw, so nobody looking over your shoulder sees it. Each dot still gives a short pulse" },
-            { kind: "toggle", key: "lockOnLeave", vault: true, title: "Lock when I leave Huginn", note: "Huginn locks the moment you switch to another app or the computer sleeps" },
-            { kind: "toggle", key: "panicLock", vault: true, title: "Panic lock", note: "Ctrl+Shift+Q (or both stick buttons held on a controller) locks Huginn at once and hides message text until you unlock" },
+            { kind: "toggle", key: "lockOnLeave", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Lock when I leave Huginn", note: "Huginn locks the moment you switch to another app or the computer sleeps" },
+            { kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q (or both stick buttons held on a controller) locks Huginn at once and hides message text until you unlock" },
             { kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts", note: "Off: people don't see when you've read their messages. Delivered still shows" },
             { kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Contacts see a green dot while Huginn is open. Off: nobody sees yours, and you don't see theirs" },
             { kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: "A link you send shows its page's title and picture. Off: links go as plain text" }
-        ]
+        ].filter(r => !r.hide)
         case "keep": return [
             { kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages for",
               note: "Chats keep messages for 7 days, or up to 30 in Family and Work. Each chat's own limit is under its options. A day deletes sooner on this computer",
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "Shorten all to a day" }] }
         ]
         case "nearby": return [
-            { kind: "toggle", key: "visibleNearby", chat: true, title: "Find people close by", note: "Off: strangers close by or on the same Wi-Fi can't see your name or message you. Your contacts still can" },
+            { kind: "toggle", key: "visibleNearby", chat: true, title: "Find people close by", note: "Off: this computer announces nothing on the Wi-Fi, and strangers can't see your name or message you. You can still find others and send to them, and contacts still reach you over the internet" },
             { kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room", note: "Everyone close by or on the same Wi-Fi with Huginn or Muninn can see and message you" },
             { kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages", note: "Off: they clear when Huginn closes" },
             { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Muninn and the free LocalSend app on phones and computers can find this one. You accept every file on screen" }
@@ -495,9 +502,10 @@ Rectangle {
                         HButton {
                             id: buttonCtl
                             anchors.right: parent.right
+                            width: Math.min(implicitWidth, parent.width)
                             anchors.verticalCenter: parent.verticalCenter
                             visible: modelData.kind === "button"
-                            kind: modelData.key === "eraseChat" || modelData.key === "deleteMessages" ? "danger" : "normal"
+                            kind: modelData.key === "eraseChat" || modelData.key === "deleteMessages" || modelData.key === "lockOff" ? "danger" : "normal"
                             text: modelData.label || ""
                             enabled: modelData.enabled !== false
                             onClicked: page.press(modelData.key)
@@ -612,6 +620,8 @@ Rectangle {
         else if (key === "backup") startBackup()
         else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
+        else if (key === "lockOff") Ui.sure("Turn off the lock?", "Anyone who can use this computer could open Huginn and read your chats, contacts and keys. They stay encrypted, but the key sits on this computer beside them, unprotected. Panic lock and locking when you leave stop working too.",
+                                            "Turn off", () => { if (Vault.turnOffLock()) Ui.say("The lock is off. Huginn opens without a pattern or password."); else Ui.say("The lock couldn't be turned off. Unlock Huginn first.", true) }, false, true)
         else if (key === "callHistory") { section = "callhistory"; inSection = true }
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Unlock Huginn first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Every conversation on this computer is deleted. Contacts stay.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)

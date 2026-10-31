@@ -12,6 +12,7 @@
 #include <QNetworkReply>
 #include <QProcess>
 #include <QTimer>
+#include "platform/singleinstance.h"
 #include "platform/winupdate.h"
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -250,6 +251,7 @@ void Updater::installFlatpak(const QString &path)
         }
         m_status = QStringLiteral("Updated. Restarting…");
         Q_EMIT changed();
+        SingleInstance::releaseForRestart();   // the new copy must not find this one still holding the lock
         QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
         QTimer::singleShot(300, qApp, &QCoreApplication::quit);
     });

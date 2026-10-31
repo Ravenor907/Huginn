@@ -5,13 +5,21 @@ The Cloudflare TURN token stays inside Cloudflare, never inside the apps.
 
 Files:
 
-- `worker.js`: the Worker. Paste this into the Cloudflare editor.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `14 tests passed`.
+- `worker.js`: the Worker, and the `RelayLimits` object that keeps the daily counts.
+- `wrangler.toml`: the Worker's name, the `LIMITS` binding and the storage setup, for `wrangler deploy`.
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `20 tests passed`.
+
+## How it gets to Cloudflare
+
+Each release (a push to main that changes `code/VERSION`) deploys this folder to the Worker `huginn-relay`
+(`https://huginn-relay.ravenor907.workers.dev`), after every check has passed. Test builds never touch it.
+The deploy keeps the Worker's secrets. Without the two GitHub secrets below, the release still goes out
+and only shows a warning that the Worker was not deployed.
 
 ## Setup steps
 
 Do these in order. One action per step. Button names are from the Cloudflare dashboard at
-dash.cloudflare.com. If a button has a slightly different name, pick the closest match.
+dash.cloudflare.com and from GitHub. If a button has a slightly different name, pick the closest match.
 
 ### A. Make the TURN key
 
@@ -30,78 +38,69 @@ dash.cloudflare.com. If a button has a slightly different name, pick the closest
 10. Run `openssl rand -hex 32`.
 11. Copy the long line it prints into your note. This is your `APP_SECRET`.
 
-### C. Make the Worker
+### C. Get the Cloudflare account ID
 
 12. In the left sidebar, click **Workers & Pages**.
-13. Click **Create** (it may say **Create application**).
-14. Pick **Worker** (it may say **Start with Hello World!**).
-15. Type the name `huginn-relay`.
-16. Click **Deploy**.
-17. Click **Edit code**.
-18. Select everything in the editor and delete it.
-19. Paste all of `worker.js`.
-20. Click **Deploy**.
+13. Find **Account ID** on the right side of the page.
+14. Click it to copy it into your note. This is your `CLOUDFLARE_ACCOUNT_ID`.
 
-### D. Add the three secrets
+### D. Make the deploy token
 
-21. Go back to the Worker's page (click its name at the top left of the editor).
-22. Click **Settings**.
-23. Find **Variables and Secrets** and click **Add**.
-24. Set **Type** to **Secret**, name `TURN_KEY_ID`, paste its value from your note.
-25. Click **Add variable** (or **+ Add**) and add a Secret named `TURN_KEY_API_TOKEN` with its value.
-26. Add one more Secret named `APP_SECRET` with its value.
-27. Click **Deploy**.
+15. Click the person icon at the top right, then **My Profile**.
+16. Click **API Tokens**.
+17. Click **Create Token**.
+18. Next to **Edit Cloudflare Workers**, click **Use template**. (It includes **Workers Scripts: Edit**.)
+19. Under **Account Resources**, pick your account.
+20. Click **Continue to summary**, then **Create Token**.
+21. Copy the token into your note. This is your `CLOUDFLARE_API_TOKEN`. It is shown only once.
 
-### E. Make the KV store
+### E. Add the two GitHub secrets
 
-28. In the left sidebar, click **Storage & Databases**, then **KV**.
-29. Click **Create** (it may say **Create namespace** or **Create instance**).
-30. Type the name `LIMITS`.
-31. Click **Create**.
+22. Open the repository on github.com and click **Settings**.
+23. Click **Secrets and variables**, then **Actions**.
+24. Click **New repository secret**. Name `CLOUDFLARE_API_TOKEN`, paste its value, click **Add secret**.
+25. Click **New repository secret** again. Name `CLOUDFLARE_ACCOUNT_ID`, paste its value, click **Add secret**.
+26. The next release deploys the Worker.
 
-### F. Connect the KV store to the Worker
+### F. Add the three Worker secrets
 
-32. Open the Worker again (**Workers & Pages**, then `huginn-relay`).
-33. Click **Bindings** (on some layouts it is under **Settings**).
-34. Click **Add binding**.
-35. Pick **KV namespace**.
-36. Set **Variable name** to `LIMITS`.
-37. Pick the `LIMITS` namespace from the list.
-38. Click **Add binding** (or **Save**, then **Deploy** if asked).
+Do this once the Worker exists (after the first release with the GitHub secrets).
+
+27. In Cloudflare, click **Workers & Pages**, then `huginn-relay`.
+28. Click **Settings**.
+29. Find **Variables and Secrets** and click **Add**.
+30. Set **Type** to **Secret**, name `TURN_KEY_ID`, paste its value from your note.
+31. Add a Secret named `TURN_KEY_API_TOKEN` with its value.
+32. Add one more Secret named `APP_SECRET` with its value.
+33. Click **Deploy**.
 
 ### G. Check it works
 
-39. On the Worker's page, copy its address. It looks like `https://huginn-relay.<your-name>.workers.dev`.
-40. Open that address with `/health` on the end in a browser.
-41. You should see `{"ok":true}`.
-42. Send the address and your `APP_SECRET` so they can go into the apps' constants files (see `shared/docs/relay.md`).
+34. Open `https://huginn-relay.ravenor907.workers.dev/health` in a browser.
+35. You should see `{"ok":true}`.
+36. The Worker address and `APP_SECRET` go into the apps' constants files (see `shared/docs/relay.md`).
 
 ## Good to know
 
 - Limits: each app install gets at most 30 logins a day, each internet address at most 60 a day (a home
   shares one address, so this is a few installs' worth), and everyone together at most 3000 a day.
-  The day resets at midnight UTC. When a limit is hit the Worker answers 429.
-- The per-address count is kept under a scrambled form of the address and the day (a hash), so the KV store
-  never holds anyone's address. It goes away by itself after two days.
+  An IPv6 address counts by its first half (its /64), which is one home or one phone, so one home can't
+  get around the cap by changing the rest. The day resets at midnight UTC. When a limit is hit the Worker
+  answers 429.
+- The counts live in one small storage object at Cloudflare (`RelayLimits`, bound as `LIMITS`). Each login
+  is checked and counted in one step inside it, so logins at the same moment can't go over a limit.
+- Addresses are never stored or logged. The per-address count is kept under a keyed hash (HMAC) of the address
+  and the day. The key is the Worker's `TURN_KEY_API_TOKEN` secret, so the stored value can't be turned back
+  into an address by trying them all. All counts from earlier days are deleted when a new day starts.
+- If the storage object is missing or not working, the Worker refuses every request (answers 503).
+  That is on purpose: the caps are what protect the TURN account.
+- Free plan budget, per login: 1 Worker request, 1 storage object request, 3 storage rows written (and the
+  same 3 or fewer deleted the next day). The free plan allows 100,000 Worker requests, 100,000 storage object
+  requests and 100,000 rows written a day. The 3000 a day cap uses at most 3000 requests of each kind and
+  about 18,000 rows, so 500 users fit with room to spare.
 - Each login lasts 30 minutes. The apps ask for a fresh one for a call when less than 5 minutes are left.
-- If the KV store is missing or not working, the Worker refuses every request (answers 503).
-  So if step F is skipped, nothing works. That is on purpose.
-- KV on the free Workers plan allows about 1000 writes a day. Each login uses 3 writes, so the free plan
-  stops at about 330 logins a day (the Worker then answers 503). The paid Workers plan lifts this.
-- KV counts are close, not exact. A burst from many places at once can go a little over a limit.
 - TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage.
-- The Worker logs nothing about requests.
-- To change the code later: open the Worker, click **Edit code**, paste the new `worker.js`, click **Deploy**.
-  The secrets and the KV binding stay.
-
-## Updating the Worker
-
-A new `worker.js` keeps the same secrets and the same KV binding.
-
-1. Open **Workers & Pages**, then `huginn-relay`.
-2. Click **Edit code**.
-3. Select everything in the editor and delete it.
-4. Paste all of the new `worker.js`.
-5. Click **Deploy**.
-6. Open the Worker's address with `/health` on the end. You should still see `{"ok":true}`.
-7. Optional: in **Notifications** (left sidebar or account menu), add a usage or billing alert, so you hear about unexpected TURN traffic.
+- Optional: in **Notifications** (left sidebar or account menu), add a usage or billing alert, so you hear
+  about unexpected TURN traffic.
+- To deploy by hand from this folder: `npx wrangler@4.156.0 deploy` (needs Node 22 or newer and a
+  Cloudflare login).

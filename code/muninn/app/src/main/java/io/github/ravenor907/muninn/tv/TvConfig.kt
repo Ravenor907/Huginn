@@ -316,5 +316,24 @@ object TvRules {
     fun adoptMic(s: Status, myMic: Int, myMicAt: Long, synced: Boolean): Boolean =
         s.mic != myMic && (if (s.own) synced else s.ts > myMicAt)
 
+    /**
+     * Android won't show its "Allow" box for a permission any more: it was asked for before ([askedBefore])
+     * and Android no longer offers a second chance ([rationale] false). Only its app page can turn it on then.
+     */
+    fun settingsOnly(askedBefore: Boolean, rationale: Boolean): Boolean = askedBefore && !rationale
+
+    /**
+     * The button the remote lands on when a conversation opens: speech to text, then Record, then the first
+     * quick message, then the Call button (the only button left when the TV has no microphone). Null: none
+     * of them is on screen, so focus goes to the first thing that takes it.
+     */
+    fun firstTalkFocus(dictate: Boolean, mic: Boolean, calls: Boolean, quick: List<String>): String? = when {
+        dictate -> "say"
+        mic -> "rec"
+        quick.isNotEmpty() -> quick.first()
+        calls -> "call"
+        else -> null
+    }
+
     private const val MAX_INT = (1L shl 53) - 1
 }

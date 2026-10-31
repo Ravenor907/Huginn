@@ -9,7 +9,9 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.media.audiofx.AutomaticGainControl
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 import kotlin.math.pow
@@ -284,11 +286,16 @@ object TvRecorder {
     private val main by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
     /** Called on the main thread when the 5-minute limit stops it; the screen then sends it. */
     var onLimit: (() -> Unit)? = null
-    @Volatile private var stopFlag = false
-    private var thread: Thread? = null
-    private var out: ByteArrayOutputStream? = null
-    private var started = 0L
-    @Volatile private var failed = false
+
+    /** One recording: its sound so far and its thread's flags. */
+    private class Take(val started: Long) {
+        val buf = ByteArrayOutputStream()
+        @Volatile var stop = false
+        @Volatile var failed = false
+        var thread: Thread? = null
+    }
+    /** The recording under way, until [finish] or [cancel] takes it. */
+    @Volatile private var take: Take? = null
 
     fun start(context: Context): Boolean {
         cancel()
@@ -303,15 +310,14 @@ object TvRecorder {
                 start()
             }
         } catch (e: Exception) { rec.release(); return false }
-        val buf = ByteArrayOutputStream()
-        stopFlag = false; failed = false; out = buf
-        started = System.currentTimeMillis()
+        val t = Take(System.currentTimeMillis())
+        take = t
         recording.value = true
-        thread = Thread({ loop(rec, codec, buf) }, "muninn-tv-voice").apply { isDaemon = true; start() }
+        t.thread = Thread({ loop(rec, codec, t) }, "muninn-tv-voice").apply { isDaemon = true; start() }
         return true
     }
 
-    private fun loop(rec: AudioRecord, codec: MediaCodec, buf: ByteArrayOutputStream) {
+    private fun loop(rec: AudioRecord, codec: MediaCodec, t: Take) {
         TvMic.audioThread()
         val agc = TvMic.clipAgc(rec.audioSessionId)
         val proc = TvMic.clipProcessor(RATE)
@@ -321,30 +327,34 @@ object TvRecorder {
         val bytes = ByteArray(FRAME * 2)
         val info = MediaCodec.BufferInfo()
         var samples = 0L
+        // The 5-minute limit ended it (not OK or Back): the screen is told once the clip is complete.
+        var limited = false
         try {
             rec.startRecording()
             while (true) {
-                val atLimit = System.currentTimeMillis() - started >= io.github.ravenor907.muninn.net.Voice.MAX_MS
-                val end = stopFlag || atLimit
+                if (!t.stop && System.currentTimeMillis() - t.started >= io.github.ravenor907.muninn.net.Voice.MAX_MS) limited = true
+                val end = t.stop || limited
                 var n = 0
                 if (!end) {
-                    n = TvMic.readFully(rec, raw, FRAME); if (n < 0) { failed = true; break }
+                    n = TvMic.readFully(rec, raw, FRAME); if (n < 0) { t.failed = true; break }
                     if (proc != null && n == FRAME) proc.capture(raw, n, pcm) else System.arraycopy(raw, 0, pcm, 0, n)
                 }
                 gain.process(pcm, n)
                 TvMic.measure(pcm, n)
                 for (i in 0 until n) { bytes[2 * i] = pcm[i].toInt().toByte(); bytes[2 * i + 1] = (pcm[i].toInt() shr 8).toByte() }
                 val inIdx = codec.dequeueInputBuffer(20_000)
+                var queuedEnd = false
                 if (inIdx >= 0) {
                     val ib = codec.getInputBuffer(inIdx)!!
                     ib.clear(); ib.put(bytes, 0, n * 2)
                     codec.queueInputBuffer(inIdx, 0, n * 2, samples * 1_000_000 / RATE, if (end) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0)
                     samples += n
+                    queuedEnd = end
                 }
-                if (drain(codec, info, buf, end)) break
-                if (atLimit && !stopFlag) { stopFlag = true; main.post { onLimit?.invoke() } }
+                // Once the end is in, [drain] has waited for the rest: what came out is the clip.
+                if (drain(codec, info, t.buf, end) || queuedEnd) break
             }
-        } catch (e: Exception) { failed = true
+        } catch (e: Exception) { t.failed = true
         } finally {
             try { rec.stop() } catch (_: Exception) {}
             rec.release()
@@ -353,6 +363,8 @@ object TvRecorder {
             try { codec.stop() } catch (_: Exception) {}
             codec.release()
         }
+        // Only while it is still the recording under way: OK or Back may have taken it in the meantime.
+        if (limited) main.post { if (take === t) onLimit?.invoke() }
     }
 
     /** Moves encoded frames out, each with its ADTS header. True once the end of stream came out. */
@@ -372,25 +384,29 @@ object TvRecorder {
         }
     }
 
-    fun elapsed(): Long = if (recording.value) System.currentTimeMillis() - started else 0
+    fun elapsed(): Long = take?.let { System.currentTimeMillis() - it.started } ?: 0L
 
-    /** Stops and returns (sound, length in ms), or null if it was too short or failed. */
-    fun finish(): Pair<ByteArray, Int>? {
-        val t = thread ?: return null
-        val ms = (System.currentTimeMillis() - started).toInt().coerceAtMost(io.github.ravenor907.muninn.net.Voice.MAX_MS)
-        stopFlag = true
-        t.join(4000)
-        thread = null; recording.value = false
-        val buf = out; out = null
-        if (failed || ms < 700 || buf == null) return null
-        val bytes = synchronized(buf) { buf.toByteArray() }
+    /**
+     * Stops and returns (sound, length in ms), or null if it was too short or failed. The encoder's last
+     * frames are waited for on an IO thread (up to 4 seconds), never on the main thread.
+     */
+    suspend fun finish(): Pair<ByteArray, Int>? {
+        val t = take ?: return null
+        take = null
+        val ms = (System.currentTimeMillis() - t.started).toInt().coerceAtMost(io.github.ravenor907.muninn.net.Voice.MAX_MS)
+        t.stop = true
+        withContext(Dispatchers.IO) { t.thread?.join(4000) }
+        if (take == null) recording.value = false
+        if (t.failed || ms < 700) return null
+        val bytes = synchronized(t.buf) { t.buf.toByteArray() }
         return io.github.ravenor907.muninn.net.Voice.check(listOf(bytes))?.let { it to ms }
     }
 
     fun cancel() {
-        stopFlag = true
-        thread?.join(2000)
-        thread = null; out = null; recording.value = false
+        val t = take
+        take = null
+        if (t != null) { t.stop = true; t.thread?.join(2000) }
+        recording.value = false
     }
 
     /** The 7-byte ADTS header for one AAC LC frame of [size] bytes, 44.1 kHz, mono. */
