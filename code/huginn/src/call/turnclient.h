@@ -1,0 +1,145 @@
+#pragma once
+
+#include "stun.h"
+
+#include <QHash>
+#include <QHostAddress>
+#include <QNetworkAccessManager>
+#include <QObject>
+#include <QPointer>
+#include <QSet>
+#include <QStringList>
+#include <QTimer>
+#include <functional>
+#include <map>
+
+class QSslSocket;
+class QUdpSocket;
+
+namespace CallNet
+{
+QHostAddress toHost(const Stun::Address &a);
+Stun::Address fromHost(const QHostAddress &h, quint16 port);
+// Looks host up (DNS), up to tries times a second apart; an IP literal is used as it is.
+// done gets a null address when the name couldn't be looked up.
+void resolve(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries = 3);
+}
+
+// A TURN login from the relay Worker (shared/docs/relay.md).
+struct TurnLogin {
+    QStringList urls;
+    QString username, credential;
+    qint64 expiresMs = 0;
+    bool valid() const { return !username.isEmpty() && !credential.isEmpty() && !urls.isEmpty(); }
+};
+
+// Asks the relay Worker for a TURN login (HTTPS) when a call needs one; keeps it in
+// memory until 5 minutes before it expires. Follows the Worker's rules: after 429 nothing until the
+// next UTC day, after a 5xx at least 60 s. The credential is never logged.
+class RelayCredentials : public QObject
+{
+    Q_OBJECT
+public:
+    explicit RelayCredentials(QObject *parent = nullptr);
+    // identityKey: this device's chat key (SPKI DER); its SHA-256 is the Worker's "id".
+    // done is called exactly once, never from inside get().
+    void get(const QByteArray &identityKey, std::function<void(const TurnLogin &login, const QString &why)> done);
+    // Builds the request body (also used by the self-test).
+    static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret);
+
+private:
+    void fetch();
+    void finish(const TurnLogin &login, const QString &why);
+
+    QNetworkAccessManager m_net;
+    TurnLogin m_cache;
+    QByteArray m_identity;
+    qint64 m_blockedUntil = 0;
+    bool m_busy = false;
+    QList<std::function<void(const TurnLogin &, const QString &)>> m_waiting;
+};
+
+// One TURN allocation (RFC 8656) on Cloudflare: Allocate with the long-term credential and
+// MESSAGE-INTEGRITY, Refresh before it lapses, ChannelBind per peer (which also makes the permission,
+// refreshed every 4 minutes), ChannelData for media. UDP first; if that gets no answer, TURN over TLS
+// on port 443, then any other turns: URL. Audio goes only through here over the internet: no STUN,
+// no direct internet path.
+class TurnClient : public QObject
+{
+    Q_OBJECT
+public:
+    explicit TurnClient(const TurnLogin &login, QObject *parent = nullptr);
+    ~TurnClient() override;
+
+    void start();
+    void stop();   // deallocates (Refresh with lifetime 0)
+    bool ready() const { return m_relayed.valid(); }
+    // The relayed transport address: the only address offers and answers carry.
+    Stun::Address relayed() const { return m_relayed; }
+    bool overTls() const { return m_tls != nullptr; }
+    void addPeer(const Stun::Address &peer);
+    bool send(const Stun::Address &peer, const QByteArray &data);
+
+    struct Server {
+        QString host;
+        quint16 port = 0;
+        bool tls = false;
+    };
+    // The servers to try, in order, from the Worker's URLs (public for the self-test).
+    static QList<Server> servers(const QStringList &urls);
+
+Q_SIGNALS:
+    void allocated();
+    void failed(const QString &why);
+    void data(const Stun::Address &peer, const QByteArray &bytes);
+
+private:
+    struct Pending {
+        Stun::Message msg;
+        bool auth = false;
+        int tries = 0;
+        int rto = 250;
+        QTimer *timer = nullptr;
+    };
+    struct Peer {
+        Stun::Address addr;
+        quint16 channel = 0;
+        bool bound = false;
+    };
+
+    void tryNext();
+    void connectUdp(const QHostAddress &host, quint16 port);
+    void connectTls(const Server &s, const QHostAddress &ip);
+    void request(quint16 method, const std::vector<std::pair<quint16, QByteArray>> &attrs, bool auth = true,
+                 const Stun::Address &peer = Stun::Address());
+    void transmit(const QByteArray &tid);
+    void writeRaw(const QByteArray &bytes);
+    void onDatagrams();
+    void onTlsData();
+    void onPacket(const QByteArray &bytes);
+    void onResponse(const Stun::Message &m, const QByteArray &bytes);
+    void allocate();
+    void refresh(quint32 lifetime);
+    void bind(Peer &p);
+    void dropPending();
+    void fail(const QString &why);
+
+    TurnLogin m_login;
+    QList<Server> m_servers;
+    int m_next = 0;
+    QUdpSocket *m_udp = nullptr;
+    QSslSocket *m_tls = nullptr;
+    QByteArray m_tlsBuf;
+    QHostAddress m_serverAddr;
+    quint16 m_serverPort = 0;
+    QString m_realm, m_nonce;
+    QByteArray m_key;
+    Stun::Address m_relayed;
+    std::map<QByteArray, Pending> m_pending;
+    QList<Peer> m_peers;
+    quint16 m_nextChannel = 0x4000;
+    QTimer m_refresh, m_rebind, m_giveUp;
+    bool m_stopped = false;
+    QHash<QString, QHostAddress> m_resolved;   // per allocation attempt: names looked up
+    QSet<QString> m_unresolved;                // and names it couldn't (not asked again)
+};
