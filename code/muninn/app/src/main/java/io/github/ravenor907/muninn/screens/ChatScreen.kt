@@ -295,6 +295,8 @@ fun ChatMain(app: Muninn) {
             "archived" -> ArchivedScreen(app)
             "tap" -> TapScreen(app) { ChatNav.open = "" }
             "mirror" -> MirrorList { ChatNav.open = "" }
+            "labsreport" -> LabsReportScreen(app)
+            Chat.LABS_PAGE -> LabsReportsScreen(app)
             else -> if (open.startsWith("mirror/")) androidx.compose.runtime.key(open) { MirrorChatScreen(open.removePrefix("mirror/")) { ChatNav.open = "mirror" } }
                 else androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
@@ -336,9 +338,9 @@ private fun ListLabel(text: String, top: Dp = 4.dp, modifier: Modifier = Modifie
 }
 
 @Composable
-private fun SearchBox(value: String, onChange: (String) -> Unit) {
+private fun SearchBox(value: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
     val shape = io.github.ravenor907.muninn.ui.LookShapes.composer
-    Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 12.dp).fillMaxWidth().heightIn(min = 44.dp)
+    Row(modifier.heightIn(min = 44.dp)
         .clip(shape).background(Palette.field).hcBorder(shape).padding(start = 14.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically) {
         MIcon("search", Palette.textMuted, 18.dp, weight = 1.8f)
@@ -599,7 +601,12 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     Box(Modifier.fillMaxSize().frosted()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
             item {
-                SearchBox(query) { query = it }
+                // Search, and the chat list's three-dot menu beside it.
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 2.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SearchBox(query, Modifier.weight(1f)) { query = it }
+                    Spacer(Modifier.width(4.dp))
+                    io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
+                }
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
             }
@@ -665,18 +672,24 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             // Requests, archived chats and the trash: one row at the bottom.
             val pendingIntros = intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
             val asks = requests.size + ginvites.size + pendingIntros
-            if (q.isEmpty() && (asks > 0 || archivedRows.isNotEmpty() || trashed.isNotEmpty())) item(key = "more") {
+            val labsHere = app.chat.isLabs()
+            if (q.isEmpty() && (asks > 0 || archivedRows.isNotEmpty() || trashed.isNotEmpty() || labsHere)) item(key = "more") {
                 Box(Modifier.fillMaxWidth().padding(top = 12.dp).height(1.dp).background(Palette.hairline))
-                PersonRow("More", "Requests, archived, trash", "", asks, false,
+                PersonRow("More", if (labsHere) "Requests, archived, trash, Labs" else "Requests, archived, trash", "", asks, false,
                     { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("download", Palette.accent, 22.dp) } }) {
                     showMore = true
                 }
             }
-            item { Spacer(Modifier.height(24.dp)) }
+            // Room under the last row for the + button.
+            item { Spacer(Modifier.height(96.dp)) }
         }
+        // Add someone: a round gold button at the bottom left, above the tabs.
+        Box(Modifier.align(Alignment.BottomStart).padding(16.dp).size(56.dp).clip(CircleShape).background(Palette.gold)
+            .clickable(role = Role.Button) { ChatNav.open = "add" }.semantics { contentDescription = "Add someone" },
+            contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
     }
     if (showMore) MoreSheet(asks = requests.size + ginvites.size + intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size,
-        archived = archivedRows.size, trash = trashed.size) { showMore = false }
+        archived = archivedRows.size, trash = trashed.size, labs = if (app.chat.isLabs()) app.chat.labs.reports.value.size else -1) { showMore = false }
     FolderDialogs(app, editingFolder) { editingFolder = null }
 }
 
@@ -712,7 +725,7 @@ internal fun listMoves(app: Muninn, key: String): Pair<(() -> Unit)?, (() -> Uni
 /** The chat list's More row: Requests, Archived and Trash, each its own page. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun MoreSheet(asks: Int, archived: Int, trash: Int, done: () -> Unit) {
+private fun MoreSheet(asks: Int, archived: Int, trash: Int, labs: Int = -1, done: () -> Unit) {
     val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = done, sheetState = sheet, containerColor = Palette.panel, shape = Corner, dragHandle = null) {
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).navigationBarsPadding()) {
@@ -721,6 +734,8 @@ private fun MoreSheet(asks: Int, archived: Int, trash: Int, done: () -> Unit) {
             io.github.ravenor907.muninn.ui.MenuRow("people", "Requests", value = if (asks > 0) "$asks" else "") { done(); ChatNav.open = "requests" }
             io.github.ravenor907.muninn.ui.MenuRow("download", "Archived", value = if (archived > 0) "$archived" else "") { done(); ChatNav.open = "archived" }
             io.github.ravenor907.muninn.ui.MenuRow("delete", "Trash", value = if (trash > 0) "$trash" else "") { done(); ChatNav.open = "trash" }
+            // The Labs contact's own phone: the bug reports that came in.
+            if (labs >= 0) io.github.ravenor907.muninn.ui.MenuRow("info", "Labs reports", value = if (labs > 0) "$labs" else "") { done(); ChatNav.open = Chat.LABS_PAGE }
         }
     }
 }
@@ -856,6 +871,10 @@ private fun Conversation(app: Muninn, key: String) {
     val route = app.chat.route(key)
     val verified = app.chat.isVerified(key)
     val context = LocalContext.current
+    // Calls with them show in the timeline, between the messages, by time.
+    val history by io.github.ravenor907.muninn.net.call.CallManager.history.collectAsState()
+    val calls = remember(history, key) { history.filter { it.peerKey == key }.sortedBy { it.at } }
+    val callNow by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
     // While this chat is on screen, new messages here just buzz instead of notifying; its old notification goes.
     DisposableEffect(key) {
         app.openChat = key
@@ -995,14 +1014,31 @@ private fun Conversation(app: Muninn, key: String) {
             }
         } else if (c == null && m?.iSaid == true) Text("Waiting for $name to say yes.", style = Type.small,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
+        // A call with them going on: back to it.
+        callNow?.takeIf { it.peerKey == key && it.phase != io.github.ravenor907.muninn.net.call.CallSession.Phase.ENDED }?.let {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp).clip(CircleShape).background(Palette.goldTint)
+                .clickable(role = Role.Button) { CallActivity.show(context) }.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                MIcon("call", Palette.goldBright, 20.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Return to call", style = Type.normal.copy(color = Palette.goldBright), maxLines = 1)
+            }
+        }
         val current = matches.getOrNull(matchAt)
         val albums = remember(msgs) { albumsOf(msgs) }
+        val callOf: (io.github.ravenor907.muninn.net.call.CallManager.Log) -> Unit = { l -> io.github.ravenor907.muninn.screens.CallActivity.call(context, l.peerKey) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom)) {
             items(msgs.size, key = { msgs[it].id }) { i ->
                 val m = msgs[i]
                 Column {
-                    if (i == 0 || dayIndex(msgs[i - 1].time) != dayIndex(m.time)) DayLabel(m.time)
+                    // The calls since the message before this one.
+                    var day = if (i == 0) -1L else dayIndex(msgs[i - 1].time)
+                    callsBetween(calls, if (i == 0) Long.MIN_VALUE else msgs[i - 1].time, m.time).forEach { l ->
+                        if (dayIndex(l.at) != day) { day = dayIndex(l.at); DayLabel(l.at) }
+                        CallLine(l) { callOf(l) }
+                    }
+                    if (dayIndex(m.time) != day) DayLabel(m.time)
                     // An album shows once, in its first photo's place.
                     if (m.id !in albums.first) Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
                         quote = quoteOf(m.re), onQuote = { jumpTo(m.re) }, me = me, highlight = current == i,
@@ -1011,9 +1047,20 @@ private fun Conversation(app: Muninn, key: String) {
                         onVote = { v -> app.chat.vote(key, m.id, v)?.let { Ui.say(it, true) } }, voterName = { if (it == key) name else app.chat.nameOf(it) }) { sheetFor = m }
                 }
             }
+            // The calls since the last message.
+            val after = callsBetween(calls, msgs.lastOrNull()?.time ?: Long.MIN_VALUE, Long.MAX_VALUE)
+            if (after.isNotEmpty()) item(key = "calls") {
+                Column {
+                    var day = msgs.lastOrNull()?.time?.let { dayIndex(it) } ?: -1L
+                    after.forEach { l ->
+                        if (dayIndex(l.at) != day) { day = dayIndex(l.at); DayLabel(l.at) }
+                        CallLine(l) { callOf(l) }
+                    }
+                }
+            }
             if (typingNow) item(key = "typing") { TypingRow(name) }
         }
-        if (msgs.isEmpty()) Text("No messages yet.", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center,
+        if (msgs.isEmpty() && calls.isEmpty()) Text("No messages yet.", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         picked?.let { uri ->
             Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {

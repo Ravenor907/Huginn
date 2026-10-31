@@ -73,8 +73,10 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
     connect(&m_ringer, &QTimer::timeout, this, [this] {
         if (ringing() && now() - m_ringSince > RoomWire::kRingMs) {
             const QString text = QStringLiteral("Missed group call from %1").arg(ringName());
+            const QString rg = m_ringG;
             stopRing();
             Q_EMIT finished(text);
+            Q_EMIT logged(rg, text, true);
             return;
         }
         if (!Settings::silenced())
@@ -260,6 +262,8 @@ void RoomManager::leave()
     if (!inRoom())
         return;
     const QString g = m_g, ch = m_ch;
+    const bool wasCall = groupCall();
+    const int seconds = elapsed();
     for (const QString &k : members(g))
         sendRoom(QStringLiteral("vleave"), k, g, ch);
     const QHash<QString, Peer> peers = m_peers;
@@ -295,6 +299,10 @@ void RoomManager::leave()
     ++m_serial;
     Q_EMIT presenceChanged();
     Q_EMIT changed();
+    // A group call (not a voice channel) goes into the group's timeline.
+    if (wasCall)
+        Q_EMIT logged(g, seconds > 0 ? QStringLiteral("Group call · %1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'))
+                                     : QStringLiteral("Group call"), false);
 }
 
 void RoomManager::toggleMute()
@@ -644,6 +652,7 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
                 const QString text = QStringLiteral("Missed group call from %1").arg(ringName());
                 stopRing();
                 Q_EMIT finished(text);
+                Q_EMIT logged(g, text, true);
             }
         }
         return;
@@ -653,7 +662,9 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
             return;   // in it already, or the same ring again (6.5 step 1)
         const bool busy = inRoom() || (m_calls && (m_calls->inCall() || m_calls->state() == QLatin1String("incoming")));
         if (!fresh || busy || ringing()) {
-            Q_EMIT finished(QStringLiteral("Missed group call from %1").arg(nameOf(g, from)));
+            const QString text = QStringLiteral("Missed group call from %1").arg(nameOf(g, from));
+            Q_EMIT finished(text);
+            Q_EMIT logged(g, text, true);
             return;
         }
         startRing(from, g, ch);

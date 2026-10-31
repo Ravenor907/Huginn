@@ -1,0 +1,165 @@
+import QtQuick
+import Huginn
+
+// Labs › Report a bug: the screenshot of Huginn taken just before this opened, Include screenshot (on unless
+// switched off), what went wrong (up to 2000 characters), then Send. The D-pad moves between them, A uses
+// one, B or Esc closes. Main.qml takes the screenshot and opens it (openReport).
+Item {
+    id: report
+    visible: false
+    anchors.fill: parent
+    property string text: ""
+    property bool include: true
+    property bool tour: false
+    // The focus with a controller: 0 Include screenshot, 1 the text, 2 Send, 3 Cancel.
+    property int focusAt: 1
+    readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
+    readonly property int firstFocus: Labs.hasShot ? 0 : 1
+
+    function open(asTour) {
+        tour = !!asTour
+        text = tour ? "The chat list jumps to the top when a photo arrives." : ""
+        include = true
+        focusAt = 1
+        visible = true
+    }
+    function close() {
+        visible = false
+        Labs.clearShot()
+        if (Ui.main) Ui.main.restoreFocus()
+    }
+    function edit() {
+        Ui.ask("What went wrong?", "Up to 2000 characters", report.text, "Done", t => report.text = t.slice(0, 2000), false, true)
+    }
+    function send() {
+        if (tour) return
+        const err = Labs.send(report.text, report.include && Labs.hasShot)
+        if (err !== "") { Ui.say(err, true); return }
+        Ui.say("Report sent. Thank you.")
+        close()
+    }
+    function activate() {
+        if (focusAt === 0) include = !include
+        else if (focusAt === 1) edit()
+        else if (focusAt === 2) send()
+        else close()
+    }
+    function handleButton(b) {
+        switch (b) {
+        case "up": focusAt = focusAt >= 2 ? 1 : Math.max(firstFocus, focusAt - 1); break
+        case "down": focusAt = Math.min(2, focusAt + 1); break
+        case "left": if (focusAt === 2) focusAt = 3; else if (focusAt === 3) focusAt = 2; break
+        case "right": if (focusAt === 3) focusAt = 2; else if (focusAt === 2) focusAt = 3; break
+        case "a": activate(); break
+        case "b": close(); break
+        }
+        return true
+    }
+
+    Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: report.close() }
+
+    Rectangle {
+        id: box
+        anchors.centerIn: parent
+        width: Math.min(parent.width - Theme.px(32), Theme.px(620))
+        height: Math.min(parent.height - Theme.px(32), col.implicitHeight + Theme.px(40))
+        radius: Theme.radius
+        color: Theme.panel
+        border.color: Theme.line
+        clip: true
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+        Flickable {
+            id: view
+            anchors.fill: parent
+            anchors.margins: Theme.px(20)
+            contentHeight: col.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            Column {
+                id: col
+                width: view.width
+                spacing: Theme.px(14)
+                Text {
+                    text: "REPORT A BUG"
+                    color: Theme.text
+                    font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
+                }
+                // The screenshot, as it will go (smaller here).
+                Rectangle {
+                    visible: Labs.hasShot
+                    width: parent.width
+                    height: Math.round(width * 9 / 16)
+                    radius: Theme.radius
+                    color: Theme.groundDeep
+                    border.color: Theme.line
+                    opacity: report.include ? 1 : 0.35
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        fillMode: Image.PreserveAspectFit
+                        source: Labs.shotUrl
+                        asynchronous: true
+                    }
+                }
+                Rectangle {
+                    visible: Labs.hasShot
+                    width: parent.width
+                    height: Theme.px(48)
+                    radius: Theme.radius
+                    color: report.focusAt === 0 && report.padFocus ? Theme.focusFill : "transparent"
+                    border.width: report.focusAt === 0 && report.padFocus ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Text {
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Include screenshot"
+                        color: Theme.text
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
+                    }
+                    ToggleSwitch {
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: report.include
+                        onToggled: report.include = !report.include
+                    }
+                }
+                // What went wrong: a click or A opens the keyboard prompt.
+                Rectangle {
+                    width: parent.width
+                    height: Math.max(Theme.px(96), body.implicitHeight + Theme.px(24))
+                    radius: Theme.radius
+                    color: Theme.groundDeep
+                    border.width: report.focusAt === 1 && report.padFocus ? Theme.focusWidth : 1
+                    border.color: report.focusAt === 1 && report.padFocus ? Theme.accent : Theme.lineMuted
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: "What went wrong?"
+                    Text {
+                        id: body
+                        x: Theme.px(12); y: Theme.px(12)
+                        width: parent.width - Theme.px(24)
+                        wrapMode: Text.Wrap
+                        text: report.text !== "" ? report.text : "What went wrong?"
+                        color: report.text !== "" ? Theme.text : Theme.textFaint
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                    }
+                    HoverHandler { cursorShape: Qt.IBeamCursor }
+                    TapHandler { onTapped: { report.focusAt = 1; report.edit() } }
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: "Also sends Huginn " + Labs.label + ", " + Labs.os
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                }
+                Row {
+                    anchors.right: parent.right
+                    spacing: Theme.px(10)
+                    HButton { text: "Cancel"; kind: "plain"; focused: report.focusAt === 3 && report.padFocus; onClicked: report.close() }
+                    HButton { text: "Send"; kind: "primary"; enabled: report.text.trim() !== ""; focused: report.focusAt === 2 && report.padFocus; onClicked: report.send() }
+                }
+            }
+        }
+    }
+}

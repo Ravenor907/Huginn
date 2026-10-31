@@ -6,7 +6,7 @@ import Huginn
 // items = [{ id, kind: "raven" | "group" | "add" | "icon", label, icon, letter, badge, unread, bottom }].
 // Chats (the raven) sits on top, then the groups (round initials; the one on screen is a
 // gold square with a gold pill beside it, one with something unread a short pill, and its
-// @mentions of me a number) and + for a new group. Contacts, Calls, Files, Settings (the valknut)
+// @mentions of me a number) and + for a new group. Contacts, Files, Settings (the valknut)
 // and the power button sit at the foot, always on show; the power button opens a small menu: Lock
 // Huginn (when a lock is set) and Close Huginn.
 // Pointing at one names it. LB steps through them (Main.qml); the D-pad moves the rail focus.

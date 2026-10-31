@@ -128,6 +128,9 @@ Q_SIGNALS:
     void presenceChanged();
     void incoming(const QString &name, const QString &group);
     void finished(const QString &text);   // for a toast
+    // A group call ended here, or one rang and was missed: main.cpp puts it in the group's timeline (a missed one
+    // also raises a notification that opens the group).
+    void logged(const QString &g, const QString &text, bool missed);
 
 private:
     struct Peer {

@@ -138,6 +138,7 @@ private fun ShortList(app: Muninn) {
         NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "clock") { SettingsNav.folder = "battery" }
         NavRow("More", icon = "gear") { SettingsNav.folder = "more" }
     }
+    if (Labs.on(app)) LabsSection(app)
 }
 
 /** Your picture, name and status at the top of Settings; tap for Your profile. */

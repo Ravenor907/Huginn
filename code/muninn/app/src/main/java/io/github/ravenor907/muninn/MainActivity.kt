@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.height
 import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Received
-import io.github.ravenor907.muninn.screens.CallsScreen
 import io.github.ravenor907.muninn.screens.ChatColumn
 import io.github.ravenor907.muninn.screens.ChannelColumn
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +48,8 @@ import androidx.compose.foundation.verticalScroll
 import io.github.ravenor907.muninn.screens.ChatMain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
@@ -166,7 +167,7 @@ class MainActivity : ComponentActivity() {
 
     /** Opens a tab by name (also what CI and links ask for); anything unknown is the chat list. */
     private fun show(name: String) {
-        val t = when (name) { "send", "files" -> "files"; "calls", "contacts", "settings" -> name; else -> "chat" }
+        val t = when (name) { "send", "files" -> "files"; "contacts", "settings" -> name; else -> "chat" }
         if (t == "settings" && tab != "settings") { beforeSettings = tab; SettingsNav.folder = "" }
         tab = t
     }
@@ -378,10 +379,8 @@ class MainActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    /** Your profile (name, picture, status), a page of Settings. */
-    private fun openProfile() { show("settings"); SettingsNav.folder = "profile" }
 
-    private fun title(t: String) = when (t) { "calls" -> "Calls"; "files" -> "Files"; "contacts" -> "Contacts"; "settings" -> "Settings"; else -> "Muninn" }
+    private fun title(t: String) = when (t) { "files" -> "Files"; "contacts" -> "Contacts"; "settings" -> "Settings"; else -> "Muninn" }
 
     private fun toggleSettings() {
         if (tab == "settings") tab = beforeSettings else show("settings")
@@ -498,7 +497,6 @@ class MainActivity : ComponentActivity() {
     private fun TabContent(t: String) {
         when (t) {
             "files" -> TransferScreen(app) { startDirect() }
-            "calls" -> CallsScreen()
             "contacts" -> ContactsScreen(app) { tab = "chat" }
             "settings" -> SettingsScreen(app) { secure() }
             else -> ChatScreen(app) { askClose() }
@@ -533,13 +531,9 @@ class MainActivity : ComponentActivity() {
         // An open conversation (or My code, Add someone, the Nearby room) gets the whole screen: no header, no tabs.
         val full = tab == "chat" && ChatNav.open.isNotEmpty()
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            val header: @Composable () -> Unit = { Brand(title = title(tab).uppercase()) {
-                // Your own picture on Chats opens Your profile (status, picture, name).
-                if (tab == "chat") Box(Modifier.padding(end = 4.dp).size(48.dp).clip(CircleShape)
-                    .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
-                    contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
-                if (tab == "chat") IconAction("plus", "Add someone", Palette.onGold, Modifier.padding(end = 4.dp).clip(CircleShape).background(Palette.gold)) { ChatNav.open = "add" }
-                if (tab == "chat") io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
+            // Only the raven, the name and the valknut. On Chats the name is centred; in Settings the raven counts taps (Labs).
+            val header: @Composable () -> Unit = { Brand(onLogo = if (tab == "settings") ({ io.github.ravenor907.muninn.screens.Labs.tap(app) }) else null,
+                title = title(tab).uppercase(), centered = tab == "chat") {
                 SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
@@ -587,7 +581,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxWidth().bar(Palette.groundDeep, top = true)) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
             Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp)) {
-                listOf("chat" to ("chat" to "Chats"), "calls" to ("call" to "Calls"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
+                listOf("chat" to ("chat" to "Chats"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     val tint = if (on) Palette.goldBright else Palette.textMuted
                     Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
@@ -657,7 +651,7 @@ class MainActivity : ComponentActivity() {
                 // Groups can be many: the top part scrolls, the tabs below stay put.
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
-                listOf("files" to ("folder" to "Files"), "calls" to ("call" to "Calls"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
+                listOf("files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
                         onClick = { show(id) }) {
@@ -687,20 +681,14 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
                             } else {
-                                ColumnHeader("Chats") {
-                                    Box(Modifier.padding(end = 4.dp).size(48.dp).clip(CircleShape)
-                                        .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
-                                        contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
-                                    IconAction("plus", "Add someone", Palette.goldBright) { ChatNav.open = "add" }
-                                    io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
-                                }
+                                ColumnHeader("Chats")
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
                             }
                         }
                         Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.hairline))
                         Box(Modifier.weight(1f).fillMaxHeight()) { ChatMain(app) }
                     } else Column(Modifier.fillMaxSize()) {
-                        ColumnHeader(title(tab))
+                        ColumnHeader(title(tab), onRaven = if (tab == "settings") ({ io.github.ravenor907.muninn.screens.Labs.tap(app) }) else null)
                         Box(Modifier.weight(1f).fillMaxWidth()) { TabContent(tab) }
                     }
                     Toast(toast, Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp))
@@ -711,9 +699,16 @@ class MainActivity : ComponentActivity() {
 
     /** A tablet column's 60dp title bar with a hairline under it. */
     @Composable
-    private fun ColumnHeader(text: String, trailing: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}) {
+    private fun ColumnHeader(text: String, onRaven: (() -> Unit)? = null, trailing: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}) {
         Column(Modifier.fillMaxWidth().bar()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                // Settings: the raven, which counts taps (Labs). No ripple and nothing announced, as on phones.
+                if (onRaven != null) {
+                    val tap by androidx.compose.runtime.rememberUpdatedState<() -> Unit>(onRaven)
+                    Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(26.dp)
+                        .pointerInput(Unit) { detectTapGestures(onTap = { tap() }) })
+                    Spacer(Modifier.width(10.dp))
+                }
                 Text(text.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 trailing()
             }

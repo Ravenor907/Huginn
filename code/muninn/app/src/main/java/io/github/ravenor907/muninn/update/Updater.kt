@@ -61,11 +61,15 @@ class Updater(private val context: Context, private val identity: Identity) {
             try {
                 val api = fromApi()
                 // GitHub's API allows few checks per address an hour: then ask the website instead.
-                val (best, bestUrl, bestSha) = if (api.first == null) fromWebsite() else api
+                var (best, bestUrl, bestSha) = if (api.first == null) fromWebsite() else api
+                // The Pre-release channel (Labs): the "beta" pre-release too, when it's newer than the latest release.
+                if (identity.preRelease) fromBeta()?.let { (bv, bu, bs) ->
+                    if (best == null || Versions.newer(bv, best!!)) { best = bv; bestUrl = bu; bestSha = bs }
+                }
                 url = bestUrl
                 sha = bestSha
                 version = best
-                val newer = best != null && rank(best) > rank(current)
+                val newer = best != null && mayInstall(best!!, current)
                 // Data saver on mobile data: the download waits for Wi-Fi, unless the person taps to get it now.
                 val wait = newer && installAfter && (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() == true
                 _state.value = State(if (!newer) "Muninn is up to date" else if (wait) "Muninn $best is ready. It downloads on Wi-Fi, or tap to get it now"
@@ -78,7 +82,31 @@ class Updater(private val context: Context, private val identity: Identity) {
         }
     }
 
-    fun download() {
+    /**
+     * Labs, "Go back to stable": the latest release, installed even though it's older than this pre-release. Its
+     * file, SHA-256, .sig and .vsig are checked as always. The channel goes back to Stable and Labs mode turns off.
+     */
+    fun backToStable() {
+        if (_state.value.busy) return
+        identity.preRelease = false
+        identity.labs = false
+        _state.value = _state.value.copy(busy = true, status = "Checking for updates…")
+        pool.execute {
+            try {
+                val api = fromApi()
+                val (best, bestUrl, bestSha) = if (api.first == null) fromWebsite() else api
+                if (best == null || bestUrl == null) { _state.value = State("Couldn't find the latest release."); return@execute }
+                url = bestUrl; sha = bestSha; version = best
+                _state.value = State("Muninn $best is ready to install", best, false, true)
+                download(back = true)
+            } catch (e: Exception) {
+                _state.value = State("Couldn't reach GitHub. Check the connection.")
+            }
+        }
+    }
+
+    /** [back]: going back to stable ([backToStable]), the one time an older release may be installed. */
+    fun download(back: Boolean = false) {
         val u = url ?: return
         val want = sha
         val ver = version
@@ -93,8 +121,9 @@ class Updater(private val context: Context, private val identity: Identity) {
                     _state.value = _state.value.copy(busy = false, status = NOT_SIGNED)
                     return@execute
                 }
-                // Never an older (or the same) version, whatever a release's tag says.
-                if (!mayInstall(ver, current)) {
+                // Never an older (or the same) version, whatever a release's tag says. Going back to stable takes the
+                // latest release (never a pre-release) even when it's older.
+                if (!(back && Versions.isStable(ver) && !u.contains("/$BETA_TAG/")) && !mayInstall(ver, current)) {
                     _state.value = _state.value.copy(busy = false, status = NOT_NEWER)
                     return@execute
                 }
@@ -154,8 +183,15 @@ class Updater(private val context: Context, private val identity: Identity) {
         var best: String? = null
         var bestUrl: String? = null
         var bestSha: String? = null
+        betaSha = null
         for (i in 0 until a.length()) {
             val r = a.getJSONObject(i)
+            // The "beta" pre-release: only its APK's SHA-256 is kept, for the Pre-release channel ([fromBeta]).
+            if (r.optString("tag_name") == BETA_TAG && r.optBoolean("prerelease")) {
+                val assets = r.optJSONArray("assets")
+                if (assets != null) betaSha = (0 until assets.length()).map { assets.getJSONObject(it) }
+                    .firstOrNull { it.optString("name") == "Muninn.apk" }?.let { shaOf(it.optString("digest")) }
+            }
             if (r.optBoolean("draft") || r.optBoolean("prerelease")) continue
             val tag = r.optString("tag_name")
             val name = versionOf(tag) ?: continue
@@ -167,6 +203,23 @@ class Updater(private val context: Context, private val identity: Identity) {
             }
         }
         return Triple(best, bestUrl, bestSha)
+    }
+
+    /** The "beta" pre-release's APK SHA-256, from the last [fromApi]. */
+    @Volatile private var betaSha: String? = null
+
+    /**
+     * The "beta" pre-release: (label, download link, SHA-256), or null when there is none. Its version.txt holds the
+     * label ("0.99 beta 12"), which its .vsig signs.
+     */
+    private fun fromBeta(): Triple<String, String, String?>? {
+        val label = try {
+            Net.client.newCall(Request.Builder().url("$DOWNLOAD/$BETA_TAG/version.txt").header("User-Agent", AGENT).build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.string()?.trim() else null
+            }
+        } catch (e: Exception) { null } ?: return null
+        if (!Versions.isBeta(label)) return null
+        return Triple(label, "$DOWNLOAD/$BETA_TAG/Muninn.apk", betaSha ?: sidecar("$DOWNLOAD/$BETA_TAG/Muninn.apk.sha256"))
     }
 
     /** The hex SHA-256 in a release's ".sha256" file (as sha256sum writes it), or null. */
@@ -211,6 +264,8 @@ class Updater(private val context: Context, private val identity: Identity) {
         private const val LATEST = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest"
         private const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download"
         private const val RECHECK_MS = 5 * 60_000L
+        /** The pre-release's fixed tag, replaced on every push to the beta branch. */
+        const val BETA_TAG = "beta"
         /** A plain agent with no app name or version, so GitHub can't tell which app or version is asking. */
         private const val AGENT = "Mozilla/5.0"
         private const val NOT_SIGNED = "This update isn't signed with the project's key, so it wasn't installed."
@@ -237,8 +292,8 @@ class Updater(private val context: Context, private val identity: Identity) {
         fun versionSigned(version: String, file: String, sha: String, vsig: ByteArray, key: ByteArray = hex(RELEASE_KEY)): Boolean =
             Ed25519.verify(key, versionMessage(version, file, sha), vsig)
 
-        /** Only a version newer than the one installed ([current]) is ever installed. */
-        fun mayInstall(version: String, current: String) = rank(version) > rank(current)
+        /** Only a version newer than the one installed ([current]) is ever installed, by [Versions] order. */
+        fun mayInstall(version: String, current: String) = Versions.newer(version, current)
 
         /** ".../releases/tag/v0.6" -> "v0.6" (where the "latest" link lands), else null. */
         fun tagFromLatest(url: String): String? =
@@ -254,7 +309,8 @@ class Updater(private val context: Context, private val identity: Identity) {
 
         /**
          * One dot, read as a decimal: 0.3 < 0.31 < 0.32 < 0.4 < 1.0. An installed test build
-         * ("0.3 Test 1") sits just below its version. Matches versionCode in build.gradle.kts.
+         * ("0.3 Test 1") sits just below its version. Matches versionCode in build.gradle.kts. Which version is newer is
+         * [Versions] (it also orders pre-releases).
          */
         fun rank(v: String): Long {
             val m = Regex("""^(\d+)\.(\d+)( Test \d+)?""").find(v) ?: return 0

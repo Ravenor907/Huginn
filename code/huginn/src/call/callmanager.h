@@ -53,7 +53,6 @@ class CallManager : public QObject
     Q_PROPERTY(bool incomingVideo READ incomingVideo NOTIFY changed)
     Q_PROPERTY(QString cameraName READ cameraName NOTIFY changed)
     Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
-    Q_PROPERTY(int missedCount READ missedCount NOTIFY historyChanged)
     Q_PROPERTY(bool available READ available CONSTANT)
 
 public:
@@ -83,7 +82,6 @@ public:
     bool incomingVideo() const;
     QString cameraName() const;
     QVariantList history() const { return m_history; }
-    int missedCount() const;
     bool available() const;
 
     // "" when the call is starting, otherwise what to tell the person.
@@ -106,9 +104,6 @@ public:
     Q_INVOKABLE void hangup();
     Q_INVOKABLE void toggleMute();
     Q_INVOKABLE void nextOutput();
-    Q_INVOKABLE void markSeen();                 // Calls page opened: missed calls are seen
-    Q_INVOKABLE void deleteEntry(const QString &id);
-    Q_INVOKABLE void clearHistory();
     Q_INVOKABLE QString duration(int seconds) const;
     // Calls older than their chat's message limit go (cutoff(key): the oldest time kept, in ms).
     // main.cpp runs it whenever Chat prunes messages.
@@ -135,6 +130,9 @@ Q_SIGNALS:
     void changed();
     void tick();
     void historyChanged();
+    // A 1:1 call ended and went into the history (result: "answered", "missed" or how it ended): main.cpp puts it in
+    // that chat's timeline, and a missed one raises a notification that opens the chat.
+    void logged(const QString &key, bool out, const QString &result, int seconds);
     void incoming(const QString &name);
     void finished(const QString &text);   // for a toast
     void trustChanged(const QString &key, bool on);   // the rooms' sessions follow it too
@@ -164,7 +162,7 @@ private:
     QTimer m_ticker, m_clear, m_ringer;
     Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
-    qint64 m_seen = 0;           // missed calls after this (ms) count in the badge
+    qint64 m_seen = 0;           // kept in the saved history for older builds (they counted missed calls after it)
     qint64 m_started = 0;
     qint64 m_preparedAt = 0;
     uint m_notification = 0;

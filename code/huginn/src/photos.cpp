@@ -40,6 +40,17 @@ QByteArray prepare(const QString &path, bool hd)
     return scrub(encode(img, hd ? 2 * 1024 * 1024 : 60 * 1024));
 }
 
+QByteArray prepareImage(const QImage &in, int side, int limit)
+{
+    if (in.isNull())
+        return {};
+    QImage img = in;
+    if (qMax(img.width(), img.height()) > side)
+        img = img.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    img = img.convertToFormat(QImage::Format_RGB32);   // no transparency in a JPEG
+    return scrub(encode(img, limit));
+}
+
 QByteArray scrub(const QByteArray &b)
 {
     // Removes EXIF (location, camera, time), XMP, ICC, maker notes (APP1 to APP15) and comments,

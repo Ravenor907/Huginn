@@ -41,6 +41,10 @@ class Settings : public QObject
     // Do not disturb: no message sound, no desktop notification and no ring while it's on. Set by
     // the status card for this run only; it isn't saved here (the status is).
     Q_PROPERTY(bool quiet READ quiet WRITE setQuiet NOTIFY changed)
+    // Labs mode (ten presses on the raven in Settings): the Labs group with the update channel and
+    // bug reports. updateChannel: "stable" or "beta" (Pre-release); only read while Labs is on.
+    Q_PROPERTY(bool labs READ labs WRITE setLabs NOTIFY changed)
+    Q_PROPERTY(QString updateChannel READ updateChannel WRITE setUpdateChannel NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -84,6 +88,10 @@ public:
     int leafSize() const { return qBound(50, value("leafSize", 100).toInt(), 200); }
     int leafCount() const { return qBound(25, value("leafCount", 100).toInt(), 200); }
     bool quiet() const { return s_quiet; }
+    bool labs() const { return value("labs/on", false).toBool(); }
+    QString updateChannel() const { return value("labs/channel", "stable").toString() == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable"); }
+    // The Pre-release channel counts only while Labs is on.
+    bool preRelease() const { return labs() && updateChannel() == QLatin1String("beta"); }
     // The same, read where no Settings object is at hand (the ring in src/call).
     static bool silenced() { return s_quiet; }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
@@ -114,6 +122,8 @@ public:
     void setLeafSize(int v) { setLook("leafSize", qBound(50, v, 200)); }
     void setLeafCount(int v) { setLook("leafCount", qBound(25, v, 200)); }
     void setQuiet(bool v);
+    void setLabs(bool v) { set("labs/on", v); }
+    void setUpdateChannel(const QString &v) { set("labs/channel", v == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable")); }
 
 Q_SIGNALS:
     void changed();

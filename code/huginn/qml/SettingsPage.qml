@@ -3,7 +3,8 @@ import Huginn
 
 // Settings: one flat list on the left (You, Notifications, Look, Calls, Privacy and lock, Devices,
 // Controller, Backup, About, and Erase last in red). A choice opens its rows on the right, related
-// ones together in framed sections. Changes save as you go.
+// ones together in framed sections. Changes save as you go. About starts with the raven: ten presses
+// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports).
 Rectangle {
     id: page
     // Autumn: a frosted pane, so the leaves show while Look's sliders are moved.
@@ -114,11 +115,17 @@ Rectangle {
             { kind: "button", key: "restore", title: "Restore from backup", label: "Restore", enabled: Vault.exists && !Vault.busy }
         ]
         case "about": return [
-            { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version,
+            { kind: "raven", key: "raven", title: "Huginn " + System.version, note: Settings.labs ? "Labs mode on" : "" },
+            { kind: "button", key: "check", title: Updater.status,
               label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },
-            { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" }
-        ]
+            { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
+            { group: "Labs", kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
+              options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
+            { group: "Labs", kind: "button", key: "goStable", hide: !Settings.labs, title: "Go back to stable", note: "Installs the latest stable",
+              label: "Go back", enabled: !Updater.busy },
+            { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" }
+        ].filter(r => !r.hide)
         case "erase": return [
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
             { kind: "button", key: "eraseChat", title: "Erase everything", note: "Deletes everything on this PC.", label: "Erase" }
@@ -137,6 +144,20 @@ Rectangle {
         return out
     }
     readonly property var dangerKeys: ["lockOff", "deleteMessages", "eraseChat", "restore"]
+    // Labs turned off under the focus: it stays on a row that's still there.
+    onRowsChanged: if (row >= rows.length) row = Math.max(0, rows.length - 1)
+
+    // The raven in About: ten presses in a row (a few seconds apart at most) turn Labs mode on or off.
+    property int ravenTaps: 0
+    Timer { id: ravenReset; interval: 3000; onTriggered: page.ravenTaps = 0 }
+    function tapRaven() {
+        ravenTaps++
+        ravenReset.restart()
+        if (ravenTaps < 10) return
+        ravenTaps = 0
+        Settings.labs = !Settings.labs
+        Ui.say(Settings.labs ? "Labs mode on" : "Labs mode off")
+    }
 
     // Scrolls the left column so the row the controller is on is in view.
     function revealNav(item) {
@@ -307,7 +328,8 @@ Rectangle {
         // Wide choices go under the words when there isn't room beside them.
         readonly property bool stacked: control.width > width * 0.5
         onFocusedChanged: if (focused) Qt.callLater(page.showRow, rowItem)
-        height: stacked ? texts.implicitHeight + control.height + Theme.px(30) : Math.max(Theme.px(52), texts.implicitHeight + Theme.px(20))
+        height: stacked ? texts.implicitHeight + control.height + Theme.px(30)
+                        : Math.max(Theme.px(52), texts.implicitHeight + Theme.px(20), rowItem.r.kind === "raven" ? control.height + Theme.px(16) : 0)
         color: focused ? Theme.focusFill : "transparent"
         border.width: focused ? Theme.focusWidth : 0
         border.color: Theme.accent
@@ -336,8 +358,25 @@ Rectangle {
                  : rowItem.r.kind === "swatches" ? swatchCtl.implicitWidth
                  : rowItem.r.kind === "size" ? sizeCtl.naturalWidth
                  : rowItem.r.kind === "slider" ? Theme.px(220)
+                 : rowItem.r.kind === "raven" ? ravenCtl.width
                  : rowItem.r.kind === "button" ? buttonCtl.implicitWidth : 0)
-            height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0)
+            height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0,
+                             ravenCtl.visible ? ravenCtl.height : 0)
+            // About: the raven. Ten presses turn Labs mode on or off.
+            Image {
+                id: ravenCtl
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: rowItem.r.kind === "raven"
+                source: rowItem.r.kind === "raven" ? "assets/raven-gold.png" : ""
+                width: Theme.px(56); height: width
+                sourceSize.width: 256; sourceSize.height: 256
+                fillMode: Image.PreserveAspectFit
+                Accessible.role: Accessible.Button
+                Accessible.name: "Raven"
+                Accessible.onPressAction: page.tapRaven()
+                TapHandler { onTapped: page.tapRaven() }
+            }
             // Look › Autumn: Leaf size and How many leaves.
             LookSlider {
                 anchors.right: parent.right
@@ -557,6 +596,13 @@ Rectangle {
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Can't be undone.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
         else if (key === "eraseChat") Ui.sure("Erase everything?", "Deletes everything on this PC. Can't be undone.",
                                               "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
+        else if (key === "raven") tapRaven()
+        else if (key === "report") Ui.main.openReport()
+        else if (key === "goStable") {
+            if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
+            Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),
+                    "Go back", () => Updater.goBackToStable(), false, true)
+        }
         else if (key === "check") {
             if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", job, "Update anyway", () => Updater.install(), true, true)
@@ -593,6 +639,7 @@ Rectangle {
             Settings[r.key] = dir === 0 ? 100 : Math.max(r.from, Math.min(r.to, now + dir * step))
         }
         else if (r.kind === "button" && dir === 0 && r.enabled !== false) press(r.key)
+        else if (r.kind === "raven" && dir === 0) tapRaven()
     }
 
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).

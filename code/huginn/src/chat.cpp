@@ -11,6 +11,7 @@
 #include "link.h"
 #include "trust.h"
 #include "groupwire.h"
+#include "labs.h"
 #include "msglimits.h"
 #include "localsend.h"
 #include "nostr.h"
@@ -589,6 +590,23 @@ void Chat::systemNote(const QString &key, const QString &text)
     m.insert(QStringLiteral("system"), true);
     m.insert(QStringLiteral("state"), QStringLiteral("read"));   // never answered with a receipt
     addPrivate(key, m);
+}
+
+void Chat::noteCall(const QString &where, const QString &text, bool missed)
+{
+    if (!m_ready || where.isEmpty() || text.isEmpty())
+        return;
+    if (where.startsWith(QLatin1String("g:"))) {
+        const QString g = where.mid(2);
+        if (m_groups.contains(g))
+            groupNote(g, text);
+        return;
+    }
+    systemNote(where, text);
+    if (missed) {
+        m_unread.insert(where);
+        Q_EMIT changed();
+    }
 }
 
 QByteArray Chat::keyWith(const QString &theirKey) const
@@ -1456,6 +1474,13 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     if (isBlocked(fromKey) || isTrashed(fromKey))
         return 200;   // blocked or in the trash: dropped quietly
     const QString room = o.value(QStringLiteral("room")).toString();
+    // Labs bug reports ("lb", labs.cpp): the Huginn with the Labs key takes them from anyone; every other one drops
+    // them quietly. 0: not a report.
+    if (m_labs) {
+        const int code = m_labs->receive(o, fromKey, name);
+        if (code != 0)
+            return code;
+    }
     if (room == QLatin1String("photo"))
         return receivePiece(o, fromKey, name, via);
     QString mailbox = o.value(QStringLiteral("mailbox")).toString();
@@ -1684,6 +1709,18 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             }
             Q_EMIT notice(QStringLiteral("%1 added you with your invite link.").arg(name));
             receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
+        } else if (m_labs && m_labs->replyAllowed(fromKey)) {
+            // The Labs contact answering a bug report sent from here: an ordinary request, under its own name.
+            commitPeer();
+            const QString labsName = QString::fromLatin1(Labs::kName);
+            incoming.insert(QStringLiteral("name"), labsName);
+            m_held[fromKey].insert(msgId, incoming);
+            if (!m_requests.contains(fromKey)) {
+                m_requests.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), labsName},
+                                            {QStringLiteral("code"), codeWith(fromKey)}, {QStringLiteral("mailbox"), mailbox}});
+                Q_EMIT notice(labsName + QStringLiteral(" wants to chat"));
+                Q_EMIT arrived(labsName, QStringLiteral("Wants to chat with you"), fromKey);
+            }
         } else if (!inviteOk(o.value(QStringLiteral("invite")).toString())) {
             return 403;   // from far away with no valid invite (an expired or leaked code): dropped quietly
         } else {

@@ -29,7 +29,7 @@ Window {
 
     // ------------------------------------------------------------- the rail
     // Chats, then every group (round initials), + for a new group; at the foot, always on show,
-    // Contacts, Calls, Files, Settings (the valknut) and the power button (lock or close).
+    // Contacts, Files, Settings (the valknut) and the power button (lock or close). Calls live in their chats.
     readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2, mentions: 1 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
@@ -41,7 +41,6 @@ Window {
      .concat([
         { id: "newgroup", kind: "add", label: "New group", action: true },
         { id: "contacts", kind: "icon", icon: "person", label: "Contacts", bottom: true },
-        { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
         { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
         { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
         // Lock Huginn or close it (a small menu).
@@ -170,7 +169,6 @@ Window {
             if (app.pageName.startsWith("g:")) return "GroupPage.qml"
             switch (app.pageName) {
             case "dms": return "ChatPage.qml"
-            case "calls": return "CallsPage.qml"
             case "files": return "FilesPage.qml"
             case "settings": return "SettingsPage.qml"
             case "contacts": return "ContactsPage.qml"
@@ -336,8 +334,6 @@ Window {
     Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(-1) }
     Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(0) }
     Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", {}) }
-    // Calls (the history), also on the rail.
-    Shortcut { sequence: "Ctrl+Shift+C"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("calls", {}) }
     function showShortcuts() { shortcutsPanel.open() }
     // Size of everything, like a web browser's zoom; saved at once.
     readonly property var sizes: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200]
@@ -355,6 +351,16 @@ Window {
     PersonPanel { id: personPanel; z: 24 }
     // Ctrl+/: every keyboard shortcut.
     ShortcutsPanel { id: shortcutsPanel; z: 27 }
+    // Labs: Report a bug (its screenshot is taken first, so the report screen isn't in it), and on the Huginn
+    // with the Labs key, Labs reports.
+    LabsReport { id: labsReport; z: 28 }
+    LabsInbox { id: labsInbox; z: 28 }
+    function openReport() {
+        if (app.privacyCovered) return
+        Labs.capture(app)
+        labsReport.open(app.touring)
+    }
+    function openLabsReports() { labsInbox.open(app.touring) }
     TextPrompt { id: prompt; z: 30 }
     CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
@@ -493,6 +499,12 @@ Window {
             app.lastActive = seen
             app.clock = t
         }
+        // A missed call's notification was clicked: its chat (a contact's key, or "g:<group>").
+        function onShowChat(where) {
+            if (Vault.screenLocked) { app.openPage("dms", {}); return }
+            if (where.startsWith("g:")) app.openPage(where, {})
+            else app.openPage("dms", { open: where })
+        }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // An @mention always says so (without the text unless previews are on).
@@ -519,6 +531,8 @@ Window {
             if (profileCard.visible) profileCard.close()
             if (personPanel.visible) personPanel.close()
             if (shortcutsPanel.visible) shortcutsPanel.close()
+            if (labsReport.visible) labsReport.close()
+            if (labsInbox.visible) labsInbox.close()
             if (meCard.visible) meCard.close()
             if (rail.menuOpen) rail.closeMenu()
             Ui.say("Huginn locked.")
@@ -548,6 +562,8 @@ Window {
         if (picker.visible) return picker
         if (switcher.visible) return switcher
         if (shortcutsPanel.visible) return shortcutsPanel
+        if (labsReport.visible) return labsReport
+        if (labsInbox.visible) return labsInbox
         if (personPanel.visible) return personPanel
         if (profileCard.visible) return profileCard
         if (meCard.visible) return meCard
@@ -722,12 +738,12 @@ Window {
         property string savedTheme: "dark"
         property string savedDensity: "cozy"
         property string savedSize: "100"
+        property bool savedLabs: false
         readonly property var steps: [
             { page: "dms", file: "00-direct-messages" },
             { page: "dms", zone: "messages", file: "01-conversation" },
             { page: "dms", rail: true, file: "02-rail" },
             { page: "files", file: "03-files" },
-            { page: "calls", file: "04-calls" },
             { page: "settings", file: "05-settings" },
             { page: "settings", section: "privacy", file: "06-settings-lock" },
             { page: "contacts", file: "07-contacts" },
@@ -757,7 +773,11 @@ Window {
             { page: "settings", section: "look", small: true, file: "30-small-window" },
             // A contact's menu › Edit, the other sub-page.
             { page: "dms", zone: "messages", person: true, personPage: "edit", file: "31-edit" },
-            { page: "files", filesMenu: true, file: "32-files-menu" }
+            { page: "files", filesMenu: true, file: "32-files-menu" },
+            // Labs mode: its group in About, Report a bug, and Labs reports.
+            { page: "settings", section: "about", labs: true, file: "33-labs" },
+            { page: "settings", section: "about", labs: true, report: true, file: "34-labs-report" },
+            { page: "dms", labsInbox: true, file: "35-labs-reports" }
         ]
         interval: 1500
         repeat: true
@@ -765,9 +785,10 @@ Window {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
-            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density; savedSize = Settings.uiSize }
+            labsReport.visible = false; labsInbox.visible = false
+            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
             if (step >= steps.length) {
-                Settings.theme = savedTheme; Settings.density = savedDensity; Settings.uiSize = savedSize
+                Settings.theme = savedTheme; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
                 app.width = 1920; app.height = 1080
                 stop(); System.tourFinished(); return
             }
@@ -778,6 +799,7 @@ Window {
             // A portrait window: the one-column layout.
             if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
+            Settings.labs = s.labs ? true : savedLabs
             const args = { tour: true }
             if (s.section) args.section = s.section
             if (s.zone) args.zone = s.zone
@@ -795,6 +817,8 @@ Window {
             if (s.person) personPanel.show("tour", "Mira", { tour: true, page: s.personPage || "can" })
             if (s.filesMenu) Qt.callLater(() => { const p = app.page(); if (p && p.filesMenu) p.filesMenu() })
             if (s.newGroup) app.newGroup()
+            if (s.report) Qt.callLater(app.openReport)
+            if (s.labsInbox) app.openLabsReports()
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }

@@ -193,13 +193,14 @@ object Ringer {
         sound(c, false)
     }
 
+    /** [key]: the chat it opens (the caller, or "g:" and a group for a group call). */
     fun missed(c: Context, name: String, key: String) {
-        // Extreme battery saver: no notifications; the Calls tab still lists it.
+        // Extreme battery saver: no notifications; the chat still shows it.
         if (try { (c.applicationContext as Muninn).power.extreme } catch (_: Exception) { false }) return
         channels(c)
         val who = shown(c, name)
         val open = PendingIntent.getActivity(c, key.hashCode() + 1, Intent(c, io.github.ravenor907.muninn.MainActivity::class.java)
-            .putExtra("screen", "calls").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            .putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(c, MISSED).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Missed call").setContentText(who ?: "Someone called you")
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)

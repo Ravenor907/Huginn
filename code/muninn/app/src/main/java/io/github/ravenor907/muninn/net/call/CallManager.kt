@@ -32,7 +32,7 @@ object CallManager {
         val video: Boolean = false, val videoCall: Boolean = false,
     )
 
-    /** One line of the Calls tab. [result]: "answered", "missed", "declined", "noanswer", "busy", "failed". */
+    /** One call, shown in its chat. [result]: "answered", "missed", "declined", "noanswer", "busy", "failed". */
     data class Log(val id: String, val peerKey: String, val name: String, val outgoing: Boolean, val at: Long, val seconds: Long, val result: String)
 
     private val _call = MutableStateFlow<Ui?>(null)
@@ -253,8 +253,6 @@ object CallManager {
         if (keep.size != before.size) { _history.value = keep; app?.let { save(it) } }
     }
 
-    fun deleteLog(id: String) = exec.execute { _history.value = _history.value.filterNot { it.id == id }; app?.let { save(it) } }
-    fun clearHistory() = exec.execute { _history.value = emptyList(); app?.let { save(it) } }
 
     // ------------------------------------------------------------------ signaling (from Chat)
 

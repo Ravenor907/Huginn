@@ -1983,3 +1983,51 @@ can't ring. With `b1` it can:
 
 An app without `b1` or `e1` ignores the receipt fields and gets neither ring envelopes nor day key wrappings; with
 mixed versions everything falls back to sections 14 and 20.
+
+## 24. Labs bug reports (field `lb`)
+
+Labs mode (tap the raven in Settings 10 times, 10 more to turn it off) lets a tester send a bug report to the
+project. A report is an ordinary private message from the tester to the **Labs contact**, built into both apps:
+
+- name `Huginn Muninn Labs`
+- chat key (SPKI, base64)
+  `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5ihedM8ypmMLI817zKk9CbxL0Tl3Q67Orwj8/UUpgOH9PlIIlw7FQDuIfKBa6BuK2fjw6Iu2RKxNvLdEFfVK+w==`
+- mailbox `5ee40952b01671ffec761fc6ff65529fac098b03aed4b7a0b5d69d86e2e93529`
+
+The Labs contact is never shown in the tester's contact list and never gets a chat there.
+
+**Sending.** Over the internet only, to that mailbox, wrapped for that key like any envelope (section 20 and 23),
+sealed like a first message to a new contact: always v1 (never the ratchet) and never bound (no `aad`), whatever the
+tester's app knows about that key. The report is one envelope in room `private`:
+
+```
+{ room: "private", fromKey, fromName, fromId, mailbox, id, cap, caps, nonce, data,
+  lb: { app: "muninn" | "huginn", v: "<version label>", os: "<system>", model: "<device model>", s: "<screenshot id>" } }
+```
+
+- `data` opens to the text: UTF-8, trimmed, 1 to 2000 characters (code points).
+- `v` is the installed version as the app shows it (`0.98`, `0.99 beta 12`), `os` the system (`Android 15`,
+  `Windows 11`, `Linux`), `model` the device model. Each at most 80 characters. Nothing else about the device:
+  no logs, no addresses, no other data.
+- `s` is there only when a screenshot goes with it: the screenshot's id (1 to 64 characters, letters, digits, `-`).
+
+The screenshot (optional, one JPEG, every metadata block removed as for any photo) goes as photo pieces exactly as
+a photo to a contact (room `photo`, `i`, `n`, the same 16 KB pieces), with `id` = the screenshot's id and the same `lb`
+(without `s`) in each piece's envelope. At most 130 pieces (the relay limit for a photo). The tester's app waits for the relays to take every
+envelope and says whether the report went; it is not retried later.
+
+**Receiving.** Only the app whose own chat key is the Labs key takes envelopes with `lb`. Every other app drops them
+quietly (answers 200 and keeps nothing). The Labs contact's app:
+
+- takes them from anyone, with no contact code or invite, but opens each only as v1 with the sender's chat key, and
+  refuses a malformed `lb` or text (400);
+- takes at most 10 reports a day from one sender (429 after that, pieces too);
+- keeps them, with their screenshots, for 30 days in a "Labs reports" list (from the chat list's More row) showing
+  the sender's name, the label, system and model, the text and the screenshot;
+- matches a screenshot to its report by `s`, whichever arrives first; a report without `s` takes a screenshot from
+  the same sender that came within 15 minutes of it;
+- sends no receipts for them.
+
+**Replying.** Reply in the Labs reports list makes the sender a contact on the Labs contact's app and opens their
+chat. Its messages go as to any new contact (no invite). The tester's app, once it has sent a report, takes a
+private message from the Labs key with no invite as a chat request (Requests), like a code shared some other way.

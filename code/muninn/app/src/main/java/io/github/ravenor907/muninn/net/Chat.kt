@@ -249,6 +249,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Muted, archived and marked unread: on this phone only. */
     val flags = ChatFlags({ vault.read(File(context.filesDir, "chatflags.json")) }, { vault.write(File(context.filesDir, "chatflags.json"), it) })
     /** Contacts removed from the list, kept 30 days so they can come back: local only. */
+    /** Labs reports to this phone, when its chat key is the Labs key ([LabsWire]). */
+    val labs = LabsInbox(context, vault)
+    /** This phone is the Labs contact: it takes Labs reports. */
+    fun isLabs() = id.publicKey == LabsWire.KEY
     val trash = Trash({ vault.read(File(context.filesDir, "trash.json")) }, { vault.write(File(context.filesDir, "trash.json"), it) })
     private val groupTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val callTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
@@ -802,6 +806,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (fromKey.isEmpty() || fromKey == id.publicKey) return 400 to "{}"
         if (fromKey in id.muted() || trash.has(fromKey)) return 200 to "{}"   // blocked or in the trash: dropped quietly
         val room = o.optString("room")
+        // A Labs report: only the Labs contact takes it; everyone else drops it quietly.
+        if (o.has(LabsWire.FIELD)) return if (isLabs()) receiveLabs(o, room, fromKey, name) else 200 to "{}"
         // A Kids' TV only talks to the people its parents listed, and only about what it allows.
         // With no TV handler set, a Kids' TV takes nothing but configs (which it checks itself).
         val tv = tvHandler
@@ -1028,7 +1034,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     }
                     notices.tryEmit("$name added you with your invite link.")
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
-                } else if (!inviteOk(o.optString("invite"))) {
+                } else if (!inviteOk(o.optString("invite")) && !(fromKey == LabsWire.KEY && id.labsReported)) {
+                    // (A reply from the Labs contact to a report sent from here goes on to be a request.)
                     // From far away with no valid invite (an old or leaked code): dropped quietly.
                     return 403 to "{}"
                 } else {
@@ -1147,6 +1154,74 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             list.forEach { addPrivate(r.peerKey, it) }
             receipt(r.peerKey, list.map { it.id }, "delivered", r.mailbox)
         }
+    }
+
+    // ------------------------------------------------------------------ Labs reports (protocol-0.6.md, "Labs")
+
+    /**
+     * A Labs report or one of its screenshot's pieces, to this phone (the Labs contact). Taken from anyone, with no
+     * contact code, but always sealed v1 to the Labs key by the sender's own chat key, and at most [LabsWire.PER_DAY] a day each.
+     */
+    private fun receiveLabs(o: JSONObject, room: String, fromKey: String, name: String): Pair<Int, String> {
+        val lb = o.optJSONObject(LabsWire.FIELD)
+        if (!LabsWire.ok(lb) || lb == null) return 400 to "{}"
+        val msgId = o.optString("id")
+        if (msgId.isEmpty() || msgId.length > 64) return 400 to "{}"
+        val now = System.currentTimeMillis()
+        if (room == "private" && labs.known(msgId)) return 200 to "{}"
+        if (!labs.allowed(fromKey, now)) return 429 to "{}"
+        if (room != "private" && room != "photo") return 400 to "{}"
+        val sk = try { sharedKey(fromKey) } catch (e: Exception) { return 400 to "{}" }
+        // Always v1 (never the ratchet), so a report opens whether or not the sender is a contact here.
+        val plain = ChatWire.open(o, sk, id.keys, null, ChatCrypto::newKeyPair, id.publicKey) ?: return 403 to "{}"
+        if (room == "photo") return labs.piece(fromKey, msgId, o.optInt("i", -1), o.optInt("n"), plain, now) to "{}"
+        val text = String(plain, Charsets.UTF_8).trim()
+        if (!LabsWire.textOk(text)) return 400 to "{}"
+        val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
+        val r = LabsInbox.Report(msgId, fromKey, name, mailbox, lb.optString("app"), lb.optString("v"), lb.optString("os"), lb.optString("model"),
+            text, now, lb.optString("s"))
+        val code = labs.add(r)
+        if (code == 200) arrivals.tryEmit(Triple(LabsWire.NAME, "Bug report from $name", LABS_PAGE))
+        return code to "{}"
+    }
+
+    /**
+     * Sends a Labs report: [text], and [jpeg] (a screenshot already stripped of metadata) if given. Sealed v1 to the
+     * Labs key like a first message, to its mailbox over the internet only. [done]: true once relays hold all of it.
+     */
+    fun sendLabsReport(text: String, jpeg: ByteArray?, info: JSONObject, done: (Boolean) -> Unit) {
+        val t = text.trim()
+        if (!LabsWire.textOk(t) || isLabs()) { done(false); return }
+        bg {
+            if (Move.locked) { done(false); return@bg }
+            val sk = sharedKey(LabsWire.KEY)
+            val shotId = if (jpeg != null) UUID.randomUUID().toString() else ""
+            fun base(room: String, msgId: String, lb: JSONObject) =
+                ChatWire.base(room, id.publicKey, id.username, id.fingerprint, nostr.publicKey, msgId).put(LabsWire.FIELD, lb)
+            val bodies = ArrayList<String>()
+            if (jpeg != null) {
+                val parts = Photos.split(jpeg)
+                if (parts.size > LabsWire.MAX_SHOT_PIECES) { done(false); return@bg }
+                parts.forEachIndexed { i, part ->
+                    bodies += ChatWire.seal(base("photo", shotId, JSONObject(info.toString())).put("i", i).put("n", parts.size),
+                        part, sk, LabsWire.KEY, null, ChatCrypto::newKeyPair).toString()
+                }
+            }
+            val lb = JSONObject(info.toString()).apply { if (shotId.isNotEmpty()) put("s", shotId) }
+            bodies += ChatWire.seal(base("private", UUID.randomUUID().toString(), lb), t.toByteArray(Charsets.UTF_8), sk, LabsWire.KEY, null,
+                ChatCrypto::newKeyPair).toString()
+            id.labsReported = true
+            val once = java.util.concurrent.atomic.AtomicBoolean(false)
+            val finish: (Boolean) -> Unit = { ok -> if (once.compareAndSet(false, true)) done(ok) }
+            // A relay that never answers: give up after a minute.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ finish(false) }, 60_000)
+            if (!internet(LabsWire.KEY, bodies, LabsWire.MAILBOX, stored = { finish(true) }, days = 7)) finish(false)
+        }
+    }
+
+    /** Labs: answer a report. Its sender becomes a contact here and their chat opens; the first message goes as a request to them. */
+    fun labsReply(r: LabsInbox.Report) {
+        if (!isContact(r.from)) putContact(Contact(r.from, r.name, r.mailbox, verified = false), confirmed = true)
     }
 
     // ------------------------------------------------------------------ photos
@@ -2357,6 +2432,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             _private.value = emptyMap(); _nearby.value = emptyList()
             groups.clear()
             photosDir.deleteRecursively()
+            labs.clear()
             outbox.clear()
             mxOut.clear(); mxStore.delete()
             saveNow(); nearbyStore.delete()
@@ -2503,12 +2579,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
             if (!prefs.contains(io.github.ravenor907.muninn.screens.LIMITS_NOTE))
                 prefs.edit().putBoolean(io.github.ravenor907.muninn.screens.LIMITS_NOTE, _private.value.values.any { it.isNotEmpty() } || groups.all.value.isNotEmpty()).apply()
+            if (isLabs()) labs.load()
             prune()
         } catch (_: Exception) {}
     }
 
     companion object {
         const val PATH = "/api/huginn/v1/message"
+        /** The chat page with the Labs reports (and what a report's notification opens). */
+        const val LABS_PAGE = "labs"
         const val MAX = 2000
         const val KEEP_AFTER = 10
         const val INVITE_MS = 60 * 60_000L

@@ -167,6 +167,26 @@
    "message": "687567696e6e2d6d756e696e6e2072656c656173652076310a312e320a487567696e6e2d57696e646f77732e7a69700a34303630373531333165323335313439303331363430313466333738353535373836343332663264636162613161623538333161386162343861336439313461",
    "signature": "a16f373b6e6d79e6015e7d6b61eeee8b0b1fc64880d3d6516fdc7ecb0d45673bf6b204cff158ae1c70fd756d952e053db8df52d4d86b158a1ea0501d4ae0c20d",
    "valid": true
+  },
+  {
+   "name": "signed for 0.99 beta 12",
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "version": "0.99 beta 12",
+   "file": "Muninn.apk",
+   "sha256": "406075131e23514903164014f378555786432f2dcaba1ab5831a8ab48a3d914a",
+   "message": "687567696e6e2d6d756e696e6e2072656c656173652076310a302e393920626574612031320a4d756e696e6e2e61706b0a34303630373531333165323335313439303331363430313466333738353535373836343332663264636162613161623538333161386162343861336439313461",
+   "signature": "aaa46f89960663bc47c65523dc16772ea0d299cd768cc932effe291f8334a98338e845c8ef68f8ffb224bad495b618f8f41c4856430ba628404599033eb9ca04",
+   "valid": true
+  },
+  {
+   "name": "beta 12 posted again as beta 13",
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "version": "0.99 beta 13",
+   "file": "Muninn.apk",
+   "sha256": "406075131e23514903164014f378555786432f2dcaba1ab5831a8ab48a3d914a",
+   "message": "687567696e6e2d6d756e696e6e2072656c656173652076310a302e393920626574612031330a4d756e696e6e2e61706b0a34303630373531333165323335313439303331363430313466333738353535373836343332663264636162613161623538333161386162343861336439313461",
+   "signature": "aaa46f89960663bc47c65523dc16772ea0d299cd768cc932effe291f8334a98338e845c8ef68f8ffb224bad495b618f8f41c4856430ba628404599033eb9ca04",
+   "valid": false
   }
  ],
  "newer": [
@@ -209,6 +229,56 @@
    "tag": "0.4",
    "current": "0.39",
    "install": true
+  },
+  {
+   "tag": "0.99 beta 3",
+   "current": "0.98",
+   "install": true
+  },
+  {
+   "tag": "0.99 beta 7",
+   "current": "0.99 beta 3",
+   "install": true
+  },
+  {
+   "tag": "0.99 beta 3",
+   "current": "0.99 beta 7",
+   "install": false
+  },
+  {
+   "tag": "0.99 beta 7",
+   "current": "0.99 beta 7",
+   "install": false
+  },
+  {
+   "tag": "0.99 beta 10",
+   "current": "0.99 beta 9",
+   "install": true
+  },
+  {
+   "tag": "0.99",
+   "current": "0.99 beta 7",
+   "install": true
+  },
+  {
+   "tag": "0.99 beta 12",
+   "current": "0.99",
+   "install": false
+  },
+  {
+   "tag": "0.98",
+   "current": "0.99 beta 3",
+   "install": false
+  },
+  {
+   "tag": "1.0 beta 1",
+   "current": "0.99",
+   "install": true
+  },
+  {
+   "tag": "0.99 beta 1",
+   "current": "0.99 Test 2",
+   "install": false
   }
  ]
 }

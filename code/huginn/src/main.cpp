@@ -31,6 +31,7 @@
 #include "transfer.h"
 #include "livelist.h"
 #include "updater.h"
+#include "labs.h"
 #include "wifiselftest.h"
 #include "proof.h"
 #include "move.h"
@@ -64,6 +65,10 @@
 
 #ifndef HUGINN_VERSION
 #define HUGINN_VERSION "0.1"
+#endif
+// A pre-release build's label ("0.99 beta 12"); a stable build's is its version.
+#ifndef HUGINN_VERSION_LABEL
+#define HUGINN_VERSION_LABEL HUGINN_VERSION
 #endif
 
 namespace
@@ -102,7 +107,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Huginn"));
     QApplication::setOrganizationName(QStringLiteral("Huginn"));
-    QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION));
+    QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION_LABEL));
     QApplication::setDesktopFileName(QStringLiteral("io.github.ravenor907.Huginn"));
     QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
     Platform::chooseGraphics();
@@ -303,6 +308,10 @@ int main(int argc, char *argv[])
     // Profile pictures and status (cap p1).
     auto *profile = new Profile(chat, vault, &app);
     chat->setProfile(profile);
+    // Labs mode: bug reports, and what goes back to plain settings before an older stable release is installed.
+    auto *labs = new Labs(chat, vault, settings, &app);
+    chat->setLabs(labs);
+    updater->beforeGoingBack = [labs] { return labs->beforeGoingBack(); };
     // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
     auto *mover = new Move(chat, vault, linked, localSend, &app);
     localSend->moveReceive = [mover](const QByteArray &body) { return mover->handle(body); };
@@ -347,6 +356,35 @@ int main(int argc, char *argv[])
             const bool preview = chat->showPreview() && !vault->screenLocked();
             Platform::notify(preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"));
         }
+    });
+    // Calls live in their chats: each one that ends goes into that chat's timeline. A missed one raises a
+    // notification (unless Do not disturb is on), and a click on it opens the chat.
+    auto missedNote = [chat, vault](const QString &where, const QString &who, const QString &text) {
+        if (Settings::silenced())
+            return;
+        const bool hide = vault->screenLocked();
+        Platform::notify(hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call"), hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text, 15000,
+                         [chat, where] { Q_EMIT chat->showChat(where); });
+    };
+    QObject::connect(calls, &CallManager::logged, chat, [chat, calls, missedNote](const QString &key, bool out, const QString &result, int seconds) {
+        const bool missed = result == QLatin1String("missed");
+        QString text;
+        if (missed)
+            text = QStringLiteral("Missed call");
+        else if (result == QLatin1String("answered"))
+            text = (out ? QStringLiteral("Outgoing call") : QStringLiteral("Incoming call")) + (seconds > 0 ? QStringLiteral(" · ") + calls->duration(seconds) : QString());
+        else if (out)
+            text = result == QLatin1String("Declined") ? QStringLiteral("Call declined") : result == QLatin1String("Busy") ? QStringLiteral("They were busy") : QStringLiteral("No answer");
+        else
+            text = result == QLatin1String("Declined") ? QStringLiteral("You declined a call") : QStringLiteral("Incoming call");
+        chat->noteCall(key, text, missed);
+        if (missed)
+            missedNote(key, chat->nameOf(key), QStringLiteral("From %1").arg(chat->nameOf(key)));
+    });
+    QObject::connect(rooms, &RoomManager::logged, chat, [chat, missedNote](const QString &g, const QString &text, bool missed) {
+        chat->noteCall(QStringLiteral("g:") + g, text, missed);
+        if (missed)
+            missedNote(QStringLiteral("g:") + g, QString(), text);
     });
     auto *direct = new Direct(&app);
     if (wifiSelf)
@@ -395,6 +433,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Mover", mover);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Profile", profile);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);

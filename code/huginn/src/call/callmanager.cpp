@@ -313,17 +313,6 @@ QString CallManager::duration(int s) const
     return h ? QStringLiteral("%1:%2").arg(h).arg(mmss) : mmss;
 }
 
-int CallManager::missedCount() const
-{
-    int n = 0;
-    for (const QVariant &v : m_history) {
-        const QVariantMap e = v.toMap();
-        if (e.value(QStringLiteral("missed")).toBool() && e.value(QStringLiteral("started")).toLongLong() > m_seen)
-            ++n;
-    }
-    return n;
-}
-
 // ------------------------------------------------------------------ actions
 
 bool CallManager::canCall(const QString &key) const { return available() && !key.isEmpty() && m_signal->canCall(key); }
@@ -752,6 +741,7 @@ void CallManager::addHistory(const QString &key, bool out, const QString &result
         m_history.removeLast();
     save();
     Q_EMIT historyChanged();
+    Q_EMIT logged(key, out, result, seconds);
 }
 
 void CallManager::pruneHistory(const std::function<qint64(const QString &)> &cutoff)
@@ -767,31 +757,6 @@ void CallManager::pruneHistory(const std::function<qint64(const QString &)> &cut
     if (kept.size() == m_history.size())
         return;
     m_history = kept;
-    save();
-    Q_EMIT historyChanged();
-}
-
-void CallManager::markSeen()
-{
-    m_seen = nowMs();
-    save();
-    Q_EMIT historyChanged();
-}
-
-void CallManager::deleteEntry(const QString &id)
-{
-    for (int i = 0; i < m_history.size(); ++i)
-        if (m_history.at(i).toMap().value(QStringLiteral("id")).toString() == id) {
-            m_history.removeAt(i);
-            break;
-        }
-    save();
-    Q_EMIT historyChanged();
-}
-
-void CallManager::clearHistory()
-{
-    m_history.clear();
     save();
     Q_EMIT historyChanged();
 }

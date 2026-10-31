@@ -93,18 +93,9 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             }
         }
     }
-    // Erasing is out of sight: tap the raven 10 times within 5 seconds to show it. A stray hand
-    // (or a curious kid) can't find it, and it still needs the hold-to-confirm.
-    var showErase by remember { mutableStateOf(false) }
-    val taps = remember { ArrayDeque<Long>() }
     // Clear of the gesture bar too, so the pattern and Erase never sit under it.
     Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
-        Brand(onLogo = {
-            val t = android.os.SystemClock.elapsedRealtime()
-            taps.addLast(t)
-            while (taps.isNotEmpty() && t - taps.first() > 5_000) taps.removeFirst()
-            if (taps.size >= 10) { taps.clear(); showErase = true }
-        })
+        Brand()
         // A pattern: the dots sit where Settings › Lock and privacy says (Lower unless changed), for one-handed use.
         if (pattern) Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
             Text("Draw your pattern to open", style = Type.big)
@@ -118,13 +109,6 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             Spacer(Modifier.weight(top))
             PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
             Spacer(Modifier.weight(bottom))
-            if (showErase) {
-                Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
-                MButton("Erase everything", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Danger) {
-                    Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
-                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
-                }
-            }
         }
         // A password: scrolls, so with larger size and text settings the field and buttons can always be reached.
         else Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -146,13 +130,6 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                     wrong -> Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                 }
                 if (!pattern) MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
-            }
-            if (showErase) {
-                Text("Forgot it? There's no way back in without it. You can erase Muninn and start fresh.", style = Type.small)
-                MButton("Erase everything", Modifier.fillMaxWidth(), Kind.Danger) {
-                    Ui.sure(Ask("Erase everything?", "Every message, contact and key on this phone is deleted for good. Files you received stay.",
-                        "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
-                }
             }
         }
     }

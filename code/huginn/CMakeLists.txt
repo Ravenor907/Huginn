@@ -2,6 +2,14 @@ cmake_minimum_required(VERSION 3.22)
 
 # One dot only, read as a decimal: 0.3, 0.31, 0.4, 1.0.
 set(HUGINN_VERSION "0.1" CACHE STRING "Version shown in the app")
+# A pre-release build's label, "<next> beta <n>" (like "0.99 beta 12"), set by CI for the beta release.
+# Empty: the same as HUGINN_VERSION (a stable build).
+set(HUGINN_VERSION_LABEL "" CACHE STRING "Version label of a pre-release build")
+if(HUGINN_VERSION_LABEL STREQUAL "")
+    set(HUGINN_LABEL "${HUGINN_VERSION}")
+else()
+    set(HUGINN_LABEL "${HUGINN_VERSION_LABEL}")
+endif()
 project(huginn VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -55,6 +63,7 @@ qt_add_executable(huginn
     src/transfer.cpp src/transfer.h
     src/livelist.cpp src/livelist.h
     src/updater.cpp src/updater.h
+    src/labs.cpp src/labs.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.h
@@ -114,7 +123,7 @@ qt_add_executable(huginn
     src/call/roommanager.cpp src/call/roommanager.h
 )
 
-target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}")
+target_compile_definitions(huginn PRIVATE HUGINN_VERSION="${HUGINN_VERSION}" HUGINN_VERSION_LABEL="${HUGINN_LABEL}")
 
 # Small per-platform pieces (src/platform/). Direct connect needs NetworkManager, so Windows
 # builds a version of it that explains the Windows way instead.
@@ -232,7 +241,6 @@ qt_add_qml_module(huginn
         qml/ChatPage.qml
         qml/GroupPage.qml
         qml/FilesPage.qml
-        qml/CallsPage.qml
         qml/CallPage.qml
         qml/IncomingCall.qml
         qml/RoomBar.qml
@@ -259,6 +267,8 @@ qt_add_qml_module(huginn
         qml/PersonPanel.qml
         qml/InvitePanel.qml
         qml/MoreButton.qml
+        qml/LabsReport.qml
+        qml/LabsInbox.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -268,10 +278,10 @@ qt_add_qml_module(huginn
 
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
-                   TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
+                   TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
-                   Avatar PicturePicker Leaves MoreButton)
+                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels.

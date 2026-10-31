@@ -236,6 +236,9 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
         Text(if (up > 0) "Online" else "Offline", style = Type.normal.copy(color = Palette.textSoft))
     }
     if (app.vault.hasPassword) MenuRow("lock", "Lock now") { done(); onLock() }
+    // Labs mode: report a bug (a screenshot of the list as it is, then the report screen).
+    val context = androidx.compose.ui.platform.LocalContext.current
+    if (Labs.on(app)) MenuRow("info", "Report a bug") { done(); Labs.report(context) }
 }
 
 /** A person's menu: Search, Media, Mute, Notifications, Person details, then Block and Delete. A Kids' TV has its own. */

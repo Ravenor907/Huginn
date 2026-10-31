@@ -38,8 +38,8 @@ Things that can't be undone sit last in a menu, in red, and ask first.
 
 ## The rail
 
-Chats and your groups sit at the top of the rail. Contacts, Calls, Files and Settings are always at its foot, with
-the power button (lock or close). LB steps through them.
+Chats and your groups sit at the top of the rail. Contacts, Files and Settings are always at its foot, with
+the power button (lock or close). LB steps through them. Calls show in their chat or group, among the messages.
 
 ## Pages
 
@@ -51,9 +51,12 @@ the power button (lock or close). LB steps through them.
 | A group's channels | Open or join | The group's menu | |
 | A group's members | The member's menu | The member's menu | |
 | Contacts | The person's menu | The person's menu | |
-| Calls | Call back | Delete or clear | |
 | Files | Send files, or send to the highlighted device | Look again, Direct connect, Clear | Look again |
 | Settings | Open, or change the highlighted row | | |
+
+In Settings › About, A on the raven ten times turns Labs mode on or off. Labs adds Report a bug (also in the Chats
+list's menu): the D-pad moves between Include screenshot, the text and Send, A uses the highlighted one, B closes.
+Labs reports (on the Labs computer, in the same menu): Up and Down pick a report, A replies, X deletes, B closes.
 
 The pattern lock works with the D-pad: move to a dot, A starts there, move on through the dots, A again when done. B starts over.
 While setting a lock, LB switches between Pattern and Password.

@@ -52,6 +52,18 @@ class Identity(context: Context, private val vault: Vault) {
     var autoUpdate: Boolean
         get() = prefs.getBoolean("autoUpdate", true)
         set(v) = prefs.edit().putBoolean("autoUpdate", v).apply()
+    /** Labs mode: the Labs section in Settings (tap the raven there 10 times). */
+    var labs: Boolean
+        get() = prefs.getBoolean("labs", false)
+        set(v) = prefs.edit().putBoolean("labs", v).apply()
+    /** The update channel: true for Pre-release (the "beta" pre-release too), false for Stable. */
+    var preRelease: Boolean
+        get() = prefs.getBoolean("preRelease", false)
+        set(v) = prefs.edit().putBoolean("preRelease", v).apply()
+    /** A Labs report went from here: a reply from the Labs contact comes as a request, like any first message. */
+    var labsReported: Boolean
+        get() = prefs.getBoolean("labsReported", false)
+        set(v) = prefs.edit().putBoolean("labsReported", v).apply()
     /** Google Nearby (Close) on top of Muninn's own Bluetooth and Wi-Fi. Off for everyone until turned on: it needs Google Play services. */
     var useGoogleNearby: Boolean
         get() = prefs.getBoolean("googleNearby", false)

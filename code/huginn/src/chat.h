@@ -19,6 +19,7 @@
 
 class Ble;
 class FileLink;
+class Labs;
 class Link;
 class LocalSend;
 class Nostr;
@@ -268,6 +269,9 @@ public:
     QByteArray signWithChatKey(const QByteArray &bytes) const;
     bool canCall(const QString &key) const;     // contact or group peer, caps c1, not blocked
     QString lanHost(const QString &key) const;  // the host of their Wi-Fi route, or ""
+    // A call in a chat's timeline (main.cpp, when one ends): where is a contact's key or "g:<group>". Only on this
+    // computer, never sent. A missed 1:1 call marks the chat unread.
+    void noteCall(const QString &where, const QString &text, bool missed);
 
     // Contact folders, only on this computer: [{id, name, count, keys (in their order), collapsed}].
     QVariantList folders() const;
@@ -357,6 +361,8 @@ public:
     void setProfile(Profile *profile) { m_profile = profile; }
     // Cap b1: this device's ring key, outside the vault (main.cpp makes it).
     void setRingKey(RingKey *ring) { m_ringKey = ring; }
+    // Labs (labs.*): bug reports to the Labs contact, and on the Huginn with the Labs key, its inbox.
+    void setLabs(Labs *labs) { m_labs = labs; }
 
     static const int kMax = 2000;
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
@@ -372,6 +378,8 @@ Q_SIGNALS:
     void callMessage(const QString &fromKey, const QJsonObject &msg);
     void pruned();   // messages past their chats' limits went (every minute, and when a limit changes)
     void liveChanged();
+    // Open this chat on screen (a missed call's notification was clicked): a contact's key or "g:<group>".
+    void showChat(const QString &where);
 
 private:
     // Caps i1 and f1 and linked devices (trust.cpp, filelink.cpp, link.cpp): rooms intro, file and
@@ -382,6 +390,8 @@ private:
     friend class Move;   // moving to another device reads and locks everything (move.cpp)
     friend class Profile;   // sends my picture to contacts and group members, reads the active map (profile.cpp)
     Profile *m_profile = nullptr;
+    friend class Labs;   // seals a report to the Labs key and sends it; the Labs inbox opens reports (labs.cpp)
+    Labs *m_labs = nullptr;
     int receiveProfile(const QString &fromKey, const QString &sentId, const QJsonObject &p);
     Trust *m_trust = nullptr;
     FileLink *m_files = nullptr;

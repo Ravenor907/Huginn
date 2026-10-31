@@ -27,8 +27,8 @@ shot() {
   adb exec-out screencap -p > "screens/$(printf %02d $n)-$name.png"
   crashed "$name"
 }
-# The four tabs and Settings (the header gear).
-for screen in chats calls files contacts settings; do
+# The three tabs and Settings (the valknut).
+for screen in chats files contacts settings; do
   s=$screen; [ "$s" = chats ] && s=chat
   shot "$screen" --es screen "$s"
 done

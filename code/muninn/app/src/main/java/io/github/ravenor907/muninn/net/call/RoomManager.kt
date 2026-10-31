@@ -449,7 +449,7 @@ object RoomManager {
                     val r = _ring.value
                     if (r != null && r.g == group && r.ch == room && presenceTable.inRoom(group, room, now()).isEmpty()) {
                         stopRing()
-                        missed(r.name, r.group, from)
+                        missed(r.name, r.group, r.g)
                     }
                 }
             }
@@ -457,7 +457,7 @@ object RoomManager {
                 if (here || _ring.value?.let { it.g == group && it.ch == room } == true) return   // in it, or the same ring again
                 val inCall = CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true
                 val who = nameOf(group, from); val grp = state(group)?.name ?: ""
-                if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, from); return }
+                if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, group); return }
                 val a = app ?: return
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
                 // Extreme battery saver: group calls ring only while Muninn is open.
@@ -466,7 +466,7 @@ object RoomManager {
                 RoomRinger.ring(a, who, grp)
                 ringTimer = exec.schedule(Runnable {
                     val r = _ring.value
-                    if (r != null && r.g == group && r.ch == room) { stopRing(); missed(who, grp, from) }
+                    if (r != null && r.g == group && r.ch == room) { stopRing(); missed(who, grp, group) }
                 }, RoomLogic.RING_MS, TimeUnit.MILLISECONDS)
             }
             "vdecline" -> if (fresh && here) { declined += from; _notices.tryEmit("${nameOf(group, from)} can't join right now") }
@@ -474,9 +474,10 @@ object RoomManager {
         }
     }
 
-    private fun missed(who: String, group: String, from: String) {
+    /** A group call missed: the notification opens group [g]. */
+    private fun missed(who: String, group: String, g: String) {
         val a = app ?: return
-        Ringer.missed(a, if (group.isNotEmpty()) "$who · $group" else who, from)
+        Ringer.missed(a, if (group.isNotEmpty()) "$who · $group" else who, io.github.ravenor907.muninn.net.Folders.groupKey(g))
     }
 
     private fun roomOffer(from: String, o: JSONObject) {

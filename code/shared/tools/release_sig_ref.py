@@ -11,7 +11,8 @@ Each release file also has <file>.vsig: the Ed25519 signature of
     UTF-8("huginn-muninn release v1" "\n" version "\n" file name "\n" lowercase hex SHA-256 of the file)
 An app builds that text from the release tag it is installing (v0.97 -> "0.97"), the file's name and the SHA-256 of
 what it downloaded, so an older signed file posted again under a newer tag doesn't check out. It installs only a
-version newer than its own. Vectors: "versioned" (signatures) and "newer" (which versions may be installed).
+version newer than its own, by order() below (a stable version is newer than its own betas). A pre-release's
+"version" is its label ("0.99 beta 12"). Vectors: "versioned" (signatures) and "newer" (which versions may be installed).
 """
 import hashlib, json, os
 
@@ -189,13 +190,16 @@ def version_message(version, name, sha_hex):
     return ("%s\n%s\n%s\n%s" % (DOMAIN, version, name, sha_hex)).encode("utf-8")
 
 
-def rank(v):
-    """Versions have one dot and read as decimals (0.3 < 0.31 < 0.4 < 1.0); a test build sits just below its version."""
+def order(v):
+    """Where a version sorts. Versions have one dot and read as decimals (0.3 < 0.31 < 0.4 < 1.0). A pre-release
+    "<version> beta <n>" sits below that version and above every version before it; betas of one version sort by n.
+    A test build ("0.3 Test 1") sorts like a beta. Anything else sorts below everything."""
     import re
-    m = re.match(r"^(\d+)\.(\d+)( Test \d+)?", v)
+    m = re.match(r"^(\d+)\.(\d+)(?: (?:beta|Test) (\d+))?$", v)
     if not m:
-        return 0
-    return (int(m.group(1)) * 1000000 + int((m.group(2) + "000000")[:6])) * 10 + (0 if m.group(3) else 5)
+        return (-1, 0, 0)
+    num = int(m.group(1)) * 1000000 + int((m.group(2) + "000000")[:6])
+    return (num, 0, int(m.group(3))) if m.group(3) else (num, 1, 0)
 
 
 def versioned():
@@ -219,13 +223,20 @@ def versioned():
         case("someone else's key", "0.96", "Muninn.apk", sha, sig, False, RFC[0][1]),
         case("Huginn's zip", "1.2", "Huginn-Windows.zip", other,
              sign(seed, version_message("1.2", "Huginn-Windows.zip", other)).hex(), True),
+        case("signed for 0.99 beta 12", "0.99 beta 12", "Muninn.apk", other,
+             sign(seed, version_message("0.99 beta 12", "Muninn.apk", other)).hex(), True),
+        case("beta 12 posted again as beta 13", "0.99 beta 13", "Muninn.apk", other,
+             sign(seed, version_message("0.99 beta 12", "Muninn.apk", other)).hex(), False),
     ]
 
 
 def newer_cases():
     pairs = [("0.97", "0.96"), ("0.96", "0.96"), ("0.9", "0.96"), ("0.96", "0.96 Test 2"), ("1.0", "0.99"),
-             ("0.31", "0.3"), ("0.3", "0.31"), ("0.4", "0.39")]
-    return [{"tag": t, "current": c, "install": rank(t) > rank(c)} for t, c in pairs]
+             ("0.31", "0.3"), ("0.3", "0.31"), ("0.4", "0.39"),
+             ("0.99 beta 3", "0.98"), ("0.99 beta 7", "0.99 beta 3"), ("0.99 beta 3", "0.99 beta 7"),
+             ("0.99 beta 7", "0.99 beta 7"), ("0.99 beta 10", "0.99 beta 9"), ("0.99", "0.99 beta 7"),
+             ("0.99 beta 12", "0.99"), ("0.98", "0.99 beta 3"), ("1.0 beta 1", "0.99"), ("0.99 beta 1", "0.99 Test 2")]
+    return [{"tag": t, "current": c, "install": order(t) > order(c)} for t, c in pairs]
 
 
 def check(v):
@@ -243,7 +254,7 @@ def check(v):
         if got != c["valid"]:
             raise SystemExit("versioned %r: got %s" % (c["name"], got))
     for c in v["newer"]:
-        if (rank(c["tag"]) > rank(c["current"])) != c["install"]:
+        if (order(c["tag"]) > order(c["current"])) != c["install"]:
             raise SystemExit("newer %r" % c)
 
 

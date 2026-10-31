@@ -23,7 +23,6 @@ Item {
             ["Hide the list", "Ctrl+Shift+L"],
             ["Hide members", "Ctrl+Shift+U"],
             ["Settings", "Ctrl+,"],
-            ["Calls", "Ctrl+Shift+C"],
             ["Scroll a screenful", "Page Up"],
             ["Back", "Esc"] ] },
          { title: "MESSAGES", keys: [

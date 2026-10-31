@@ -45,6 +45,34 @@ release still carries it. `shared/tools/release_sig_ref.py` is the reference and
 `shared/vectors/release-sig-vectors.json` (`versioned` and `newer`); Muninn checks it in `ReleaseSigTest`, Huginn in
 `--release-sig-selftest`.
 
+## Pre-releases
+
+Stable releases are versions like `0.98` (`code/VERSION`). Every push to the `beta` branch builds a pre-release
+labelled `<next> beta <n>`, for example `0.99 beta 12`: `<next>` is `code/BETA` and `<n>` the CI run number.
+
+- **Order.** The number first; for the same number a stable release is newer than any of its betas, and betas
+  compare by `<n>`: 0.98 < 0.99 beta 3 < 0.99 beta 7 < 0.99. A test build (`0.3 Test 1`) sorts like a beta.
+  `release_sig_ref.py` (`order`) is the reference; the `newer` vectors include betas.
+- **One pre-release.** The beta job replaces one GitHub pre-release with the fixed tag `beta` on every push. It holds
+  `Huginn.flatpak`, `Huginn-Windows.zip` and `Muninn.apk`, each with `.sig` and `.vsig`, and `version.txt`: the
+  label, with no newline at the end. Each `.vsig` signs the text above with the label as its version line
+  (`0.99 beta 12`). The beta job signs with the same key and the same checks as the release job, and never deploys
+  the relay. The pre-release is never marked latest.
+- **The channel.** In Labs mode, Settings has an update channel: Stable or Pre-release. On Stable an app never looks
+  at the `beta` tag. On Pre-release it also reads
+  `https://github.com/Ravenor907/Huginn-Muninn/releases/download/beta/version.txt` and installs whichever of the
+  latest release and the pre-release is newest by the order above, with the same four checks (the pre-release's
+  SHA-256 is the one GitHub lists for its file).
+- **Going back to stable.** Labs has "Go back to stable": after the person confirms, the app installs the latest
+  stable release even though it is older than the installed pre-release. It is the only time the newer check is
+  skipped, only for the latest stable release, and every other check still applies. It sets the channel back to
+  Stable and turns Labs mode off.
+- **Android version codes.** A pre-release APK has the same `versionCode` as the stable version in `code/VERSION`
+  (Gradle property `betaLabel` sets only its `versionName`), so going back to stable installs over it without
+  uninstalling. Stable releases keep their usual `versionCode`.
+- **Huginn.** CI passes the label as `-DHUGINN_VERSION_LABEL=<label>` beside `-DHUGINN_VERSION`; empty or missing
+  means a stable build.
+
 If the key is ever lost, the apps can't accept updates signed with a new one. Everyone would have to download
 the new version by hand once. Keep a copy of the private key somewhere safe and offline.
 

@@ -27,19 +27,34 @@ namespace
 const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100";
 const char *kLatestPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest";
 const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/";
+// The one pre-release (Labs' Pre-release channel), always under this tag; its version.txt holds the label.
+const char *kBetaTag = "beta";
 const char *kAppId = "io.github.ravenor907.Huginn";
 // The project's release key (Ed25519, shared/docs/release-key.pem). CI signs every release file with its private half.
 const char *kReleaseKey = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06";
 
-// Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0.
-// A test build ("0.3 Test 1") sits just below its version.
-qint64 rank(const QString &v)
+// Versions have one dot and read as decimals: 0.3 < 0.31 < 0.32 < 0.4 < 1.0. For the same version the betas
+// come first, by number ("0.99 beta 3" < "0.99 beta 12"; an old test build "0.3 Test 1" sorts like a beta), then
+// the stable release itself.
+struct Rank {
+    qint64 number = 0;   // the version as a decimal, six places
+    int kind = 0;        // 1 beta (or an old test build), 2 stable
+    qint64 n = 0;        // the test or beta number
+};
+Rank rank(const QString &v)
 {
-    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^(\\d+)\\.(\\d+)( Test \\d+)?")).match(v);
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("^(\\d{1,6})\\.(\\d{1,6})(?: (Test|beta) (\\d{1,6}))?")).match(v);
     if (!m.hasMatch())
-        return 0;
-    const qint64 frac = (m.captured(2) + QStringLiteral("000000")).left(6).toLongLong();
-    return (m.captured(1).toLongLong() * 1000000 + frac) * 10 + (m.captured(3).isEmpty() ? 5 : 0);
+        return {};
+    Rank r;
+    r.number = m.captured(1).toLongLong() * 1000000 + (m.captured(2) + QStringLiteral("000000")).left(6).toLongLong();
+    if (m.captured(3).isEmpty())
+        r.kind = 2;
+    else {
+        r.kind = 1;   // a test build sorts like a beta
+        r.n = m.captured(4).toLongLong();
+    }
+    return r;
 }
 }
 
@@ -57,6 +72,7 @@ void Updater::startAutoUpdate()
         return;   // a development build updates by rebuilding
     if (m_settings && !m_settings->autoUpdate())
         return;   // "Check for updates automatically" is off: nothing asks GitHub until Check now
+    m_goingBack = false;
     fetch(false, true);
 }
 
@@ -67,14 +83,56 @@ QString Updater::versionFromTag(const QString &tag)
     return m.hasMatch() ? m.captured(1) : QString();
 }
 
+int Updater::compareVersions(const QString &a, const QString &b)
+{
+    const Rank x = rank(a), y = rank(b);
+    if (x.number != y.number)
+        return x.number < y.number ? -1 : 1;
+    if (x.kind != y.kind)
+        return x.kind < y.kind ? -1 : 1;
+    if (x.n != y.n)
+        return x.n < y.n ? -1 : 1;
+    return 0;
+}
+
 bool Updater::newer(const QString &a, const QString &b)
 {
-    return rank(a) > rank(b);
+    return compareVersions(a, b) > 0;
+}
+
+bool Updater::isLabel(const QString &s)
+{
+    static const QRegularExpression re(QRegularExpression::anchoredPattern(QStringLiteral("\\d{1,6}\\.\\d{1,6}( beta [1-9]\\d{0,5})?")));
+    return re.match(s).hasMatch();
+}
+
+QString Updater::labelFor(const QString &tag) const
+{
+    return tag == QLatin1String(kBetaTag) ? m_betaLabel : versionFromTag(tag);
+}
+
+QString Updater::assetName() const
+{
+    return WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral("Huginn.flatpak");
 }
 
 void Updater::check()
 {
+    m_goingBack = false;
     fetch(false);
+}
+
+void Updater::goBackToStable()
+{
+    if (m_busy)
+        return;
+    if (!System::inFlatpak() && !WinUpdate::supported()) {
+        m_status = QStringLiteral("This build updates by rebuilding.");
+        Q_EMIT changed();
+        return;
+    }
+    m_goingBack = true;
+    fetch(true);
 }
 
 QNetworkRequest Updater::request(const QUrl &url) const
@@ -104,12 +162,20 @@ void Updater::fetch(bool installAfter, bool autoMode)
         }
         QString bestVer, bestTag, bestAsset;
         QByteArray bestDigest;
+        const bool pre = !m_goingBack && m_settings && m_settings->preRelease();
+        m_betaDigest.clear();
         for (const QJsonValue &v : QJsonDocument::fromJson(r->readAll()).array()) {
             const QJsonObject rel = v.toObject();
             if (rel.value(QStringLiteral("draft")).toBool())
                 continue;
-            if (rel.value(QStringLiteral("prerelease")).toBool())
+            if (rel.value(QStringLiteral("prerelease")).toBool()) {
+                // The Pre-release channel only: GitHub's SHA-256 of the beta release's file, when it lists one.
+                if (pre && rel.value(QStringLiteral("tag_name")).toString() == QLatin1String(kBetaTag))
+                    for (const QJsonValue &a : rel.value(QStringLiteral("assets")).toArray())
+                        if (a.toObject().value(QStringLiteral("name")).toString() == assetName())
+                            m_betaDigest = WinUpdate::parseDigest(a.toObject().value(QStringLiteral("digest")).toString().toLatin1());
                 continue;
+            }
             const QString tag = rel.value(QStringLiteral("tag_name")).toString();
             if (!tag.startsWith(QLatin1Char('v')))   // Muninn (the phone app) releases are muninn-v…
                 continue;
@@ -134,7 +200,33 @@ void Updater::fetch(bool installAfter, bool autoMode)
             }
         }
         m_assetDigest = bestDigest;
+        if (pre) {
+            fetchBeta(bestVer, bestTag, bestAsset, installAfter, autoMode);
+            return;
+        }
         chosen(bestVer, bestTag, bestAsset, installAfter, autoMode);
+    });
+}
+
+void Updater::fetchBeta(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode)
+{
+    m_busy = true;
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QStringLiteral("/version.txt")));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply *r = m_net.get(req);
+    connect(r, &QNetworkReply::finished, this, [this, r, ver, tag, asset, installAfter, autoMode] {
+        r->deleteLater();
+        m_busy = false;
+        const QString label = r->error() == QNetworkReply::NoError ? QString::fromUtf8(r->read(64)).trimmed() : QString();
+        // A beta newer than the newest stable release (or no stable one found): that one.
+        if (isLabel(label) && (tag.isEmpty() || newer(label, ver))) {
+            m_betaLabel = label;
+            m_assetDigest = m_betaDigest;   // may be empty: then the file's own SHA-256, bound by .sig and .vsig
+            chosen(label, QString::fromLatin1(kBetaTag), QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QLatin1Char('/') + assetName(),
+                   installAfter, autoMode);
+            return;
+        }
+        chosen(ver, tag, asset, installAfter, autoMode);
     });
 }
 
@@ -153,13 +245,20 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
         const QString tag = m.hasMatch() ? m.captured(1) : QString();
         const QString ver = versionFromTag(tag);
         if (ver.isEmpty()) {
+            m_goingBack = false;
             m_status = QStringLiteral("Couldn't reach GitHub. Check the connection.");
             Q_EMIT changed();
             return;
         }
         // Every release carries Huginn.flatpak (see .github/workflows/build.yml).
         m_assetDigest.clear();   // the page doesn't say; the .sha256 file beside the zip does
-        chosen(ver, tag, QString::fromLatin1(kDownload) + tag + (WinUpdate::supported() ? QStringLiteral("/") + WinUpdate::assetName() : QStringLiteral("/Huginn.flatpak")), installAfter, autoMode);
+        const QString asset = QString::fromLatin1(kDownload) + tag + (WinUpdate::supported() ? QStringLiteral("/") + WinUpdate::assetName() : QStringLiteral("/Huginn.flatpak"));
+        if (!m_goingBack && m_settings && m_settings->preRelease()) {
+            m_betaDigest.clear();
+            fetchBeta(ver, tag, asset, installAfter, autoMode);
+            return;
+        }
+        chosen(ver, tag, asset, installAfter, autoMode);
     });
 }
 
@@ -170,6 +269,7 @@ void Updater::chosen(const QString &bestVer, const QString &bestTag, const QStri
     m_assetUrl = bestAsset;
     if (installAfter) {
         if (bestTag.isEmpty()) {
+            m_goingBack = false;
             m_status = QStringLiteral("No release found on GitHub.");
             Q_EMIT changed();
             return;
@@ -190,13 +290,14 @@ void Updater::install()
 {
     if (m_busy || m_assetUrl.isEmpty())
         return;
+    m_goingBack = false;
     download(m_assetUrl, m_latestTag);
 }
 
 void Updater::download(const QString &url, const QString &tag)
 {
     m_busy = true;
-    m_status = QStringLiteral("Downloading Huginn %1…").arg(versionFromTag(tag));
+    m_status = QStringLiteral("Downloading Huginn %1…").arg(labelFor(tag));
     Q_EMIT changed();
     QNetworkRequest req = request(QUrl(url));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -206,6 +307,7 @@ void Updater::download(const QString &url, const QString &tag)
         if (r->error() != QNetworkReply::NoError) {
             m_busy = false;
             m_auto = false;
+            m_goingBack = false;
             m_status = QStringLiteral("The download failed. Try again.");
             Q_EMIT changed();
             return;
@@ -217,6 +319,7 @@ void Updater::download(const QString &url, const QString &tag)
         if (!f.open(QIODevice::WriteOnly)) {
             m_busy = false;
             m_auto = false;
+            m_goingBack = false;
             m_status = QStringLiteral("Couldn't save the update.");
             Q_EMIT changed();
             return;
@@ -245,6 +348,7 @@ void Updater::installFlatpak(const QString &path)
         m_busy = false;
         if (st != QProcess::NormalExit || code != 0) {
             m_auto = false;
+            m_goingBack = false;
             m_status = QStringLiteral("Installing the update failed.");
             Q_EMIT changed();
             return;
@@ -262,6 +366,7 @@ void Updater::failed(const QString &status)
 {
     m_busy = false;
     m_auto = false;
+    m_goingBack = false;
     m_status = status;
     Q_EMIT changed();
 }
@@ -270,7 +375,7 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
 {
     m_status = QStringLiteral("Checking the download…");
     Q_EMIT changed();
-    const QString name = WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral("Huginn.flatpak");
+    const QString name = assetName();
     auto get = [this, tag](const QString &file) {
         QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + file));
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -288,6 +393,14 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
             const QByteArray vsig = vs->error() == QNetworkReply::NoError ? vs->read(256) : QByteArray();
             if (!m_assetDigest.isEmpty()) {
                 checkThenInstall(path, tag, name, m_assetDigest, sig, vsig);
+                return;
+            }
+            // The beta release with no digest from the API: the file's own SHA-256. .sig still has to sign these
+            // bytes and .vsig this SHA-256 with the label, so nothing unsigned gets through.
+            if (tag == QLatin1String(kBetaTag)) {
+                QFile f(path);
+                const QByteArray own = f.open(QIODevice::ReadOnly) ? QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex() : QByteArray();
+                checkThenInstall(path, tag, name, own, sig, vsig);
                 return;
             }
             // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
@@ -324,18 +437,25 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
         failed(QStringLiteral("This update isn't signed with the project's key, so it wasn't installed."));
         return;
     }
-    // The version signed in .vsig must be the one this release's tag names, and newer than this copy: an older
-    // signed file posted again under a newer tag is never installed.
-    const QString version = versionFromTag(tag);
+    // The version signed in .vsig must be the one this release's tag names (the beta release: its version.txt label),
+    // and newer than this copy: an older signed file posted again under a newer tag is never installed.
+    const QString version = labelFor(tag);
     if (version.isEmpty() || !versionSignedBy(version, name, got, vsig, QByteArray::fromHex(kReleaseKey))) {
         qWarning("update: no valid version signature (%d bytes of .vsig)", int(vsig.size()));
         QFile::remove(path);
         failed(QStringLiteral("This update's version isn't signed with the project's key, so it wasn't installed."));
         return;
     }
-    if (!newer(version, m_current)) {
+    // Go back to stable (asked on screen) is the one install that may be older; it's still a stable release.
+    const bool goingBack = m_goingBack && tag != QLatin1String(kBetaTag);
+    if (!goingBack && !newer(version, m_current)) {
         QFile::remove(path);
         failed(QStringLiteral("This update isn't newer than the Huginn you have, so it wasn't installed."));
+        return;
+    }
+    if (goingBack && beforeGoingBack && !beforeGoingBack()) {
+        QFile::remove(path);
+        failed(QStringLiteral("Unlock Huginn first, then try again."));
         return;
     }
     if (!WinUpdate::supported()) {
@@ -346,8 +466,10 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
     Q_EMIT changed();
     WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
         m_busy = false;
-        if (!ok)
+        if (!ok) {
             m_auto = false;
+            m_goingBack = false;
+        }
         m_status = msg;
         Q_EMIT changed();
         if (ok)
@@ -430,6 +552,32 @@ bool Updater::selfTest(const QString &vectorsPath)
             }
         }
         ok = ok && vok;
+    }
+    // Pre-release labels (Labs): numeric version first, a stable release above its betas, betas by number.
+    {
+        const char *const order[] = {"0.97", "0.98 Test 1", "0.98", "0.99 beta 3", "0.99 beta 7", "0.99 beta 12", "0.99", "0.991 beta 1", "1.0 beta 1", "1.0"};
+        const int count = int(sizeof(order) / sizeof(order[0]));
+        bool lok = true;
+        for (int i = 0; i < count; ++i)
+            for (int j = 0; j < count; ++j) {
+                const int want = i < j ? -1 : i > j ? 1 : 0;
+                if (compareVersions(QString::fromLatin1(order[i]), QString::fromLatin1(order[j])) != want) {
+                    fprintf(stderr, "release-sig self-test: \"%s\" against \"%s\" is in the wrong order\n", order[i], order[j]);
+                    lok = false;
+                }
+            }
+        const char *const good[] = {"0.98", "0.99 beta 12", "1.0 beta 1"};
+        const char *const bad[] = {"", "0.99 beta", "0.99 beta 0", "0.99 Beta 3", "0.99 beta 3 ", "v0.99", "0.99 beta 3\n1"};
+        for (const char *g : good)
+            lok = lok && isLabel(QString::fromLatin1(g));
+        for (const char *b : bad)
+            lok = lok && !isLabel(QString::fromLatin1(b));
+        // A beta's .vsig signs its label as the version line.
+        lok = lok && versionMessage(QStringLiteral("0.99 beta 12"), QStringLiteral("Huginn.flatpak"), QByteArrayLiteral("AB"))
+                         == QByteArrayLiteral("huginn-muninn release v1\n0.99 beta 12\nHuginn.flatpak\nab");
+        if (!lok)
+            fprintf(stderr, "release-sig self-test: pre-release labels FAILED\n");
+        ok = ok && lok;
     }
     // The built-in project key is a real Ed25519 key, and refuses a signature it didn't make.
     const QByteArray key = QByteArray::fromHex(kReleaseKey);

@@ -71,17 +71,18 @@ val Corner: androidx.compose.ui.graphics.Shape get() = LookShapes.corner
 /**
  * One slim row: the raven, the MUNINN wordmark (or a tab's [title]), then [trailing] (icon-only buttons). The wordmark takes
  * only the space left beside the buttons and shrinks to fit it, so the two never collide.
- * [onLogo]: taps on the raven (the lock screen counts them). No ripple and nothing announced.
+ * [onLogo]: taps on the raven (Settings counts them, for Labs). No ripple and nothing announced.
+ * [centered]: the wordmark sits in the middle of the row (the chat list, with only the Settings button beside it).
  */
 @Composable
-fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", trailing: @Composable RowScope.() -> Unit = {}) {
+fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", centered: Boolean = false, trailing: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().bar().heightIn(min = 64.dp).padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         val tap by androidx.compose.runtime.rememberUpdatedState(onLogo)
         val logo = Modifier.size(30.dp).then(if (onLogo != null) Modifier.pointerInput(Unit) { detectTapGestures(onTap = { tap?.invoke() }) } else Modifier)
         Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = logo)
         Spacer(Modifier.width(10.dp))
-        FitLine(title, Type.title, Modifier.weight(1f))
+        FitLine(title, Type.title, Modifier.weight(1f), if (centered) Alignment.Center else Alignment.CenterStart)
         trailing()
     }
 }
@@ -95,8 +96,8 @@ fun IconAction(icon: String, label: String, tint: Color = Palette.text, modifier
 
 /** One line of text that shrinks (down to 60%) to fit its width instead of wrapping or running into its neighbors. */
 @Composable
-fun FitLine(text: String, style: TextStyle, modifier: Modifier = Modifier) {
-    BoxWithConstraints(modifier, contentAlignment = Alignment.CenterStart) {
+fun FitLine(text: String, style: TextStyle, modifier: Modifier = Modifier, align: Alignment = Alignment.CenterStart) {
+    BoxWithConstraints(modifier, contentAlignment = align) {
         val measurer = rememberTextMeasurer()
         val maxW = constraints.maxWidth
         val size = remember(text, style, maxW) {

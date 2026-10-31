@@ -51,10 +51,6 @@ Item {
         pw.text = ""; pw2.text = ""
         saveSecret(t, false)
     }
-    function forgot() {
-        Ui.sure("Erase everything and start over?", "Deletes everything on this PC. Can't be undone.",
-                "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
-    }
     function focusField() { if (!usePattern) pw.forceActiveFocus() }
     onUsePatternChanged: if (visible) Qt.callLater(focusField)
     onVisibleChanged: if (visible) Qt.callLater(focusField)
@@ -147,17 +143,6 @@ Item {
             visible: Gamepad.connected && panel.usePattern
             text: "D-pad moves. A starts and ends. B clears."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
-        }
-        Text {
-            visible: panel.mode === "unlock"
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: "Forgot it? Erase and start over"
-            color: forgotHover.hovered ? Theme.danger : Theme.textMuted
-            font.family: Theme.body; font.pixelSize: Theme.fs(13); font.underline: forgotHover.hovered
-            Accessible.role: Accessible.Button
-            Accessible.name: text
-            HoverHandler { id: forgotHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: panel.forgot() }
         }
         HButton {
             visible: panel.mode === "change"

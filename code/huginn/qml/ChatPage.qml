@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // Chats, the same as Muninn's. Middle column: the title with + (add someone, my code, a one-time
-// link) and the list's three dots (New folder, Trash), then requests, people in no folder, each
+// link) and the list's three dots (New folder, Trash, and the Labs entries), then requests, people in no folder, each
 // folder as a section that folds away (like Discord categories), and at the very bottom the Nearby
 // room and people around you. Every person has one menu (PeopleActions.contactMenu): their three
 // dots, a right click, LT or X. Main column: the open conversation (name, Call and the same menu in
@@ -1086,14 +1086,19 @@ Rectangle {
             else if (a === "once") PeopleActions.inviteLink()
         })
     }
-    // The list's three dots: New folder and Trash.
+    // The list's three dots: New folder and Trash; Report a bug in Labs mode; Labs reports on the Huginn with the Labs key.
     function listMenu() {
         if (locked) return
         const n = Chat.trash.length
-        Ui.pickFrom("Chats", [{ header: "", items: [{ name: "New folder", icon: "folder", url: "folder" },
-                                                     { name: "Trash", icon: "close", detail: n ? String(n) : "", url: "trash" }] }], a => {
+        const items = [{ name: "New folder", icon: "folder", url: "folder" },
+                       { name: "Trash", icon: "close", detail: n ? String(n) : "", url: "trash" }]
+        if (Settings.labs) items.push({ name: "Report a bug", icon: "info", url: "report" })
+        if (Labs.inbox) items.push({ name: "Labs reports", icon: "file", detail: Labs.reports.length ? String(Labs.reports.length) : "", url: "labs" })
+        Ui.pickFrom("Chats", [{ header: "", items: items }], a => {
             if (a === "folder") newFolder("")
             else if (a === "trash") openTrash()
+            else if (a === "report") Ui.main.openReport()
+            else if (a === "labs") Ui.main.openLabsReports()
         })
     }
     function addSomeone() {

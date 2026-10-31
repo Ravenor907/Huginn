@@ -36,6 +36,9 @@ object Photos {
         }
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
+    /** A Labs screenshot: 1280 px on the long side, at most 300 KB, a plain JPEG with no metadata. Null if it can't be made. */
+    fun screenshot(b: Bitmap): ByteArray? = try { scrub(encode(scale(b, 1280), 300 * 1024)) } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
+
     private fun scale(b: Bitmap, side: Int): Bitmap {
         val long = maxOf(b.width, b.height)
         if (long <= side) return b

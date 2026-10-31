@@ -14,6 +14,11 @@ val versionParts = Regex("""^(\d+)\.(\d+)$""").find(versionText)?.groupValues
     ?: error("VERSION must look like 0.3 or 0.31, not \"$versionText\"")
 // Same ranking as the in-app updater, so every release installs over the one before it.
 val versionNumber = ((versionParts[1].toLong() * 1_000_000 + (versionParts[2] + "000000").take(6).toLong()) * 10 + 5).toInt()
+// A pre-release build (-PbetaLabel="0.99 beta 12", from CI on the beta branch): the label is its versionName, and its
+// versionCode stays the stable one above, so going back to stable installs over it without uninstalling.
+val betaLabel = (project.findProperty("betaLabel") as String?)?.trim()?.takeIf { it.isNotEmpty() }?.also {
+    if (!Regex("""^\d+\.\d+ beta \d+$""").matches(it)) error("betaLabel must look like \"0.99 beta 12\", not \"$it\"")
+}
 
 // Calls: libopus, built from source with the NDK (Android's own Opus encoder only exists from Android 10).
 // Pinned version and SHA-256; fetched once into build/opus by fetchOpus, built by src/main/cpp/CMakeLists.txt.
@@ -52,7 +57,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = versionNumber
-        versionName = versionText
+        versionName = betaLabel ?: versionText
         // Native code (libopus, the Kids' TV voice library) is built for phones, tablets and TVs (ARM). The debug
         // build adds x86_64 for emulators; -PciAbi=x86_64 builds only that one, for a fast test build.
         externalNativeBuild { cmake { arguments += listOf("-DOPUS_SRC=${opusSrc.absolutePath}", "-DANDROID_STL=c++_static",
