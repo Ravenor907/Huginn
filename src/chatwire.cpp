@@ -45,7 +45,7 @@ QStringList ChatWire::capsOf(const QJsonObject &o, bool *present)
         *present = v.isString();
     QStringList out;
     for (const QString &t : v.toString().split(QLatin1Char(' '), Qt::SkipEmptyParts))
-        // Muninn sends more than 16 tokens from 0.95 (s1 is its 17th): keep up to 32.
+        // Muninn sends 20 tokens from 0.95: keep up to 32.
         if (t.size() <= 8 && !out.contains(t) && out.size() < 32)
             out << t;
     return out;

@@ -251,12 +251,15 @@ int Vault::waitSeconds() const
     const qint64 mono = sinceStart(), started = QDateTime::currentMSecsSinceEpoch() - mono;
     const qint64 at = settings().value(QStringLiteral("vault/at"), 0).toLongLong();
     const qint64 was = settings().value(QStringLiteral("vault/started"), 0).toLongLong();
-    if (qAbs(started - was) > 120000) {
-        // Restarted, or the clock moved: the whole wait again, from now.
+    if (mono < at - wait) {
+        // Restarted (the time since start-up went back): the whole wait again, from now.
         settings().setValue(QStringLiteral("vault/at"), mono + wait);
         settings().setValue(QStringLiteral("vault/started"), started);
         return int((wait + 999) / 1000);
     }
+    // The clock moved, or the computer slept: the wait runs on time since start-up, so neither changes it.
+    if (qAbs(started - was) > 120000)
+        settings().setValue(QStringLiteral("vault/started"), started);
     const qint64 left = qBound<qint64>(0, at - mono, wait);
     return left > 0 ? int((left + 999) / 1000) : 0;
 }

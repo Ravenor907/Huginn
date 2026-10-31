@@ -36,8 +36,10 @@ class Contacts(context: Context, private val vault: Vault) {
         val old = get(chatKey)
         if (old != null && !old.groupOnly) return
         val mb = mailbox.takeIf { it.length == 64 } ?: old?.mailbox
-        val c = Contact(chatKey, name.take(40).ifBlank { old?.name ?: "Someone" }, mb, verified = false, ratchet = true,
-            groupOnly = true, caps = setOf("r1", "g1", "c1"))
+        // Keep what was already learned about them (caps, the s1 binding, their message limit): a group change
+        // must never forget it, or messages to them go out in a form their app has stopped taking.
+        val c = (old ?: Contact(chatKey, "", mb, verified = false)).copy(name = name.take(40).ifBlank { old?.name ?: "Someone" },
+            mailbox = mb, ratchet = true, groupOnly = true, caps = old?.caps.orEmpty() + setOf("r1", "g1", "c1"))
         if (old == c) return
         _all.value = _all.value.filterNot { it.chatKey == chatKey } + c
         save()

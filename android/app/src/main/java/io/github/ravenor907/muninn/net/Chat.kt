@@ -1785,7 +1785,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** Cap s1: someone whose app proves its routes. A route that can't prove it's them is never used for them. */
-    private fun strict(k: String) = contacts.get(k)?.caps?.contains(Proof.CAP) == true || k in s1Said
+    private fun strict(k: String) = contacts.get(k)?.caps?.contains(Proof.CAP) == true || k in s1Said ||
+        s1Bound.containsKey(k) || _met.value[k]?.caps?.contains(Proof.CAP) == true
 
     private fun otherS1(o: JSONObject, fromKey: String) {
         if (s1Said.size > 2000) s1Said.clear()
