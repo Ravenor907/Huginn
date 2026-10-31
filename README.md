@@ -49,8 +49,9 @@ Both apps share one look: sharp edges, a touch of the old north, and a clean, mo
 - **No account.** You are a key made on your own device, not a phone number or email address. Strangers without your code can't reach you.
 - **Works with or without the internet.** Close by, your devices talk over Wi-Fi and Bluetooth. Apart, sealed messages travel through free public relays.
 - **Relays can't tell who's talking to whom.** Messages go out on their own short connections, padded to a few fixed sizes, so a relay can't link sender and receiver or guess what a message is. Only your internet address shows, unless you use a VPN.
+- **Nearby devices have to prove who they are.** Close by, a phone or computer counts as your contact only when it proves it with their key.
 - **Your address stays yours on calls.** Calls with people you haven't chosen to trust go through a relay, so they never see your internet address.
-- **A lock that's hard to guess.** A pattern or password opens the app, and everything it keeps is encrypted. On a phone the lock is tied to its security chip, and on a computer it's built to be very slow to guess. Panic lock locks it all in a moment.
+- **A lock that's hard to guess.** A pattern or password opens the app, and everything it keeps is encrypted. Your lock is very slow to guess, even on a powerful computer, and new locks need at least 6 dots or characters. Panic lock locks it all in a moment.
 - **Safe moves and links.** Move here works only on your home Wi-Fi, and linked devices are checked with 4 emoji on both screens.
 - **Messages don't stay forever.** Chats delete messages, photos, voice clips, videos and files after 7 days on every device, and backups leave them out. Family and Work chats can keep them up to 30 days. Relays are told to drop them when that time is up too.
 - **Checked top to bottom.** For 0.95 both apps were gone through for security problems and made tighter.
