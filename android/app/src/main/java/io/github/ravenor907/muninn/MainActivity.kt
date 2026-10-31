@@ -535,8 +535,10 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.size(44.dp)
                 .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
                 .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-                if (open) Box(Modifier.size(44.dp).background(androidx.compose.ui.graphics.Brush.radialGradient(
-                    listOf(Palette.goldBright.copy(alpha = 0.16f), androidx.compose.ui.graphics.Color.Transparent))))
+                // Centred on the knot's weight, a touch below the middle of the button.
+                if (open) Box(Modifier.size(48.dp).offset(y = 1.dp).background(androidx.compose.ui.graphics.Brush.radialGradient(
+                    0f to Palette.goldBright.copy(alpha = 0.35f), 0.5f to Palette.goldBright.copy(alpha = 0.12f),
+                    1f to androidx.compose.ui.graphics.Color.Transparent)))
                 // The knot's weight sits low in its picture (wide base, pointed tops): lift it 2dp so it looks centred.
                 Box(Modifier.offset(y = (-2).dp)) { Valknut(28.dp) }
             }
