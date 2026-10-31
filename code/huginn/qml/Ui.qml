@@ -28,7 +28,8 @@ QtObject {
     function openPage(name, args) { main.openPage(name, args || {}) }
     // Back out of a page: to the rail, or from Contacts back to Settings.
     function closePage() { main.closePage() }
-    function pickFrom(title, sections, cb) { picker.openList(title, sections, cb) }
+    // back: the menu a sub-page came from (B and the arrow go back to it).
+    function pickFrom(title, sections, cb, back) { picker.openList(title, sections, cb, back) }
     function say(text, bad) { if (toast) toast.show(text, bad) }
     function ask(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) { prompt.open(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) }
     // The same with a row of choices under the field: cb(text, choice).

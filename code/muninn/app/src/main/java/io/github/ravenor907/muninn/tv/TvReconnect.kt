@@ -13,14 +13,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * A parent who wiped or reinstalled their phone gets back onto the Kids' TV (cap k6, shared/docs/protocol-0.6.md 7.11).
+ * Cap k6 (shared/docs/protocol-0.6.md 7.11): a phone asks to look after a Kids' TV with a "Connect a parent" code
+ * (the TV's contact code with "tv":2 and a token of its own). The TV warns every parent (`ask`), any parent can
+ * Approve or Block, and after 24 hours with no block the new phone takes over (`orphan`).
  *
- * On the TV a parent holds OK for 5 seconds on "Connect a parent", and the TV shows a code: its contact code with "tv":2
- * and a token of its own (an hour, once). The parent's phone scans it and sends `rejoin`. The TV then warns every parent
- * (`ask`, on every route, the internet included, again every 6 hours) and shows a banner. Any parent can Approve (one tap:
- * the new phone is added, nobody is taken off) or Block (it stops). If nobody blocks within 24 hours, the TV sends the
- * new phone `orphan` with its signed config, and takes the new phone's next config as its only parent: the old parents
- * go. That takeover is the only path that removes anyone.
+ * The kids' TV shows no such code and has no parent screens: another parent is added from a parent's phone
+ * (TvParent.addParent), and a TV whose parent phones are all lost is started over by clearing Muninn's data on
+ * the TV. With no token issued the TV refuses every `rejoin`; the parent side still answers a TV's `ask`.
  */
 object TvReconnect {
     const val CAP = "k6"
@@ -38,7 +37,7 @@ object TvReconnect {
     data class Request(val tv: String, val k: String, val n: String)
 
     private val _joiner = MutableStateFlow<Joiner?>(null)
-    /** On the TV: the reconnect waiting (for the banner). */
+    /** On the TV: the reconnect waiting. */
     val joiner: StateFlow<Joiner?> = _joiner.asStateFlow()
     private val _requests = MutableStateFlow<List<Request>>(emptyList())
     /** For the parent's screens: TVs waiting on this phone's Approve or Block. */
@@ -79,16 +78,6 @@ object TvReconnect {
     /** The new phone takes over only when nobody blocked and [WAIT_MS] went by since it asked. */
     fun takeoverDue(at: Long, now: Long, blocked: Boolean): Boolean = !blocked && now - at >= WAIT_MS
 
-    /** The TV's "Connect a parent" code: its contact code (no invite) with "tv":2 and a fresh token of its own. */
-    fun code(app: Muninn): String {
-        this.app = app
-        token = java.util.UUID.randomUUID().toString().replace("-", "")
-        tokenUntil = System.currentTimeMillis() + TOKEN_MS
-        val code = Contacts.code(app.identity.username, app.identity.publicKey, app.nostr.publicKey)
-        val o = JSONObject(String(Base64.getUrlDecoder().decode(code.removePrefix(Contacts.PREFIX)), Charsets.UTF_8)).put("tv", CODE_TV).put("r", token)
-        return Contacts.PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))
-    }
-
     /** (TV key, token) in a "Connect a parent" code, else null. */
     fun keyIn(text: String): Pair<String, String>? {
         val i = text.indexOf(Contacts.PREFIX)
@@ -127,10 +116,7 @@ object TvReconnect {
     /** The newcomer may sign the TV's next config by themselves: 24 hours went by and nobody blocked. */
     fun orphanFrom(k: String) = _joiner.value?.let { it.k == k && it.orphan } == true
 
-    /**
-     * The TV was disconnected: whoever was waiting to look after it goes (the banner with them), and the last
-     * "Connect a parent" code stops working, so nobody from before can take over the TV once a new parent pairs it.
-     */
+    /** The TV was disconnected: whoever was waiting to look after it goes, and no token is left to take. */
     fun clear(a: Muninn) {
         app = a
         token = ""; tokenUntil = 0L
@@ -150,7 +136,7 @@ object TvReconnect {
         val b = Tv.bridge(app) ?: return false
         when (t) {
             "rejoin" -> {
-                // Only with the token of a code this TV showed after the 5-second hold, once, within the hour.
+                // Only with the token of a code this TV showed, once, within the hour (the kids' TV shows none).
                 if (token.isEmpty() || o.getString("r") != token || System.currentTimeMillis() > tokenUntil || fromKey in parents) return false
                 token = ""
                 if (_joiner.value != null) return true   // one at a time

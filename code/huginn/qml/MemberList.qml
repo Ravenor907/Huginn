@@ -3,8 +3,9 @@ import Huginn
 
 // A group's member list, on the right like Discord: who's in a voice room, who's online (Active
 // status, cap m1), who's idle (was online in the last half hour) and everyone else, each with a dot
-// that says it and a line that says it in words. A click opens their profile card. The controller
-// moves through `ordered` (GroupPage's members zone).
+// that says it and a line that says it in words. A click, a right click, the three dots, A or LT
+// open the member's one menu (GroupPage.memberMenu). The controller moves through `ordered`
+// (GroupPage's members zone).
 Rectangle {
     id: list
     property var host: null                 // GroupPage
@@ -72,7 +73,7 @@ Rectangle {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 bottomPadding: Theme.px(8)
-                text: "Active status is off, so nobody shows as online. Settings › Lock and privacy."
+                text: "Active status is off."
                 color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
@@ -149,7 +150,7 @@ Rectangle {
         }
         Column {
             anchors.left: mface.right; anchors.leftMargin: Theme.px(12)
-            anchors.right: crown.visible ? crown.left : parent.right; anchors.rightMargin: Theme.px(6)
+            anchors.right: crown.visible ? crown.left : memMore.left; anchors.rightMargin: Theme.px(6)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
             Text {
@@ -171,25 +172,29 @@ Rectangle {
         Icon {
             id: crown
             visible: !!mr.person.owner || !!mr.person.admin
-            anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+            anchors.right: memMore.left; anchors.rightMargin: Theme.px(4)
             anchors.verticalCenter: parent.verticalCenter
             name: mr.person.owner ? "crown" : "shield"; size: Theme.px(15)
             color: mr.person.owner ? Theme.accent : Theme.textMuted
         }
         HoverHandler { id: memHover; cursorShape: Qt.PointingHandCursor }
+        // A click, a right click or a hold: the member's menu, the same as the three dots and LT.
         TapHandler {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
-            onTapped: (point, button) => {
-                if (!list.host) return
-                list.host.zone = "members"; list.host.memRow = mr.at
-                // A right click: the person panel for a contact, the group's member options otherwise.
-                if (button === Qt.RightButton) {
-                    if (!mr.person.me && (list.tour || Chat.isContact(mr.person.key))) Ui.showPerson(mr.person.key, mr.person.name, { tour: list.tour, more: list.tour ? null : () => list.host.memberOptions(mr.person) })
-                    else list.host.memberOptions(mr.person)
-                }
-                else list.host.showMember(mr.person)
-            }
-            onLongPressed: if (!mr.person.me && list.host && !list.tour && Chat.isContact(mr.person.key)) Ui.showPerson(mr.person.key, mr.person.name, {})
+            onTapped: mr.openMenu()
+            onLongPressed: mr.openMenu()
+        }
+        function openMenu() {
+            if (!list.host) return
+            list.host.zone = "members"; list.host.memRow = mr.at
+            list.host.memberMenu(mr.person)
+        }
+        MoreButton {
+            id: memMore
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
+            anchors.verticalCenter: parent.verticalCenter
+            label: "More for " + (mr.person.name || "")
+            onClicked: mr.openMenu()
         }
     }
 }

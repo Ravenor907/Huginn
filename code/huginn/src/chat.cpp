@@ -2932,7 +2932,7 @@ QVariantList Chat::around() const
 
 QVariantList Chat::people() const
 {
-    // Settings › Contacts: in touch, met close by, and blocked.
+    // Contacts: in touch, met close by, and blocked.
     QVariantList out;
     QSet<QString> seen;
     // "Nickname (their name)" when there's a nickname.

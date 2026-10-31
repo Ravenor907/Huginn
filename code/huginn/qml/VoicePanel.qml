@@ -3,7 +3,7 @@ import QtQuick.Shapes
 import Huginn
 
 // You, at the bottom left under the rail and the list, like Discord: your picture, name and status
-// (a click opens your card, MeCard.qml) with Mute, Deafen and Settings. In a voice room or group
+// (a click opens your card, MeCard.qml) with Mute and Deafen (Settings is on the rail). In a voice room or group
 // call it grows a top part: which room, who you're talking with (a gold ring while they talk,
 // dimmed while muted), push to talk, Share and Leave.
 Rectangle {
@@ -166,7 +166,7 @@ Rectangle {
         Rectangle { width: parent.width; height: 1; color: Theme.line }
     }
 
-    // You: picture, name and status (a click opens your card), then Mute, Deafen and Settings.
+    // You: picture, name and status (a click opens your card), then Mute and Deafen.
     Item {
         id: me
         anchors.bottom: parent.bottom
@@ -227,44 +227,6 @@ Rectangle {
                 icon: panel.deafened ? "deafened" : "headphones"; label: (panel.deafened ? "Undeafen" : "Deafen") + " (Ctrl+Shift+D)"; lit: panel.deafened
                 enabled: panel.inVoice
                 onClicked: Rooms.toggleDeafen()
-            }
-            // Settings: the valknut.
-            Rectangle {
-                width: Theme.px(32); height: width
-                radius: Theme.radius
-                color: "transparent"
-                Accessible.role: Accessible.Button
-                Accessible.name: "Settings (Ctrl+,)"
-                Accessible.onPressAction: Ui.openPage("settings", {})
-                // Settings: no tile behind the knot. Open, a small soft glow comes from its centre.
-                Shape {
-                    visible: setHover.hovered || (Ui.main && Ui.main.section === "settings")
-                    opacity: Ui.main && Ui.main.section === "settings" ? 1 : 0.6
-                    anchors.centerIn: parent
-                    width: Theme.px(36); height: width
-                    preferredRendererType: Shape.CurveRenderer
-                    ShapePath {
-                        strokeColor: "transparent"
-                        fillGradient: RadialGradient {
-                            centerX: Theme.px(18); centerY: centerX; centerRadius: centerX; focalX: centerX; focalY: centerX
-                            GradientStop { position: 0.0; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.28) }
-                            GradientStop { position: 0.5; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.08) }
-                            GradientStop { position: 1.0; color: "transparent" }
-                        }
-                        PathAngleArc { centerX: Theme.px(18); centerY: centerX; radiusX: centerX; radiusY: centerX; startAngle: 0; sweepAngle: 360 }
-                    }
-                }
-                Image {
-                    anchors.centerIn: parent
-                    anchors.verticalCenterOffset: -Theme.px(2.5)
-                    source: "assets/valknut.png"
-                    width: Theme.px(20); height: width
-                    sourceSize.width: 64; sourceSize.height: 64
-                    smooth: true; mipmap: true
-                }
-                HoverHandler { id: setHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: Ui.openPage("settings", {}) }
-                Tip { shown: setHover.hovered; text: "Settings (Ctrl+,)" }
             }
         }
     }

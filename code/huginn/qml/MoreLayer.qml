@@ -30,14 +30,14 @@ Item {
     // ------------------------------------------------------------- what the page calls
     function attach() {
         if (tour) return
-        if (where === "") { Ui.say("Pictures, videos and polls go to one person or a group. Open a chat first.", true); return }
+        if (where === "") { Ui.say("Open a chat first.", true); return }
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
-            { name: "Pictures from this computer", detail: "Pick several at once: up to 10 go together as an album", url: "files", icon: "image" },
-            { name: "Recent pictures", detail: "The newest in your Pictures folder", url: "recent", icon: "image" },
-            { name: "Video message", detail: "Up to a minute with the camera. You see it before it's sent", url: "record", icon: "play" },
-            { name: "Video file", detail: "An MP4 of up to a minute", url: "videofile", icon: "play" },
-            { name: "Poll", detail: "A question with 2 to 10 answers to pick from", url: "poll", icon: "check" }]
-            .concat(where.indexOf("g:") === 0 || !Chat.isContact(where) ? [] : [{ name: "A file", detail: "Straight to them over the internet, up to 4 GB", url: "file", icon: "file" }]) }], a => {
+            { name: "Pictures from this PC", detail: "Up to 10 as an album", url: "files", icon: "image" },
+            { name: "Recent pictures", url: "recent", icon: "image" },
+            { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
+            { name: "Video file", detail: "MP4, up to a minute", url: "videofile", icon: "play" },
+            { name: "Poll", url: "poll", icon: "check" }]
+            .concat(where.indexOf("g:") === 0 || !Chat.isContact(where) ? [] : [{ name: "A file", detail: "Up to 4 GB", url: "file", icon: "file" }]) }], a => {
                 if (a === "files") pickPictures()
                 else if (a === "recent") recentPicture()
                 else if (a === "record") recordVideo()
@@ -67,11 +67,11 @@ Item {
         function onRecentPicturesReady(pics) {
             if (!layer.wantPictures) return
             layer.wantPictures = false
-            if (!pics.length) { Ui.say("No pictures found. Pictures in your Pictures folder show up here.", true); return }
-            Ui.pickFrom("Send a picture", [{ header: "Newest first. Location and camera details are removed", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
+            if (!pics.length) { Ui.say("No pictures in your Pictures folder.", true); return }
+            Ui.pickFrom("Send a picture", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
                 Ui.pickFrom("Send this picture", [{ header: "", items: [
-                    { name: "Send", detail: "Quick anywhere", url: "normal" },
-                    { name: "High quality", detail: "Sharper. Best close by or on Wi-Fi; up to a minute over the internet", url: "hd" }] }],
+                    { name: "Send", url: "normal" },
+                    { name: "High quality", detail: "Best on the same Wi-Fi", url: "hd" }] }],
                     q => layer.sendPictures([path], q === "hd")))
         }
     }

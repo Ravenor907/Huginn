@@ -27,7 +27,10 @@ import java.util.concurrent.TimeUnit
  * after Muninn has installed itself once, Android 12 and newer let later updates go in without asking.
  */
 object TvUpdate {
-    /** What the TV screen shows: a confirm waiting for OK on the remote, or a note for a parent. */
+    /**
+     * What the TV screen shows: a confirm waiting for OK on the remote. [needsParent]: a new Muninn waits
+     * until a parent asks the TV, from their phone, to allow installs.
+     */
     data class State(val confirm: Intent? = null, val needsParent: Boolean = false, val status: String = "")
     val state = MutableStateFlow(State())
     private val timer = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-update").apply { isDaemon = true } }
@@ -64,7 +67,7 @@ object TvUpdate {
 
     /** Installs [apk] with a session; without the "install unknown apps" permission it waits for a parent. */
     fun install(c: Context, apk: File) {
-        if (!canInstall(c)) { waiting = apk; state.value = State(needsParent = true, status = "A new Muninn is ready. A parent needs to allow updates once."); return }
+        if (!canInstall(c)) { waiting = apk; state.value = State(needsParent = true, status = "Ask a parent"); return }
         waiting = null
         Thread {
             try {
@@ -121,25 +124,28 @@ object TvUpdate {
         try { c.startActivity(i) } catch (_: Exception) {}
     }
 
-    // ------------------------------------------------------------------ the parent's one-time TV setup
+    // ------------------------------------------------------------------ permissions a parent asks for from their phone
 
-    /** One thing a parent turns on once on the TV. [open] goes to it; true when done. */
-    data class Need(val id: String, val title: String, val why: String)
+    /** One thing that is still off on the TV: "mic", "notify", "overlay", "fullscreen" or "install". */
+    data class Need(val id: String)
 
-    /** What's still off. Microphone and notifications are asked for in the app; the rest are Android settings. */
+    /**
+     * What's still off. Microphone and notifications are Android's "Allow" prompts; the rest are Android
+     * settings pages. A parent's phone sees the list in the TV's status (7.13) and asks the TV for each.
+     */
     fun needs(c: Context): List<Need> = buildList {
         if (TvAudio.hasMic(c) && ContextCompat.checkSelfPermission(c, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
-            add(Need("mic", "Allow the microphone", "For calls, voice messages and talking to the TV."))
+            add(Need("mic"))
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            add(Need("notify", "Allow notifications", "So new messages show while something else is on."))
+            add(Need("notify"))
         if (!Settings.canDrawOverlays(c))
-            add(Need("overlay", "Show over other apps", "So a call from a parent comes up over a show or a game."))
+            add(Need("overlay"))
         // "Show over other apps" already lets the call screen open by itself, and many TVs (Google TV) have no
-        // full-screen calls screen at all: only ask for it when the overlay isn't allowed either.
+        // full-screen calls screen at all: only needed when the overlay isn't allowed either.
         if (Build.VERSION.SDK_INT >= 34 && !Settings.canDrawOverlays(c) && c.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == false)
-            add(Need("fullscreen", "Full-screen calls", "So the call screen can open by itself when someone calls."))
+            add(Need("fullscreen"))
         if (!canInstall(c))
-            add(Need("install", "Install updates and apps", "So Muninn can keep itself up to date, and install apps a parent sends."))
+            add(Need("install"))
     }
 
     /**
@@ -166,10 +172,12 @@ object TvUpdate {
         else -> null
     }
 
-    /** What a parent picks on Muninn's app page to turn on the need [id] when Android won't ask any more. */
-    fun howTo(id: String): String = when (id) {
-        "notify" -> "Choose Permissions, then Notifications, then Allow."
-        else -> "Choose Permissions, then Microphone, then Allow."
+    /** The one line the TV shows while it asks for [id] (Android's prompt, or its settings page). */
+    fun line(id: String, settingsPage: Boolean): String = when {
+        id == "mic" && settingsPage -> "Permissions, Microphone, Allow"
+        id == "notify" && settingsPage -> "Permissions, Notifications, Allow"
+        id == "mic" || id == "notify" -> "Press Allow"
+        else -> "Turn on Muninn"
     }
 
     /** Android's "Allow" box for [perm] came up (or was asked for) once on this TV. */
@@ -184,7 +192,7 @@ object TvUpdate {
 
     /**
      * Muninn's own app page in Android's settings (Permissions is on it), for a permission Android won't ask
-     * for any more. Only from For a parent, which takes OK held for 5 seconds. False if the TV has no such page.
+     * for any more. Only when a parent asks from their phone. False if the TV has no such page.
      */
     fun openAppPage(c: Context): Boolean = try {
         c.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", c.packageName, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -192,9 +200,6 @@ object TvUpdate {
     } catch (e: Exception) { false }
 
     private fun prefs(c: Context) = c.applicationContext.getSharedPreferences("muninn-tv", Context.MODE_PRIVATE)
-    /** The setup list comes up by itself once after pairing; after that only from "For a parent". */
-    fun setupShown(c: Context) = prefs(c).getBoolean("setupShown", false)
-    fun markSetupShown(c: Context) = prefs(c).edit().putBoolean("setupShown", true).apply()
 }
 
 /** The PackageInstaller session's answer. */

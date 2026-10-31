@@ -1,10 +1,9 @@
 import QtQuick
 import Huginn
 
-// Calls: everyone you called or who called you, newest first, missed ones marked. A calls back.
-// A call is started from a conversation (LT there, then Call); this page is the history. It also
-// sits inside Settings › Calls and voice › Call history (embedded: no header of its own, Settings
-// has one, and no room left for the voice panel).
+// Calls (on the rail): everyone you called or who called you, newest first, missed ones marked,
+// and Call back. A calls back; LT has Delete and Clear all. A call is started from a chat's Call
+// button or a contact's menu. embedded: no header of its own (for a page that has one).
 Rectangle {
     id: page
     color: Theme.ground
@@ -24,8 +23,8 @@ Rectangle {
     readonly property var picked: entries.length > 0 ? entries[Math.min(row, entries.length - 1)] : null
 
     readonly property var prompts: entries.length === 0 ? [{ key: "b", label: "Back" }]
-        : [{ key: "a", label: "Call back" }, { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
-    readonly property string status: Calls.available ? "" : "Calls aren't available in this build"
+        : [{ key: "a", label: "Call back" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
+    readonly property string status: Calls.available ? "" : "Calls aren't available here"
 
     Component.onCompleted: Calls.markSeen()
 
@@ -58,12 +57,12 @@ Rectangle {
         const e = picked
         if (!e) return
         Ui.pickFrom(nameOf(e), [{ header: "", items: [
-            { name: "Call back", detail: "", url: "call" },
-            { name: "Delete from the list", detail: "Only on this computer", url: "delete" },
-            { name: "Clear all calls", detail: "Only on this computer", url: "clear" } ] }], a => {
+            { name: "Call back", icon: "call", url: "call" },
+            { name: "Delete from the list", url: "delete", danger: true },
+            { name: "Clear all calls", url: "clear", danger: true } ] }], a => {
             if (a === "call") callBack()
             else if (a === "delete") Calls.deleteEntry(e.id)
-            else if (a === "clear") Ui.sure("Clear all calls?", "The list of calls on this computer is emptied. It doesn't change anyone else's.", "Clear", () => Calls.clearHistory(), false, true)
+            else if (a === "clear") Ui.sure("Clear all calls?", "Can't be undone.", "Clear", () => Calls.clearHistory(), false, true)
         })
     }
 
@@ -141,7 +140,10 @@ Rectangle {
                     }
                 }
                 HoverHandler { id: rowHover }
-                TapHandler { onTapped: page.row = index }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onTapped: (point, button) => { page.row = index; if (button === Qt.RightButton) page.options() }
+                }
             }
         }
     }
@@ -173,7 +175,7 @@ Rectangle {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
-                text: page.picked ? page.nameOf(page.picked) : "Encrypted voice calls"
+                text: page.picked ? page.nameOf(page.picked) : "Calls"
                 color: Theme.text
                 font.family: Theme.display
                 font.pixelSize: Theme.fs(22)
@@ -184,9 +186,8 @@ Rectangle {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: page.picked ? page.detail(page.picked)
-                    : "Call the people you chat with, on Huginn or Muninn: open their chat and choose Call. "
-                      + "Close by, the sound goes straight over Wi-Fi or Bluetooth; apart, it goes over the internet, still encrypted end to end."
+                visible: !!page.picked
+                text: page.picked ? page.detail(page.picked) : ""
                 color: page.picked && page.picked.missed ? Theme.danger : Theme.textMuted
                 font.family: Theme.body
                 font.pixelSize: Theme.fs(16)

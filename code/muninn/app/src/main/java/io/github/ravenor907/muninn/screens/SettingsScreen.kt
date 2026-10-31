@@ -37,6 +37,8 @@ import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Panel
+import io.github.ravenor907.muninn.ui.Framed
+import io.github.ravenor907.muninn.ui.NavRow
 import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.ToggleRow
 import io.github.ravenor907.muninn.ui.Type
@@ -57,28 +59,28 @@ object SettingsNav {
     var folder by mutableStateOf("")
     /** A chat page Settings asks for (My code from Your profile): MainActivity opens it on the Chats tab and clears this. */
     var goChat by mutableStateOf("")
+    /** A Settings page a chat page asks for (Linked devices from the chat list): MainActivity opens it and clears this. */
+    var goSettings by mutableStateOf("")
 }
 
-/** One page of Settings: its title, one plain line about it, and the page Back goes to. */
-private class Page(val id: String, val title: String, val detail: String, val parent: String = "")
+/** One page of Settings: its title and the page Back goes to. */
+private class Page(val id: String, val title: String, val parent: String = "")
 
-/** Everything under More settings, in the order shown. Each keeps a single plain line. */
+/** Everything under More, in the order shown. */
 private val MORE = listOf(
-    Page("battery", "Battery details", "How Muninn saves power, and what it used today", "more"),
-    Page("calls", "Calls", "Noise removal on your calls", "more"),
-    Page("nearby", "Close by details", "Bluetooth, Wi-Fi, this phone's name and received files", "more"),
-    Page("link", "Linked devices", "Use Muninn on a tablet or second phone too", "more"),
-    Page("backup", "Backup", "Save your chats to a file only you can open", "more"),
-    Page("tv", "Kids' TV", "Who the TV can call, and noise removal on the TV", "more"),
-    Page("access", "Accessibility", "High contrast, color-blind friendly, less motion", "more"),
-    Page("about", "Updates and about", "Version, check for updates", "more"),
-    Page("trash", "Trash", "Contacts you removed, for 30 days", "more"),
-    Page("erase", "Erase everything", "Removes every chat and contact from this phone", "more"),
+    Page("calls", "Calls", "more"),
+    Page("nearby", "Close by", "more"),
+    Page("link", "Linked devices", "more"),
+    Page("backup", "Backup", "more"),
+    Page("tv", "Kids' TV", "more"),
+    Page("access", "Accessibility", "more"),
+    Page("about", "Updates and about", "more"),
+    Page("erase", "Erase everything", "more"),
 )
 
 private val PAGES = listOf(
-    Page("profile", "Your profile", ""), Page("notify", "Notifications", ""), Page("look", "Look and text size", ""), Page("lock", "Lock and privacy", ""),
-    Page("keep", "Keep messages for", ""), Page("more", "More settings", "Everything else"), Page("lockset", "Change lock", "", "lock"),
+    Page("profile", "Profile"), Page("notify", "Notifications"), Page("look", "Look"), Page("lock", "Lock and privacy"),
+    Page("battery", "Battery"), Page("more", "More"), Page("lockset", "Change lock", "lock"),
 ) + MORE
 
 @Composable
@@ -86,9 +88,12 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val folder = SettingsNav.folder
     val page = PAGES.firstOrNull { it.id == folder }
     androidx.activity.compose.BackHandler(enabled = folder.isNotEmpty()) { SettingsNav.folder = page?.parent ?: "" }
-    // Kids' TV settings and the trash are whole screens of their own.
-    if (folder == "trash") { TrashScreen(app) { SettingsNav.folder = "more" }; return }
-    if (folder.startsWith("tv:")) { io.github.ravenor907.muninn.tv.ParentTvScreen(app, folder.removePrefix("tv:")) { SettingsNav.folder = "tv" }; return }
+    // A Kids' TV's settings are a whole screen of their own: its menu, then each section.
+    if (folder.startsWith("tv:")) {
+        val tvCount = io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState().value.values.count { !it.disconnecting }
+        io.github.ravenor907.muninn.tv.ParentTvScreen(app, folder.removePrefix("tv:"), section = null, onBack = { SettingsNav.folder = if (tvCount > 1) "tv" else "" })
+        return
+    }
     if (folder == "lockset") { ChangeLock(app); return }
     androidx.compose.runtime.key(folder) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
@@ -99,7 +104,6 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             "notify" -> NotifyPage(app)
             "look" -> LookPage(app)
             "lock" -> LockPage(app, onSecure)
-            "keep" -> KeepPage(app)
             "more" -> MorePage()
             "battery" -> BatteryPage(app)
             "calls" -> CallsPage()
@@ -116,41 +120,24 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     }
 }
 
-/** The short list: you (opens Your profile), Link a computer, battery, five rows that open a page each, Nearby as one switch, and More settings. */
+/** The short list: Kids' TV when there is one, then six rows that open a page each. */
 @Composable
 private fun ShortList(app: Muninn) {
-    val id = app.identity
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    Spacer(Modifier.height(6.dp))
-    MeRow(app)
-    PageRow("Link a computer", "Use Muninn on a tablet or second phone too") { SettingsNav.folder = "link" }
-
-    Text("Battery", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 16.dp))
-    var choice by remember { mutableStateOf(BatteryChoice.of(app)) }
-    ChoiceRow(BatteryChoice.entries.size, Modifier.padding(top = 6.dp), minWidth = 96.dp) { i, m ->
-        val c = BatteryChoice.entries[i]
-        MButton(c.title, m, if (choice == c) Kind.Accent else Kind.Normal) { c.apply(app); choice = c }
+    val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
+    val mine = tvs.values.filter { !it.disconnecting }
+    if (mine.isNotEmpty()) io.github.ravenor907.muninn.ui.Framed {
+        NavRow("Kids' TV", if (mine.size == 1) app.chat.nameOf(mine[0].key) else "${mine.size} TVs", icon = "tv") {
+            SettingsNav.folder = if (mine.size == 1) "tv:" + mine[0].key else "tv"
+        }
     }
-    Help(choice?.help ?: "Your own mix, set under More settings › Battery details.")
-
-    Spacer(Modifier.height(12.dp))
-    val notifyOn = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
-    val ra = app.power.rightAwayKeys().size
-    PageRow("Notifications", (if (notifyOn) "On" else "Off") + if (ra > 0) ", $ra right away" else "") { SettingsNav.folder = "notify" }
-    PageRow("Look and text size", "${io.github.ravenor907.muninn.ui.Looks.name(Access.look)}, ${pct(Access.text)} text") { SettingsNav.folder = "look" }
-    PageRow("Lock and privacy", when {
-        !app.vault.hasPassword -> "No lock set. Read receipts, screenshots"
-        app.vault.usesPattern -> "Pattern position: ${posName(id.patternPos)}"
-        else -> "Password, read receipts, screenshots"
-    }) { SettingsNav.folder = "lock" }
-    PageRow("Keep messages for", if (id.deleteAfter in 1 until 7 * DAY) "1 day, every chat" else "7 days, Family and Work up to 30") { SettingsNav.folder = "keep" }
-
-    // Nearby as one switch: on, people close by or on the same Wi-Fi can find you; the details are under More.
-    var nearby by remember { mutableStateOf(id.visibleNearby && id.nearbyChat) }
-    ToggleRow("Find people close by", "Chat and share files with no internet", nearby) {
-        nearby = it; id.visibleNearby = it; id.nearbyChat = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
+    io.github.ravenor907.muninn.ui.Framed {
+        MeRow(app)
+        NavRow("Notifications", icon = "info") { SettingsNav.folder = "notify" }
+        NavRow("Look", icon = "smile") { SettingsNav.folder = "look" }
+        NavRow("Lock and privacy", icon = "lock") { SettingsNav.folder = "lock" }
+        NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "clock") { SettingsNav.folder = "battery" }
+        NavRow("More", icon = "gear") { SettingsNav.folder = "more" }
     }
-    PageRow("More settings", "Everything else") { SettingsNav.folder = "more" }
 }
 
 /** Your picture, name and status at the top of Settings; tap for Your profile. */
@@ -166,24 +153,15 @@ private fun MeRow(app: Muninn) {
         io.github.ravenor907.muninn.ui.Avatar("me", name, 48.dp, showDot = true)
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(name, style = Type.big, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-            Text(line, style = Type.small, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text("Profile · $line", style = Type.small, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }
-        MIcon("forward", Palette.textMuted, 20.dp)
+        MIcon("forward", Palette.textMuted, 18.dp)
     }
 }
 
 /** A row that opens a page: its name, what it's set to, and an arrow. */
 @Composable
-private fun PageRow(title: String, value: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick).padding(vertical = 10.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(title, style = Type.normal.copy(color = Palette.text))
-            if (value.isNotEmpty()) Text(value, style = Type.small)
-        }
-        MIcon("forward", Palette.textMuted, 20.dp)
-    }
-}
+private fun PageRow(title: String, value: String, onClick: () -> Unit) = NavRow(title, value, onClick = onClick)
 
 /** One short help line under something that isn't obvious. */
 @Composable
@@ -197,9 +175,9 @@ private fun posName(p: String) = when (p) { "top" -> "Top"; "middle" -> "Middle"
  * under More settings › Battery details, for anyone who wants their own mix.
  */
 private enum class BatteryChoice(val title: String, val help: String) {
-    FASTEST("Fastest", "Always fully connected. Messages and calls arrive in seconds. Uses the most battery."),
-    BALANCED("Balanced", "Messages and calls still arrive in seconds. Muninn saves power while the screen is off."),
-    EXTREME("Extreme battery saver", "No notifications. Messages arrive when you open Muninn or refresh. Calls ring only while Muninn is open. Nothing runs in the background.");
+    FASTEST("Fastest", "Arrives in seconds. Uses the most."),
+    BALANCED("Balanced", "Arrives in seconds. Saves battery."),
+    EXTREME("Extreme saver", "No notifications. Saves most.");
 
     fun apply(app: Muninn) {
         val p = app.power
@@ -231,76 +209,68 @@ private fun NotifyPage(app: Muninn) {
     val id = app.identity
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var preview by remember { mutableStateOf(id.showPreview) }
-    Panel {
-        if (app.power.extreme) {
-            Text("Extreme battery saver is on", style = Type.normal.copy(color = Palette.text))
-            Text("No notifications. Messages arrive when you open Muninn or refresh. Calls ring only while Muninn is open.", style = Type.small)
-        } else {
-            Text("Messages arrive on time", style = Type.normal.copy(color = Palette.text))
-            Text("Muninn keeps one light connection open, so you hear about messages right away without draining your battery.", style = Type.small)
-        }
-    }
-    Spacer(Modifier.height(8.dp))
-    val on = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
-    PageRow("Notifications", if (on) "On. Tell me when a message or call comes in" else "Off. Turn them on in Android's settings") {
-        try {
-            ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
-        } catch (_: Exception) {}
-    }
+    if (app.power.extreme) Framed { Text("Extreme saver: no notifications.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(vertical = 10.dp)) }
     // Android 14 and newer: without "Full-screen notifications" an incoming call is only a notification.
     var fullOff by remember { mutableStateOf(fullScreenOff(ctx)) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx) }
-    if (fullOff) {
-        Panel(Modifier.padding(bottom = 8.dp)) {
-            Text("Calls can't fill the screen", style = Type.normal.copy(color = Palette.danger))
-            Text("Android isn't letting Muninn show full-screen calls, so an incoming call only shows as a notification, and not over the lock screen.", style = Type.small)
-            MButton("Turn on full-screen calls", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { openFullScreenSetting(ctx) }
+    Framed {
+        val on = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+        PageRow("Notifications", if (on) "On" else "Off") {
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+            } catch (_: Exception) {}
+        }
+        if (fullOff) PageRow("Full-screen calls", "Off. Tap to turn on") { openFullScreenSetting(ctx) }
+        ToggleRow("Show the message", "Off: just “New message”", preview) { preview = it; id.showPreview = it }
+        PageRow("Sound and vibration", "") {
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
+            } catch (_: Exception) {}
         }
     }
-    ToggleRow("Show the message", "Off: only “New message”, not who it's from or what it says", preview) { preview = it; id.showPreview = it }
-    PageRow("Sound and vibration", "Uses the phone's settings for Muninn") {
-        try {
-            ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
-        } catch (_: Exception) {}
-    }
-    RightAwayRow(app)
-    QuietHours(app)
+    Framed("Always right away") { RightAwayRow(app) }
+    Framed("Quiet hours") { QuietHours(app) }
 }
 
 @Composable
 private fun LookPage(app: Muninn) {
     val id = app.identity
-    Text("Look", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
-    val looks = io.github.ravenor907.muninn.ui.Looks.ALL
-    // Two a line; one a line at a large text size, so no name breaks mid-word.
-    ChoiceRow(looks.size, Modifier.padding(top = 6.dp), minWidth = 140.dp, max = 2) { i, m ->
-        val (k, n) = looks[i]
-        MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
+    Framed("Look") {
+        val looks = io.github.ravenor907.muninn.ui.Looks.ALL
+        // Two a line; one a line at a large text size, so no name breaks mid-word.
+        ChoiceRow(looks.size, Modifier.padding(vertical = 8.dp), minWidth = 140.dp, max = 2) { i, m ->
+            val (k, n) = looks[i]
+            MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
+        }
+        if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL && io.github.ravenor907.muninn.ui.Palette.autumn) io.github.ravenor907.muninn.ui.AutumnControls()
     }
-    Help("True black saves a little battery on OLED screens. Light is parchment, like Huginn's. Seasonal follows the time of year: autumn's falling leaves for now.")
-    if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL && io.github.ravenor907.muninn.ui.Palette.autumn) io.github.ravenor907.muninn.ui.AutumnControls()
-    Text("Size of everything", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
-    ChoiceRow(sizes.size, Modifier.padding(top = 6.dp)) { i, m ->
-        val v = sizes[i]; MButton(pct(v), m, if (Access.size == v) Kind.Accent else Kind.Normal) { Access.size = v; id.uiSize = v }
+    Framed("Size of everything") {
+        val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
+        ChoiceRow(sizes.size, Modifier.padding(vertical = 8.dp)) { i, m ->
+            val v = sizes[i]; MButton(pct(v), m, if (Access.size == v) Kind.Accent else Kind.Normal) { Access.size = v; id.uiSize = v }
+        }
     }
-    Text("Text size", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    val texts = listOf(1f, 1.15f, 1.3f, 1.5f)
-    ChoiceRow(texts.size, Modifier.padding(top = 6.dp)) { i, m ->
-        val v = texts[i]; MButton(pct(v), m, if (Access.text == v) Kind.Accent else Kind.Normal) { Access.text = v; id.textSize = v }
+    Framed("Text size") {
+        val texts = listOf(1f, 1.15f, 1.3f, 1.5f)
+        ChoiceRow(texts.size, Modifier.padding(top = 8.dp)) { i, m ->
+            val v = texts[i]; MButton(pct(v), m, if (Access.text == v) Kind.Accent else Kind.Normal) { Access.text = v; id.textSize = v }
+        }
+        Help("Adds to your phone's font size.")
+        Spacer(Modifier.height(8.dp))
     }
-    Help("100% is the usual. Text size adds to your phone's own font size.")
-    PageRow("Accessibility", "High contrast, color-blind friendly, less motion") { SettingsNav.folder = "access" }
+    Framed { PageRow("Accessibility", "") { SettingsNav.folder = "access" } }
 }
 
 @Composable
 private fun AccessPage(app: Muninn) {
     val id = app.identity
-    ToggleRow("High contrast", "White text on black, stronger outlines", Access.contrast) { Access.contrast = it; id.highContrast = it }
-    ToggleRow("Color-blind friendly", "Warnings in amber instead of red; status always says it in words", Access.colorBlind) { Access.colorBlind = it; id.colorBlind = it }
-    ToggleRow("Reduce motion", "No sliding or fading", Access.reduceMotion) { Access.reduceMotion = it; id.reduceMotion = it }
+    Framed {
+        ToggleRow("High contrast", "Stronger outlines", Access.contrast) { Access.contrast = it; id.highContrast = it }
+        ToggleRow("Color-blind friendly", "Amber warnings, status in words", Access.colorBlind) { Access.colorBlind = it; id.colorBlind = it }
+        ToggleRow("Reduce motion", "No sliding or fading", Access.reduceMotion) { Access.reduceMotion = it; id.reduceMotion = it }
+    }
 }
 
 @Composable
@@ -317,59 +287,58 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     var trail by remember { mutableStateOf(id.patternTrail) }
     var privateKeys by remember { mutableStateOf(id.privateKeyboard) }
     var hasLock by remember { mutableStateOf(app.vault.hasPassword) }
-    if (hasLock) {
-        Text("Muninn asks for your ${if (app.vault.usesPattern) "pattern" else "password"} to open. Without it, nothing it keeps can be read, even by Muninn.", style = Type.normal)
-        MButton("Change lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
-        MButton("Turn off the lock", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
-            Ui.sure(Ask("Turn off the lock?", "Anyone who can use this phone could open Muninn and read your chats, contacts and keys. " +
-                "They stay encrypted, but the key sits on the phone beside them, unprotected. Panic lock stops working too.",
-                "Turn off", danger = true) {
+    Framed("Lock") {
+        if (hasLock) PageRow("Change lock", if (app.vault.usesPattern) "Pattern" else "Password") { SettingsNav.folder = "lockset" }
+        else {
+            Text("No lock set.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 10.dp))
+            MButton("Set a lock", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
+        }
+        if (app.vault.usesPattern) {
+            Text("Pattern position", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            val places = listOf("top", "middle", "lower")
+            ChoiceRow(places.size, Modifier.padding(top = 6.dp, bottom = 4.dp)) { i, m ->
+                val p = places[i]; MButton(posName(p), m, if (pos == p) Kind.Accent else Kind.Normal) { pos = p; id.patternPos = p }
+            }
+            ToggleRow("Hide the pattern as I draw", "", !trail) { trail = !it; id.patternTrail = !it }
+        }
+        if (app.vault.hasPassword) {
+            Text("Lock again after", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+            val afters = listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min")
+            ChoiceRow(afters.size, Modifier.padding(top = 6.dp, bottom = 4.dp)) { i, m ->
+                val (ms, label) = afters[i]
+                MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
+            }
+            var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
+            var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
+            ToggleRow("Panic lock", if (onTv) "Lock instantly from the icon" else "Lock instantly from tile or icon", panic) {
+                panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
+            }
+            if (panic && !onTv && io.github.ravenor907.muninn.ui.Panic.canShake(ctx))
+                ToggleRow("Shake to lock", "Shake hard 3 times", shake) { shake = it; io.github.ravenor907.muninn.ui.Panic.setShake(ctx, it) }
+        }
+        // Destructive, so last, red, and asked first.
+        if (hasLock) io.github.ravenor907.muninn.ui.MenuRow("lock", "Turn off the lock", danger = true) {
+            Ui.sure(Ask("Turn off the lock?", "Anyone with this phone can read your chats.", "Turn off", danger = true) {
                 try { app.vault.setPassword(null) } catch (_: Exception) {}
                 hasLock = app.vault.hasPassword
-                if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off. Muninn opens without a pattern or password.") }
+                if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off.") }
             })
         }
-    } else {
-        Text("Muninn opens without a lock. Anyone who can use this phone can open it and read your chats.", style = Type.normal.copy(color = Palette.danger))
-        MButton("Set a lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
     }
-    if (app.vault.usesPattern) {
-        Text("Pattern position", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-        val places = listOf("top", "middle", "lower")
-        ChoiceRow(places.size, Modifier.padding(top = 6.dp)) { i, m ->
-            val p = places[i]; MButton(posName(p), m, if (pos == p) Kind.Accent else Kind.Normal) { pos = p; id.patternPos = p }
-        }
-        Help("Where the dots sit when you unlock or set a pattern. Lower is easiest with one hand.")
-        ToggleRow("Hide the pattern as I draw", "No line and no lit dots while you draw, so nobody watching sees it", !trail) { trail = !it; id.patternTrail = !it }
-    }
-    if (app.vault.hasPassword) {
-        Text("Lock again after Muninn is in the background for", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-        val afters = listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min")
-        ChoiceRow(afters.size, Modifier.padding(top = 6.dp)) { i, m ->
-            val (ms, label) = afters[i]
-            MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
-        }
-        Help("While locked, one notification says new messages are waiting. They open once you unlock.")
-        var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
-        var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
-        ToggleRow("Panic lock", if (onTv) "Lock Muninn at once from its icon's menu. Any call ends and notifications are cleared"
-            else "Lock Muninn in one move from anywhere: the “Lock Muninn” quick settings tile, or “Lock now” when you hold Muninn's icon. Any call ends and notifications are cleared", panic) {
-            panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
-        }
-        if (panic && !onTv) {
-            Help("Add the tile: swipe down twice, tap the pencil, and drag “Lock Muninn” into your tiles.")
-            if (io.github.ravenor907.muninn.ui.Panic.canShake(ctx))
-                ToggleRow("Shake to lock", "Shake the phone hard 3 times while Muninn is open", shake) { shake = it; io.github.ravenor907.muninn.ui.Panic.setShake(ctx, it) }
+    Framed("Privacy") {
+        ToggleRow("Send read receipts", "Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
+        ToggleRow("Active status", "Off: nobody sees it, both ways", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
+        ToggleRow("Block screenshots", "Also hides it in recents", secure) { secure = it; id.secureScreen = it; onSecure() }
+        ToggleRow("Link previews", "The site sees your address", previews) { previews = it; id.linkPreviews = it }
+        ToggleRow("Private keyboard", "Keyboard doesn't learn your typing", privateKeys) {
+            privateKeys = it; id.privateKeyboard = it; io.github.ravenor907.muninn.ui.PrivateKeyboard.on = it
         }
     }
-    Section("Privacy")
-    Text("Everything Muninn keeps on this phone is encrypted, and messages are end-to-end encrypted.", style = Type.small)
-    ToggleRow("Send read receipts", "Off: people don't see when you've read their messages. Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
-    ToggleRow("Active status", "A dot shows contacts when Muninn is open. Off: nobody sees yours, and you don't see theirs", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
-    ToggleRow("Block screenshots", "Also hides Muninn's screen in recent apps", secure) { secure = it; id.secureScreen = it; onSecure() }
-    ToggleRow("Link previews", "Shows a link's title and picture. This phone opens the page, so that site sees your internet address", previews) { previews = it; id.linkPreviews = it }
-    ToggleRow("Private keyboard", "The keyboard doesn't learn what you type. Also turns off voice typing on most keyboards", privateKeys) {
-        privateKeys = it; id.privateKeyboard = it; io.github.ravenor907.muninn.ui.PrivateKeyboard.on = it
+    Framed("Messages") {
+        var shorter by remember { mutableStateOf(id.deleteAfter in 1 until 7 * DAY) }
+        ToggleRow("Delete after 1 day", "Every chat, on both sides", shorter) {
+            shorter = it; val ms = if (it) DAY else 0L; id.deleteAfter = ms; app.chat.pruneSoon()
+        }
     }
 }
 
@@ -383,83 +352,80 @@ private fun ChangeLock(app: Muninn) {
 }
 
 @Composable
-private fun KeepPage(app: Muninn) {
-    val id = app.identity
-    var shorter by remember { mutableStateOf(id.deleteAfter in 1 until 7 * DAY) }
-    Text("Chats keep messages for 7 days. Chats in your Family and Work folders, and Family and Work groups, can keep them up to 30. " +
-        "A chat's own menu can set its days.", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
-    ToggleRow("Shorten all chats to 1 day", "Every message on this phone goes after a day, on both sides of every chat", shorter) {
-        shorter = it; val ms = if (it) DAY else 0L; id.deleteAfter = ms; app.chat.pruneSoon()
-    }
-}
-
-@Composable
 private fun MorePage() {
-    Help("Things most people never need to change.")
-    Spacer(Modifier.height(6.dp))
-    MORE.forEach { p -> PageRow(p.title, p.detail) { SettingsNav.folder = p.id } }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Framed {
+        MORE.filter { it.id != "erase" }.forEach { p -> PageRow(p.title, "") { SettingsNav.folder = p.id } }
+        // Hands Muninn itself to a phone close by (Quick Share or Bluetooth), no internet needed.
+        PageRow("Share the app", "") { io.github.ravenor907.muninn.ui.ShareApp.share(ctx) }
+        MORE.filter { it.id == "erase" }.forEach { p -> PageRow(p.title, "") { SettingsNav.folder = p.id } }
+    }
 }
 
 @Composable
 private fun BatteryPage(app: Muninn) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    var choice by remember { mutableStateOf(BatteryChoice.of(app)) }
     var check by remember { mutableStateOf(app.power.check) }
+    var saver by remember { mutableStateOf(app.power.saver) }
+    var low by remember { mutableStateOf(app.power.lowBatterySave) }
+    var adaptive by remember { mutableStateOf(app.power.adaptive) }
+    var data by remember { mutableStateOf(app.power.dataSaver) }
+    fun reread() { choice = BatteryChoice.of(app); check = app.power.check; saver = app.power.saver; low = app.power.lowBatterySave
+        adaptive = app.power.adaptive; data = app.power.dataSaver }
     val stay = check == Check.LIVE
     var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
     // Only while this page is on screen.
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) }
-    Text("Check for messages", style = Type.normal.copy(color = Palette.text))
-    ChoiceRow(Check.entries.size, Modifier.padding(top = 6.dp), minWidth = 140.dp, max = 2) { i, m ->
-        val c = Check.entries[i]; MButton(c.title, m, if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c }
+    Framed("Battery") {
+        ChoiceRow(BatteryChoice.entries.size, Modifier.padding(top = 8.dp), minWidth = 96.dp) { i, m ->
+            val c = BatteryChoice.entries[i]
+            MButton(c.title, m, if (choice == c) Kind.Accent else Kind.Normal) { c.apply(app); reread() }
+        }
+        Help(choice?.help ?: "Your own mix, below.")
+        Spacer(Modifier.height(8.dp))
     }
-    Help(when (check) {
-        Check.LIVE -> "Messages and calls arrive within seconds. In the background Muninn keeps one light connection, checked about every 5 minutes. No Google servers (a small silent “Listening” notification you can hide)."
-        Check.QUARTER -> "Saves battery. Messages arrive within about 15 minutes. Calls don't ring and show as missed. Fully connected while charging."
-        Check.HOUR -> "Saves more battery. Messages arrive within about an hour. Calls don't ring and show as missed. Fully connected while charging."
-        Check.OPEN -> "No notifications, messages or calls until you open Muninn, even while charging. Messages wait for you."
-    })
-    if (stay && !free) {
-        Text("Android's battery saver can still pause Muninn while the phone sleeps, so messages arrive late. Allowing it costs little.",
-            style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-        MButton("Let Muninn run in the background", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
-    } else if (stay) Help("Muninn can run in the background. Messages arrive as they're sent.")
-    if (stay && Build.VERSION.SDK_INT >= 26) {
-        MButton("Hide the Listening notification", Modifier.fillMaxWidth().padding(top = 6.dp)) {
+    if (stay && !free) Framed {
+        Text("Android may pause Muninn.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 10.dp))
+        MButton("Allow background use", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent) { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
+    }
+    Framed("Check for messages") {
+        ChoiceRow(Check.entries.size, Modifier.padding(top = 8.dp), minWidth = 140.dp, max = 2) { i, m ->
+            val c = Check.entries[i]; MButton(c.title, m, if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c; choice = BatteryChoice.of(app) }
+        }
+        Help(when (check) {
+            Check.LIVE -> "Arrives in seconds"
+            Check.QUARTER -> "Within 15 minutes. Calls missed."
+            Check.HOUR -> "Within an hour. Calls missed."
+            Check.OPEN -> "Only while Muninn is open."
+        })
+        Spacer(Modifier.height(8.dp))
+    }
+    Framed("Saving") {
+        if (stay) ToggleRow("Save when the screen is off", "Saves battery", saver) { saver = it; app.power.saver = it; choice = BatteryChoice.of(app) }
+        ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; choice = BatteryChoice.of(app) }
+        ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; choice = BatteryChoice.of(app) }
+        ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; choice = BatteryChoice.of(app) }
+        if (stay && Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
             } catch (_: Exception) {}
         }
-        Help("Turn it off on the next screen. Muninn keeps listening and messages still notify you.")
     }
-    var saver by remember { mutableStateOf(app.power.saver) }
-    val away by app.power.away.collectAsState()
-    if (stay) ToggleRow("Save power when the screen is off", if (saver) "One light connection while the screen is off, and a full one for a few minutes after a message. Messages and calls still arrive within seconds"
-        else "Always fully connected. Uses more battery", saver) { saver = it; app.power.saver = it }
     androidx.compose.runtime.LaunchedEffect(check) { app.power.refresh() }
-    Help(away.label)
-    var low by remember { mutableStateOf(app.power.lowBatterySave) }
-    ToggleRow("Save more when the battery is low", "Below 30%: phones close by aren't looked for in the background. Below 15%: the connection " +
-        "is checked every 10 minutes instead of 5, but never dropped. Your Always right away people are never held back", low) { low = it; app.power.lowBatterySave = it }
-    var adaptive by remember { mutableStateOf(app.power.adaptive) }
-    ToggleRow("Check less when it's quiet", "After 3 hours with nothing new and Muninn closed, it checks less often until a message comes or you open it. Calls still ring", adaptive) {
-        adaptive = it; app.power.adaptive = it
-    }
-    var data by remember { mutableStateOf(app.power.dataSaver) }
-    ToggleRow("Data saver", "On mobile data, big files and videos wait until you tap them, and updates wait for Wi-Fi", data) { data = it; app.power.dataSaver = it }
-    Section("Today")
-    BatteryReport(app)
+    Framed("Today") { BatteryReport(app) }
 }
 
 @Composable
 private fun CallsPage() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
-    ToggleRow("Noise removal", if (noise) "Background noise is taken out of your voice. Turn it off if people say you sound quiet"
-        else "Off: Muninn asks your phone not to filter noise out of your voice. Background sound comes through too", noise) {
-        noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
+    Framed {
+        ToggleRow("Noise removal", "Takes out background noise", noise) {
+            noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
+        }
     }
-    Help("Changes start with your next call.")
 }
 
 @Composable
@@ -469,65 +435,69 @@ private fun NearbyPage(app: Muninn) {
     var nearby by remember { mutableStateOf(id.nearbyChat) }
     var keep by remember { mutableStateOf(id.keepNearbyHistory) }
     var device by remember { mutableStateOf(id.deviceName) }
-    ToggleRow("Visible to people nearby", if (visible) "People close by or on the same Wi-Fi can see your name and message you"
-        else "Hidden: only your contacts can reach you close by or on the same Wi-Fi. Your name isn't sent out", visible) {
-        visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
-    }
-    if (visible) ToggleRow("Nearby room", "A chat room for everyone close by or on the same Wi-Fi with Huginn or Muninn", nearby) {
-        nearby = it; id.nearbyChat = it; app.net.announce()
-    }
     var closeBy by remember { mutableStateOf(app.power.closeBy) }
-    ToggleRow("Find phones close by in the background", if (closeBy) "Bluetooth keeps looking while Muninn is closed, for chatting without the internet. Uses more battery"
-        else "Off: it looks only while Muninn is open. Saves battery", closeBy) { closeBy = it; app.power.closeBy = it }
-    ToggleRow("Keep Nearby messages", "Off: they clear when Muninn closes. Encrypted when kept", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
-    Section("This phone")
-    Text("Name other devices see", style = Type.small)
-    Row(Modifier.padding(top = 4.dp)) {
-        Field(device, { device = it.take(40) }, "Muninn on my phone", Modifier.weight(1f))
-        MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = device.isNotBlank() && device != id.deviceName) { id.deviceName = device; app.net.announce(); Ui.say("Saved.") }
+    Framed {
+        ToggleRow("Visible to people nearby", "Off: only contacts can reach you", visible) {
+            visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
+        }
+        if (visible) ToggleRow("Nearby room", "A chat for everyone close by", nearby) {
+            nearby = it; id.nearbyChat = it; app.net.announce()
+        }
+        ToggleRow("Look in the background", "Uses more battery", closeBy) { closeBy = it; app.power.closeBy = it }
+        ToggleRow("Keep Nearby messages", "Off: cleared when Muninn closes", keep) { keep = it; id.keepNearbyHistory = it; if (!it) app.chat.clearNearby() }
     }
-    Help("Received files go to ${io.github.ravenor907.muninn.net.Received.place(androidx.compose.ui.platform.LocalContext.current)}.")
+    Framed("This phone's name") {
+        Row(Modifier.padding(vertical = 8.dp)) {
+            Field(device, { device = it.take(40) }, "Muninn on my phone", Modifier.weight(1f))
+            MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = device.isNotBlank() && device != id.deviceName) { id.deviceName = device; app.net.announce(); Ui.say("Saved.") }
+        }
+        Help("Files go to ${io.github.ravenor907.muninn.net.Received.place(androidx.compose.ui.platform.LocalContext.current)}")
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
-/** More settings › Kids' TV: every TV this phone looks after, each opening its own settings. */
+/** More › Kids' TV: every TV this phone looks after, each opening its own settings. */
 @Composable
 private fun TvPage(app: Muninn) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val mine = tvs.values.filter { !it.disconnecting }
-    if (mine.isEmpty()) Text("No Kids' TV yet. Install Muninn on the TV, then scan the code it shows with Add someone.", style = Type.normal)
-    mine.forEach { t -> PageRow(app.chat.nameOf(t.key), "Who it can call, messages, microphone and noise removal") { SettingsNav.folder = "tv:" + t.key } }
+    Framed {
+        if (mine.isEmpty()) Text("No Kids' TV yet. Scan the TV's code.", style = Type.normal, modifier = Modifier.padding(vertical = 10.dp))
+        mine.forEach { t -> PageRow(app.chat.nameOf(t.key), "") { SettingsNav.folder = "tv:" + t.key } }
+    }
 }
 
 @Composable
 private fun AboutPage(app: Muninn) {
     val up by app.updater.state.collectAsState()
     var auto by remember { mutableStateOf(app.identity.autoUpdate) }
-    Panel {
-        Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal)
-        Text(if (auto) "Muninn checks for a new version every time you open it." else "Muninn only checks when you tap Check now.", style = Type.small)
+    Framed("Updates") {
+        Text("Muninn ${app.updater.current}. ${up.status}", style = Type.normal, modifier = Modifier.padding(top = 10.dp))
         if (up.busy && up.progress > 0f) Bar(up.progress, Modifier.padding(top = 6.dp))
-        MButton(if (up.ready) "Install ${up.latest}" else "Check now", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = !up.busy) {
+        MButton(if (up.ready) "Install ${up.latest}" else "Check now", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent, enabled = !up.busy) {
             if (up.ready) app.updater.download() else app.updater.check()
         }
+        ToggleRow("Check automatically", "Your Kids' TV follows this", auto) {
+            auto = it; app.identity.autoUpdate = it; io.github.ravenor907.muninn.tv.TvParent.autoUpdateChanged(app)
+        }
     }
-    ToggleRow("Check for updates automatically", "Asks GitHub for a new version when Muninn opens. A Kids' TV you look after follows this", auto) {
-        auto = it; app.identity.autoUpdate = it; io.github.ravenor907.muninn.tv.TvParent.autoUpdateChanged(app)
+    Framed("About") {
+        Text("Private chat and file sharing. Made by Ravenor907. GPL-3.0.", style = Type.small, modifier = Modifier.padding(vertical = 10.dp))
     }
-    Section("About")
-    Text("Muninn ${app.updater.current}: private chat and file sharing, Huginn's phone companion. Sends and receives with LocalSend. Made by Ravenor907. GPL-3.0.", style = Type.small)
 }
 
 @Composable
 private fun ErasePage(app: Muninn) {
-    Text("Delete every message on this phone, or erase everything Muninn keeps (messages, contacts, keys and settings).", style = Type.normal)
-    MButton("Delete all messages", Modifier.fillMaxWidth().padding(top = 10.dp)) {
-        Ui.sure(Ask("Delete all messages?", "Every conversation on this phone is deleted. Contacts stay.", "Hold to delete", danger = true, hold = true) {
-            app.chat.deleteAll(); Ui.say("All messages deleted.")
-        })
-    }
-    MButton("Erase everything", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
-        Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings are deleted for good, and Muninn closes. Files you received stay.",
-            "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+    Framed {
+        io.github.ravenor907.muninn.ui.MenuRow("delete", "Delete all messages", danger = true) {
+            Ui.sure(Ask("Delete all messages?", "Contacts stay. This can't be undone.", "Hold to delete", danger = true, hold = true) {
+                app.chat.deleteAll(); Ui.say("All messages deleted.")
+            })
+        }
+        io.github.ravenor907.muninn.ui.MenuRow("close", "Erase everything", danger = true) {
+            Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone.",
+                "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+        }
     }
 }
 
@@ -557,22 +527,22 @@ private fun RightAwayRow(app: Muninn) {
     }
     var open by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(top = 10.dp, bottom = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { open = !open }.padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Always right away: $summary", style = Type.normal.copy(color = Palette.text))
-            Text("Their messages arrive and ring at once, even with a low battery, in quiet hours or after a quiet spell", style = Type.small)
+            Text(summary, style = Type.normal.copy(color = Palette.text))
+            Text("Even when saving battery", style = Type.small)
         }
         Text(if (open) "Hide" else "Change", style = Type.small.copy(color = Palette.accent), modifier = Modifier.padding(start = 8.dp))
     }
     if (!open) return
-    if (keys.isEmpty()) Text("Put people in the Family folder, or add them here.", style = Type.small.copy(color = Palette.textMuted))
+    if (keys.isEmpty()) Text("Family is on it by default.", style = Type.small.copy(color = Palette.textMuted))
     keys.sortedBy { name(it).lowercase() }.forEach { k ->
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(name(k) + if (k in family) " (Family)" else "", style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
             io.github.ravenor907.muninn.ui.IconAction("close", "Take ${name(k)} off", Palette.textMuted, size = 18.dp) { app.power.setRightAway(k, false) }
         }
     }
-    MButton(if (adding) "Done adding" else "Add someone", Modifier.fillMaxWidth().padding(top = 6.dp)) { adding = !adding }
+    MButton(if (adding) "Done adding" else "Add someone", Modifier.fillMaxWidth().padding(vertical = 8.dp)) { adding = !adding }
     if (adding) {
         val others = (contacts.filter { !it.groupOnly }.map { it.chatKey } + groups.filterValues { !it.readOnly }.keys.map { "g:$it" })
             .filter { it !in keys }.distinct().sortedBy { name(it).lowercase() }
@@ -592,20 +562,17 @@ private fun BatteryReport(app: Muninn) {
     var r by remember { mutableStateOf(app.power.report()) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(30_000) { r = app.power.report() }
     fun time(ms: Long): String { val m = ms / 60_000; return if (m < 60) "$m min" else "${m / 60} h ${m % 60} min" }
-    Panel {
-        Text("Today so far", style = Type.normal.copy(color = Palette.text))
-        Text("Open on screen or charging: ${time(r.openMs)}", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-        Text("Fully connected in the background (conversations, calls): ${time(r.connectedMs)}", style = Type.small)
-        Text("One light connection: ${time(r.savingMs)}", style = Type.small)
-        Text("Resting (nothing running): ${time(r.restingMs)}", style = Type.small)
-        Text("Connection checks: ${r.pings} (${r.wakeups} woke the phone)", style = Type.small)
+    Column(Modifier.padding(vertical = 8.dp)) {
+        Text("On screen or charging: ${time(r.openMs)}", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        Text("Fully connected: ${time(r.connectedMs)}", style = Type.small)
+        Text("Light connection: ${time(r.savingMs)}", style = Type.small)
+        Text("Resting: ${time(r.restingMs)}", style = Type.small)
+        Text("Checks: ${r.pings}, ${r.wakeups} woke the phone", style = Type.small)
         Text("Reconnects: ${r.reconnects}", style = Type.small)
-        Text("Checks the message servers made on their own: ${r.serverPings} (each wakes the phone's radio for a moment)", style = Type.small)
-        Text("Background checks for messages: ${r.checks}", style = Type.small)
-        Text("Staying connected cost about ${"%.1f".format(java.util.Locale.US, r.costPercent)}% of the battery (a rough guess)", style = Type.small)
-        r.dataBytes?.let { Text("Data used since the phone started: ${io.github.ravenor907.muninn.net.LocalSend.size(it)}", style = Type.small) }
-        Text("Fully connected costs the most. Android's own Settings › Battery shows Muninn's real share of the battery.",
-            style = Type.small, modifier = Modifier.padding(top = 6.dp))
+        Text("Server checks: ${r.serverPings}", style = Type.small)
+        Text("Background checks: ${r.checks}", style = Type.small)
+        Text("Cost: about ${"%.1f".format(java.util.Locale.US, r.costPercent)}% battery", style = Type.small)
+        r.dataBytes?.let { Text("Data used: ${io.github.ravenor907.muninn.net.LocalSend.size(it)}", style = Type.small) }
     }
 }
 
@@ -618,11 +585,10 @@ private fun QuietHours(app: Muninn) {
     var mode by remember { mutableStateOf(app.power.quietMode) }
     fun hour(h: Int) = when (h) { 0 -> "12 AM"; 12 -> "12 PM"; in 1..11 -> "$h AM"; else -> "${h - 12} PM" }
     var dnd by remember { mutableStateOf(app.power.followDnd) }
-    ToggleRow("Quiet hours", if (on) "From ${hour(from)} to ${hour(to)}: ${mode.title.lowercase()}" else "Check less overnight, then go back to your choice", on) {
+    ToggleRow("Quiet hours", if (on) "${hour(from)} to ${hour(to)}" else "Check less overnight", on) {
         on = it; app.power.quietOn = it
     }
-    ToggleRow("Also during Do Not Disturb", if (dnd) "While Do Not Disturb or Bedtime mode is on: ${mode.title.lowercase()}"
-        else "Do Not Disturb doesn't change how Muninn checks", dnd) { dnd = it; app.power.followDnd = it }
+    ToggleRow("Also during Do Not Disturb", "", dnd) { dnd = it; app.power.followDnd = it }
     if (!on) {
         if (dnd) QuietMode(mode) { mode = it; app.power.quietMode = it }
         return
@@ -647,7 +613,7 @@ private fun QuietMode(mode: Check, set: (Check) -> Unit) {
     ChoiceRow(modes.size, Modifier.padding(top = 6.dp), minWidth = 140.dp) { i, m ->
         val c = modes[i]; MButton(c.title, m, if (mode == c) Kind.Accent else Kind.Normal) { set(c) }
     }
-    Text("While quiet hours or Do Not Disturb last, Muninn checks this way unless your own choice saves more.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+    Spacer(Modifier.height(8.dp))
 }
 
 /** A folder's title, with a way back to the list (Back does the same). */
@@ -672,15 +638,11 @@ private fun LinkedDevices(app: Muninn) {
     val phone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
     var code by remember { mutableStateOf<String?>(null) }
     var pasted by remember { mutableStateOf("") }
-    Panel {
-        Text("A tablet or second phone can show this phone's chats and send through it. It works while this phone is on and online. " +
-            "Everything between the two is end-to-end encrypted, and your contacts see nothing new.", style = Type.small)
-    }
+    Help("Show these chats on another device.")
     phone?.let { p ->
         Section("This device mirrors")
         Panel {
             Text(p.name, style = Type.big)
-            Text("Its chats are at the top of your chat list.", style = Type.small)
             MButton("Unlink", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
                 Ui.sure(Ask("Unlink ${p.name}?", "This device stops showing its chats.", "Unlink", danger = true) { io.github.ravenor907.muninn.net.Link.unlink(p.key) })
             }
@@ -701,9 +663,9 @@ private fun LinkedDevices(app: Muninn) {
     }
     // Use on both (linked devices, below), or Move here (cap x1).
     MoveSection(app)
-    Section("Use on both: link a device to this phone")
+    Section("Link a device to this phone")
     Panel {
-        Text("On the other device: Settings › More settings › Linked devices › Show the link code. Then scan it here, or paste it.", style = Type.small)
+        Text("Scan the other device's link code.", style = Type.small)
         var scanning by remember { mutableStateOf(false) }
         if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp).height(260.dp)) { c ->
             scanning = false
@@ -721,7 +683,7 @@ private fun LinkedDevices(app: Muninn) {
     if (phone == null) {
         Section("Use this device as a companion")
         Panel {
-            Text("Scan this code with your phone (it works for 10 minutes). This device then shows your phone's chats.", style = Type.small)
+            Text("Scan with your phone. Works 10 minutes.", style = Type.small)
             val c = code
             if (c == null) MButton("Show the link code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { code = io.github.ravenor907.muninn.net.Link.myLinkCode() }
             else {

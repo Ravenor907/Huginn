@@ -20,6 +20,13 @@ Rectangle {
     property bool grouped: false
     signal options()
     signal chosen()          // clicked: the page picks it (its tools show)
+    // A click on the name or picture: their profile card (in a group, with their member menu).
+    function showWho() {
+        const k = whoText.key
+        if (k === "" || (host && host.isTour && !host.showMember)) return
+        if (host && host.showMember) host.showMember(k, who)
+        else Ui.showProfile(k, who, {})
+    }
     property string who: m.name || "Someone"
     // Safe while a list takes the row away (its message is gone by then) and the theme changes.
     readonly property bool mine: !!m && !!m.mine
@@ -77,7 +84,7 @@ Rectangle {
         HoverHandler { cursorShape: whoText.key !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor }
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
-            onTapped: if (whoText.key !== "" && !(msg.host && msg.host.isTour)) Ui.showProfile(whoText.key, msg.who, {})
+            onTapped: msg.showWho()
         }
     }
     Column {
@@ -102,7 +109,7 @@ Rectangle {
                 HoverHandler { cursorShape: whoText.key !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor }
                 TapHandler {
                     gesturePolicy: TapHandler.ReleaseWithinBounds
-                    onTapped: if (whoText.key !== "" && !(msg.host && msg.host.isTour)) Ui.showProfile(whoText.key, msg.who, {})
+                    onTapped: msg.showWho()
                 }
             }
             Text {

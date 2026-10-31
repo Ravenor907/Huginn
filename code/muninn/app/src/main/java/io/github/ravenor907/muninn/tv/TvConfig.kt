@@ -91,6 +91,32 @@ object Canon {
     } catch (e: Exception) { false }
 }
 
+/**
+ * What the kids' screens say when something can't be done: a few words, each with its icon.
+ * Kept free of Android so the unit tests check them.
+ */
+object TvWords {
+    const val TOO_SHORT = "Too short"
+    const val CANT_CALL = "Can't call now"
+    const val NO_MIC = "No microphone"
+    const val ASK_PARENT = "Ask a parent"
+    const val NOT_HEARD = "Didn't hear you"
+    const val NO_TYPING = "Can't type here"
+    const val NO_INTERNET = "No internet"
+    val ALL = listOf(TOO_SHORT, CANT_CALL, NO_MIC, ASK_PARENT, NOT_HEARD, NO_TYPING, NO_INTERNET)
+
+    /** The icon beside [words] (a name from the app's icon set). */
+    fun icon(words: String): String = when (words) {
+        TOO_SHORT -> "clock"
+        CANT_CALL -> "call"
+        NO_MIC, NOT_HEARD -> "mic"
+        ASK_PARENT -> "user"
+        NO_TYPING -> "chat"
+        NO_INTERNET -> "wifi"
+        else -> "info"
+    }
+}
+
 /** A parent-defined button on the TV. [id]: 8 random bytes, base64url (11 characters). */
 data class Quick(val id: String, val text: String)
 
@@ -107,11 +133,14 @@ data class TvConfig(
     val nr: Int = TvRules.NR_BOTH,
     /** k7 (7.12): whether the TV checks for updates by itself, as the parent set it (absent: on). */
     val upd: Boolean = true,
+    /** k8 (7.13): days messages stay on the TV, 1 to 7 (absent: null, the TV keeps its own setting). */
+    val keep: Int? = null,
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
 data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC, /** k5: only for a TV whose app said "k5". */ val nr: Int? = null,
-                     /** k7: only for a TV whose app said "k7". */ val upd: Boolean? = null)
+                     /** k7: only for a TV whose app said "k7". */ val upd: Boolean? = null,
+                     /** k8: only for a TV whose app said "k8". */ val keep: Int? = null)
 
 /**
  * The kids' TV rules (protocol 0.6, section 7): what a well-formed config is, when a TV takes a new
@@ -133,11 +162,20 @@ object TvRules {
     const val NR_STANDARD = 1
     const val NR_STRONG = 2
     const val NR_BOTH = 3
+    /** k8 (7.13): the fewest and most days messages stay on the TV. */
+    const val MIN_KEEP = 1
+    const val MAX_KEEP = 7
+    /** k8 (7.13): the TV permissions a parent can ask the TV to turn on, and that the TV's status lists while off. */
+    val PERMS = listOf("mic", "notify", "overlay", "install")
+    /** Quick messages the TV's conversation screen shows (the first ones in the parent's order). */
+    const val QUICK_SHOWN = 4
+    /** The recording screen takes OK only after this long, so the press that started it can't send it. */
+    const val ARM_MS = 2_000L
     val DEFAULT_QUICK = listOf("I need you", "Please come here", "I'm hungry", "I love you")
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd")
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep")
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -149,6 +187,7 @@ object TvRules {
         if (c.has("mic")) { val m = c.get("mic"); require(Canon.isInt(m) && (m as Number).toLong() in 0..MAX_MIC.toLong()) { "mic" } }
         if (c.has("nr")) { val n = c.get("nr"); require(Canon.isInt(n) && (n as Number).toLong() in NR_NONE.toLong()..NR_BOTH.toLong()) { "nr" } }
         if (c.has("upd")) require(c.get("upd") is Boolean) { "upd" }
+        if (c.has("keep")) { val d = c.get("keep"); require(Canon.isInt(d) && (d as Number).toLong() in MIN_KEEP.toLong()..MAX_KEEP.toLong()) { "keep" } }
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -222,6 +261,7 @@ object TvRules {
             c.optBoolean("calls", true), if (c.has("mic")) c.getInt("mic") else DEFAULT_MIC,
             if (c.has("nr")) c.getInt("nr") else NR_BOTH,
             c.optBoolean("upd", true),
+            if (c.has("keep")) c.getInt("keep") else null,
         )
     }
 
@@ -233,7 +273,7 @@ object TvRules {
             .put("quick", JSONArray().apply { quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
             .put("contacts", JSONArray().apply { contacts.distinctBy { it.k }.sortedBy { it.k }.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("dictation", dictation).put("ts", ts)
-        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) } }
+        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) }; it.keep?.let { d -> o.put("keep", d.coerceIn(MIN_KEEP, MAX_KEEP)) } }
         return Canon.sign(priv, CONFIG, o)
     }
 
@@ -285,16 +325,19 @@ object TvRules {
      * (TV clock). [own]: the level was set on the TV itself ("own":true), so a parent's phone takes it
      * without comparing clocks.
      */
-    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false): String =
+    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false, off: List<String>? = null): String =
         JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT))
-            .apply { if (own) put("own", true) }.toString()
+            .apply { if (own) put("own", true); off?.let { put("off", JSONArray(it.filter { p -> p in PERMS }.distinct())) } }.toString()
     /** Parent to TV: "send me your status". */
     fun usageMessage(): String = JSONObject().put("t", "usage").toString()
     /** Parent to TV: erase the messages, photos, voice messages and caches (pairing and contacts stay). */
     fun clearMessage(): String = JSONObject().put("t", "clear").toString()
 
-    /** A TV's status (7.7). [own]: the level was set on the TV (absent: false). */
-    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false)
+    /**
+     * A TV's status (7.7). [own]: the level was set on the TV (absent: false). [off]: k8 (7.13), the
+     * permissions still off on the TV (null: the TV didn't say).
+     */
+    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false, val off: List<String>? = null)
 
     /** A TV's status, or null if it isn't well-formed (7.7). "own", when present, must be a boolean. */
     fun status(o: JSONObject): Status? {
@@ -304,7 +347,11 @@ object TvRules {
         val m = (mic as Number).toLong(); val u = (used as Number).toLong(); val t = (ts as Number).toLong()
         if (m !in 0..MAX_MIC.toLong() || u !in 0..MAX_INT || t !in 0..MAX_INT) return null
         val own = if (o.has("own")) (o.get("own") as? Boolean ?: return null) else false
-        return Status(m.toInt(), u, t, own)
+        val off = if (o.has("off")) {
+            val a = o.get("off") as? JSONArray ?: return null
+            (0 until a.length()).map { a.get(it) as? String ?: return null }.filter { it in PERMS }.distinct()
+        } else null
+        return Status(m.toInt(), u, t, own, off)
     }
 
     /**
@@ -322,18 +369,38 @@ object TvRules {
      */
     fun settingsOnly(askedBefore: Boolean, rationale: Boolean): Boolean = askedBefore && !rationale
 
-    /**
-     * The button the remote lands on when a conversation opens: speech to text, then Record, then the first
-     * quick message, then the Call button (the only button left when the TV has no microphone). Null: none
-     * of them is on screen, so focus goes to the first thing that takes it.
-     */
-    fun firstTalkFocus(dictate: Boolean, mic: Boolean, calls: Boolean, quick: List<String>): String? = when {
-        dictate -> "say"
-        mic -> "rec"
-        quick.isNotEmpty() -> quick.first()
-        calls -> "call"
-        else -> null
+    // ---- k8 (7.13): a parent asks the TV to turn on one of its permissions
+    /** Parent to TV: show Android's prompt (or settings page) for [perm], one of [PERMS]. */
+    fun allowMessage(perm: String): String {
+        require(perm in PERMS) { "perm" }
+        return JSONObject().put("t", "allow").put("p", perm).toString()
     }
+
+    /** The permission an "allow" asks for, or null if [o] isn't a well-formed one. */
+    fun allowIn(o: JSONObject): String? {
+        if (Canon.keys(o) != setOf("t", "p") || o.opt("t") != "allow") return null
+        return (o.opt("p") as? String)?.takeIf { it in PERMS }
+    }
+
+    /** Milliseconds a "keep" of [days] means on the TV: 0 for the most (every chat's own limit), else that many days. */
+    fun keepMs(days: Int): Long = if (days >= MAX_KEEP) 0L else days.coerceAtLeast(MIN_KEEP) * 86_400_000L
+
+    /**
+     * The big buttons in a conversation, left to right: Call (when a parent allows calls), Voice message
+     * and Talk to type (when the TV has a microphone, and a parent turned the remote mic on).
+     */
+    fun talkButtons(calls: Boolean, mic: Boolean, dictate: Boolean): List<String> = buildList {
+        if (calls) add("call")
+        if (mic) add("rec")
+        if (dictate) add("say")
+    }
+
+    /** The button the remote lands on when a conversation opens: the first big button, else the first quick message. */
+    fun firstTalkFocus(calls: Boolean, mic: Boolean, dictate: Boolean, quick: List<String>): String? =
+        talkButtons(calls, mic, dictate).firstOrNull() ?: quick.firstOrNull()
+
+    /** The recording screen's Send and Stop take OK once [elapsed] ms have gone by. */
+    fun recordingArmed(elapsed: Long): Boolean = elapsed >= ARM_MS
 
     private const val MAX_INT = (1L shl 53) - 1
 }

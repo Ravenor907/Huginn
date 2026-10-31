@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
   workflow_dispatch:
 
@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release: ${{ steps.plan.outputs.release }}
+      beta: ${{ steps.plan.outputs.beta }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: No outside services, no pairing, no attribution, no em dashes
@@ -52,6 +53,12 @@ jobs:
             echo "release=1" >> "$GITHUB_OUTPUT"; echo "::notice title=Release::This push releases $v"
           else
             echo "release=0" >> "$GITHUB_OUTPUT"; echo "::notice title=Test build::No release ($v is already out, or this isn't main)"
+          fi
+          # The beta branch: every push replaces the "beta" pre-release (never offered as an update).
+          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/beta ]; then
+            echo "beta=1" >> "$GITHUB_OUTPUT"; echo "::notice title=Beta::This push replaces the beta pre-release"
+          else
+            echo "beta=0" >> "$GITHUB_OUTPUT"
           fi
 
   flatpak:
@@ -177,7 +184,7 @@ jobs:
     needs: rules
     runs-on: ubuntu-24.04
     env:
-      RELEASE: ${{ needs.rules.outputs.release }}
+      RELEASE: ${{ (needs.rules.outputs.release == '1' || needs.rules.outputs.beta == '1') && '1' || '0' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
@@ -797,3 +804,33 @@ jobs:
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
             Every file is signed with the project's release key (the .sig beside it, and the .vsig for its version) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md
             Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security
+
+  beta:
+    # The beta branch's downloads as one pre-release named "beta", replaced on every push to beta.
+    # Installed apps update only from the latest full release, so nobody is moved onto it.
+    name: Beta pre-release
+    needs: [rules, flatpak, muninn, muninn-screens, windows, relay]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: Huginn.flatpak
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: muninn-apk
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: Huginn-Windows.zip
+      - name: Replace the beta pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l Huginn.flatpak Huginn-Windows.zip Muninn.apk
+          gh release delete beta --cleanup-tag --yes || true
+          gh release create beta Huginn.flatpak Huginn-Windows.zip Muninn.apk --prerelease --latest=false \
+            --target "${{ github.sha }}" --title "Beta: new layout" \
+            --notes "Test build of the new layout. Not offered as an update. Installing it replaces your current copy; the next full release brings you back."

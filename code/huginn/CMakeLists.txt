@@ -258,6 +258,7 @@ qt_add_qml_module(huginn
         qml/TopBar.qml
         qml/PersonPanel.qml
         qml/InvitePanel.qml
+        qml/MoreButton.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -270,7 +271,7 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage CallsPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
-                   Avatar PicturePicker Leaves)
+                   Avatar PicturePicker Leaves MoreButton)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels.

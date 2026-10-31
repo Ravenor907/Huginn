@@ -60,13 +60,13 @@ object TvBanner {
             setPadding(dp(22), dp(14), dp(22), dp(14))
             background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(Color.argb(240, 20, 22, 30)); setStroke(dp(2), Color.rgb(212, 175, 55)) }
             isFocusable = true; isFocusableInTouchMode = true
-            addView(line(title, 20f, Color.WHITE, bold = true))
-            addView(line(text, 17f, Color.rgb(225, 225, 230)))
-            addView(line("OK to open, Back to close", 13f, Color.rgb(160, 160, 170)))
+            addView(line(title, 24f, Color.WHITE, bold = true))
+            addView(line(text, 20f, Color.rgb(225, 225, 230)))
+            addView(line("OK to open", 20f, Color.rgb(170, 170, 180)))
             setOnClickListener { dismiss(); open(c, key) }
         }
         val lp = WindowManager.LayoutParams(
-            dp(420), WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(480), WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,

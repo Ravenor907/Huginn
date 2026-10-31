@@ -25,7 +25,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +40,7 @@ import io.github.ravenor907.muninn.R
 import io.github.ravenor907.muninn.net.call.CallManager
 import io.github.ravenor907.muninn.net.call.CallSession.Phase
 import io.github.ravenor907.muninn.screens.CallActivity
+import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,19 +50,19 @@ import kotlinx.coroutines.launch
 
 /**
  * A call on the Kids' TV, made for the remote: one big focused button (Answer when it rings, Hang up
- * during the call), Back declines a ring. Shown by CallActivity in kids' mode.
+ * during the call), Back declines a ring. A big muted icon shows while the call is muted. The microphone
+ * level and noise removal are set from a parent's phone. Shown by CallActivity in kids' mode.
  */
 @Composable
-fun TvCallScreen(app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit) {
+fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit) {
     val c by CallManager.call.collectAsState()
     val context = LocalContext.current
     val mic = remember { TvAudio.hasMic(context) }
-    var micLevel by remember { mutableStateOf(false) }
     val call = c
     BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
         if (call == null) { Text("Call ended", style = tvTitle(34.sp)); return@Box }
-        // Centred when it fits; on a 540 dp tall TV screen with a note showing it scrolls, and the focused button comes into view.
+        // Centred when it fits; on a 540 dp tall TV screen it scrolls, and the focused button comes into view.
         Column(horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 48.dp, vertical = 32.dp)) {
             val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
@@ -73,10 +73,14 @@ fun TvCallScreen(app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, 
             }
             Text(call.name, style = tvTitle(44.sp), modifier = Modifier.padding(top = 22.dp))
             Text(status(call), style = tvText(26.sp, Palette.textSoft), modifier = Modifier.padding(top = 8.dp))
-            if (!mic && call.phase != Phase.ENDED) Text("This TV has no microphone, so they can't hear you. Plug one in, or ask a parent.",
-                style = tvText(20.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
-            else if (call.note.isNotEmpty() && call.phase != Phase.ENDED) Text(call.note, style = tvText(20.sp, Palette.danger), textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 14.dp))
+            if (call.phase != Phase.ENDED) when {
+                !mic -> TvProblemLine("mic", TvWords.NO_MIC)
+                call.muted -> Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    MIcon("mute", Palette.danger, 72.dp)
+                    Text("Muted", style = tvText(30.sp, Palette.danger, FontWeight.SemiBold), modifier = Modifier.padding(start = 14.dp))
+                }
+                call.note.isNotEmpty() -> Text(call.note, style = tvText(22.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+            }
             val first = remember { FocusRequester() }
             Row(Modifier.padding(top = 36.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 when (call.phase) {
@@ -85,23 +89,12 @@ fun TvCallScreen(app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, 
                         Box(Modifier.width(260.dp)) { BigButton("Not now", icon = "close") { CallManager.decline() } }
                     }
                     Phase.ENDED -> Box(Modifier.width(260.dp)) { BigButton("OK", requester = first) { CallManager.dismiss(); onClose() } }
-                    else -> {
-                        Box(Modifier.width(260.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
-                        if (call.phase == Phase.LIVE) Box(Modifier.width(260.dp)) {
-                            BigButton(if (call.muted) "Unmute" else "Mute", icon = "mute", sub = if (call.muted) "They can't hear you" else null) { CallManager.setMuted(!call.muted) }
-                        }
-                        // They can't hear well: anyone can turn the TV's microphone up right here.
-                        if (call.phase == Phase.LIVE && mic) Box(Modifier.width(260.dp)) {
-                            val level by KidTv.micLevel.collectAsState()
-                            BigButton("Microphone", icon = "mic", sub = "Level $level") { micLevel = true }
-                        }
-                    }
+                    else -> Box(Modifier.width(300.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
                 }
             }
             LaunchedEffect(call.phase == Phase.INCOMING, call.phase == Phase.ENDED) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
         }
     }
-    if (micLevel && call != null && call.phase != Phase.ENDED) TvMicDialog(app) { micLevel = false }
 }
 
 @Composable
@@ -118,7 +111,7 @@ private fun status(c: CallManager.Ui): String {
         Phase.ENDED -> when (c.endWhy) {
             "declined" -> if (c.outgoing) "They can't talk right now" else "Call ended"
             "busy" -> "They're on another call"
-            "noanswer" -> "No answer. Try again later."
+            "noanswer" -> "No answer"
             "nopath", "error" -> "The call couldn't connect"
             "missed" -> "Missed call"
             else -> "Call ended"

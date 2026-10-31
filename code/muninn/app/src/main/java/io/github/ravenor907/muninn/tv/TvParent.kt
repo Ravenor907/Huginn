@@ -49,6 +49,12 @@ data class ManagedTv(
     val sharedWith: List<String> = emptyList(),
     /** k5 (7.10): the TV's noise removal. */
     val nr: Int = TvRules.NR_BOTH,
+    /** k7 (7.12): whether the TV looks for updates by itself (this TV's Auto-update). */
+    val upd: Boolean = true,
+    /** k8 (7.13): days messages stay on the TV (1 or 7). */
+    val keep: Int = TvRules.MAX_KEEP,
+    /** k8 (7.13): the TV's permissions still off, from its last status (null: not known). */
+    val off: List<String>? = null,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -79,7 +85,7 @@ object TvParent {
     fun load(app: Muninn) {
         this.app = app
         synchronized(lock) {
-            _tvs.value = try { app.vault.read(file(app))?.let { fromJson(JSONObject(it)) } } catch (e: Exception) { null } ?: emptyMap()
+            _tvs.value = try { app.vault.read(file(app))?.let { fromJson(JSONObject(it), app.identity.autoUpdate) } } catch (e: Exception) { null } ?: emptyMap()
         }
         if (_tvs.value.isNotEmpty()) ticking()
     }
@@ -164,7 +170,7 @@ object TvParent {
             val v = maxOf(t.v, t.applied) + 1
             val quick = t.quick.filter { it.text.isNotBlank() }.take(TvRules.MAX_QUICK)
             val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null,
-                if (k7(app, key)) app.identity.autoUpdate else null) else null
+                if (k7(app, key)) t.upd else null, if (k8(app, key)) t.keep else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the TV (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -288,7 +294,7 @@ object TvParent {
                     if (done) tries.remove(fromKey)
                     // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
                     resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC || (k5(app, fromKey) && t.nr != TvRules.NR_BOTH)
-                        || (k7(app, fromKey) && !app.identity.autoUpdate))
+                        || (k7(app, fromKey) && !t.upd) || (k8(app, fromKey) && t.keep != TvRules.MAX_KEEP))
                 }
             }
         }
@@ -305,6 +311,7 @@ object TvParent {
             v = cfg.v, applied = cfg.v, pendingV = cfg.v, pending = emptyList(),
             quick = cfg.quick, reach = people.map { it.k }, others = people, dictation = cfg.dictation,
             parents = cfg.parents, calls = cfg.calls, mic = cfg.mic, extrasSent = cfg.raw.has("mic"), nr = cfg.nr,
+            upd = if (cfg.raw.has("upd")) cfg.upd else t.upd, keep = cfg.keep ?: t.keep,
             myName = cfg.contacts.firstOrNull { it.k == me }?.n ?: t.myName,
             sharedWith = (t.sharedWith + cfg.parents.filter { it != me }).distinct(),
         )
@@ -336,7 +343,7 @@ object TvParent {
             if (t.disconnecting) return true
             val now = System.currentTimeMillis()
             adopt = TvRules.adoptMic(s, t.mic, t.micAt, synced = t.applied >= t.v)
-            put(t.copy(used = s.used, usedAt = now,
+            put(t.copy(used = s.used, usedAt = now, off = s.off ?: t.off,
                 mic = if (adopt) s.mic else t.mic, micAt = if (adopt) (if (s.own) now else s.ts) else t.micAt,
                 micOnTv = if (adopt) true else t.micOnTv))
         }
@@ -353,12 +360,40 @@ object TvParent {
     /** The TV's app said "k5": it takes noise removal in its config. */
     fun k5(app: Muninn, key: String): Boolean = "k5" in (app.contacts.get(key)?.caps ?: emptySet())
 
-    /** The TV's app said "k7": it follows this phone's "Check for updates automatically" (7.12). */
+    /** The TV's app said "k7": it takes Auto-update in its config (7.12). */
     fun k7(app: Muninn, key: String): Boolean = "k7" in (app.contacts.get(key)?.caps ?: emptySet())
 
-    /** This phone's "Check for updates automatically" changed: every TV that takes it gets a new config. */
-    fun autoUpdateChanged(app: Muninn) {
-        for (t in _tvs.value.values) if (!t.disconnecting && k7(app, t.key)) change(t.key) { it }
+    /**
+     * Settings calls this when this phone's own "Check for updates automatically" changes. Each TV follows
+     * its own Auto-update switch (on the TV's screen here), so nothing is sent.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun autoUpdateChanged(app: Muninn) {}
+
+    /** The parent switched the TV's Auto-update (7.12). */
+    fun setUpd(key: String, on: Boolean) = change(key) { it.copy(upd = on) }
+
+    /** The TV's app said "k8": it takes "keep" in its config, "allow", and lists its permissions in its status (7.13). */
+    fun k8(app: Muninn, key: String): Boolean = "k8" in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The parent picked how many days messages stay on the TV (7.13). */
+    fun setKeep(key: String, days: Int) = change(key) { it.copy(keep = days.coerceIn(TvRules.MIN_KEEP, TvRules.MAX_KEEP)) }
+
+    /**
+     * Asks the TV to turn on [perm] (7.13): the TV shows Android's prompt or opens its settings page, and
+     * its next status says whether it's on. False if the TV's app lacks k8.
+     */
+    fun askAllow(app: Muninn, key: String, perm: String): Boolean {
+        if (!k8(app, key) || perm !in TvRules.PERMS) { app.chat.probeCaps(key); return false }
+        send(app, key, listOf(TvRules.allowMessage(perm)))
+        return true
+    }
+
+    /** Takes [person] off the people the TV can reach (or stops waiting for them). They stay a parent if they are one. */
+    fun removePerson(key: String, person: String) {
+        dropWaiting(key, listOf(person))
+        if (_tvs.value[key]?.reach?.contains(person) == true)
+            change(key) { t -> t.copy(reach = t.reach - person, others = t.others.filter { it.k != person }) }
     }
 
     /** The TV's app said "k3": it reports its level and storage and takes Clear history. */
@@ -537,10 +572,12 @@ object TvParent {
             .put("micAt", t.micAt).put("micOnTv", t.micOnTv).put("used", t.used).put("usedAt", t.usedAt)
             .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } })
             .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
-            .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr))
+            .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr).put("upd", t.upd).put("keep", t.keep)
+            .apply { t.off?.let { put("off", JSONArray(it)) } })
     }
 
-    private fun fromJson(o: JSONObject): Map<String, ManagedTv> = o.keys().asSequence().mapNotNull { k ->
+    /** [autoUpdate]: this phone's own update switch, for a TV saved without its own Auto-update. */
+    private fun fromJson(o: JSONObject, autoUpdate: Boolean): Map<String, ManagedTv> = o.keys().asSequence().mapNotNull { k ->
         try {
             val x = o.getJSONObject(k)
             val q = x.optJSONArray("quick") ?: JSONArray()
@@ -553,7 +590,9 @@ object TvParent {
                 x.optLong("micAt"), x.optBoolean("micOnTv"), x.optLong("used", -1), x.optLong("usedAt"),
                 x.optJSONObject("waiting")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap(),
                 x.optJSONArray("others")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { e -> TvPerson(e.getString("k"), e.getString("n"), e.getString("p")) } } } ?: emptyList(),
-                strs(x.optJSONArray("sharedWith")), x.optInt("nr", TvRules.NR_BOTH).coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH))
+                strs(x.optJSONArray("sharedWith")), x.optInt("nr", TvRules.NR_BOTH).coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH),
+                x.optBoolean("upd", autoUpdate), x.optInt("keep", TvRules.MAX_KEEP).coerceIn(TvRules.MIN_KEEP, TvRules.MAX_KEEP),
+                x.optJSONArray("off")?.let { strs(it) })
         } catch (e: Exception) { null }
     }.toMap()
 }

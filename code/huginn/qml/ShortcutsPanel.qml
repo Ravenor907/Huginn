@@ -37,7 +37,7 @@ Item {
             ["Mute", "Ctrl+Shift+M"],
             ["Deafen", "Ctrl+Shift+D"],
             ["Leave", "Ctrl+Shift+H"],
-            [Settings.pushToTalk ? "Push to talk" : "Push to talk (Settings › Calls and voice)", "hold " + TalkKey.keyName],
+            [Settings.pushToTalk ? "Push to talk" : "Push to talk (Settings › Calls)", "hold " + TalkKey.keyName],
             ["In a call: mute", "Space"] ] },
          { title: "LOOK AND LOCK", keys: [
             ["Bigger", "Ctrl+="],

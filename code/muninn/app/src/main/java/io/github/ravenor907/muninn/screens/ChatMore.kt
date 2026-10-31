@@ -86,11 +86,11 @@ internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: (
         title = { Text("Send", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Line("Photos", "Up to 10 at once, as an album", icon = "image") { done(); onPhotos() }
+                Line("Photos", "Up to 10 at once", icon = "image") { done(); onPhotos() }
                 Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
-                Line("Video message", "Up to a minute. You see it before it's sent", icon = "video") { done(); onVideo() }
-                Line("Poll", "A question with answers to pick", icon = "check") { done(); onPoll() }
-                if (onFile != null) Line("File", "Any file, straight to their phone", icon = "file") { done(); onFile() }
+                Line("Video message", "Up to a minute", icon = "video") { done(); onVideo() }
+                Line("Poll", "Ask a question", icon = "check") { done(); onPoll() }
+                if (onFile != null) Line("File", "Any file", icon = "file") { done(); onFile() }
             }
         },
         confirmButton = { MButton("Cancel") { done() } },
@@ -402,7 +402,7 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
     val context = LocalContext.current
     val activity = context as? android.app.Activity
     val nfc = remember { android.nfc.NfcAdapter.getDefaultAdapter(context) }
-    var status by remember { mutableStateOf(if (nfc == null) "This phone has no NFC. Use My code instead." else if (!nfc.isEnabled) "Turn on NFC in Android's settings, then come back." else "Hold the backs of the two phones together.") }
+    var status by remember { mutableStateOf(if (nfc == null) "No NFC. Use My code." else if (!nfc.isEnabled) "Turn on NFC, then come back." else "Hold the phones back to back.") }
     var added by remember { mutableStateOf<String?>(null) }
     DisposableEffect(Unit) {
         val link = app.chat.inviteLink(1)
@@ -418,7 +418,7 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
                 app.chat.addContact(c)
                 if (io.github.ravenor907.muninn.net.Contacts.once(code)) app.chat.sendPrivate(c.chatKey, "Hi, it's ${app.identity.username}. We tapped phones.")
                 added = c.chatKey
-                status = "${c.name} added. You're in touch on both phones."
+                status = "${c.name} added."
             }
         }
         // A phone reading can't be read at the same moment: take turns, a little off beat so two phones meet.
@@ -443,7 +443,7 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { MButton("Back", icon = "back") { back() } }
         Text("Tap phones to add each other", style = Type.title, modifier = Modifier.padding(top = 16.dp))
-        Text("Both of you open this screen, then hold the backs of your phones together for a second or two. Each phone hands over a code that works once, only while this screen is open.",
+        Text("Both open this, then touch backs.",
             style = Type.normal, modifier = Modifier.padding(top = 8.dp))
         Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
             Box(Modifier.size(120.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) { MIcon(if (added != null) "check" else "phone", Palette.goldBright, 48.dp) }

@@ -70,7 +70,7 @@ fun BackupPanel(app: Muninn) {
                 }
             }
             reset()
-            result.onSuccess { status = "Backup saved. Keep it somewhere safe, and keep its password too."; bad = false }
+            result.onSuccess { status = "Backup saved. Keep its password safe."; bad = false }
                 .onFailure { status = "The backup couldn't be saved. ${it.message ?: ""}".trim(); bad = true }
         }
     }
@@ -93,7 +93,7 @@ fun BackupPanel(app: Muninn) {
                 status = when (it) {
                     is BackupFormat.WrongPassword -> "That's not the password for this backup."
                     is BackupFormat.NotABackup -> it.message ?: "This isn't a Muninn backup."
-                    is OutOfMemoryError -> "This backup is too big to open on this phone."
+                    is OutOfMemoryError -> "Too big to open on this phone."
                     else -> "Couldn't read that file."
                 }
             }
@@ -102,13 +102,12 @@ fun BackupPanel(app: Muninn) {
 
     fun replace(o: BackupFormat.Opened) {
         Ui.sure(Ask("Replace everything?",
-            "Every message, contact and key on this phone is replaced with the backup from ${Backup.madeOn(o)}, and Muninn restarts. " +
-                "Your lock stays the same. Use the backup on one phone at a time.",
+            "Replaces everything here. This can't be undone.",
             "Replace everything", danger = true, hold = true) {
             busy = true; status = "Restoring…"
             scope.launch {
                 val ok = withContext(Dispatchers.IO) { try { Backup.restore(ctx, app.vault, o); true } catch (e: Exception) { false } }
-                if (!ok) { busy = false; bad = true; status = "The restore didn't finish. Nothing was changed."; return@launch }
+                if (!ok) { busy = false; bad = true; status = "Restore failed. Nothing changed."; return@launch }
                 status = "Restored. Muninn is restarting…"
                 delay(800)
                 Backup.restart(ctx)
@@ -117,8 +116,8 @@ fun BackupPanel(app: Muninn) {
     }
 
     Panel {
-        Text("Save every chat, contact, photo, voice message and key to one encrypted file. It has its own backup password, separate from your lock.", style = Type.normal)
-        Text("Use the backup on one phone at a time.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        Text("Everything, in one encrypted file.", style = Type.normal)
+        Text("Use on one phone at a time.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         when (mode) {
             "backup" -> {
                 Field(pw1, { pw1 = it }, "Backup password ($MIN_PW or more characters)", Modifier.padding(top = 10.dp), secret = true,
@@ -128,7 +127,7 @@ fun BackupPanel(app: Muninn) {
                 when {
                     pw1.isNotEmpty() && pw1.length < MIN_PW -> Text("At least $MIN_PW characters.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                     pw2.isNotEmpty() && pw1 != pw2 -> Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-                    else -> Text("Without this password the backup can't be opened by anyone, you included. Write it down.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                    else -> Text("Lose it, lose the backup. Write it down.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 }
                 MButton(if (busy) "Saving…" else "Choose where to save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
                     enabled = !busy && pw1.length >= MIN_PW && pw1 == pw2) { saveTo.launch(Backup.fileName()) }
@@ -148,7 +147,7 @@ fun BackupPanel(app: Muninn) {
                     else -> {
                         val count = o.files.count { it.first != Backup.PREFS_ENTRY }
                         Text("Backup from ${Backup.madeOn(o)}: $count ${if (count == 1) "item" else "items"}.", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
-                        Text("Restoring replaces everything Muninn keeps on this phone with this backup.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                        Text("Replaces everything on this phone.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                         MButton("Replace everything with this backup", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Danger, enabled = !busy) { replace(o) }
                     }
                 }

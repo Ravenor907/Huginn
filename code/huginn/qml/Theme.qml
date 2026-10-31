@@ -5,7 +5,7 @@ import Huginn
 QtObject {
     id: theme
 
-    // Settings › General › Accessibility.
+    // Settings › Look › Accessibility.
     readonly property bool hc: Settings.highContrast
     readonly property real textScale: Number(Settings.textSize) / 100
     readonly property bool motion: !Settings.reduceMotion
@@ -160,7 +160,7 @@ QtObject {
         for (let i = 0; i < n.length; ++i) h = (h * 31 + n.charCodeAt(i)) % 9973
         return tones[h % Math.max(1, tones.length)] || plain
     }
-    // The initial-and-colour choice someone sent with their profile: their colour as the disc, and
+    // The initial-and-color choice someone sent with their profile: their color as the disc, and
     // light or dark text on it, whichever reads better.
     readonly property var pictureColours: ["#C9A35E", "#3D6A9E", "#8A5A3E", "#4E8A4E", "#7A4E9E", "#8A8A8A"]
     function avatarFrom(hex) {

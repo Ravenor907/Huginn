@@ -3,8 +3,9 @@ import Huginn
 
 // A group, Discord style: the channel column (TEXT channels, VOICE rooms), the open channel's
 // conversation with its message box, and the member column (or a thread or the pins beside it).
-// A portrait window shows one column at a time. LT (or a right click) opens the group's options
-// (invite, the group code, channels, members, rename, leave). D-pad left and right move between the columns.
+// A portrait window shows one column at a time. The group's one menu (the three dots in either
+// header, a right click on a channel, LT or X) has calls, People, Add people, Channels, Group
+// settings and Leave; a member's one menu opens from their row. D-pad left and right move between the columns.
 Rectangle {
     id: page
     // Autumn: a frosted pane the leaves fall behind; the other looks are solid.
@@ -57,7 +58,7 @@ Rectangle {
             const v = rows.findIndex(r => r.kind === "channel" && r.type === "voice")
             if (v >= 0) chRow = v
         }
-        if (a.groupOptions) Qt.callLater(groupOptions)
+        if (a.groupOptions) Qt.callLater(groupMenu)
     }
     onGidChanged: { channelId = "main"; sel = -1; Voice.stop() }
     onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
@@ -134,9 +135,9 @@ Rectangle {
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
-        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
-        : zone === "members" ? [{ key: "a", label: "Choose" }, { key: "lt", label: "Group options" }, { key: "b", label: "Back" }]
-        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "lt", label: "Options" }, { key: "b", label: "Back" }])
+        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group menu" }, { key: "b", label: "Back" }]
+        : zone === "members" ? [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
+        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "lt", label: sel >= 0 ? "Options" : "Group menu" }, { key: "b", label: "Back" }])
     readonly property string status: Chat.netStatus
 
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
@@ -191,24 +192,12 @@ Rectangle {
         PageHeader {
             id: chanHead; width: parent.width; carved: false
             title: page.locked ? "Locked" : (page.info.name || "Group")
-            Text {
+            // The group's one menu.
+            MoreButton {
+                visible: !page.locked && page.exists
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !page.locked && page.exists && !page.isTour
-                text: page.isTour || !page.exists ? "" : (Chat.groups, Chat.groupLimit(page.gid)).days + " days"
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(11)
-            }
-            // Invite people: admins, or anyone when the group lets members invite.
-            Rectangle {
-                visible: page.canInvite
-                anchors.verticalCenter: parent.verticalCenter
-                width: Theme.px(28); height: width; radius: Theme.radius
-                color: invHover.hovered ? Theme.raised : "transparent"
-                Accessible.role: Accessible.Button
-                Accessible.name: "Invite people"
-                Accessible.onPressAction: page.invitePeople()
-                Icon { anchors.centerIn: parent; name: "plus"; size: Theme.px(16); color: Theme.textSoft }
-                HoverHandler { id: invHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: page.invitePeople() }
+                label: "Group menu"
+                onClicked: page.groupMenu()
             }
         }
 
@@ -217,7 +206,7 @@ Rectangle {
             visible: !page.locked && page.exists
             anchors.top: chanHead.bottom
             anchors.topMargin: Theme.px(12)
-            anchors.bottom: voiceStrip.top
+            anchors.bottom: parent.bottom
             anchors.bottomMargin: Theme.px(6)
             x: Theme.px(8)
             width: parent.width - Theme.px(16)
@@ -313,7 +302,7 @@ Rectangle {
                     HoverHandler { id: chanHover }
                     TapHandler {
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) page.groupOptions(); else page.openRow() }
+                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) page.groupMenu(); else page.openRow() }
                     }
                 }
                 // Who's in a voice room, one under the other like Discord.
@@ -360,32 +349,9 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: page.locked ? "Huginn is locked. Open Direct messages to unlock it." : "This group isn't on this computer anymore."
+            text: page.locked ? "Locked. Open Chats to unlock." : "This group isn't here anymore."
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(15)
-        }
-
-        // Voice rooms wait for calls; and how Huginn reaches people right now.
-        Rectangle {
-            id: voiceStrip
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: Theme.px(32)
-            color: Theme.groundDeep
-            Row {
-                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.px(8)
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "shield"; size: Theme.px(15); color: Chat.internet > 0 ? Theme.accent : Theme.textMuted }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: voiceStrip.width - Theme.px(50)
-                    elide: Text.ElideRight
-                    text: Chat.netStatus + " · encrypted"
-                    color: Theme.textMuted
-                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
-                }
-            }
         }
     }
 
@@ -406,26 +372,14 @@ Rectangle {
             onBack: { page.zone = "channels"; page.sel = -1 }
             glyph: page.locked || !page.exists ? "" : "#"
             title: page.locked || !page.exists ? "" : page.channel.name
-            subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only: you're no longer in " + page.info.name
-                    : "Encrypted for the " + page.info.count + (page.info.count === 1 ? " person in " : " people in ") + page.info.name
-            // Pinned messages of this channel (only on this computer).
-            HButton {
-                anchors.verticalCenter: parent.verticalCenter
+            subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only" : (page.info.name || "")
+            // The group's one menu, in every layout.
+            MoreButton {
                 visible: !page.locked && page.exists
-                text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
-                onClicked: page.side = page.side === "pins" ? "" : "pins"
-            }
-            HButton {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !page.locked && page.exists && !Theme.portrait
-                text: "Group options"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
-                onClicked: page.groupOptions()
+                label: "Group menu"
+                onClicked: page.groupMenu()
             }
-            // The desktop: show or hide the channel list and the member list.
-            PaneToggle { which: "list" }
-            PaneToggle { which: "members"; visible: page.membersFit && !page.locked && page.exists }
         }
 
         Item {
@@ -449,7 +403,7 @@ Rectangle {
                     id: goneText
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     wrapMode: Text.WordWrap
-                    text: (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + ". The messages stay here until you delete it: Group options, then Delete it from this computer."
+                    text: (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + "."
                     color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -483,7 +437,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 visible: list.count === 0
-                text: page.readOnly ? "Nothing here." : "Nothing in #" + page.channel.name + " yet." + (page.pad ? " Press A to write, hold Y to talk." : " Say hello.")
+                text: page.readOnly ? "Nothing here." : "Nothing in #" + page.channel.name + " yet."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
 
@@ -504,7 +458,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Release Y to send, B cancels" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -588,7 +542,7 @@ Rectangle {
             id: sideHead
             width: parent.width
             title: page.side === "thread" ? "Thread" : "Pinned"
-            subtitle: page.side === "thread" ? "#" + page.channel.name : page.pinnedMsgs.length ? page.pinnedMsgs.length + " in #" + page.channel.name + " · only on this computer" : "Nothing pinned in #" + page.channel.name
+            subtitle: "#" + page.channel.name
             HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; kind: "plain"; implicitHeight: Theme.px(30); fontSize: 13; onClicked: { page.side = ""; page.threadRoot = "" } }
         }
         ListView {
@@ -617,7 +571,7 @@ Rectangle {
             anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(16)
             x: Theme.px(16); width: parent.width - Theme.px(32)
             wrapMode: Text.WordWrap
-            text: "Pin a message with the pin over its corner. Pins stay on this computer."
+            text: "Nothing pinned."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
         Composer {
@@ -668,14 +622,15 @@ Rectangle {
         anchors.bottom: parent.bottom
         width: Theme.memberWidth
     }
-    // A member's profile card, with what an admin can do with them behind Group options.
-    function showMember(m) {
-        if (!m) return
+    // A member's profile card (a click on their name or picture in the channel). Its three dots open
+    // their member menu, the same as their row, LT and A.
+    function showMember(key, name) {
+        const m = members.find(x => (x.me ? "me" : x.key) === key) || null
+        if (!m) { Ui.showProfile(key, name, {}); return }
         const status = memberCol.statusOf(m)
         const extra = { group: info.name, admin: !!m.admin, owner: !!m.owner, room: status === "voice" ? memberCol.voiceIn[m.me ? "me" : m.key] : "" }
         if (isTour) { extra.tour = true; extra.status = status }
-        else if (!m.me && !readOnly) extra.g = gid   // "Add as a contact" (cap i1) for someone who isn't one yet
-        else if (!m.me && !readOnly && info.amAdmin) extra.more = () => page.memberOptions(m)
+        if (!m.me) extra.more = () => page.memberMenu(m)
         Ui.showProfile(m.me ? "me" : m.key, m.name, extra)
     }
 
@@ -696,12 +651,12 @@ Rectangle {
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(10)
                 Text { width: parent.width; wrapMode: Text.WordWrap; text: ("Join " + (page.info.name || "")).toUpperCase(); color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "Anyone who scans this with Muninn, or pastes it into Huginn's Add someone, joins the group. It works for an hour; remove anyone you didn't mean to let in from Members."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 Text {
                     property real now: Date.now()
                     Timer { interval: 10000; repeat: true; running: page.shownCode !== ""; onTriggered: parent.now = Date.now() }
-                    text: page.codeUntil > now ? "Good for " + Math.ceil((page.codeUntil - now) / 60000) + " more minutes" : "This code has expired. Make a new one"
-                    color: page.codeUntil > now ? Theme.accent : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: page.codeUntil > now ? "Scan or paste to join. Works for 1 hour." : "Expired. Make a new code."
+                    color: page.codeUntil > now ? Theme.textMuted : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -714,7 +669,7 @@ Rectangle {
                     spacing: Theme.px(8)
                     HButton { text: "Close"; kind: "plain"; onClicked: page.shownCode = "" }
                     HButton { text: "New code"; onClicked: page.showCode() }
-                    HButton { text: "Copy code"; kind: "primary"; onClicked: { Chat.copyText(page.shownCode); Ui.say("Group code copied. It works for an hour.") } }
+                    HButton { text: "Copy code"; kind: "primary"; onClicked: { Chat.copyText(page.shownCode); Ui.say("Group code copied.") } }
                 }
             }
         }
@@ -723,7 +678,6 @@ Rectangle {
     // Invite links (Discord style): make one, see them all, revoke.
     InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; amAdmin: !!page.info.amAdmin }
     readonly property bool canInvite: !page.locked && page.exists && !page.readOnly && !page.isTour && (!!page.info.amAdmin || invitePanel.membersCanInvite)
-    function invitePeople() { invitePanel.openCreate() }
 
     // ============================================================= actions
     function tell(result, done) { if (result === "") { if (done) Ui.say(done) } else Ui.say(result, true) }
@@ -735,20 +689,20 @@ Rectangle {
         channelId = r.id
         zone = "messages"
     }
-    // A voice room or group call: one tap joins; in it already, its options.
+    // A voice room or group call: one tap joins; in it already, its menu.
     function roomAction(r) {
-        if (isTour) { Ui.say(r.name + " is a voice room: choose it to join, up to " + Rooms.maxPeople + " people at once."); return }
+        if (isTour) { Ui.say(r.name + ": choose it to join."); return }
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
         if (Rooms.isIn(gid, r.id)) {
-            Ui.pickFrom(r.name, [{ header: Rooms.statusText, items: [
-                { name: Rooms.muted ? "Unmute" : "Mute", url: "mute" },
-                { name: Rooms.deafened ? "Undeafen" : "Deafen", detail: "Deafened, you hear nobody and you're muted", url: "deafen" },
-                { name: Rooms.sharing ? "Stop sharing your screen" : "Share your screen", detail: Rooms.canShare ? "Everyone in the room sees it, encrypted to each" : "Not in this build", url: "share" },
-                { name: "Output: " + Rooms.outputName, detail: "Choose again for the next one", url: "output" },
-                { name: "Leave " + r.name, detail: "You stop hearing and being heard", url: "leave" }] }], a => {
+            const items = [{ name: "Mute", icon: "micoff", url: "mute", check: Rooms.muted },
+                           { name: "Deafen", icon: "deafened", url: "deafen", check: Rooms.deafened }]
+            if (Rooms.canShare) items.push({ name: "Share my screen", icon: "screen", url: "share", check: Rooms.sharing })
+            items.push({ name: "Output: " + Rooms.outputName, icon: "speaker", url: "output" },
+                       { name: "Leave " + r.name, url: "leave", danger: true })
+            Ui.pickFrom(r.name, [{ header: "", items: items }], a => {
                 if (a === "mute") Rooms.toggleMute()
                 else if (a === "deafen") Rooms.toggleDeafen()
-                else if (a === "share" && Rooms.canShare) Rooms.toggleShare()
+                else if (a === "share") Rooms.toggleShare()
                 else if (a === "output") Rooms.nextOutput()
                 else if (a === "leave") Rooms.leave()
             })
@@ -756,32 +710,14 @@ Rectangle {
         }
         const why = Rooms.join(gid, r.id)
         if (why !== "") Ui.say(why, true)
-        else Ui.say("You joined " + r.name + ". Up to " + Rooms.maxPeople + " people at once.")
-    }
-    // Ring some members into a group call: choose people (again to leave them out), then Start.
-    function pickCallees(chosen) {
-        const g = gid
-        const items = [{ name: chosen.length ? "Start the call" : "Choose who to ring",
-                         detail: chosen.length ? chosen.length + (chosen.length === 1 ? " person" : " people") + " will be rung" : "Then come back here", url: "go" }]
-        members.filter(m => !m.me).forEach(m => items.push({ name: m.name, url: m.key,
-            detail: Rooms.needsUpdate(m.key) ? "Needs an update to join calls"
-                  : chosen.indexOf(m.key) >= 0 ? "Will be rung · choose again to leave out" : "Choose to ring" }))
-        Ui.pickFrom("Call some people", [{ header: "Up to " + Rooms.maxPeople + " people talk at once", items: items }], k => {
-            if (k === "go") {
-                if (chosen.length) tell(Rooms.callGroup(g, chosen), "Ringing " + chosen.length + (chosen.length === 1 ? " person." : " people."))
-                else Qt.callLater(() => page.pickCallees(chosen))
-                return
-            }
-            const next = chosen.indexOf(k) >= 0 ? chosen.filter(x => x !== k) : chosen.concat([k])
-            Qt.callLater(() => page.pickCallees(next))
-        })
+        else Ui.say("You joined " + r.name + ".")
     }
     function write() {
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
         if (isTour) return
         if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         const g = gid, ch = channelId, re = replyId
-        Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "Encrypted for everyone in " + info.name, "", "Send",
+        Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
                t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" }, false, true)
     }
     // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
@@ -792,154 +728,204 @@ Rectangle {
     function showCode() {
         if (isTour) return
         const c = Chat.groupCode(gid)
-        if (c === "") { Ui.say("Only the group's admins can share its code.", true); return }
+        if (c === "") { Ui.say("Only admins can share the group code.", true); return }
         shownCode = c
         codeUntil = Date.now() + 3600000
     }
-    function invite() {
-        if (isTour) return
-        const inGroup = members.map(m => m.key)
-        const people = Chat.people.filter(p => p.contact && !p.blocked && inGroup.indexOf(p.key) < 0)
-        if (!people.length) { Ui.say("Everyone you're in touch with is already here. For anyone else, show the group code.", true); return }
-        const g = gid
-        Ui.pickFrom("Invite to " + info.name, [{ header: "Contacts", items: people.map(p => ({ name: p.name, url: p.key,
-            detail: Chat.canGroup(p.key) ? "Gets an invite to say yes to" : Chat.capsKnown(p.key) ? "Needs Muninn or Huginn 0.6" : "Checking their app first" })) }],
-            k => tell(Chat.inviteToGroup(g, k), "Invite sent. They join when they say yes."))
-    }
-    function groupItems() {
-        const people = [], chans = [], group = [], calls = []
-        if (!readOnly && !isTour && info.count > 1) {
-            calls.push({ name: "Call everyone", detail: "Rings the whole group. Up to " + Rooms.maxPeople + " people talk at once", url: "callall" })
-            if (info.count > 2) calls.push({ name: "Call some people", detail: "Choose who to ring", url: "callsome" })
-        }
-        if (!readOnly && info.amAdmin) {
-            people.push({ name: "Invite someone", detail: "A contact gets an invite to say yes to", url: "invite" })
-            people.push({ name: "Show the group code", detail: "For anyone else: they scan or paste it within the hour", url: "code" })
-        }
-        if (canInvite) people.push({ name: "Invite people", detail: "A link anyone can open to join", url: "invitelink" })
-        if (!readOnly && info.amAdmin && !isTour) people.push({ name: "Invites", detail: "Every invite link, who made it, uses and time left", url: "invites" })
-        if (!memberCol.visible) people.push({ name: "Members", detail: info.count + (info.count === 1 ? " person" : " people"), url: "members" })
-        if (!readOnly && info.amAdmin) {
-            chans.push({ name: "Add a text channel", url: "addtext" }, { name: "Add a voice room", detail: "Up to " + Rooms.maxPeople + " people talk at once", url: "addvoice" })
-            const r = rows[chRow]
-            const target = zone === "channels" && r && r.kind === "channel" ? r : channel
-            chans.push({ name: "Rename " + (target.type === "voice" ? "" : "#") + target.name, url: "rnch:" + target.id })
-            if (target.id !== "main") chans.push({ name: "Remove " + (target.type === "voice" ? "" : "#") + target.name, detail: "Its messages stay on this computer", url: "rmch:" + target.id })
-            group.push({ name: "Rename the group", detail: "Now: " + info.name, url: "rename" })
-        }
-        if (!isTour) chans.push({ name: "Pinned in #" + channel.name, detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
-        if (!isTour) group.push({ name: "Messages", detail: limitDetail(), url: "limit" })
-        if (!readOnly) group.push({ name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" })
-        if (!isTour) chans.push({ name: "Shared in #" + channel.name, detail: "Photos, videos and links", url: "shared" })
-        if (readOnly) group.push({ name: "Delete it from this computer", detail: "Its messages and photos here", url: "forget" })
-        else group.push({ name: "Leave the group", detail: info.amOwner && info.count > 1 ? "Hand it to someone first (Members)" : "You stop getting its messages", url: "leave" })
-        return [{ header: "Calls", items: calls }, { header: "People", items: people }, { header: "Channels", items: chans }, { header: "Group", items: group }]
-    }
-    function groupOptions() {
+
+    // ============================================================= the group's one menu
+    // Call everyone · Call some people · People · Add people · Channels · Group settings · Leave.
+    // The bigger ones open a sub-page; B there comes back here.
+    function groupMenu() {
         if (!exists) return
-        Ui.pickFrom(info.name || "Group", groupItems(), a => groupAction(a))
+        const items = []
+        if (!readOnly && (isTour || info.count > 1)) {
+            items.push({ name: "Call everyone", icon: "call", url: "callall" })
+            if (isTour || info.count > 2) items.push({ name: "Call some people", icon: "call", url: "callsome" })
+        }
+        items.push({ name: "People", icon: "people", url: "people" })
+        if (isTour || canInvite || (!readOnly && info.amAdmin)) items.push({ name: "Add people", icon: "plus", url: "add" })
+        items.push({ name: "Channels", icon: "hash", url: "channels" },
+                   { name: "Group settings", icon: "gear", url: "settings" })
+        items.push(readOnly ? { name: "Delete from this PC", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true })
+        Ui.pickFrom(info.name || "Group", [{ header: "", items: items }], a => groupAction(a))
     }
     function groupAction(a) {
         const g = gid
-        {
-            if (a === "invite") invite()
-            else if (a === "invitelink") invitePeople()
-            else if (a === "invites") invitePanel.openList()
-            else if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone in " + info.name + ".")
-            else if (a === "callsome") pickCallees([])
-            else if (a === "code") showCode()
-            else if (a === "members") pickMember()
-            else if (a === "pins") openPins()
+        if (a === "people") { peopleMenu(); return }
+        if (isTour) return
+        if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone.")
+        else if (a === "callsome") pickCallees([])
+        else if (a === "add") addMenu()
+        else if (a === "channels") channelsMenu()
+        else if (a === "settings") settingsMenu()
+        else if (a === "leave") {
+            if (info.amOwner && info.count > 1) { Ui.say("Make someone else owner first.", true); return }
+            Ui.sure("Leave " + info.name + "?", "Only an invite brings you back.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), false, true)
+        } else if (a === "forget") {
+            Ui.sure("Delete " + info.name + " from this PC?", "Can't be undone.", "Hold to delete",
+                    () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
+        }
+    }
+    // People: everyone in the group; each opens their member menu.
+    function peopleMenu() {
+        Ui.pickFrom("People", [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.me ? "me" : m.key,
+            detail: m.owner ? "Owner" : m.admin ? "Admin" : "" })) }],
+            k => { const m = members.find(x => (x.me ? "me" : x.key) === k); if (m) memberMenu(m, () => page.peopleMenu()) },
+            () => page.groupMenu())
+    }
+    // Ring some members into a group call: choose people (again to leave them out), then Start.
+    function pickCallees(chosen) {
+        const g = gid
+        const items = [{ name: chosen.length ? "Start the call (" + chosen.length + ")" : "Start the call", icon: "call", url: "go" }]
+        members.filter(m => !m.me).forEach(m => items.push({ name: m.name, url: m.key, check: chosen.indexOf(m.key) >= 0,
+            detail: Rooms.needsUpdate(m.key) ? "Needs an update" : "" }))
+        Ui.pickFrom("Call some people", [{ header: "", items: items }], k => {
+            if (k === "go") {
+                if (chosen.length) tell(Rooms.callGroup(g, chosen), "Ringing " + chosen.length + (chosen.length === 1 ? " person." : " people."))
+                else { Ui.say("Choose who to ring first."); Qt.callLater(() => page.pickCallees(chosen)) }
+                return
+            }
+            const next = chosen.indexOf(k) >= 0 ? chosen.filter(x => x !== k) : chosen.concat([k])
+            Qt.callLater(() => page.pickCallees(next))
+        }, () => page.groupMenu())
+    }
+    // Add people: from your contacts, a link or the group code, and the links already made.
+    function addMenu() {
+        const items = []
+        if (!readOnly && info.amAdmin) items.push({ name: "From contacts", icon: "person", url: "contacts" })
+        if (canInvite || info.amAdmin) items.push({ name: "Link or code", icon: "qr", url: "link" })
+        if (!readOnly && info.amAdmin && invitePanel.has("groupLinks")) items.push({ name: "Active links", icon: "attach", url: "links" })
+        Ui.pickFrom("Add people", [{ header: "", items: items }], a => {
+            if (a === "contacts") invite()
+            else if (a === "link") { if (invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
+            else if (a === "links") invitePanel.openList()
+        }, () => page.groupMenu())
+    }
+    function invite() {
+        const inGroup = members.map(m => m.key)
+        const people = Chat.people.filter(p => p.contact && !p.blocked && inGroup.indexOf(p.key) < 0)
+        if (!people.length) { Ui.say("Every contact is already here.", true); return }
+        const g = gid
+        Ui.pickFrom("From contacts", [{ header: "", items: people.map(p => ({ name: p.name, url: p.key,
+            detail: Chat.canGroup(p.key) ? "" : Chat.capsKnown(p.key) ? "Needs an update" : "Checking their app" })) }],
+            k => tell(Chat.inviteToGroup(g, k), "Invite sent."), () => page.addMenu())
+    }
+    // Channels: pins and what was shared in this one; admins add, rename and remove.
+    function channelsMenu() {
+        const items = [{ name: "Pinned in #" + channel.name, icon: "pin", url: "pins" },
+                       { name: "Shared in #" + channel.name, icon: "image", url: "shared" }]
+        if (!readOnly && info.amAdmin) {
+            items.push({ name: "Add a text channel", icon: "hash", url: "addtext" },
+                       { name: "Add a voice room", icon: "speaker", url: "addvoice" },
+                       { name: "Rename a channel", icon: "edit", url: "rename" })
+            if (channels.some(c => c.id !== "main")) items.push({ name: "Remove a channel", url: "remove", danger: true })
+        }
+        const g = gid, back = () => page.channelsMenu()
+        Ui.pickFrom("Channels", [{ header: "", items: items }], a => {
+            if (a === "pins") openPins()
             else if (a === "shared") more.openShared()
-            else if (a === "limit") pickGroupLimit()
-            else if (a === "picture") pickPicture()
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
-                Ui.ask(voice ? "New voice room" : "New text channel", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, voice), voice ? "Voice room added." : "Channel added."), false, true)
-            } else if (a.startsWith("rnch:")) {
-                const id = a.substring(5)
-                const c = channels.find(x => x.id === id)
-                Ui.ask("Rename " + (c ? c.name : "channel"), "Up to 32 characters", c ? c.name : "", "Save", t => tell(Chat.renameChannel(g, id, t), "Renamed."), false, true)
-            } else if (a.startsWith("rmch:")) {
-                const id = a.substring(5)
-                const c = channels.find(x => x.id === id)
-                Ui.sure("Remove " + (c ? c.name : "this channel") + "?", "It goes for everyone in the group. Messages already here stay on this device, in #general.", "Remove",
-                        () => { if (channelId === id) channelId = "main"; tell(Chat.removeChannel(g, id), "Removed.") }, false, true)
+                Ui.ask(voice ? "New voice room" : "New text channel", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, voice), "Added."), false, true)
             } else if (a === "rename") {
-                Ui.ask("Rename the group", "Everyone in it sees the new name", info.name, "Save", t => tell(Chat.renameGroup(g, t), "Renamed."), false, true)
-            } else if (a === "leave") {
-                if (info.amOwner && info.count > 1) { Ui.say("You own this group. Hand it to someone first: Members, then Make owner.", true); return }
-                Ui.sure("Leave " + info.name + "?", "You stop getting its messages. To come back, someone has to invite you again.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), false, true)
-            } else if (a === "forget") {
-                Ui.sure("Delete " + info.name + " from this computer?", "Its messages and photos here are deleted. Nobody else is affected.", "Hold to delete",
-                        () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
+                pickChannel("Rename which?", channels, id => {
+                    const c = channels.find(x => x.id === id)
+                    Ui.ask("Rename " + (c ? c.name : "channel"), "Up to 32 characters", c ? c.name : "", "Save", t => tell(Chat.renameChannel(g, id, t), "Renamed."), false, true)
+                }, back)
+            } else if (a === "remove") {
+                pickChannel("Remove which?", channels.filter(c => c.id !== "main"), id => {
+                    const c = channels.find(x => x.id === id)
+                    Ui.sure("Remove " + (c ? c.name : "this channel") + "?", "Gone for everyone.", "Remove",
+                            () => { if (channelId === id) channelId = "main"; tell(Chat.removeChannel(g, id), "Removed.") }, false, true)
+                }, back)
             }
-        }
+        }, () => page.groupMenu())
+    }
+    function pickChannel(title, list, cb, back) {
+        Ui.pickFrom(title, [{ header: "", items: list.map(c => ({ name: (c.type === "voice" ? "" : "#") + c.name, icon: c.type === "voice" ? "speaker" : "hash", url: c.id })) }], cb, back)
+    }
+    // Group settings: its name, how long messages stay, and who can invite (admins change them).
+    function settingsMenu() {
+        const l = Chat.groupLimit(gid), admin = !readOnly && !!info.amAdmin
+        const items = []
+        if (admin) items.push({ name: "Name", icon: "edit", detail: info.name, url: "name" })
+        items.push({ name: "Message days", icon: "moon", detail: l.days + " days", url: "days" })
+        if (admin && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
+        const g = gid, back = () => page.settingsMenu()
+        Ui.pickFrom("Group settings", [{ header: "", items: items }], a => {
+            if (a === "name") Ui.ask("Group name", "Everyone sees it", info.name, "Save", t => tell(Chat.renameGroup(g, t), "Renamed."), false, true)
+            else if (a === "days") pickGroupLimit(back)
+            else if (a === "invite") {
+                const r = Chat.setMembersInvite(g, !invitePanel.membersCanInvite)
+                if (r) Ui.say(r, true)
+                invitePanel.revision++
+                Qt.callLater(back)
+            }
+        }, () => page.groupMenu())
     }
     // Cap d1: the group's type and how many days messages stay, the same for everyone. Only admins change it.
     function limitDetail() {
         const l = Chat.groupLimit(gid)
-        return l.kindName + " group · messages disappear after " + l.days + " days"
+        return l.kindName + " group: " + l.days + " days"
     }
-    function pickGroupLimit() {
+    function pickGroupLimit(back) {
         const g = gid, l = Chat.groupLimit(g)
-        const older = l.older.length ? "Older apps keep messages until they update: " + l.older.join(", ") : ""
-        if (readOnly || !info.amAdmin) { Ui.say(limitDetail() + (older ? ". " + older + "." : ".")); return }
-        const items = [{ name: "Standard · 7 days", detail: l.kind === "" ? "Now" : "", url: ":7" }]
+        if (readOnly || !info.amAdmin) { Ui.say(limitDetail() + "."); return }
+        const items = [{ name: "Standard · 7 days", check: l.kind === "", url: ":7" }]
         for (const k of ["family", "work"])
             for (const d of l.choices)
-                items.push({ name: (k === "family" ? "Family" : "Work") + " · " + d + " days", detail: l.kind === k && l.days === d ? "Now" : "", url: k + ":" + d })
-        Ui.pickFrom("Messages in " + info.name, [{ header: older || "The same for everyone in the group", items: items }], a => {
+                items.push({ name: (k === "family" ? "Family" : "Work") + " · " + d + " days", check: l.kind === k && l.days === d, url: k + ":" + d })
+        Ui.pickFrom("Message days", [{ header: l.older.length ? "Some apps keep all until updated" : "", items: items }], a => {
             const p = a.split(":")
-            tell(Chat.setGroupLimit(g, p[0], Number(p[1])), "Messages in " + info.name + " now disappear after " + p[1] + " days.")
-        })
+            tell(Chat.setGroupLimit(g, p[0], Number(p[1])), p[1] + " days.")
+        }, back)
     }
-    function pickMember() {
-        Ui.pickFrom("Members of " + info.name, [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.key,
-            detail: m.owner ? "Owner" : m.admin ? "Admin" : m.contact ? "Contact" : "In this group" })) }],
-            k => { const m = members.find(x => x.key === k); if (m) memberOptions(m) })
-    }
-    function memberOptions(m) {
-        if (!m || isTour) return
+    // A member's one menu: Message · Add as contact · Make or remove admin · Make owner · Remove from
+    // group (what you may do). Their row, its three dots, A and LT all open it.
+    function memberMenu(m, back) {
+        if (!m) return
+        if (m.me) { Ui.say("That's you."); return }
         const items = []
-        if (m.contact && !m.me) items.push({ name: "Message", detail: "Your direct chat", url: "dm" })
-        if (!m.contact && !m.me && !readOnly) items.push({ name: "Add as a contact", detail: "They're asked too; once both say yes you can message directly", url: "add" })
-        if (!readOnly && !m.me && info.amAdmin) {
-            if (!m.admin) items.push({ name: "Make admin", detail: "They can invite, remove and change the group too", url: "admin" })
-            else if (info.amOwner && !m.owner) items.push({ name: "Remove as admin", url: "unadmin" })
-            if (info.amOwner) items.push({ name: "Make owner", detail: "Hands the group to them; you stay an admin", url: "owner" })
-            if (!m.owner && (!m.admin || info.amOwner)) items.push({ name: "Remove from the group", detail: "They're told, and stop getting its messages", url: "remove" })
+        if (m.contact) items.push({ name: "Message", icon: "thread", url: "dm" })
+        else if (!readOnly) items.push({ name: "Add as contact", icon: "plus", url: "add" })
+        if (!readOnly && (info.amAdmin || isTour)) {
+            if (!m.admin) items.push({ name: "Make admin", icon: "shield", url: "admin" })
+            else if (info.amOwner && !m.owner) items.push({ name: "Remove admin", icon: "shield", url: "unadmin" })
+            if (info.amOwner && !m.owner) items.push({ name: "Make owner", icon: "crown", url: "owner" })
+            if (!m.owner && (!m.admin || info.amOwner)) items.push({ name: "Remove from group", url: "remove", danger: true })
         }
-        if (!items.length) { Ui.say(m.me ? "That's you." : m.name + (m.owner ? " owns the group." : m.admin ? " is an admin." : " is in the group.")); return }
+        if (!items.length) { Ui.say(m.name + (m.owner ? " owns the group." : m.admin ? " is an admin." : " is in the group.")); return }
         const g = gid
         Ui.pickFrom(m.name, [{ header: m.owner ? "Owner" : m.admin ? "Admin" : "", items: items }], a => {
+            if (isTour) return
             if (a === "dm") Ui.openPage("dms", { open: m.key })
             else if (a === "add") PeopleActions.askToAdd(g, m)
             else if (a === "admin") tell(Chat.setAdmin(g, m.key, true), m.name + " is an admin now.")
-            else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin anymore.")
-            else if (a === "owner") Ui.sure("Hand " + info.name + " to " + m.name + "?", "They become the owner. You stay an admin, and can leave after.", "Hand it over", () => tell(Chat.handOver(g, m.key), m.name + " owns the group now."), false, true)
-            else if (a === "remove") Ui.sure("Remove " + m.name + "?", "They're told, and stop getting the group's messages. Their old messages stay.", "Remove", () => tell(Chat.removeMember(g, m.key), m.name + " was removed."), false, true)
-        })
+            else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin now.")
+            else if (a === "owner") Ui.sure("Make " + m.name + " owner?", "You stay an admin.", "Make owner", () => tell(Chat.handOver(g, m.key), m.name + " owns the group now."), false, true)
+            else if (a === "remove") Ui.sure("Remove " + m.name + "?", "They're told.", "Remove", () => tell(Chat.removeMember(g, m.key), m.name + " was removed."), false, true)
+        }, back)
     }
     function messageOptions() {
         const m = messages[sel]
-        if (!m || m.system) { groupOptions(); return }
+        if (!m || m.system) { groupMenu(); return }
         const items = []
         if (!m.unsent && !readOnly) {
-            items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
-            items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
-            items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
+            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react" })
+            items.push({ name: "Reply", icon: "reply", url: "reply" })
+            items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
-        if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", detail: "Everyone sees it marked (edited)", url: "edit" })
-        if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
+        if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", icon: "edit", url: "edit" })
+        if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
-        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", url: "play" })
-        if (m.mine && !m.unsent && !readOnly) items.push({ name: "Unsend", detail: "Removes it for everyone in the group", url: "unsend" })
+        if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
+        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
-        items.push({ name: "Delete for me", detail: "Only on this computer", url: "delete" })
+        if (m.mine && !m.unsent && !readOnly) items.push({ name: "Unsend", detail: "Removes it for everyone", url: "unsend", danger: true })
+        items.push({ name: "Delete for me", url: "delete", danger: true })
         const g = gid
-        Ui.pickFrom("Message", [{ header: "", items: items }].concat(groupItems()), a => {
+        Ui.pickFrom("Message", [{ header: "", items: items }], a => {
             if (a === "react") pickReaction(m)
             else if (a === "reply") startReply(m.id)
             else if (a === "thread") openThread(m.id)
@@ -952,7 +938,6 @@ Rectangle {
             else if (a === "unsend") Chat.unsendGroup(g, m.id)
             else if (a === "retry") Chat.retryGroup(g, m.id)
             else if (a === "delete") Chat.deleteGroupMessage(g, m.id)
-            else groupAction(a)
         })
     }
     // ------------------------------------------------------------- cap m1: replies, reactions, edits, threads, pins
@@ -1027,13 +1012,13 @@ Rectangle {
         if (isTour) return
         const on = pins.indexOf(id) < 0
         Chat.setPinned(chatKey, id, on)
-        Ui.say(on ? "Pinned. Pins are only on this computer." : "Unpinned.")
+        Ui.say(on ? "Pinned on this PC." : "Unpinned.")
     }
     function dropFiles(urls) { more.dropFiles(urls) }
     function pickReaction(m) {
         const g = gid, id = m.id
-        const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
-        if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
+        const items = Chat.quickReactions().map(e => ({ name: e, check: e === m.myReaction, url: e }))
+        if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, check: true, url: m.myReaction })
         items.push({ name: "More emoji", url: "+" })
         Ui.pickFrom("React", [{ header: "", items: items }], e => {
             if (e === "+") { openReact(id, m.myReaction || ""); return }
@@ -1053,7 +1038,7 @@ Rectangle {
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
     function boxButton(box, b) {
         switch (b) {
-        case "a": case "start": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "a": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
         case "y": System.showSteamKeyboard(); return true
         case "x": boxOptions(box); return true
         case "down": return true
@@ -1062,10 +1047,10 @@ Rectangle {
         return b === "b"
     }
     function boxOptions(box) {
-        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: page.pad ? "Pick one with the D-pad" : "", url: "emoji" },
-                       { name: "Send pictures, a video or a poll", detail: "To #" + channel.name, url: "picture" }]
+        const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" },
+                       { name: "Pictures, video or poll", icon: "image", url: "picture" }]
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
-        items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
+        items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
@@ -1086,7 +1071,7 @@ Rectangle {
             if (side === "thread") { if (threadBox.visible) threadBox.focusField(); else Ui.say("You're no longer in this group.", true) }
             else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
             return true
-        case "x": if (sideSel >= 0) sideOptions(sideSel); else groupOptions(); return true
+        case "x": if (sideSel >= 0) sideOptions(sideSel); else groupMenu(); return true
         case "y": return true
         case "b": side = ""; threadRoot = ""; return true
         }
@@ -1100,7 +1085,7 @@ Rectangle {
         if (more.busy) return more.handleButton(b)
         if (invitePanel.visible) return invitePanel.handleButton(b)
         if (shownCode !== "") {
-            if (b === "a") { Chat.copyText(shownCode); Ui.say("Code copied. It works for an hour.") }
+            if (b === "a") { Chat.copyText(shownCode); Ui.say("Group code copied.") }
             else if (b === "x") showCode()
             else if (b === "b") shownCode = ""
             return true
@@ -1137,12 +1122,13 @@ Rectangle {
             return true
         case "a":
             if (zone === "channels") openRow()
-            else if (zone === "members") showMember(memberCol.ordered[memRow])
+            else if (zone === "members") memberMenu(memberCol.ordered[memRow])
             else write()
             return true
         case "x":
             if (zone === "messages" && sel >= 0) messageOptions()
-            else groupOptions()
+            else if (zone === "members") memberMenu(memberCol.ordered[memRow])
+            else groupMenu()
             return true
         case "y":
             if (zone === "messages" && !readOnly && !isTour && !Voice.recording) {

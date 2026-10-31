@@ -133,12 +133,10 @@ fun InviteLinkDialog(app: Muninn, g: String, groupName: String, done: () -> Unit
                     FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         GroupLinks.USES.forEach { (n, w) -> MButton(w, kind = if (uses == n) Kind.Accent else Kind.Normal) { uses = n } }
                     }
-                    Text("Anyone with the link can join while it works. You can take it back in Group settings › Invite links.",
-                        style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                    Text("Revoke it any time in Add people.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
                 } else {
                     Text("Anyone with this link can join $groupName (${GroupLinks.left(l.expires)}" +
                         (if (l.max > 0) ", ${l.max} ${if (l.max == 1) "use" else "uses"})." else ")."), style = Type.normal)
-                    if (!GroupLinks.ready) Text("For now links work for an hour. Longer links come with the next update.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Qr(l.text, 220.dp) }
                     MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
                         io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn invite link", l.text)
@@ -161,35 +159,39 @@ fun InviteLinkDialog(app: Muninn, g: String, groupName: String, done: () -> Unit
     )
 }
 
-/** Group settings › Invite links: each link with who made it, uses and time left, and Revoke. Admins also get "Members can invite". */
+/** Add people › Active links: each link with who made it, uses and time left, and Revoke. Nothing when there are none. */
 @Composable
-fun InviteLinksSection(app: Muninn, g: String, admin: Boolean, onNew: () -> Unit) {
+fun InviteLinksSection(app: Muninn, g: String, admin: Boolean) {
     var tick by remember { mutableStateOf(0) }
     val links = remember(tick) { GroupLinks.list(app, g) }
-    Section("Invite links")
-    if (links.isEmpty()) Text(if (GroupLinks.ready) "No links yet." else "Links you make work for an hour for now.", style = Type.small)
-    links.forEach { l ->
-        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("By ${if (l.by == app.identity.publicKey) "you" else app.chat.nameOf(l.by)}", style = Type.normal.copy(color = Palette.text))
-                Text("${l.uses}${if (l.max > 0) " of ${l.max}" else ""} used · ${GroupLinks.left(l.expires)}", style = Type.small)
-            }
-            MButton("Revoke", kind = Kind.Danger) {
-                Ui.sure(Ask("Revoke this link?", "It stops working at once. People who already joined stay.", "Revoke", danger = true,
-                    onConfirm = { GroupLinks.revoke(app, g, l.id); tick++ }))
+    if (links.isEmpty() && !( !GroupLinks.ready && admin)) return
+    io.github.ravenor907.muninn.ui.Framed("Active links") {
+        links.forEach { l ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("By ${if (l.by == app.identity.publicKey) "you" else app.chat.nameOf(l.by)}", style = Type.normal.copy(color = Palette.text))
+                    Text("${l.uses}${if (l.max > 0) " of ${l.max}" else ""} used · ${GroupLinks.left(l.expires)}", style = Type.small)
+                }
+                MButton("Revoke", kind = Kind.Danger) {
+                    Ui.sure(Ask("Revoke this link?", "It stops working at once.", "Revoke", danger = true,
+                        onConfirm = { GroupLinks.revoke(app, g, l.id); tick++ }))
+                }
             }
         }
-    }
-    if (GroupLinks.canInvite(app, g)) MButton("New invite link", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "link") { onNew() }
-    if (!GroupLinks.ready && admin) MButton("Stop every link", Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        GroupLinks.revoke(app, g, ""); Ui.say("Those links don't work any more.")
-    }
-    if (admin) {
-        var on by remember { mutableStateOf(GroupLinks.membersCanInvite(app, g)) }
-        ToggleRow("Members can invite", "Anyone in the group can make invite links, not just admins", on) {
-            val why = GroupLinks.setMembersCanInvite(app, g, it)
-            if (why != null) Ui.say(why) else on = it
+        if (!GroupLinks.ready && admin) MButton("Stop every link", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Danger) {
+            Ui.sure(Ask("Stop every link?", "They stop working at once.", "Stop", danger = true,
+                onConfirm = { GroupLinks.revoke(app, g, ""); Ui.say("Those links don't work any more.") }))
         }
+    }
+}
+
+/** Group settings › Who can invite: admins only, or everyone in the group. */
+@Composable
+fun MembersInviteToggle(app: Muninn, g: String) {
+    var on by remember { mutableStateOf(GroupLinks.membersCanInvite(app, g)) }
+    ToggleRow("Members can invite", "Not just admins", on) {
+        val why = GroupLinks.setMembersCanInvite(app, g, it)
+        if (why != null) Ui.say(why) else on = it
     }
 }
 
@@ -200,7 +202,7 @@ fun JoinCard(app: Muninn, p: GroupLinks.Preview, onDone: () -> Unit) {
         Text(p.name, style = Type.title.copy(fontSize = 20.sp))
         Text(buildString {
             if (p.members > 0) append("${p.members} ${if (p.members == 1) "person" else "people"} · ")
-            append("${p.by.ifBlank { "An admin" }} invited you. Once you're in, everyone in the group sees your name and can message you there.")
+            append("Invited by ${p.by.ifBlank { "an admin" }}")
         }, style = Type.small, modifier = Modifier.padding(top = 4.dp))
         if (p.expired) Text("That link has ended. Ask for a new one.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
         else Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -208,7 +210,7 @@ fun JoinCard(app: Muninn, p: GroupLinks.Preview, onDone: () -> Unit) {
             MButton("Join", Modifier.weight(1f), Kind.Accent) {
                 val err = GroupLinks.join(app, p)
                 if (err != null) Ui.say(err, true)
-                else { Ui.say("Asked to join. ${p.name} shows up in your chats once ${p.by.ifBlank { "the admin" }}'s phone answers."); onDone() }
+                else { Ui.say("Asked to join ${p.name}."); onDone() }
             }
         }
     }

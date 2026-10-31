@@ -2,21 +2,18 @@ import QtQuick
 import Huginn
 
 // Your card, above the panel at the bottom left (a click on your name there): your picture and
-// name, a custom status, Online / Away / Do not disturb / Invisible, then Edit name and colour,
-// Change picture, My code and Link a phone. Only your contacts see any of it. Up and Down move
-// along the rows, A chooses, B or Escape closes; a click anywhere else closes it too.
+// name, a custom status, and Online / Away / Do not disturb / Invisible. Your name, picture, color
+// and code are in Settings › You. Up and Down move along the rows, A chooses, B or Escape closes;
+// a click anywhere else closes it too.
 Item {
     id: card
     property Item above: null          // the panel the card sits over
     property int focusIndex: 1
-    property string view: "main"       // "main" or "edit" (name and colour)
     visible: false
     anchors.fill: parent
 
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
-    readonly property var swatches: ["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"]
     readonly property color myTone: Theme.validColor(Profile.myColour) ? Profile.myColour : Theme.accent
-    property int swatch: Math.max(0, swatches.indexOf(String(Profile.myColour).toUpperCase()))
 
     // The rows, in the order the controller steps through them.
     readonly property var statusRows: [
@@ -25,20 +22,9 @@ Item {
         { id: "dnd", label: "Do not disturb", note: "no sounds" },
         { id: "invisible", label: "Invisible", note: "look offline" }
     ]
-    readonly property var actionRows: [
-        { id: "edit", label: "Edit name and colour", icon: "edit" },
-        { id: "picture", label: "Change picture", icon: "image" },
-        { id: "code", label: "My code", icon: "qr" },
-        { id: "phone", label: "Link a phone", icon: "phone" }
-    ]
-    readonly property var editRows: [
-        { id: "name", label: "Name: " + Chat.username, icon: "edit" },
-        { id: "colour", label: "Colour", icon: "smile", swatches: true },
-        { id: "back", label: "Back", icon: "back" }
-    ]
-    readonly property var rows: view === "edit" ? editRows : [{ id: "custom", label: "Custom status" }].concat(statusRows).concat(actionRows)
+    readonly property var rows: [{ id: "custom", label: "Custom status" }].concat(statusRows)
 
-    function open() { view = "main"; focusIndex = 1; visible = true; list.contentY = 0 }
+    function open() { focusIndex = 1; visible = true; list.contentY = 0 }
     function close() { visible = false; if (Ui.main) Ui.main.restoreFocus() }
     function toggle() { if (visible) close(); else open() }
     function dotColour(id) { return id === "online" ? Theme.online : id === "away" ? Theme.away : id === "dnd" ? Theme.dnd : Theme.offline }
@@ -46,22 +32,12 @@ Item {
 
     function run(id) {
         if (id === "custom") {
-            Ui.ask("Custom status", "A few words your contacts see under your name. Leave it empty for none", Profile.myCustomStatus, "Save",
+            Ui.ask("Custom status", "Empty: none", Profile.myCustomStatus, "Save",
                    t => Profile.setCustomStatus(t.slice(0, 80)), false, true)
         } else if (id === "online" || id === "away" || id === "dnd" || id === "invisible") {
             Profile.setStatus(id)
             if (Ui.main) Ui.main.autoAway = false
-        } else if (id === "edit") { view = "edit"; focusIndex = 0; list.contentY = 0 }
-        else if (id === "name") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
-        else if (id === "colour") Profile.setMyColour(swatches[swatch])
-        else if (id === "back") { view = "main"; focusIndex = 5; Qt.callLater(showFocused) }
-        else if (id === "picture") { close(); if (Ui.profile) Ui.profile.pickPicture() }
-        else if (id === "code") {
-            if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
-            close()
-            Ui.openPage("dms", {})
-            Qt.callLater(() => { const p = Ui.main.page(); if (p && p.showCode !== undefined) { Chat.newLink(); p.showCode = true } })
-        } else if (id === "phone") { close(); PeopleActions.linkedDevices() }
+        }
     }
     // Scrolls the list so the row the controller is on is in view.
     function showFocused() {
@@ -77,18 +53,13 @@ Item {
         if (top < list.contentY) list.contentY = top
         else if (bottom > list.contentY + list.height) list.contentY = bottom - list.height
     }
-    function pickSwatch(i) { swatch = i; Profile.setMyColour(swatches[i]) }
     function handleButton(b) {
         const n = rows.length
         const r = rows[focusIndex]
-        if (b === "b") { if (view === "edit") { view = "main"; focusIndex = 5; Qt.callLater(showFocused) } else close() }
+        if (b === "b" || b === "left") close()
         else if (b === "a") { if (r) run(r.id) }
         else if (b === "up") { focusIndex = Math.max(0, focusIndex - 1); Qt.callLater(showFocused) }
         else if (b === "down") { focusIndex = Math.min(n - 1, focusIndex + 1); Qt.callLater(showFocused) }
-        else if (b === "left" || b === "right") {
-            if (r && r.swatches) pickSwatch(Math.max(0, Math.min(swatches.length - 1, swatch + (b === "left" ? -1 : 1))))
-            else if (b === "left") close()
-        }
         return true
     }
 
@@ -114,7 +85,7 @@ Item {
         Accessible.name: "You: " + Chat.username + ", " + card.statusName(Profile.myStatus)
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
-        // The banner in your colour, and your picture over its edge.
+        // The banner in your color, and your picture over its edge.
         Rectangle {
             id: banner
             width: parent.width
@@ -135,7 +106,7 @@ Item {
             anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
             y: banner.height + Theme.px(4)
             Text { width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
-            Text { width: parent.width; elide: Text.ElideRight; text: "Only your contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+            Text { width: parent.width; elide: Text.ElideRight; text: "Only contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
         }
 
         // The rows: they scroll when the window is short or the Size is large.
@@ -157,7 +128,6 @@ Item {
                 // Custom status: type it here, Enter keeps it (the controller's A asks for it).
                 Rectangle {
                     id: customBox
-                    visible: card.view === "main"
                     readonly property bool on: card.padFocus && card.rows[card.focusIndex] && card.rows[card.focusIndex].id === "custom"
                     width: parent.width
                     height: Theme.px(36)
@@ -195,60 +165,17 @@ Item {
                     HoverHandler { cursorShape: Qt.IBeamCursor }
                     TapHandler { onTapped: customInput.forceActiveFocus() }
                 }
-                Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
+                Rectangle { width: parent.width; height: 1; color: Theme.seam }
 
                 // Online, Away, Do not disturb, Invisible.
                 Repeater {
-                    model: card.view === "main" ? card.statusRows : []
+                    model: card.statusRows
                     CardRow {
                         rowId: modelData.id
                         label: modelData.label
                         note: modelData.note
                         picked: Profile.myStatus === modelData.id
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8); width: Theme.px(12); height: width; radius: width / 2; color: card.dotColour(modelData.id) }
-                    }
-                }
-                Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
-                Repeater {
-                    model: card.view === "main" ? card.actionRows : []
-                    CardRow {
-                        rowId: modelData.id
-                        label: modelData.label
-                        Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft }
-                    }
-                }
-
-                // Edit name and colour.
-                Repeater {
-                    model: card.view === "edit" ? card.editRows : []
-                    CardRow {
-                        rowId: modelData.id
-                        label: modelData.swatches ? "" : modelData.label
-                        tall: !!modelData.swatches
-                        Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft; visible: !modelData.swatches }
-                        Row {
-                            visible: !!modelData.swatches
-                            anchors.verticalCenter: parent.verticalCenter
-                            x: Theme.px(30)
-                            spacing: Theme.px(8)
-                            Repeater {
-                                model: card.swatches
-                                Rectangle {
-                                    readonly property bool mine: String(Profile.myColour).toUpperCase() === modelData
-                                    width: Theme.px(28); height: width; radius: width / 2
-                                    color: modelData
-                                    border.width: mine ? Theme.px(2) : card.swatch === index && card.padFocus ? Theme.px(2) : 1
-                                    border.color: mine ? Theme.text : card.swatch === index && card.padFocus ? Theme.accent : Theme.lineMuted
-                                    Accessible.role: Accessible.RadioButton
-                                    Accessible.name: "Colour " + (index + 1)
-                                    Accessible.checked: mine
-                                    Accessible.onPressAction: card.pickSwatch(index)
-                                    Icon { visible: parent.mine; anchors.centerIn: parent; name: "check"; size: Theme.px(14); color: Theme.ground }
-                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: card.pickSwatch(index) }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -304,6 +231,6 @@ Item {
             font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: if (row.rowId !== "colour") card.run(row.rowId) }
+        TapHandler { onTapped: card.run(row.rowId) }
     }
 }

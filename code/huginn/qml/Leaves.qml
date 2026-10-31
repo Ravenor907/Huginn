@@ -3,7 +3,7 @@ import QtQuick.Window
 import Huginn
 
 // The Autumn look's ground: warm bark, and leaves and maple seeds falling behind the frosted panes.
-// Three leaf shapes (maple, oak and a serrated elm) in seven colours, drawn once each on a small
+// Three leaf shapes (maple, oak and a serrated elm) in seven colors, drawn once each on a small
 // Canvas, then moved by a 30 fps timer: they glide sideways as they fall, rock and tumble, flip
 // edge-on and back, and lean into a gust now and then; the seeds spin like helicopters and orbit as
 // they drop. Nothing is allocated per frame. The timer stops while the window is hidden or minimized,
@@ -167,7 +167,7 @@ Item {
     }
 
     // ------------------------------------------------------------- the shapes
-    // Fifteen leaves: shape (maple, oak, elm) and colour (light to dark of the gradient, which is also the vein colour).
+    // Fifteen leaves: shape (maple, oak, elm) and color (light to dark of the gradient, which is also the vein color).
     readonly property var leafShape: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
     readonly property var leafTone: [0, 0, 1, 2, 3, 1, 0, 1, 0, 4, 5, 2, 6, 2, 6]
     readonly property var tones: [

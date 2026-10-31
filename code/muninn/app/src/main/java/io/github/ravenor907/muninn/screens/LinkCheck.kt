@@ -42,15 +42,3 @@ fun LinkCheck() {
         confirmButton = { MButton("They match", kind = Kind.Accent) { Link.confirm(d.key) } },
         dismissButton = { MButton("Don't link") { Link.unlink(d.key) } })
 }
-
-/** On the chat list while this phone's chats are mirrored somewhere: never silent. */
-@Composable
-fun MirroredNote(modifier: Modifier = Modifier) {
-    val companions by Link.companions.collectAsState()
-    val on = companions.filter { it.ok }
-    if (on.isEmpty()) return
-    Panel(modifier.fillMaxWidth()) {
-        Text("Mirrored to " + on.joinToString(", ") { it.name }, style = Type.normal.copy(color = Palette.accent))
-        Text("They show your chats and can send as you. Unlink in Settings › Linked devices.", style = Type.small)
-    }
-}

@@ -1,10 +1,10 @@
 import QtQuick
 import Huginn
 
-// Your picture: choose one from a file, use your initial on a colour instead, or remove it. A chosen
+// Your picture: choose one from a file, use your initial on a color instead, or remove it. A chosen
 // file goes through Move and scale: the picture under a round window, dragged to move, the wheel, a
 // pinch or the slider to zoom, and Save keeps a 256 by 256 crop. It lives in ProfileCard.qml and is
-// opened from your profile card or Settings › Look. D-pad moves along the choices, A picks, B goes back.
+// opened from Settings › You. D-pad moves along the choices, A picks, B goes back.
 Item {
     id: pp
     visible: false
@@ -42,7 +42,7 @@ Item {
     // The choices on the first step, in the order the controller steps through them.
     readonly property var choices: {
         const a = [{ id: "file", label: "Choose a picture", icon: "image" }]
-        a.push({ id: "initial", label: "Use my initial and a colour", icon: "person" })
+        a.push({ id: "initial", label: "Use my initial and a color", icon: "person" })
         if (Profile.hasMyPicture) a.push({ id: "remove", label: "Remove picture", icon: "close", danger: true })
         a.push({ id: "close", label: "Close" })
         return a
@@ -134,7 +134,7 @@ Item {
                             width: parent.width
                             spacing: Theme.px(8)
                             ChoiceRow { choice: modelData; at: index; width: parent.width }
-                            // The six colours, under Use my initial and a colour.
+                            // The six colors, under Use my initial and a color.
                             Row {
                                 visible: modelData.id === "initial"
                                 x: Theme.px(40)

@@ -76,8 +76,8 @@ object KidMode {
 
 /**
  * What a Kids' TV holds: its parents' keys (empty while pairing) and the config they last sent.
- * [micLocal]: a microphone level set on the TV itself (7.7), used instead of the config's until a parent
- * changes it; [micAt]: when (this TV's clock). [nrLocal]: noise removal picked on the TV (7.10), the same way.
+ * [micLocal]: a microphone level kept on the TV (7.7), used instead of the config's until a parent
+ * changes it; [micAt]: when (this TV's clock). [nrLocal]: noise removal kept on the TV (7.10), the same way.
  */
 data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null, val micLocal: Int? = null, val micAt: Long = 0,
                     val nrLocal: Int? = null)
@@ -111,30 +111,18 @@ object KidTv {
         if (KidMode.on(app)) tune(_state.value)
     }
 
-    /** The microphone level (the TV's own, else the parent's) and the call setting take effect on this TV. */
+    /** The microphone level and noise removal (the TV's own, else the parent's) take effect on this TV. */
     private fun tune(s: KidState) {
         TvMic.active = s.cfg != null
         TvMic.level = s.micLocal ?: s.cfg?.mic ?: TvRules.DEFAULT_MIC
-        micLevel.value = TvMic.level
         TvMic.noise = s.nrLocal ?: s.cfg?.nr ?: TvRules.NR_BOTH
-        noise.value = TvMic.noise
     }
 
-    /** The noise removal in use, for the TV's "For a parent" screen. */
-    val noise = MutableStateFlow(TvRules.NR_BOTH)
-
-    /** Someone at the TV picked a noise removal: it takes effect from the next call or recording, until a parent picks another. */
-    fun setNoise(app: Muninn, nr: Int) = synchronized(lock) {
-        val s = _state.value
-        if (s.cfg == null || wiping.value) return@synchronized
-        val next = s.copy(nrLocal = nr.coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH))
-        _state.value = next
-        try { save(app, next) } catch (_: Exception) {}
-        tune(next)
-    }
-
-    /** The level in use, for the TV's own slider. */
-    val micLevel = MutableStateFlow(TvRules.DEFAULT_MIC)
+    /**
+     * k8 (7.13): a parent asked the TV to turn on one of its permissions ("mic", "notify", "overlay",
+     * "install"). The kids' screen shows Android's prompt or opens its settings page, then clears this.
+     */
+    val allowAsk = MutableStateFlow<String?>(null)
 
     private fun save(app: Muninn, s: KidState) {
         val o = JSONObject().put("parents", JSONArray(s.parents))
@@ -144,27 +132,13 @@ object KidTv {
         app.vault.write(file(app), o.toString())
     }
 
-    /**
-     * Anyone at the TV moved its microphone slider: it takes effect at once (a call going on too), stays
-     * until a parent picks another level, and the parents' phones are told (7.7) so theirs shows it.
-     */
-    fun setMic(app: Muninn, level: Int) {
-        val l = level.coerceIn(0, TvRules.MAX_MIC)
-        synchronized(lock) {
-            val s = _state.value
-            if (s.cfg == null || wiping.value) return
-            val next = s.copy(micLocal = l, micAt = System.currentTimeMillis())
-            _state.value = next
-            try { save(app, next) } catch (_: Exception) {}
-            tune(next)
-        }
-        statusSoon(app)
-    }
+    /** The TV's permissions changed (one was turned on or off): its parents' phones are told, with the status. */
+    fun permsChanged(app: Muninn) { if (_state.value.cfg != null) statusSoon(app) }
 
     private val statusTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-status").apply { isDaemon = true } }
     @Volatile private var statusDue: java.util.concurrent.ScheduledFuture<*>? = null
 
-    /** The status (7.7) to every parent whose app takes it, a moment after the last slider move. */
+    /** The status (7.7) to every parent whose app takes it, a moment after the last change. */
     private fun statusSoon(app: Muninn, to: List<String>? = null) {
         statusDue?.cancel(false)
         statusDue = statusTimer.schedule({ try { sendStatus(app, to) } catch (_: Exception) {} }, 1, java.util.concurrent.TimeUnit.SECONDS)
@@ -175,7 +149,8 @@ object KidTv {
         val cfg = s.cfg ?: return
         val b = Tv.bridge(app) ?: return
         val ts = if (s.micLocal != null) s.micAt else cfg.ts
-        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null)
+        val off = TvUpdate.needs(app).map { it.id }.filter { it in TvRules.PERMS }
+        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null, off = off)
         for (k in to ?: s.parents) if ("k3" in (app.contacts.get(k)?.caps ?: emptySet())) try { b.sendTvRoom(k, msg) } catch (_: Exception) {}
     }
 
@@ -236,6 +211,11 @@ object KidTv {
                 val cfg = try { TvRules.parse(new) } catch (e: Exception) { return false }
                 KidMode.markPaired(app)
                 apply(app, cfg, fromKey, mailbox)
+                // k8 (7.13): how long messages stay on the TV, as the parent set it.
+                cfg.keep?.let { d ->
+                    val ms = TvRules.keepMs(d)
+                    if (app.identity.deleteAfter != ms) { app.identity.deleteAfter = ms; app.chat.pruneSoon() }
+                }
                 // A parent who picked another microphone level wins over one set on the TV (the last change wins);
                 // a config that only carries the level on keeps the TV's own.
                 val parentMic = s.cfg == null || cfg.mic != s.cfg.mic
@@ -273,6 +253,18 @@ object KidTv {
                 // k3 (7.7): a parent's "Clear history": messages, photos, voice messages and caches. Pairing and contacts stay.
                 if (s.cfg == null || fromKey !in s.parents) return false
                 TvStorage.later { TvStorage.clear(app); sendStatus(app, null) }
+                true
+            }
+            "allow" -> {
+                // k8 (7.13): a parent asks the TV to turn on a permission; the kids' screen brings up Android's prompt.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                val perm = TvRules.allowIn(o) ?: return false
+                allowAsk.value = perm
+                // Muninn not on screen: bring it up, so the prompt shows (Android may not allow it from the background).
+                if (!app.visible) try {
+                    app.startActivity(android.content.Intent(app, io.github.ravenor907.muninn.MainActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                } catch (_: Exception) {}
                 true
             }
             "apps" -> {

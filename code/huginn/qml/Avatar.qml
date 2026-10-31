@@ -1,7 +1,7 @@
 import QtQuick
 import Huginn
 
-// A person's round picture, or a round disc in their colour with their initial. Pictures are round
+// A person's round picture, or a round disc in their color with their initial. Pictures are round
 // in every look. key is the chat key, or "me". showDot adds their status dot in the corner: green
 // online, amber away, red do not disturb, grey offline, nothing when it isn't known.
 Item {
@@ -27,7 +27,7 @@ Item {
     readonly property url pictureUrl: (rev, key !== "" ? Profile.pictureUrl(key) : "")
     readonly property bool hasPicture: String(pictureUrl) !== ""
     readonly property string status: (rev, showDot && key !== "" ? Profile.statusOf(key) : "")
-    // Their colour: the one sent with their profile, else one picked from their name.
+    // Their color: the one sent with their profile, else one picked from their name.
     readonly property var tone: {
         rev
         let hex = key === "" ? "" : mine ? Profile.myColour : Profile.colourOf(key)
@@ -40,7 +40,7 @@ Item {
     Accessible.role: Accessible.Graphic
     Accessible.name: name + (status === "online" ? ", online" : status === "away" ? ", away" : status === "dnd" ? ", do not disturb" : status === "offline" ? ", offline" : "")
 
-    // The initial on their colour (also what shows until a picture loads).
+    // The initial on their color (also what shows until a picture loads).
     Rectangle {
         anchors.fill: parent
         radius: width / 2

@@ -316,12 +316,13 @@ NR_NONE, NR_STANDARD, NR_STRONG, NR_BOTH = 0, 1, 2, 3   # k5 (7.10): the TV's no
 
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd: only sent to a TV whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep: only sent to a TV whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
     if "nr" in c and (not isinstance(c["nr"], int) or isinstance(c["nr"], bool) or not 0 <= c["nr"] <= NR_BOTH): raise ValueError("nr")
     if "upd" in c and not isinstance(c["upd"], bool): raise ValueError("upd")
+    if "keep" in c and (not isinstance(c["keep"], int) or isinstance(c["keep"], bool) or not 1 <= c["keep"] <= 7): raise ValueError("keep")
     if not isinstance(c["v"], int) or c["v"] < 1: raise ValueError("version")
     if c["parents"] != sorted(set(c["parents"])) or not c["parents"] or c["by"] not in c["parents"]: raise ValueError("parents")
     if not isinstance(c["dictation"], bool): raise ValueError("dictation")

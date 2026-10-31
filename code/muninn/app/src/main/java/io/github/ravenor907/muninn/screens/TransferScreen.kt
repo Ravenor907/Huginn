@@ -136,7 +136,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
 
     fun deliver(t: Target, files: List<File>) {
         if (files.isEmpty()) return
-        if (app.net.transfer.value.active) { Ui.say("Wait for the transfer that's running to finish, then send.", true); return }
+        if (app.net.transfer.value.active) { Ui.say("Wait for the current transfer.", true); return }
         t.send(files)
         Share.pending.clear()
     }
@@ -149,7 +149,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
         scope.launch {
             val files = withContext(Dispatchers.IO) { Share.copyIn(context, uris, app.net.transfer.value.active) }
             copying = false
-            if (files.size < uris.size) Ui.say("${uris.size - files.size} of the files couldn't be read.", true)
+            if (files.size < uris.size) Ui.say("${uris.size - files.size} files couldn't be read.", true)
             Share.pending.addAll(files)
             if (then != null) deliver(then, Share.pending.toList())
         }
@@ -188,7 +188,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
             MButton("Send an app", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !copying) { pickingApp = true }
             if (Share.pending.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${if (Share.pending.size == 1) Share.pending[0].name else "${Share.pending.size} files"} · ${LocalSend.size(Share.pending.sumOf { it.length() })}. Tap who gets ${if (Share.pending.size == 1) "it" else "them"}.",
+                Text("${if (Share.pending.size == 1) Share.pending[0].name else "${Share.pending.size} files"} · ${LocalSend.size(Share.pending.sumOf { it.length() })}. Tap who gets it.",
                     style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
                 MButton("Clear") { Share.pending.clear() }
             }
@@ -206,8 +206,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
             if (error != null) Text(error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(bottom = 8.dp))
             if (targets.isEmpty() && error == null) Text(
-                "Nobody yet. Phones with Muninn close by show up on their own. Devices with Huginn or LocalSend show up when they're on the same Wi-Fi. " +
-                    "This phone shows up as “${app.identity.deviceName}”.",
+                "Nobody nearby yet. You're “${app.identity.deviceName}”.",
                 style = Type.normal,
             )
         }
@@ -231,16 +230,16 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             }
         }
         item {
-            Text("Files tab: nearby only, to Muninn, Huginn and any LocalSend app close by or on the same Wi-Fi. To send to someone anywhere, use a chat's + › File. Received files go to ${Received.place(context)}.",
+            Text("Nearby only. Saved to ${Received.place(context)}.",
                 style = noteStyle)
             if (!showDirect && !direct.on) MButton("No shared Wi-Fi?", Modifier.fillMaxWidth().padding(top = 12.dp), icon = "wifi") { showDirect = true }
             if (showDirect || direct.on) Label("Direct connect")
             if (showDirect || direct.on) Panel {
                 if (!direct.on) {
-                    Text("No shared Wi-Fi? Muninn can make a private hotspot (no internet, no data used). The other phone scans the code with its camera to join, then sending and chat work as usual.", style = Type.normal)
+                    Text("A private hotspot. No data used.", style = Type.normal)
                     if (direct.error != null) Text(direct.error!!, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                     MButton(if (direct.starting) "Starting…" else "Start Direct connect", Modifier.fillMaxWidth().padding(top = 10.dp), enabled = !direct.starting, icon = "wifi") { askDirectPermission() }
-                    Text("On a computer: Huginn › Files › Direct connect, then scan its code with this phone's camera.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+                    Text("Computers: Huginn › Files › Direct connect.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
                 } else {
                     Text("Scan with the other phone's camera", style = Type.big)
                     Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Qr(direct.qr, 220.dp) }
@@ -250,7 +249,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                 }
             }
             Label("Recent")
-            if (items.isEmpty()) Text("Nothing yet. Files you send and receive show up here.", style = Type.normal)
+            if (items.isEmpty()) Text("No files yet.", style = Type.normal)
         }
         items(items) { it ->
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {

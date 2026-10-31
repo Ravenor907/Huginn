@@ -53,7 +53,7 @@ class TvSpeech(private val context: Context) {
             if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
             else null
         } catch (e: Exception) { null }
-        if (r == null) { f?.close(); feed = null; fail("This TV can't turn speech into words."); return }
+        if (r == null) { f?.close(); feed = null; fail(TvWords.NO_TYPING); return }
         rec = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
@@ -68,7 +68,7 @@ class TvSpeech(private val context: Context) {
             override fun onResults(results: Bundle?) {
                 feed?.close()
                 val t = first(results)
-                if (t.isNullOrBlank()) fail("I didn't catch that. Try again?") else done(t)
+                if (t.isNullOrBlank()) fail(TvWords.NOT_HEARD) else done(t)
             }
             override fun onError(error: Int) {
                 feed?.close()
@@ -78,10 +78,10 @@ class TvSpeech(private val context: Context) {
                     error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
                 if (f != null && !heard && !plain) { android.os.Handler(android.os.Looper.getMainLooper()).post { start(partial, done, fail, boost = false) }; return }
                 fail(when (error) {
-                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "I didn't catch that. Try again?"
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Muninn isn't allowed to use the microphone. Ask a parent."
-                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech needs the internet right now. Try a quick message instead."
-                    else -> "The microphone isn't working right now."
+                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> TvWords.NOT_HEARD
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> TvWords.ASK_PARENT
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> TvWords.NO_INTERNET
+                    else -> TvWords.NO_MIC
                 })
             }
         })
@@ -96,7 +96,7 @@ class TvSpeech(private val context: Context) {
                 .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, Feed.RATE)
             f.start()
         }
-        try { r.startListening(i) } catch (e: Exception) { feed?.close(); fail("The microphone isn't working right now.") }
+        try { r.startListening(i) } catch (e: Exception) { feed?.close(); fail(TvWords.NO_MIC) }
     }
 
     private fun first(b: Bundle?): String? = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()

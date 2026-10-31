@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.heading
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -133,6 +134,56 @@ fun Panel(modifier: Modifier = Modifier, focused: Boolean = false, onClick: (() 
         .border(if (focused) 2.dp else 1.dp, if (focused) Palette.accent else Palette.line, Corner)
     if (onClick != null) m = m.clickable(role = Role.Button, onClick = onClick)
     Column(m.padding(14.dp), content = content)
+}
+
+/**
+ * A framed section: a short label, then its controls in one card with the look's corners. Every page groups its
+ * controls this way, with the same spacing between cards.
+ */
+@Composable
+fun Framed(title: String? = null, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier.fillMaxWidth().padding(top = 14.dp)) {
+        if (title != null) Text(title.uppercase(), style = Type.section.copy(color = Palette.accent),
+            modifier = Modifier.padding(start = 2.dp, bottom = 6.dp).semantics { heading() })
+        Column(Modifier.fillMaxWidth().clip(Corner).background(Palette.panel).border(1.dp, Palette.line, Corner)
+            .padding(horizontal = 14.dp, vertical = 6.dp), content = content)
+    }
+}
+
+/** A row that opens a page: its name, an optional short value under it, and an arrow. */
+@Composable
+fun NavRow(title: String, value: String = "", icon: String? = null, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) { MIcon(icon, Palette.accent, 20.dp); Spacer(Modifier.width(14.dp)) }
+        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, style = Type.normal.copy(color = Palette.text))
+            if (value.isNotEmpty()) Text(value, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        MIcon("forward", Palette.textMuted, 18.dp)
+    }
+}
+
+/** One item in a three-dot menu. Destructive items are red and go last. [value]: a short state on the right. */
+@Composable
+fun MenuRow(icon: String, text: String, danger: Boolean = false, value: String = "", enabled: Boolean = true, onClick: () -> Unit) {
+    val tint = when { !enabled -> Palette.textFaint; danger -> Palette.danger; else -> Palette.text }
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(Corner).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        MIcon(icon, if (danger) Palette.danger else if (enabled) Palette.accent else Palette.textFaint, 20.dp)
+        Spacer(Modifier.width(16.dp))
+        Text(text, style = Type.normal.copy(color = tint), modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (value.isNotEmpty()) Text(value, style = Type.small, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+/** The three-dot button that opens an item's menu, the same everywhere. [label] is what TalkBack reads. */
+@Composable
+fun DotsButton(label: String, tint: Color = Palette.text, onClick: () -> Unit) {
+    Column(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.5.dp, Alignment.CenterVertically)) {
+        repeat(3) { Box(Modifier.size(3.5.dp).clip(CircleShape).background(tint)) }
+    }
 }
 
 enum class Kind { Normal, Accent, Danger }

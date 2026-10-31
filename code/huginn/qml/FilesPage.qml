@@ -1,9 +1,10 @@
 import QtQuick
 import Huginn
 
-// Files: share with phones and PCs. Middle column: pick files to send, then the devices nearby with
-// Muninn or the free LocalSend app (A sends to one). Main column: what's ready to send, what came in,
-// and Direct connect for when there's no shared Wi-Fi.
+// Files: share with phones and PCs. Middle column: one Send files button, then the devices nearby
+// with Muninn or the free LocalSend app (A sends to one). The three dots (or LT) hold Look again,
+// Direct connect (for when there's no shared Wi-Fi) and Clear. Main column: what's ready to send
+// and what came in.
 Rectangle {
     id: page
     color: Theme.ground
@@ -13,11 +14,9 @@ Rectangle {
     property bool tour: false
     readonly property var devices: LocalSend.devices
     readonly property var incoming: LocalSend.items
-    // Rows in the middle column: the three actions, then one per device.
-    readonly property int actionCount: 3
-    readonly property var rows: [{ kind: "pick", name: "Pick files to send", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "Pick one or several" },
-                                 { kind: "clear", name: "Clear the list", detail: Transfer.sharedCount > 0 ? "Start over" : "Nothing picked yet" },
-                                 { kind: "direct", name: Direct.on ? "Stop Direct connect" : "Direct connect", detail: Direct.on ? "Back to your usual Wi-Fi" : "No shared Wi-Fi? Make one for the phone" }]
+    // Rows in the middle column: Send files, then one per device.
+    readonly property int actionCount: 1
+    readonly property var rows: [{ kind: "pick", name: "Send files", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "" }]
         .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, type: d.type,
                                     detail: d.model ? d.model : d.app === "muninn" ? "Muninn" : d.app === "huginn" ? "Huginn" : d.type === "mobile" ? "Phone" : "Computer" })))
     readonly property var sharedNames: {
@@ -31,8 +30,8 @@ Rectangle {
     Component.onCompleted: LocalSend.refresh()
 
     readonly property var prompts: LocalSend.sending ? [{ key: "b", label: cancelArmed ? "Stop now" : "Stop sending" }]
-        : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Choose" },
-           { key: "y", label: "Look again" }, { key: "b", label: "Back" }]
+        : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Pick files" },
+           { key: "y", label: "Look again" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
     // B while a send is going: the first press says to press again, a second one within 3 s cancels.
     property bool cancelArmed: false
     Timer { id: cancelTimer; interval: 3000; onTriggered: page.cancelArmed = false }
@@ -52,7 +51,10 @@ Rectangle {
         width: Theme.portrait ? parent.width : Theme.listWidth
         color: Theme.column
 
-        PageHeader { id: head; width: parent.width; title: "Files" }
+        PageHeader {
+            id: head; width: parent.width; title: "Files"
+            MoreButton { anchors.verticalCenter: parent.verticalCenter; label: "Files menu"; onClicked: page.filesMenu() }
+        }
 
         // Scrolls when there are more devices than fit.
         Flickable {
@@ -97,9 +99,10 @@ Rectangle {
                             width: parent.width
                             height: Theme.px(56)
                             radius: Theme.radius
-                            opacity: modelData.kind === "clear" && Transfer.sharedCount === 0 ? 0.55 : 1
-                            color: on ? Theme.tile : tileHover.hovered ? Theme.raised : "transparent"
-                            border.width: on ? Theme.focusWidth : 0
+                            // Send files is the one button: framed in the accent.
+                            readonly property bool button: modelData.kind === "pick"
+                            color: on ? Theme.tile : button ? Theme.accentFill : tileHover.hovered ? Theme.raised : "transparent"
+                            border.width: on ? Theme.focusWidth : button ? 1 : 0
                             border.color: Theme.accent
                             Accessible.role: Accessible.Button
                             Accessible.name: (modelData.kind === "device" ? "Send to " : "") + modelData.name
@@ -112,7 +115,7 @@ Rectangle {
                                 Icon {
                                     anchors.centerIn: parent
                                     size: Theme.px(18)
-                                    name: modelData.kind === "pick" ? "plus" : modelData.kind === "clear" ? "back" : modelData.kind === "direct" ? "qr" : modelData.type === "mobile" ? "phone" : "network"
+                                    name: modelData.kind === "pick" ? "send" : modelData.type === "mobile" ? "phone" : "network"
                                     color: tile.on ? Theme.accent : Theme.textMuted
                                 }
                             }
@@ -121,7 +124,7 @@ Rectangle {
                                 anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                                 anchors.verticalCenter: parent.verticalCenter
                                 Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: tile.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" && Transfer.sharedCount > 0 ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                                Text { visible: text !== ""; width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                             }
                             HoverHandler { id: tileHover }
                             TapHandler { onTapped: { page.current = index; page.choose() } }
@@ -130,6 +133,7 @@ Rectangle {
                 }
             }
         }
+        // One line when nobody is found; "Look again" is a link.
         Text {
             visible: page.devices.length === 0
             anchors.top: rowView.bottom
@@ -137,13 +141,17 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: !Settings.nearbySharing ? "Nearby sharing is off. Turn it on in Settings › More settings › Find people close by."
-                : !LocalSend.running ? (LocalSend.error || "Nearby sharing is starting…")
-                : LocalSend.scanning ? "Looking for devices on your Wi-Fi…"
-                : "No devices yet. Open Muninn or the free LocalSend app on the same Wi-Fi, then choose Look again. This device shows up as “" + LocalSend.alias + "”."
+            textFormat: Text.StyledText
+            linkColor: Theme.accent
+            text: !Settings.nearbySharing ? "Nearby sharing is off."
+                : !LocalSend.running ? (LocalSend.error || "Starting…")
+                : LocalSend.scanning ? "Looking…"
+                : "No devices found. <a href=\"again\">Look again</a>"
+            onLinkActivated: LocalSend.refresh()
             color: Theme.textMuted
             font.family: Theme.body
             font.pixelSize: Theme.fs(14)
+            HoverHandler { cursorShape: parent.hoveredLink !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor }
         }
     }
 
@@ -160,21 +168,7 @@ Rectangle {
             width: parent.width
             carved: false
             title: "Sharing"
-            subtitle: !Settings.nearbySharing ? "Nearby sharing is off in Settings"
-                    : LocalSend.running ? "Shows up in LocalSend as “" + LocalSend.alias + "”" : (LocalSend.error || "Starting nearby sharing…")
-            HButton {
-                implicitHeight: Theme.px(32)
-                fontSize: 14
-                enabled: LocalSend.running && !LocalSend.scanning
-                text: LocalSend.scanning ? "Looking…" : "Look again"
-                onClicked: LocalSend.refresh()
-            }
-            HButton {
-                implicitHeight: Theme.px(32)
-                fontSize: 14
-                text: Direct.on ? "Stop Direct connect" : "Direct connect"
-                onClicked: page.toggleDirect()
-            }
+            subtitle: LocalSend.running ? "Shown as " + LocalSend.alias : ""
         }
 
         // Scrolls when the window is short or the Size is large.
@@ -196,12 +190,12 @@ Rectangle {
                 width: listsView.width
                 spacing: Theme.px(8)
 
-                SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? (Ui.main && Ui.main.padInUse ? "Pick a device and press A" : "Click a device to send") : "" }
+                SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? "Pick a device" : "" }
                 Text {
                     visible: Transfer.sharedCount === 0
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Nothing picked yet. Choose Pick files to send, then pick a device. To receive, send from Muninn or LocalSend and accept on screen."
+                    text: "Nothing picked yet."
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
                 Repeater {
@@ -244,7 +238,7 @@ Rectangle {
                     visible: page.incoming.length === 0
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Nothing yet. Files show up here as they arrive."
+                    text: "Nothing yet."
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -287,7 +281,7 @@ Rectangle {
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
-                Text { visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Direct connect is on. Scan this with the phone's camera to join this computer's Wi-Fi"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                Text { visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Scan with the phone's camera"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
                 Text { visible: Direct.on; width: parent.width; wrapMode: Text.Wrap; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
@@ -320,26 +314,34 @@ Rectangle {
         const paths = System.pickFiles()
         if (!paths.length) return
         Transfer.share(paths)
-        Ui.say(Transfer.sharedCount === 1 ? "1 file ready. Pick more, or pick a device." : Transfer.sharedCount + " files ready. Pick more, or pick a device.")
+        Ui.say((Transfer.sharedCount === 1 ? "1 file" : Transfer.sharedCount + " files") + " ready. Pick a device.")
     }
     function sendTo(d) {
-        if (Transfer.sharedCount === 0) { Ui.say("Pick files first: choose Pick files to send.", true); return }
+        if (Transfer.sharedCount === 0) { Ui.say("Pick files first: Send files.", true); return }
         LocalSend.send(d.id, Transfer.shared)
     }
     function choose() {
         const r = rows[current]
         if (!r) return
         if (r.kind === "pick") pickFiles()
-        else if (r.kind === "clear") { if (Transfer.sharedCount > 0) { Transfer.clearShared(); Ui.say("The list is clear.") } }
-        else if (r.kind === "direct") toggleDirect()
         else sendTo(r)
+    }
+    // The three dots: Look again, Direct connect and Clear.
+    function filesMenu() {
+        const items = [{ name: "Look again", icon: "search", url: "look" },
+                       { name: "Direct connect", icon: "qr", url: "direct", check: Direct.on }]
+        if (Transfer.sharedCount > 0) items.push({ name: "Clear", url: "clear", danger: true })
+        Ui.pickFrom("Files", [{ header: "", items: items }], a => {
+            if (a === "look") LocalSend.refresh()
+            else if (a === "direct") toggleDirect()
+            else if (a === "clear") { Transfer.clearShared(); Ui.say("Cleared.") }
+        })
     }
 
     // No shared Wi-Fi: this computer makes its own for the phone to join.
     function toggleDirect() {
-        if (Direct.on) { Direct.stop(); Ui.say("Direct connect is off. This device goes back to your usual Wi-Fi."); return }
-        Ui.sure("Start Direct connect?", "This device makes its own private Wi-Fi (no internet) and shows a code for the phone's camera. It leaves your usual Wi-Fi until you stop it.",
-                "Start", () => Direct.start(), false, false)
+        if (Direct.on) { Direct.stop(); Ui.say("Direct connect is off."); return }
+        Ui.sure("Start Direct connect?", "Leaves your Wi-Fi until stopped.", "Start", () => Direct.start(), false, false)
     }
     function handleButton(b) {
         if (LocalSend.sending) {
@@ -354,6 +356,7 @@ Rectangle {
         case "up": current = Math.max(0, current - 1); return true
         case "down": current = Math.min(rows.length - 1, current + 1); return true
         case "a": choose(); return true
+        case "x": filesMenu(); return true
         case "y": LocalSend.refresh(); return true
         }
         return false   // Left and B: back to the rail

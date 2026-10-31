@@ -26,6 +26,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import io.github.ravenor907.muninn.ui.Corner
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.Muninn
@@ -54,17 +68,14 @@ private fun missing(ctx: Context, app: Muninn): List<Missing> {
         if (pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) && !granted(Manifest.permission.CAMERA))
             add(Missing("camera", "Camera", "For video calls.", Manifest.permission.CAMERA))
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled())
-            add(Missing("notify", "Notifications", "So you see new messages and calls.",
+            add(Missing("notify", "Notifications", "So you see new messages.",
                 if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null))
         // Android 14 and newer: a call only fills the screen (also over the lock screen) with this allowed.
         if (fullScreenOff(ctx))
-            add(Missing(FULL_SCREEN, "Full-screen calls", "So an incoming call fills the screen, even when the phone is locked.", null))
+            add(Missing(FULL_SCREEN, "Full-screen calls", "Calls show over the lock screen.", null))
         // Messages only arrive right away if Android lets Muninn run in the background (unrestricted battery use).
         if (app.identity.stayConnected && !MessageService.unrestricted(ctx))
-            add(Missing("battery", "Unrestricted background use",
-                "So messages arrive the moment they're sent, even while the phone sleeps. Without it Android pauses Muninn " +
-                    "and messages can come up to 15 minutes late. It costs little: Muninn keeps one light connection and wakes " +
-                    "the phone only for a short check about every 5 minutes. No Google servers. On the next screen, tap Allow.", null))
+            add(Missing("battery", "Battery setup", "So messages arrive on time.", null))
     }.filter { it.id !in hidden }
 }
 
@@ -93,15 +104,22 @@ private fun openAppSettings(ctx: Context, notifications: Boolean) {
     }
 }
 
+/** One thing on the chat list's "to finish" sheet: what it is, a short line, and its one button. */
+private class Todo(val id: String, val title: String, val detail: String, val button: String, val run: () -> Unit)
+
+private const val FINISH_HIDDEN = "finishHidden"
+
 /**
- * "Finish setting up" on the chat list: the permissions Muninn still needs (microphone, camera, notifications,
- * running in the background), one tap each. Gone once nothing is missing; each line can be put off with "not now".
- * Never on a Kids' TV (a parent sets that up from the TV's own checklist).
+ * "1 thing to finish" on the chat list: the permissions Muninn still needs, close-by chat, the note that messages
+ * delete, and where this phone's chats are mirrored, as one row that opens a small sheet. The row can be put away;
+ * it comes back when something new is added. Never on a Kids' TV (a parent sets that up from the TV's own checklist).
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun SetupCard(app: Muninn, modifier: Modifier = Modifier) {
+fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     if (io.github.ravenor907.muninn.tv.KidMode.on(app)) return
+    val prefs = remember { ctx.getSharedPreferences("muninn", Context.MODE_PRIVATE) }
     var tick by remember { mutableIntStateOf(0) }
     var list by remember { mutableStateOf(missing(ctx, app)) }
     // Android's own screens change these behind our back: look again every little while and after each answer.
@@ -114,28 +132,58 @@ fun SetupCard(app: Muninn, modifier: Modifier = Modifier) {
         if (!ok && m != null && System.currentTimeMillis() - askedAt < 500) openAppSettings(ctx, m.id == "notify")
         tick++
     }
-    if (list.isEmpty()) return
-    Panel(modifier) {
-        Text("Finish setting up", style = Type.big)
-        Text("Muninn works best with these. Tap one to allow it.", style = Type.small)
+    val closeError by app.close.error.collectAsState()
+    val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
+    val mirrored = companions.filter { it.ok }
+    var limits by remember { mutableStateOf(prefs.getBoolean(LIMITS_NOTE, false)) }
+    var hidden by remember { mutableStateOf(prefs.getStringSet(FINISH_HIDDEN, null).orEmpty()) }
+    var open by remember { mutableStateOf(false) }
+    val todos = buildList {
+        if (closeError != null) add(Todo("close", "Chat close by", "Works without the internet.", "Allow") { onAllowNearby() })
         list.forEach { m ->
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(m.title, style = Type.normal)
-                    Text(m.detail, style = Type.small.copy(color = Palette.textMuted))
+            add(Todo(m.id, m.title, m.detail, "Allow") {
+                when {
+                    m.id == "battery" -> MessageService.askUnrestricted(ctx)
+                    m.id == FULL_SCREEN -> openFullScreenSetting(ctx)
+                    m.permission != null -> { asking = m; askedAt = System.currentTimeMillis(); ask.launch(m.permission) }
+                    else -> openAppSettings(ctx, m.id == "notify")
                 }
-                MButton("Allow", Modifier.padding(start = 8.dp), Kind.Accent) {
-                    when {
-                        m.id == "battery" -> MessageService.askUnrestricted(ctx)
-                        m.id == FULL_SCREEN -> openFullScreenSetting(ctx)
-                        m.permission != null -> { asking = m; askedAt = System.currentTimeMillis(); ask.launch(m.permission) }
-                        else -> openAppSettings(ctx, m.id == "notify")
+            })
+        }
+        if (mirrored.isNotEmpty()) add(Todo("mirror:" + mirrored.joinToString(",") { it.name }, "Mirrored to " + mirrored.joinToString(", ") { it.name },
+            "They can send as you.", "Open") { open = false; SettingsNav.goSettings = "link" })
+        if (limits) add(Todo("limits", "Messages delete after 7 days.", "", "Got it") {
+            limits = false; prefs.edit().putBoolean(LIMITS_NOTE, false).apply()
+        })
+    }
+    val shown = todos.filter { it.id !in hidden }
+    if (shown.isEmpty()) return
+    Row(modifier.fillMaxWidth().clip(Corner).background(Palette.panel).border(1.dp, Palette.line, Corner)
+        .clickable(role = Role.Button, onClickLabel = "Show") { open = true }.padding(start = 14.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(24.dp).clip(CircleShape).background(Palette.gold), contentAlignment = Alignment.Center) {
+            Text("${shown.size}", style = Type.small.copy(color = Palette.onGold, fontWeight = FontWeight.SemiBold))
+        }
+        Text(if (shown.size == 1) "1 thing to finish" else "${shown.size} things to finish", style = Type.normal.copy(color = Palette.text),
+            modifier = Modifier.weight(1f).padding(start = 12.dp))
+        IconAction("close", "Hide", Palette.textMuted, size = 18.dp) {
+            hidden = hidden + shown.map { it.id }
+            prefs.edit().putStringSet(FINISH_HIDDEN, hidden).apply()
+        }
+    }
+    if (open) {
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { open = false }, sheetState = sheet, containerColor = Palette.panel, shape = Corner, dragHandle = null) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).navigationBarsPadding()) {
+                Text("To finish", style = Type.big, modifier = Modifier.padding(bottom = 4.dp))
+                shown.forEach { t ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(t.title, style = Type.normal.copy(color = Palette.text))
+                            if (t.detail.isNotEmpty()) Text(t.detail, style = Type.small)
+                        }
+                        MButton(t.button, Modifier.padding(start = 8.dp), Kind.Accent) { t.run() }
                     }
-                }
-                IconAction("close", "Not now: ${m.title}", Palette.textMuted, size = 18.dp) {
-                    val p = ctx.getSharedPreferences("muninn", Context.MODE_PRIVATE)
-                    p.edit().putStringSet(HIDDEN, p.getStringSet(HIDDEN, null).orEmpty() + m.id).apply()
-                    tick++
                 }
             }
         }

@@ -245,4 +245,38 @@ class TvConfigTest {
         assertTrue(TvRules.adoptMic(old, myMic = 50, myMicAt = 1_000, synced = true))
         assertFalse(TvRules.adoptMic(old, myMic = 50, myMicAt = 3_000, synced = true))
     }
+
+    @Test
+    fun k8KeepAllowAndPermissionStatus() {
+        val privA = ChatCrypto.privateFrom(chat.getString("privA"))
+        val people = listOf(TvPerson(kA, "Dad", "a".repeat(64)))
+        // "keep" goes in only when asked for (a TV that said k8), 1 to 7 days; absent: the TV keeps its own.
+        val without = TvRules.config(privA, kTV, 1, kA, listOf(kA), emptyList(), people, false, 1761500000000, TvExtras(calls = true, mic = 50))
+        assertFalse(without.has("keep"))
+        assertEquals(null, TvRules.parse(without).keep)
+        val withKeep = TvRules.config(privA, kTV, 2, kA, listOf(kA), emptyList(), people, false, 1761500000001, TvExtras(keep = 1))
+        TvRules.check(withKeep)
+        assertEquals(1, TvRules.parse(withKeep).keep)
+        assertTrue(TvRules.accept(kTV, listOf(kA), without, withKeep).first)
+        assertEquals(7, TvRules.parse(TvRules.config(privA, kTV, 3, kA, listOf(kA), emptyList(), people, false, 1, TvExtras(keep = 30))).keep)
+        for (bad in listOf<Any>(0, 8, "1", true)) {
+            val c = JSONObject(withKeep.toString()).put("keep", bad)
+            try { TvRules.check(c); fail("should refuse keep $bad") } catch (e: IllegalArgumentException) {}
+        }
+        assertEquals(86_400_000L, TvRules.keepMs(1))
+        assertEquals(0L, TvRules.keepMs(7))
+        // "allow": exactly t and p, p one of the four permissions.
+        for (p in TvRules.PERMS) assertEquals(p, TvRules.allowIn(JSONObject(TvRules.allowMessage(p))))
+        assertEquals(null, TvRules.allowIn(JSONObject().put("t", "allow").put("p", "camera")))
+        assertEquals(null, TvRules.allowIn(JSONObject(TvRules.allowMessage("mic")).put("x", 1)))
+        assertEquals(null, TvRules.allowIn(JSONObject().put("t", "update").put("p", "mic")))
+        try { TvRules.allowMessage("camera"); fail("should refuse camera") } catch (e: IllegalArgumentException) {}
+        // The status lists what is still off; a phone that doesn't know "off" reads the rest as before.
+        val s = JSONObject(TvRules.statusMessage(50, 10, 20, off = listOf("mic", "fullscreen", "install")))
+        assertEquals(listOf("mic", "install"), TvRules.status(s)!!.off)
+        assertEquals(null, TvRules.status(JSONObject(TvRules.statusMessage(50, 10, 20)))!!.off)
+        assertEquals(emptyList<String>(), TvRules.status(JSONObject(TvRules.statusMessage(50, 10, 20, off = emptyList())))!!.off)
+        assertEquals(null, TvRules.status(JSONObject(s.toString()).put("off", "mic")))
+        assertEquals(null, TvRules.status(JSONObject(s.toString()).put("off", JSONArray().put(1))))
+    }
 }

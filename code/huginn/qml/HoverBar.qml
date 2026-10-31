@@ -25,7 +25,7 @@ Rectangle {
         .concat(canThread ? [{ id: "thread", icon: "thread", tip: "Open thread" }] : [])
         .concat(canEdit ? [{ id: "edit", icon: "edit", tip: "Edit" }] : [])
         .concat(canPin ? [{ id: "pin", icon: "pin", tip: pinnedNow ? "Unpin" : "Pin" }] : [])
-        .concat([{ id: "more", icon: "gear", tip: "More" }])
+        .concat([{ id: "more", icon: "more", tip: "More" }])
     Row {
         id: icons
         anchors.centerIn: parent

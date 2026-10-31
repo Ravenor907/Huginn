@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import Huginn
 
-// Ctrl+K: type part of a name, Up and Down to choose, Enter to go. Direct messages and every text
+// Ctrl+K: type part of a name, Up and Down to choose, Enter to go. Chats and every text
 // channel of every group, the ones with something unread first.
 Item {
     id: sw

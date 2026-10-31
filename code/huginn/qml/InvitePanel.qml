@@ -2,8 +2,8 @@ import QtQuick
 import Huginn
 
 // Group invite links, like Discord's. "create": the link with Copy, its QR code, and Edit invite link
-// (Expire after, Max uses) to make another. "list": Group options › Invites, every link with who made
-// it, how many used it and the time left, Revoke, and the "Members can invite" switch (admins only).
+// (Expire after, Max uses) to make another. "list": the group menu › Add people › Active links, every link with who made
+// it, how many used it and the time left, and Revoke. Who can invite is under Group settings.
 //
 // HOOKS (cap j1, grouplinks.cpp), each checked with has() so this still works without them:
 //   Chat.createGroupLink(g, ttlMs, maxUses) -> { link, id } or { error } (ttlMs 0: never; maxUses 0: no limit)
@@ -76,15 +76,13 @@ Item {
                 spacing: Theme.px(10)
                 Text {
                     width: parent.width; wrapMode: Text.WordWrap
-                    text: (panel.mode === "list" ? "Invites" : "Invite people to " + panel.groupName).toUpperCase()
+                    text: (panel.mode === "list" ? "Active links" : "Invite link").toUpperCase()
                     color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
                 }
                 Text {
                     width: parent.width; wrapMode: Text.WordWrap
-                    text: !panel.ready ? "Invite links come with the next update. For now, use Invite someone or Show the group code."
-                        : !panel.has("groupLinks") ? ""
-                        : panel.mode === "list" ? "Every invite link for " + panel.groupName + ". Revoke one and it stops working at once."
-                        : "Anyone with this link can join " + panel.groupName + ". Send it in a message, or let them scan the code."
+                    visible: text !== ""
+                    text: !panel.ready ? "" : panel.mode === "list" ? "Revoke stops a link at once." : "Anyone with this link can join."
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
 
@@ -145,22 +143,6 @@ Item {
                 }
 
                 // ------------------------------------------------- list
-                Row {
-                    visible: panel.mode === "list" && panel.amAdmin && panel.has("setMembersInvite")
-                    width: parent.width
-                    spacing: Theme.px(10)
-                    Column {
-                        width: parent.width - canSw.width - Theme.px(10)
-                        Text { text: "Members can invite"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                        Text { width: parent.width; wrapMode: Text.WordWrap; text: "Off: only admins can make invite links."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-                    }
-                    ToggleSwitch {
-                        id: canSw
-                        anchors.verticalCenter: parent.verticalCenter
-                        checked: panel.membersCanInvite
-                        onToggled: { const r = Chat.setMembersInvite(panel.gid, !panel.membersCanInvite); if (r) Ui.say(r, true); panel.revision++ }
-                    }
-                }
                 Column {
                     visible: panel.mode === "list"
                     width: parent.width

@@ -1,372 +1,270 @@
 import QtQuick
 import Huginn
 
-// The person panel: a right click (or a hold) on someone in the chat list, Contacts or a member
-// list. Their role (which of the Family, Work and Folk folders they're in), what they can do, where
-// their chat sits, and nickname, note, chat color, introduce, the 4-emoji check and block, in one
-// place, the same everywhere. The D-pad moves along the choices, A picks, B closes.
+// The bigger sub-pages of a contact's menu (PeopleActions.contactMenu): "edit" (nickname, note,
+// chat color) and "can" (what they can do: the four switches, Direct calls and Message days).
+// One framed section of rows. The D-pad moves, A changes, Left and Right pick a color, B goes back
+// to the menu.
 //
-// HOOKS (chatpeople.cpp): what they can do and where the chat sits call these, each
-// through has() so this screen still works on a build without them:
-//   Chat.callsAllowed / setCallsAllowed, Chat.filesAllowed / setFilesAllowed, Chat.showsActive / setShowsActive
-//   Chat.pinChat, isPinnedChat, archiveChat, isArchived, muteChat (until, ms), isMuted, markUnread, isMarkedUnread
-//   Chat.isRightAway / setRightAway (Always right away), Chat.chatColor / setChatColor (the chat color)
+// HOOKS (chatpeople.cpp), each through has() so this still works on a build without them:
+//   Chat.callsAllowed / setCallsAllowed, Chat.filesAllowed / setFilesAllowed, Chat.showsActive / setShowsActive,
+//   Chat.isRightAway / setRightAway, Chat.chatColor / setChatColor
 Item {
     id: panel
     property string key: ""
     property string name: ""
-    property var extra: ({})          // { section, keys (the section's order as shown), tour }
+    property var extra: ({})          // { page: "edit" | "can", back (the menu to go back to), tour }
     property int focusIndex: 0
     property int revision: 0          // bumps after a change so the bindings below read again
     visible: false
     anchors.fill: parent
 
     readonly property bool tour: !!extra.tour
-    readonly property bool contact: !tour && (revision, Chat.people, Chat.isContact(key))
+    readonly property string page: extra.page === "can" ? "can" : "edit"
     readonly property string shownName: tour ? name : (revision, Chat.chats, Chat.nameOf(key)) || name
     readonly property string nick: tour ? "" : (revision, Chat.chats, Chat.nicknameOf(key))
     readonly property string note: tour ? "" : (revision, Chat.people, Chat.noteOf(key))
-    readonly property bool verified: tour || (revision, Chat.chats, Chat.isVerified(key))
-    readonly property bool blocked: !tour && (revision, Chat.chats, Chat.isBlocked(key))
-    readonly property string presence: tour ? "online" : Ui.main ? Ui.main.presenceOf(key) : "offline"
 
-    // ------------------------------------------------------------- hooks
     function has(fn) { return typeof Chat[fn] === "function" }
-    function hook(fn, args, fallback) {
-        if (!has(fn)) return fallback
-        return Chat[fn].apply(Chat, args || [])
-    }
-    readonly property var perms: tour ? { always: true, calls: true, files: true, active: true } : (revision, Chat.chats, {
-        always: hook("isRightAway", [key], false), calls: hook("callsAllowed", [key], true),
-        files: hook("filesAllowed", [key], true), active: hook("showsActive", [key], true) })
-    readonly property var flags: tour ? { muted: false, archived: false, unread: false, pinned: false, color: "" } : (revision, Chat.chats, {
-        muted: hook("isMuted", [key], false), archived: hook("isArchived", [key], false), unread: hook("isMarkedUnread", [key], false),
-        pinned: hook("isPinnedChat", [key], false), color: hook("chatColor", [key], "") })
+    function hook(fn, args, fallback) { return has(fn) ? Chat[fn].apply(Chat, args || []) : fallback }
+    readonly property var getters: ({ always: "isRightAway", calls: "callsAllowed", files: "filesAllowed", active: "showsActive" })
     readonly property var setters: ({ always: "setRightAway", calls: "setCallsAllowed", files: "setFilesAllowed", active: "setShowsActive" })
-
-    // ------------------------------------------------------------- role: the three starting folders
-    readonly property var roles: ["Family", "Work", "Folk", "None"]
-    function folderId(n) { const f = Chat.folders.find(x => String(x.name).toLowerCase() === n.toLowerCase()); return f ? f.id : "" }
-    readonly property string role: {
-        if (tour) return "Family"
+    function isOn(id) {
         revision; Chat.chats
-        const mine = Chat.foldersOf(key)
-        for (const r of ["Family", "Work", "Folk"]) { const id = folderId(r); if (id !== "" && mine.indexOf(id) >= 0) return r }
-        return "None"
+        if (tour) return id !== "direct"
+        if (id === "direct") return Calls.trusted(key)
+        return !!hook(getters[id], [key], id !== "always")
     }
-    function setRole(r) {
-        if (tour || !contact) return
-        for (const n of ["Family", "Work", "Folk"]) {
-            let id = folderId(n)
-            if (id === "" && n === r) id = Chat.addFolder(n)
-            if (id !== "") Chat.setInFolder(id, key, n === r)
-        }
-        revision++
-        Ui.say(r === "None" ? shownName + " has no role now." : shownName + " is in " + r + " now.")
-    }
-
-    // ------------------------------------------------------------- what they can do
-    readonly property var permRows: [
-        { id: "always", label: "Always right away", note: "Their messages reach you at once, even when you're saving battery" },
-        { id: "calls", label: "Calls and video", note: "They can call you" },
-        { id: "files", label: "Send me files", note: "Files straight from them over the internet" },
-        { id: "active", label: "See when I'm active", note: "They see the green dot while Huginn is open" }
-    ]
-    function permOn(id) { return !!perms[id] }
-    function togglePerm(id) {
-        if (tour) return
-        if (!has(setters[id])) return
-        Chat[setters[id]](key, !permOn(id))
-        revision++
-    }
-
-    // ------------------------------------------------------------- where the chat sits
-    readonly property var keys: extra.keys || []
-    readonly property int at: keys.indexOf(key)
-    readonly property bool pinned: !!flags.pinned
-    function place(how) {
-        if (tour) return
-        const section = extra.section || ""
-        if (how === "pin" && has("pinChat")) {
-            Chat.pinChat(key, !pinned)
-            Ui.say(pinned ? "Unpinned." : shownName + " is pinned to the top.")
-        } else if (how === "pin" || how === "up" || how === "down") {
-            if (at < 0) return
-            const next = keys.slice()
-            const to = how === "pin" ? 0 : how === "up" ? Math.max(0, at - 1) : Math.min(keys.length - 1, at + 1)
-            next.splice(at, 1)
-            next.splice(to, 0, key)
-            Chat.placeIn(key, section, section, next)
-            const k = Object.assign({}, extra); k.keys = next; extra = k
-            Ui.say(how === "pin" ? shownName + " is at the top." : "Moved.")
-        } else if (how === "mute") {
-            if (!has("muteChat")) return
-            // For good until unmuted (a huge time).
-            Chat.muteChat(key, flags.muted ? 0 : 8640000000000000)
-        } else if (how === "archive") {
-            if (!has("archiveChat")) return
-            Chat.archiveChat(key, !flags.archived)
-        } else if (how === "unread") {
-            if (!has("markUnread")) return
-            Chat.markUnread(key, !flags.unread)
-        }
-        revision++
-    }
-    readonly property var placeRows: [
-        { id: "pin", label: pinned ? "Unpin" : "Pin to the top", lit: pinned, on: has("pinChat") || at > 0 },
-        { id: "up", label: "Move up", on: at > 0 },
-        { id: "down", label: "Move down", on: at >= 0 && at < keys.length - 1 },
-        { id: "mute", label: flags.muted ? "Unmute" : "Mute", lit: !!flags.muted, on: true },
-        { id: "archive", label: flags.archived ? "Take out of archive" : "Archive", lit: !!flags.archived, on: true },
-        { id: "unread", label: flags.unread ? "Mark read" : "Mark unread", lit: !!flags.unread, on: true }
-    ]
+    readonly property string tint: tour ? "" : (revision, Chat.chats, hook("chatColor", [key], ""))
     readonly property var colors: ["", "#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6"]
-    function setColor(c) {
-        if (tour) return
-        if (!has("setChatColor")) return
-        Chat.setChatColor(key, c)
-        revision++
-    }
 
-    // ------------------------------------------------------------- the rest
-    function act(id) {
-        const k = key, n = shownName
-        if (tour) return
-        if (id === "nick") Ui.ask("Nickname for " + Chat.realNameOf(k), "Only on this computer; they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(k), "Save",
-                                  t => { Chat.setNickname(k, t); revision++ }, false, true)
-        else if (id === "note") Ui.ask("Note about " + n, "Only on this computer, never sent.", Chat.noteOf(k), "Save", t => { Chat.setNote(k, t); revision++ }, false, true)
-        else if (id === "introduce") { close(); PeopleActions.introduce(k) }
-        else if (id === "check") { close(); PeopleActions.checkCode(k) }
-        else if (id === "block") {
-            if (blocked) { Chat.block(k, false); revision++; Ui.say(n + " is unblocked.") }
-            else Ui.sure("Block " + n + "?", "Nothing from them reaches you until you unblock them. They aren't told.", "Block", () => { Chat.block(k, true); panel.revision++ }, false, true)
-        }
-        else if (id === "trash") Ui.sure("Move " + n + " to trash?", "They go to the Trash with your chat for 30 days, then are deleted for good. Restore brings everything back.",
-                                         "Move to trash", () => { Chat.removeContact(k); panel.close(); Ui.say(n + " is in the Trash.") }, false, true)
-    }
-
-    // Every choice, in the order the controller steps through them.
-    readonly property var order: ["nick", "note"].concat(roles.map(r => "role:" + r)).concat(permRows.map(p => "perm:" + p.id))
-                                 .concat(placeRows.map(p => "place:" + p.id)).concat(colors.map((c, i) => "color:" + i))
-                                 .concat(["introduce", "check", "block", "trash"])
-    function choose(id) {
-        if (id.indexOf("role:") === 0) setRole(id.substring(5))
-        else if (id.indexOf("perm:") === 0) togglePerm(id.substring(5))
-        else if (id.indexOf("place:") === 0) place(id.substring(6))
-        else if (id.indexOf("color:") === 0) setColor(colors[Number(id.substring(6))])
-        else act(id)
-    }
-    function focused(id) { return !!Ui.main && Ui.main.padInUse && order[focusIndex] === id }
+    readonly property var rows: page === "can" ? [
+        { id: "always", label: "Always right away", toggle: true },
+        { id: "calls", label: "Calls and video", toggle: true },
+        { id: "files", label: "Send me files", toggle: true },
+        { id: "active", label: "See when I'm active", toggle: true },
+        { id: "direct", label: "Direct calls (shares your address)", toggle: true },
+        { id: "days", label: "Message days", value: tour ? "7 days" : (revision, Chat.chats, Chat.chatDays(key)) + " days" }
+    ] : [
+        { id: "nick", label: "Nickname", value: nick !== "" ? nick : "None" },
+        { id: "note", label: "Note", value: note !== "" ? note : "None" },
+        { id: "color", label: "Chat color", swatches: true }
+    ]
 
     function show(k, n, x) {
         key = k; name = n; extra = x || {}; focusIndex = 0; revision++
         visible = true
     }
     function close() { visible = false; if (Ui.main) Ui.main.restoreFocus() }
+    // B and the arrow: back to the menu this came from.
+    function back() {
+        const f = extra.back
+        close()
+        if (f) f()
+    }
+    // Comes back here after a prompt or a list opened from a row.
+    function reopen() { const k = key, n = name, x = extra, at = focusIndex; show(k, n, x); focusIndex = at }
+
+    function act(id) {
+        if (tour) return
+        const k = key
+        if (id === "nick")
+            Ui.ask("Nickname for " + Chat.realNameOf(k), "Only you see it. Empty: their name", Chat.nicknameOf(k), "Save", t => { Chat.setNickname(k, t); panel.revision++ }, false, true)
+        else if (id === "note")
+            Ui.ask("Note about " + shownName, "Only you see it", Chat.noteOf(k), "Save", t => { Chat.setNote(k, t); panel.revision++ }, false, true)
+        else if (id === "color") pickColor(1)
+        else if (id === "days") { visible = false; PeopleActions.daysMenu(k, () => panel.reopen()) }
+        else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }
+        else if (setters[id] && has(setters[id])) { Chat[setters[id]](k, !isOn(id)); revision++ }
+    }
+    function setColor(c) {
+        if (tour || !has("setChatColor")) return
+        Chat.setChatColor(key, c)
+        revision++
+    }
+    function pickColor(dir) {
+        const at = Math.max(0, colors.indexOf(tint))
+        setColor(colors[(at + dir + colors.length) % colors.length])
+    }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.7) }
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: panel.close() }
 
     Rectangle {
         id: box
-        readonly property bool narrow: width < Theme.px(560)
         anchors.centerIn: parent
-        width: Math.min(parent.width - Theme.px(32), Theme.px(640))
-        height: Math.min(parent.height - Theme.px(32), col.implicitHeight + Theme.px(44))
+        width: Math.min(parent.width - Theme.px(32), Theme.px(480))
+        height: Math.min(parent.height - Theme.px(32), head.height + section.height + foot.height + Theme.px(56))
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.line
         clip: true
+        Accessible.role: Accessible.Dialog
+        Accessible.name: (panel.page === "can" ? "What they can do" : "Edit") + ", " + panel.shownName
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+
+        Item {
+            id: head
+            x: Theme.px(12); y: Theme.px(12)
+            width: parent.width - Theme.px(24)
+            height: Theme.px(36)
+            Rectangle {
+                id: backBtn
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(30); height: width
+                radius: Theme.radius
+                color: backHover.hovered ? Theme.raised : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Back"
+                Accessible.onPressAction: panel.back()
+                Icon { anchors.centerIn: parent; name: "back"; size: Theme.px(18); color: Theme.textSoft }
+                HoverHandler { id: backHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: panel.back() }
+            }
+            Avatar {
+                id: face
+                anchors.left: backBtn.right; anchors.leftMargin: Theme.px(8)
+                anchors.verticalCenter: parent.verticalCenter
+                key: panel.tour ? "" : panel.key
+                name: panel.shownName
+                size: Theme.px(30)
+                backdrop: Theme.panel
+            }
+            Text {
+                anchors.left: face.right; anchors.leftMargin: Theme.px(10)
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                text: (panel.page === "can" ? "What they can do" : "Edit").toUpperCase()
+                color: Theme.text
+                font.family: Theme.display; font.pixelSize: Theme.fs(15); font.weight: Font.Bold; font.letterSpacing: Theme.px(1.5)
+            }
+        }
+
+        // One framed section: the rows, a seam between each.
         Flickable {
-            anchors.fill: parent
-            anchors.margins: Theme.px(22)
-            contentHeight: col.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
+            id: view
+            anchors.top: head.bottom; anchors.topMargin: Theme.px(12)
+            anchors.bottom: foot.top; anchors.bottomMargin: Theme.px(12)
+            x: Theme.px(16)
+            width: parent.width - Theme.px(32)
+            contentHeight: section.height
             clip: true
-            Column {
-                id: col
-                width: parent.width
-                spacing: Theme.px(18)
-
-                // Who: avatar, name, how they are, Nickname and Note.
-                Row {
-                    width: parent.width
-                    spacing: Theme.px(14)
-                    Avatar {
-                        id: face
-                        key: panel.tour ? "" : panel.key
-                        name: panel.shownName
-                        size: Theme.px(60)
-                        showDot: !panel.tour
-                        backdrop: Theme.panel
-                    }
-                    Column {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - face.width - nickBtn.width - noteBtn.width - Theme.px(42)
-                        Text { width: parent.width; elide: Text.ElideRight; text: panel.shownName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(19); font.weight: Font.DemiBold }
-                        Text {
-                            width: parent.width; elide: Text.ElideRight
-                            text: (panel.presence === "online" ? "Online" : panel.presence === "idle" ? "Idle" : "Offline")
-                                  + (panel.verified ? " · Checked with the 4 emoji" : " · Not checked yet") + (panel.blocked ? " · Blocked" : "")
-                            color: panel.presence === "online" ? Theme.online : Theme.textMuted
-                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                        }
-                    }
-                    HButton { id: nickBtn; anchors.verticalCenter: parent.verticalCenter; kind: "plain"; text: "Nickname"; fontSize: 13; focused: panel.focused("nick"); onClicked: panel.act("nick") }
-                    HButton { id: noteBtn; anchors.verticalCenter: parent.verticalCenter; kind: "plain"; text: "Note"; fontSize: 13; focused: panel.focused("note"); onClicked: panel.act("note") }
-                }
-                Text { visible: panel.note !== ""; width: parent.width; wrapMode: Text.WordWrap; text: panel.note; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.italic: true }
-
-                // Role.
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Rectangle {
+                id: section
+                width: view.width
+                height: rowCol.implicitHeight + 2
+                radius: Theme.radius
+                color: Theme.panelLow
+                border.color: Theme.line
                 Column {
-                    width: parent.width
-                    spacing: Theme.px(8)
-                    Label { text: "ROLE" }
-                    Rectangle {
-                        width: parent.width; height: Theme.px(48)
-                        radius: Theme.radius
-                        color: Theme.panelLow
-                        Row {
-                            anchors.fill: parent; anchors.margins: Theme.px(4)
-                            spacing: Theme.px(6)
-                            Repeater {
-                                model: panel.roles
-                                Rectangle {
-                                    readonly property bool on: panel.role === modelData
-                                    width: (parent.width - Theme.px(18)) / 4; height: parent.height
-                                    radius: Theme.radius
-                                    color: on ? Theme.accent : roleHover.hovered ? Theme.raised : "transparent"
-                                    border.width: panel.focused("role:" + modelData) ? Theme.focusWidth : 0
-                                    border.color: Theme.text
-                                    opacity: panel.contact || panel.tour ? 1 : 0.5
-                                    Accessible.role: Accessible.RadioButton
-                                    Accessible.name: modelData
-                                    Accessible.checked: on
-                                    Text { anchors.centerIn: parent; text: modelData; color: parent.on ? Theme.ground : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: parent.on ? Font.DemiBold : Font.Normal }
-                                    HoverHandler { id: roleHover; cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: panel.setRole(modelData) }
-                                }
+                    id: rowCol
+                    x: 1; y: 1
+                    width: parent.width - 2
+                    Repeater {
+                        model: panel.rows
+                        Rectangle {
+                            id: row
+                            readonly property bool on: !!Ui.main && Ui.main.padInUse && panel.focusIndex === index
+                            width: rowCol.width
+                            height: Math.max(Theme.px(48), label.implicitHeight + Theme.px(16))
+                            color: on ? Theme.focusFill : rowHover.hovered ? Theme.raised : "transparent"
+                            border.width: on ? Theme.focusWidth : 0
+                            border.color: Theme.accent
+                            Accessible.role: modelData.toggle ? Accessible.CheckBox : Accessible.Button
+                            Accessible.name: modelData.label + (modelData.value ? ", " + modelData.value : "")
+                            Accessible.checked: !!modelData.toggle && panel.isOn(modelData.id)
+                            Accessible.onPressAction: panel.act(modelData.id)
+                            Rectangle { visible: index > 0; width: parent.width; height: 1; color: Theme.seam }
+                            Text {
+                                id: label
+                                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
+                                anchors.right: right.left; anchors.rightMargin: Theme.px(10)
+                                anchors.verticalCenter: parent.verticalCenter
+                                wrapMode: Text.WordWrap
+                                text: modelData.label
+                                color: Theme.text
+                                font.family: Theme.body; font.pixelSize: Theme.fs(15)
                             }
-                        }
-                    }
-                }
-
-                // What they can do, and where their chat sits (side by side when there's room).
-                Grid {
-                    width: parent.width
-                    columns: box.narrow ? 1 : 2
-                    columnSpacing: Theme.px(18)
-                    rowSpacing: Theme.px(18)
-                    readonly property real cellW: box.narrow ? width : (width - columnSpacing) / 2
-                    Rectangle {
-                        width: parent.cellW
-                        height: permCol.implicitHeight
-                        radius: Theme.radius
-                        color: Theme.panelLow
-                        border.color: Theme.line
-                        Column {
-                            id: permCol
-                            width: parent.width
-                            Label { text: "WHAT THEY CAN DO"; leftPadding: Theme.px(12); topPadding: Theme.px(10); bottomPadding: Theme.px(4) }
-                            Repeater {
-                                model: panel.permRows
-                                Rectangle {
-                                    width: permCol.width; height: Math.max(Theme.px(40), permText.implicitHeight + Theme.px(12))
-                                    color: panel.focused("perm:" + modelData.id) ? Theme.focusFill : "transparent"
-                                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam; visible: index < panel.permRows.length - 1 }
+                            Item {
+                                id: right
+                                anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: modelData.toggle ? sw.width : modelData.swatches ? swatchRow.width : valueRow.width
+                                height: Math.max(sw.height, swatchRow.height, valueRow.height)
+                                ToggleSwitch {
+                                    id: sw
+                                    visible: !!modelData.toggle
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    // The whole row is the switch: a click anywhere on it (the row's tap) flips it once.
+                                    enabled: false
+                                    checked: !!modelData.toggle && panel.isOn(modelData.id)
+                                }
+                                Row {
+                                    id: swatchRow
+                                    visible: !!modelData.swatches
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: Theme.px(6)
+                                    Repeater {
+                                        model: modelData.swatches ? panel.colors : []
+                                        Rectangle {
+                                            readonly property bool picked: (panel.tint || "") === modelData
+                                            width: Theme.px(24); height: width; radius: Theme.radius
+                                            color: modelData === "" ? Theme.raised : modelData
+                                            border.width: picked ? Theme.px(2) : 1
+                                            border.color: picked ? Theme.text : Theme.line
+                                            Accessible.role: Accessible.RadioButton
+                                            Accessible.name: modelData === "" ? "No color" : "Color " + index
+                                            Accessible.checked: picked
+                                            Icon { visible: modelData === ""; anchors.centerIn: parent; name: "close"; size: Theme.px(12); color: Theme.textMuted }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: panel.setColor(modelData) }
+                                        }
+                                    }
+                                }
+                                Row {
+                                    id: valueRow
+                                    visible: !modelData.toggle && !modelData.swatches
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: Theme.px(6)
                                     Text {
-                                        id: permText
-                                        anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
-                                        anchors.right: permSw.left; anchors.rightMargin: Theme.px(10)
                                         anchors.verticalCenter: parent.verticalCenter
-                                        wrapMode: Text.WordWrap
-                                        text: modelData.label
-                                        color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                                        width: Math.min(implicitWidth, row.width * 0.45)
+                                        elide: Text.ElideRight
+                                        text: modelData.value || ""
+                                        color: Theme.textMuted
+                                        font.family: Theme.body; font.pixelSize: Theme.fs(14)
                                     }
-                                    ToggleSwitch {
-                                        id: permSw
-                                        anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        checked: panel.permOn(modelData.id)
-                                        onToggled: panel.togglePerm(modelData.id)
-                                    }
+                                    Icon { anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
                                 }
                             }
+                            HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: { panel.focusIndex = index; if (!modelData.swatches) panel.act(modelData.id) } }
                         }
                     }
-                    Column {
-                        width: parent.cellW
-                        spacing: Theme.px(8)
-                        Label { text: "WHERE THIS CHAT SITS" }
-                        Grid {
-                            width: parent.width
-                            columns: 2
-                            spacing: Theme.px(6)
-                            Repeater {
-                                model: panel.placeRows
-                                Rectangle {
-                                    width: (parent.width - Theme.px(6)) / 2; height: Theme.px(40)
-                                    radius: Theme.radius
-                                    opacity: modelData.on ? 1 : 0.45
-                                    color: modelData.lit ? Theme.accentFill : placeHover.hovered && modelData.on ? Theme.raised : "transparent"
-                                    border.width: panel.focused("place:" + modelData.id) ? Theme.focusWidth : 1
-                                    border.color: panel.focused("place:" + modelData.id) ? Theme.accent : Theme.line
-                                    Accessible.role: Accessible.Button
-                                    Accessible.name: modelData.label
-                                    Text { anchors.centerIn: parent; width: parent.width - Theme.px(8); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: modelData.label; color: modelData.lit ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
-                                    HoverHandler { id: placeHover; cursorShape: modelData.on ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                                    TapHandler { enabled: modelData.on; onTapped: panel.place(modelData.id) }
-                                }
-                            }
-                        }
-                        Label { text: "CHAT COLOR"; topPadding: Theme.px(6) }
-                        Row {
-                            spacing: Theme.px(8)
-                            Repeater {
-                                model: panel.colors
-                                Rectangle {
-                                    readonly property bool on: (panel.flags.color || "") === modelData
-                                    width: Theme.px(28); height: width; radius: Theme.radius
-                                    color: modelData === "" ? Theme.raised : modelData
-                                    border.width: on || panel.focused("color:" + index) ? Theme.px(2) : 1
-                                    border.color: on || panel.focused("color:" + index) ? Theme.text : Theme.line
-                                    Accessible.role: Accessible.RadioButton
-                                    Accessible.name: modelData === "" ? "No color" : "Color " + modelData
-                                    Icon { visible: modelData === ""; anchors.centerIn: parent; name: "close"; size: Theme.px(14); color: Theme.textMuted }
-                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: panel.setColor(modelData) }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Introduce, check again, block, trash.
-                Flow {
-                    width: parent.width
-                    spacing: Theme.px(8)
-                    HButton { visible: panel.contact || panel.tour; text: "Introduce to someone"; fontSize: 13; focused: panel.focused("introduce"); onClicked: panel.act("introduce") }
-                    HButton { visible: panel.contact || panel.tour; text: panel.verified ? "Check 4 emoji again" : "Check the 4 emoji"; fontSize: 13; focused: panel.focused("check"); onClicked: panel.act("check") }
-                    HButton { text: panel.blocked ? "Unblock" : "Block"; kind: "danger"; fontSize: 13; focused: panel.focused("block"); onClicked: panel.act("block") }
-                    HButton { visible: panel.contact || panel.tour; text: "Move to trash"; kind: "danger"; fontSize: 13; focused: panel.focused("trash"); onClicked: panel.act("trash") }
-                    HButton { visible: !!panel.extra.more; text: "Group options"; fontSize: 13; onClicked: { const f = panel.extra.more; panel.close(); f() } }
                 }
             }
         }
-    }
-
-    component Label: Text {
-        color: Theme.textMuted
-        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.letterSpacing: Theme.px(1)
+        Row {
+            id: foot
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(16)
+            HButton { text: "Done"; kind: "primary"; onClicked: panel.back() }
+        }
     }
 
     function handleButton(b) {
+        const r = rows[focusIndex]
         switch (b) {
-        case "up": case "left": focusIndex = Math.max(0, focusIndex - 1); return true
-        case "down": case "right": focusIndex = Math.min(order.length - 1, focusIndex + 1); return true
-        case "a": choose(order[focusIndex]); return true
-        case "b": close(); return true
+        case "up": focusIndex = Math.max(0, focusIndex - 1); return true
+        case "down": focusIndex = Math.min(rows.length - 1, focusIndex + 1); return true
+        case "left": case "right": if (r && r.swatches) pickColor(b === "left" ? -1 : 1); return true
+        case "a": if (r) act(r.id); return true
+        case "b": back(); return true
         }
         return true
     }

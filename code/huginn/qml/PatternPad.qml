@@ -5,7 +5,7 @@ import Huginn
 // the controller or the arrow keys: move the ring to a dot, A (Enter) starts there, moving on picks
 // up each dot the ring reaches, A again is done and B starts over.
 // Passing straight over a dot in between picks it up too, as on Android.
-// Settings › Lock and privacy › Hide the pattern as I draw: the line and the lit dots stay hidden;
+// Settings › Privacy and lock › Hide the pattern as I draw: the line and the lit dots stay hidden;
 // each dot gives a short pulse as it's picked up, so you know it registered.
 Item {
     id: pad

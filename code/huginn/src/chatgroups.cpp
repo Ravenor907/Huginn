@@ -1295,7 +1295,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                                   {QStringLiteral("count"), int(GroupWire::keysOf(st).size())}, {QStringLiteral("inv"), p.value(QStringLiteral("inv")).toString()}});
             saveGroups();
             if (fresh) {
-                Q_EMIT notice(QStringLiteral("%1 invited you to %2. Open Direct messages to answer.").arg(nameOf(fromKey), gname));
+                Q_EMIT notice(QStringLiteral("%1 invited you to %2. Open Chats to answer.").arg(nameOf(fromKey), gname));
                 Q_EMIT arrived(nameOf(fromKey), QStringLiteral("Invited you to ") + gname, QStringLiteral("invite:") + g);
             }
             Q_EMIT changed();

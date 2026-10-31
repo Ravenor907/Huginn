@@ -1,11 +1,13 @@
 import QtQuick
 import Huginn
 
-// Direct messages, the same as Muninn's. Middle column: Add someone, My code, requests, people in no
-// folder, then each folder as a section that folds away (like Discord categories), the Trash, and at
-// the very bottom the Nearby room and people around you. Main column: the open conversation and its
-// message box, with a thread or the pins beside it. A portrait window shows one at a time. Locked
-// with a pattern or password like Muninn.
+// Chats, the same as Muninn's. Middle column: the title with + (add someone, my code, a one-time
+// link) and the list's three dots (New folder, Trash), then requests, people in no folder, each
+// folder as a section that folds away (like Discord categories), and at the very bottom the Nearby
+// room and people around you. Every person has one menu (PeopleActions.contactMenu): their three
+// dots, a right click, LT or X. Main column: the open conversation (name, Call and the same menu in
+// its header) and its message box, with a thread or the pins beside it. A portrait window shows one
+// at a time. Locked with a pattern or password like Muninn.
 Rectangle {
     id: page
     // Autumn: a frosted pane the leaves fall behind; the other looks are solid.
@@ -67,7 +69,10 @@ Rectangle {
         changeLock = !!a.changeLock
         if (a.zone) zone = a.zone
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
-        if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from Contacts › Message
+        if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
+        // A contact's menu › Chat › Pinned messages or Shared.
+        if (a.open && a.show === "pins") Qt.callLater(openPins)
+        if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
     }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
@@ -77,18 +82,17 @@ Rectangle {
     // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
     // keep their own order; people in no folder go newest first until they're moved.
     readonly property var entries: {
-        const out = [{ kind: "add", name: "Add someone", detail: "Paste their code, or a group code" },
-                     { kind: "code", name: "My code", detail: "A QR anyone can scan to message you" }]
-        Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName,
-                                                  detail: i.waiting ? "Waiting for " + i.fromName + " to let you in" : i.fromName + " invited you · " + i.count + (i.count === 1 ? " person" : " people") }))
+        // Rows waiting for an answer carry a short tag instead of a second line.
+        const out = []
+        Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, tag: i.waiting ? "Waiting" : "Invite" }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
-                                              detail: r.replaces ? "Says they're " + r.replacesName + " with a new security key" : "Wants to chat (has your code)" }))
+                                              tag: r.replaces ? "New key" : "Request" }))
         // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
-        PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true }, e)))
-        if (Linked.phone.key) out.push({ kind: "mirror", name: Linked.phone.name + "'s chats", detail: "Your linked phone, while it's online" })
+        PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true, tag: e.pendingKind === "intro" ? "Intro" : "Request" }, e)))
+        if (Linked.phone.key) out.push({ kind: "mirror", name: Linked.phone.name + "'s chats", tag: "Phone" })
         const chats = Chat.chats, byKey = {}
         chats.forEach(c => byKey[c.key] = c)
-        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, detail: c.last || page.routeText(c.route), unread: c.unread, route: c.route, section: section })
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section })
         const order = Chat.topOrder
         const loose = chats.filter(c => !(c.folders || []).length)
         loose.filter(c => order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
@@ -99,12 +103,10 @@ Rectangle {
                        unread: !!f.collapsed && keys.some(k => byKey[k].unread) })
             if (!f.collapsed) keys.forEach(k => out.push(person(byKey[k], f.id)))
         })
-        const trash = Chat.trash
-        if (trash.length) out.push({ kind: "trash", name: "Trash", detail: trash.length + (trash.length === 1 ? " person" : " people") + " · deleted for good after 30 days" })
         // Nearby always last, in its own section. Hidden from people nearby: none of it.
         if (Chat.visibleNearby) {
-            out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", detail: Chat.nearbyOn ? Chat.nearbyCount + " around you · you're " + Chat.username : "Off" })
-            Chat.around.forEach((p, i) => out.push({ kind: "stranger", key: p.key, name: p.name, label: i === 0 ? "Around you" : "", detail: page.routeText(p.route) + (page.pad ? " · A to message" : " · click to message"), route: p.route }))
+            out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", tag: Chat.nearbyOn ? "" : "Off" })
+            Chat.around.forEach((p, i) => out.push({ kind: "stranger", key: p.key, name: p.name, label: i === 0 ? "Around you" : "", route: p.route }))
         }
         return out
     }
@@ -117,24 +119,20 @@ Rectangle {
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
     readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
 
-    // What the hint bar shows (Main.qml adds LB). LT opens the options (the page gets it as X).
-    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }, { key: "b", label: "Back" }]
+    // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
+    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(lock.mode !== "unlock" ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
+        : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
-                             { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
-        : [{ key: "a", label: "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
-            .concat(sel >= 0 || openKey !== "" ? [{ key: "lt", label: "Options" }] : []).concat([{ key: "b", label: "Back" }])
+                             { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
+        : !picked ? [{ key: "a", label: "Add someone" }, { key: "b", label: "Back" }]
+        : [{ key: "a", label: keep.visible && sel < 0 ? "Keep in touch" : "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
+            .concat(sel >= 0 ? [{ key: "lt", label: "Options" }] : openKey !== "" ? [{ key: "lt", label: "Menu" }] : []).concat([{ key: "b", label: "Back" }])
     readonly property string status: lock.visible ? "" : Chat.netStatus
 
-    function routeText(r) {
-        return r === "bluetooth" ? "Close by (Bluetooth)" : r === "wifi" ? "Same Wi-Fi" : r === "internet" ? "Over the internet" : "Not reachable right now"
-    }
-    function routeShort(r) {
-        return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Online" : "Away"
-    }
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
     function stateLabel(m) {
         if (!m.mine) return ""
@@ -183,12 +181,11 @@ Rectangle {
         if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
     }
     Component.onCompleted: { Vault.back(); showLimitsNote() }   // away more than a minute: locked again
-    // Cap d1: told once, on the chat list, that messages don't stay forever.
+    // Cap d1: told once, on the chat list, that messages don't stay forever. The one place this is explained.
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
         Chat.dismissLimitsNote()
-        Ui.sure("Messages disappear after 7 days", "Every chat deletes messages, pictures and voice clips older than its limit, on every device. "
-                + "Family and Work groups, and people in your Family or Work folder, can keep them up to 30 days.", "Got it", () => {})
+        Ui.sure("Messages disappear", "After 7 days, on every device. Family and Work can keep them up to 30 days.", "Got it", () => {})
     }
     Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
@@ -217,26 +214,27 @@ Rectangle {
             id: listHead
             width: parent.width
             carved: false
-            title: "Direct messages"
-            // Folders are sections of the list below; this makes a new one (with a pointer).
+            title: "Chats"
+            // Add someone, my code or a one-time link.
             Rectangle {
                 visible: !page.locked
                 anchors.verticalCenter: parent.verticalCenter
-                height: Math.max(Theme.px(28), newFolderLabel.implicitHeight + Theme.px(6))
-                width: newFolderLabel.implicitWidth + Theme.px(18)
+                width: Theme.px(28); height: width
                 radius: Theme.radius
-                color: newFolderHover.hovered ? Theme.raised : Theme.tile
+                color: addHover.hovered ? Theme.raised : "transparent"
                 Accessible.role: Accessible.Button
-                Accessible.name: "New folder"
-                Text {
-                    id: newFolderLabel
-                    anchors.centerIn: parent
-                    text: "+ Folder"
-                    color: Theme.textSoft
-                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                }
-                HoverHandler { id: newFolderHover }
-                TapHandler { onTapped: page.newFolder("") }
+                Accessible.name: "Add someone"
+                Accessible.onPressAction: page.addMenu()
+                Icon { anchors.centerIn: parent; name: "plus"; size: Theme.px(18); lineWidth: 2; color: addHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.addMenu() }
+            }
+            // The list's own menu: New folder and Trash.
+            MoreButton {
+                visible: !page.locked
+                anchors.verticalCenter: parent.verticalCenter
+                label: "Chats menu"
+                onClicked: page.listMenu()
             }
         }
 
@@ -247,7 +245,7 @@ Rectangle {
             visible: !page.locked
             anchors.top: listHead.bottom
             anchors.topMargin: Theme.px(8)
-            anchors.bottom: netStrip.top
+            anchors.bottom: parent.bottom
             anchors.bottomMargin: Theme.px(6)
             x: Theme.px(8)
             width: parent.width - Theme.px(16)
@@ -280,7 +278,7 @@ Rectangle {
                     }
                 }
 
-                // A folder's header: tap (or A) folds it away, X for its options.
+                // A folder's header: tap (or A) folds it away; its three dots, a right click or X for its menu.
                 Rectangle {
                     visible: entry.isHeader
                     anchors.bottom: parent.bottom
@@ -305,13 +303,13 @@ Rectangle {
                         anchors.right: headDot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         elide: Text.ElideRight
-                        text: String(modelData.name || "").toUpperCase() + "  ·  " + (modelData.count || 0)
+                        text: String(modelData.name || "").toUpperCase() + "  " + (modelData.count || 0)
                         color: entry.on || modelData.unread ? Theme.text : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(0.5)
                     }
                     Rectangle {
                         id: headDot
-                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.right: folderMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(8); height: width; radius: width / 2
                         color: Theme.accent
@@ -321,6 +319,14 @@ Rectangle {
                     TapHandler {
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.listOptions(); else page.choose() }
+                    }
+                    MoreButton {
+                        id: folderMore
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(2)
+                        anchors.verticalCenter: parent.verticalCenter
+                        implicitWidth: Theme.px(24); implicitHeight: Theme.px(24)
+                        label: "Folder menu"
+                        onClicked: { page.zone = "list"; page.row = index; page.folderOptions(modelData) }
                     }
                 }
 
@@ -339,7 +345,7 @@ Rectangle {
                     border.width: on ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: modelData.name + ", " + modelData.detail
+                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.unread ? ", unread" : "")
                     Rectangle {
                         id: ava
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
@@ -360,7 +366,7 @@ Rectangle {
                             visible: !parent.parent.person
                             anchors.centerIn: parent
                             size: Theme.px(18)
-                            name: modelData.kind === "add" ? "plus" : modelData.kind === "code" ? "qr" : modelData.kind === "ginvite" ? "hash" : modelData.kind === "trash" ? "close" : "people"
+                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : "people"
                             color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
@@ -372,24 +378,35 @@ Rectangle {
                             color: Theme.accent
                         }
                     }
-                    Column {
+                    // One line: the name, a short tag for what waits for an answer, the unread dot and the three dots.
+                    Text {
                         anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                        anchors.right: dot.left; anchors.rightMargin: Theme.px(6)
+                        anchors.right: tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight; text: modelData.name || ""
+                        color: parent.on || parent.here || modelData.unread ? Theme.text : Theme.textSoft
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: modelData.unread ? Font.DemiBold : Font.Medium
+                    }
+                    Rectangle {
+                        id: tagChip
+                        visible: !!modelData.tag
+                        anchors.right: dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: tagText.implicitWidth + Theme.px(12); height: tagText.implicitHeight + Theme.px(4)
+                        radius: Theme.radiusSmall
+                        color: "transparent"
+                        border.color: modelData.kind === "nearby" || modelData.waiting ? Theme.lineMuted : Theme.accent
                         Text {
-                            width: parent.width; elide: Text.ElideRight; text: modelData.name || ""
-                            color: parent.parent.on || parent.parent.here || modelData.unread ? Theme.text : Theme.textSoft
-                            font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: modelData.unread ? Font.DemiBold : Font.Medium
-                        }
-                        Text {
-                            width: parent.width; elide: Text.ElideRight; text: modelData.detail || ""   // folder headers and some rows have none
-                            color: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting) ? Theme.accent : Theme.textMuted
-                            font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                            id: tagText
+                            anchors.centerIn: parent
+                            text: modelData.tag || ""
+                            color: modelData.kind === "nearby" || modelData.waiting ? Theme.textMuted : Theme.accent
+                            font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold
                         }
                     }
                     Rectangle {
                         id: dot
-                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.right: rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(8); height: width; radius: width / 2
                         color: Theme.accent
@@ -424,11 +441,21 @@ Rectangle {
                         onClicked: mouse => {
                             if (moved) return
                             page.zone = "list"; page.row = index
-                            if (mouse.button === Qt.RightButton) page.personPanel(modelData); else page.choose()
+                            if (mouse.button === Qt.RightButton) page.rowMenu(modelData); else page.choose()
                         }
                         // Press and hold: the person panel too (a touch screen has no right click).
-                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.personPanel(modelData) } }
+                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.rowMenu(modelData) } }
                         Component.onDestruction: if (moved) page.cancelDrag()
+                    }
+                    // A person's one menu (only people have one; the rest answer A or a click).
+                    MoreButton {
+                        id: rowMore
+                        visible: modelData.kind === "chat"
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: visible ? implicitWidth : 0
+                        label: "More for " + (modelData.name || "")
+                        onClicked: { page.zone = "list"; page.row = index; page.rowMenu(modelData) }
                     }
                 }
             }
@@ -488,36 +515,9 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: Vault.exists ? "Locked. Unlock to see your chats." : "Set a lock to start chatting."
+            text: Vault.exists ? "Locked." : "Set a lock to start."
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(15)
-        }
-
-        // How Huginn reaches people right now.
-        Rectangle {
-            id: netStrip
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: Theme.px(32)
-            color: Theme.groundDeep
-            Row {
-                anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.px(8)
-                Icon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: "shield"; size: Theme.px(15)
-                    color: Chat.internet > 0 || Chat.nearbyOn ? Theme.accent : Theme.textMuted
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: netStrip.width - Theme.px(50)
-                    elide: Text.ElideRight
-                    text: Chat.netStatus + (Chat.nearbyOn ? " · nearby on" : "") + " · encrypted"
-                    color: Theme.textMuted
-                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
-                }
-            }
         }
     }
 
@@ -536,49 +536,22 @@ Rectangle {
             carved: page.locked || !page.picked
             backShown: Theme.portrait && !page.locked
             onBack: { page.zone = "list"; page.sel = -1 }
-            title: page.locked ? "Locked" : !page.picked ? "Direct messages" : page.openKey === "" ? "Nearby room" : page.openName
-            subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "Everyone close by or on this Wi-Fi with Huginn or Muninn"
-                    : page.theyType ? "typing…"
-                    : (page.theyActive ? "Active now · " : "") + "Encrypted · " + (Chat.keyChanged(page.openKey) ? "security key changed, not verified" : Chat.isVerified(page.openKey) ? "verified" : "not verified")
-            Row {
-                visible: !page.locked && page.openKey !== ""
-                spacing: Theme.px(6)
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: Theme.px(8); height: width; radius: width / 2
-                    color: page.openRoute === "" || page.openRoute === "none" ? Theme.textFaint : Theme.hc ? Theme.text : Theme.online
-                }
-                // Active status (cap m1): their app is open right now.
-                Text {
-                    visible: page.theyActive
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Active"
-                    color: Theme.hc ? Theme.text : Theme.online
-                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: page.routeShort(page.openRoute)
-                    color: Theme.textMuted
-                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                }
-            }
-            // The desktop: show or hide the list of conversations.
-            PaneToggle { which: "list" }
-            // Pinned messages of this chat (only on this computer).
-            HButton {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: !page.locked && page.openKey !== ""
-                text: page.pins.length ? "Pins · " + page.pins.length : "Pins"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
-                onClicked: page.side = page.side === "pins" ? "" : "pins"
-            }
+            title: page.locked ? "Locked" : !page.picked ? "Chats" : page.openKey === "" ? "Nearby room" : page.openName
+            subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "People close by"
+                    : (Chat.isVerified(page.openKey) && !Chat.keyChanged(page.openKey) ? "Verified" : "Not verified")
+            // Name, Call and the person's one menu.
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !page.locked && page.openKey !== ""
                 text: "Call"
                 implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
                 onClicked: page.startCall()
+            }
+            MoreButton {
+                visible: !page.locked && page.openKey !== ""
+                anchors.verticalCenter: parent.verticalCenter
+                label: "More for " + page.openName
+                onClicked: page.chatMenu()
             }
         }
 
@@ -623,10 +596,10 @@ Rectangle {
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     spacing: Theme.px(6)
                     Text { width: parent.width; wrapMode: Text.WordWrap; text: Chat.theySaidKeep(page.openKey) ? page.openName + " wants to keep in touch" : "Keep in touch with " + page.openName + "?"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold }
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: "If you both say yes, you can message each other from anywhere." + (page.pad ? " Menu: Yes" : ""); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { width: parent.width; wrapMode: Text.WordWrap; text: "Then message from anywhere."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                     Row {
                         spacing: Theme.px(8)
-                        HButton { text: "Yes, keep in touch"; kind: "primary"; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.keepInTouch(page.openKey) }
+                        HButton { text: "Yes"; kind: "primary"; focused: page.pad && page.active && page.zone === "messages" && page.sel < 0; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.keepInTouch(page.openKey) }
                         HButton { text: "Not now"; kind: "plain"; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.notNow(page.openKey) }
                     }
                 }
@@ -844,10 +817,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 visible: list.count === 0 && page.picked
-                text: page.openKey === "" ? (Chat.nearbyOn ? (Chat.nearbyCount === 0 ? "Nobody else is here yet. Open Muninn on a phone close by or on this Wi-Fi." : "Say hello.")
-                                                           : "Nearby chat is off. Turn it on in Settings › More settings › Find people close by.")
-                                          : page.pad ? "No messages yet. Press A to write, hold Y to talk, LT for a picture and more."
-                                                     : "No messages yet. Say hello, or drop a picture here."
+                text: page.openKey === "" ? (Chat.nearbyOn ? (Chat.nearbyCount === 0 ? "Nobody nearby yet." : "Say hello.") : "Nearby room is off.")
+                                          : "No messages yet."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
             // Nothing picked yet: how to start, instead of landing in the public Nearby room.
@@ -865,19 +836,13 @@ Rectangle {
                 }
                 Text {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
-                    text: "PICK A CHAT, OR ADD SOMEONE"
+                    text: "PICK A CHAT"
                     color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
                 }
                 Text {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
-                    text: "Your chats are on the left. Add someone with their code, or show yours for them to scan."
+                    text: "Or add someone with +"
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
-                }
-                Row {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: Theme.px(8)
-                    HButton { text: "Add someone"; kind: "primary"; onClicked: page.addSomeone() }
-                    HButton { text: "My code"; onClicked: { Chat.newLink(); page.showCode = true } }
                 }
             }
 
@@ -901,7 +866,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Release Y to send, B cancels" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -997,8 +962,8 @@ Rectangle {
             id: sideHead
             width: parent.width
             title: page.side === "thread" ? "Thread" : "Pinned"
-            subtitle: page.side === "thread" ? "With " + page.openName : page.pinnedMsgs.length ? page.pinnedMsgs.length + " pinned · only on this computer" : "Nothing pinned with " + page.openName
-            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: { page.side = ""; page.threadRoot = "" } }
+            subtitle: page.openName
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; kind: "plain"; implicitHeight: Theme.px(30); fontSize: 13; onClicked: { page.side = ""; page.threadRoot = "" } }
         }
         ListView {
             id: sideList
@@ -1027,7 +992,7 @@ Rectangle {
             anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(16)
             x: Theme.px(16); width: parent.width - Theme.px(32)
             wrapMode: Text.WordWrap
-            text: "Pin a message with the pin over its corner. Pins stay on this computer."
+            text: "Nothing pinned."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
         Composer {
@@ -1074,12 +1039,12 @@ Rectangle {
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(10)
                 Text { text: "MY CODE"; color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: "They scan this with their phone's camera: it opens Muninn, or shows where to get it. It works for an hour, so a leaked code can't be used to spam you; people who already have you keep working."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                 Text {
                     property real now: Date.now()
                     Timer { interval: 10000; repeat: true; running: page.showCode; onTriggered: parent.now = Date.now() }
-                    text: Chat.linkExpires > now ? "Good for " + Math.ceil((Chat.linkExpires - now) / 60000) + " more minutes" : "This code has expired. Make a new one"
-                    color: Chat.linkExpires > now ? Theme.accent : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    width: parent.width; wrapMode: Text.WordWrap
+                    text: Chat.linkExpires > now ? "Scan to add me. Works for 1 hour." : "Expired. Make a new code."
+                    color: Chat.linkExpires > now ? Theme.textMuted : Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -1092,7 +1057,7 @@ Rectangle {
                     spacing: Theme.px(8)
                     HButton { text: "Close"; kind: "plain"; onClicked: page.showCode = false }
                     HButton { text: "New code"; onClicked: Chat.newLink() }
-                    HButton { text: "Copy link"; kind: "primary"; onClicked: { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") } }
+                    HButton { text: "Copy link"; kind: "primary"; onClicked: { Chat.copyLink(); Ui.say("Link copied.") } }
                 }
             }
         }
@@ -1102,143 +1067,93 @@ Rectangle {
     function write() {
         if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         if (openKey === "") {
-            if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › More settings › Find people close by.", true); return }
+            if (!Chat.nearbyOn) { Ui.say("Nearby room is off: Settings › Privacy and lock.", true); return }
             Ui.ask("Message everyone nearby", "You're " + Chat.username, "", "Send", t => Chat.sendNearby(t), false, true)
         } else {
             const k = openKey, re = replyId
-            Ui.ask(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "End-to-end encrypted", "", "Send",
+            Ui.ask(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
                    t => { Chat.sendPrivate(k, t, re); page.replyId = "" }, false, true)
         }
     }
+    // The + beside the title: add someone, show my code, or copy a one-time link.
+    function addMenu() {
+        if (locked) return
+        Ui.pickFrom("Add", [{ header: "", items: [{ name: "Add someone", icon: "plus", url: "add" },
+                                                   { name: "My code", icon: "qr", url: "code" },
+                                                   { name: "One-time link", icon: "attach", url: "once" }] }], a => {
+            if (a === "add") addSomeone()
+            else if (a === "code") { Chat.newLink(); showCode = true }
+            else if (a === "once") PeopleActions.inviteLink()
+        })
+    }
+    // The list's three dots: New folder and Trash.
+    function listMenu() {
+        if (locked) return
+        const n = Chat.trash.length
+        Ui.pickFrom("Chats", [{ header: "", items: [{ name: "New folder", icon: "folder", url: "folder" },
+                                                     { name: "Trash", icon: "close", detail: n ? String(n) : "", url: "trash" }] }], a => {
+            if (a === "folder") newFolder("")
+            else if (a === "trash") openTrash()
+        })
+    }
     function addSomeone() {
-        Ui.ask("Add someone", "Paste the code or link they sent you, or a group's code or invite link.", "", "Add", t => {
+        Ui.ask("Add someone", "Paste their code or link", "", "Add", t => {
             // A group's code or invite link (cap j1 links work the same way): its name and size, then Join or Not now.
             const gc = Chat.parseGroupCode(t)
             if (gc && gc.name && !gc.mine && !gc.member && !gc.expired) {
                 const n = gc.count || gc.members || 0
-                Ui.sure("Join " + gc.name + "?", (n ? n + (n === 1 ? " member. " : " members. ") : "") + "Everyone in a group sees your name and can message the group. You can leave any time.",
-                        "Join", () => { const r = Chat.joinWithCode(t); Ui.say(r === "" ? "Asked to join " + gc.name + ". It opens once they let you in." : r, r !== "") }, false, false)
+                Ui.sure("Join " + gc.name + "?", (n ? n + (n === 1 ? " member. " : " members. ") : "") + "They see your name.",
+                        "Join", () => { const r = Chat.joinWithCode(t); Ui.say(r === "" ? "Asked to join " + gc.name + "." : r, r !== "") }, false, false)
                 Ui.confirm.cancelText = "Not now"
                 return
             }
             if (t.indexOf("MUNINNG1:") >= 0) {
                 const gc = Chat.parseGroupCode(t)
                 const r = Chat.joinWithCode(t)
-                if (r === "") Ui.say("Asked " + gc.adminName + " to let you in to " + gc.name + ". It opens once they do.")
+                if (r === "") Ui.say("Asked to join " + gc.name + ".")
                 else Ui.say(r, true)
                 return
             }
             const c = Chat.parseCode(t)
-            if (!c.key) { Ui.say("That isn't a Muninn code. Ask them for My code › Share link.", true); return }
+            if (!c.key) { Ui.say("That code didn't work.", true); return }
             if (c.mine) { Ui.say("That's your own code.", true); return }
-            if (c.expired) { Ui.say("That code has expired (they last an hour). Ask them for a new one.", true); return }
+            if (c.expired) { Ui.say("That code expired. Ask for a new one.", true); return }
             const r = Chat.replaces(t)
-            const added = () => { Ui.say(c.name + " added. Say hi: they'll get it wherever they are."); openKey = c.key; picked = true; zone = "messages" }
+            const added = () => { Ui.say(c.name + " added."); openKey = c.key; picked = true; zone = "messages" }
             if (!r.key) { Chat.addContact(t); PeopleActions.added(t, c.key); added(); return }
             // A contact with this inbox or name already has another security key: never replaced quietly.
             if (r.sameInbox) {
-                Ui.sure(r.name + "'s security key changed?", "This code has " + r.name + "'s inbox but a different security key. Use it only if you've checked with them "
-                        + "another way (in person or a call). Your chat carries on with the new key, marked not verified.", "Use the new key",
+                Ui.sure(r.name + "'s key changed?", "Check with them in person first.", "Use the new key",
                         () => { Chat.addContact(t, r.key); openKey = c.key; picked = true; zone = "messages" }, false, true)
                 return
             }
-            Ui.pickFrom("Is this " + r.name + "?", [{ header: "Not the security key you have for " + r.name, items: [
-                { name: "Someone new", detail: "Add " + c.name + " as another contact", url: "new" },
-                { name: "Same person, new key", detail: "Your chat with " + r.name + " carries on, marked not verified. Check the code with them", url: "same" }] }],
+            Ui.pickFrom("Is this " + r.name + "?", [{ header: "", items: [
+                { name: "Someone new", url: "new" },
+                { name: "Same person, new key", url: "same" }] }],
                 a => {
                     if (a === "same") { Chat.addContact(t, r.key); openKey = c.key; picked = true; zone = "messages" }
                     else { Chat.addContact(t); added() }
                 })
         })
     }
-    // A name only for this computer: never sent. Empty goes back to their own name.
-    function rename(k) {
-        Ui.ask("Nickname for " + Chat.realNameOf(k), "Only on this computer; they aren't told. Leave it empty to use their own name.", Chat.nicknameOf(k), "Save",
-               t => { Chat.setNickname(k, t); Ui.say(t.trim() === "" ? "Back to " + Chat.realNameOf(k) + "." : "Nickname set: " + Chat.nameOf(k) + ".") }, false, true)
-    }
-    // The person panel for a row of the list: role, what they can do, where their chat sits.
-    function personPanel(e) {
+    // A person's one menu (PeopleActions.contactMenu), from their row: Move up and Down follow the
+    // section they were opened in.
+    function rowMenu(e) {
         if (!e || e.kind !== "chat") { listOptions(); return }
-        Ui.showPerson(e.key, e.name, { section: e.section, keys: sectionKeys(e.section) })
+        const k = e.key
+        PeopleActions.contactMenu(k, e.name, { section: e.section, keys: sectionKeys(e.section), removed: () => page.closeChatWith(k) })
     }
+    // The same menu for the open chat (its header's three dots, or LT with no message picked).
+    function chatMenu() {
+        if (openKey === "") return
+        const k = openKey, e = entries.find(x => x.kind === "chat" && x.key === k)
+        PeopleActions.contactMenu(k, openName, { tour: tour, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
+    }
+    function closeChatWith(k) { if (openKey === k) { openKey = ""; picked = false; zone = "list" } }
     function checkCode(k) { PeopleActions.checkCode(k) }
-    // Cap f1 and i1 additions to a 1:1 chat's options.
-    function moreItems() {
-        if (openKey === "" || !Chat.isContact(openKey)) return []
-        return [{ name: "Send a file", detail: "Straight to them, wherever they are, up to 4 GB", url: "file" },
-                { name: "Introduce to someone", detail: "Two of your contacts meet, if both say yes", url: "introduce" }]
-    }
-    function conversationItems() {
-        const items = [{ name: "Call", detail: Calls.canCall(openKey) ? "Encrypted voice call" : "Needs a newer Muninn or Huginn", url: "call" }]
-        if (Calls.canVideo(openKey)) items.push({ name: "Video call", detail: "Encrypted", url: "video" })
-        if (keep.visible) items.unshift({ name: "Keep in touch", detail: "If you both say yes, you can message from anywhere", url: "keep" },
-                                        { name: "Not now", detail: "Don't keep in touch for now", url: "notnow" })
-        items.push(
-                       { name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" },
-                       { name: "Shared photos, videos and links", detail: "Everything sent in this chat", url: "shared" },
-                       { name: "Nickname", detail: "A name only you see. Now: " + openName, url: "rename" },
-                       { name: "Role and permissions", detail: "Family, Work or Folk, what they can do, where the chat sits", url: "person" },
-                       { name: "Folders", detail: folderNames(openKey), url: "folders" },
-                       { name: "Pinned messages", detail: pins.length ? pins.length + " · only on this computer" : "Nothing pinned yet", url: "pins" })
-        moreItems().forEach(i => items.push(i))
-        if (Chat.isContact(openKey)) items.push({ name: "Messages", detail: "Disappear after " + Chat.chatDays(openKey) + " days", url: "limit" })
-        if (!Chat.isVerified(openKey)) items.push({ name: "Check code", detail: Chat.keyChanged(openKey) ? "Their security key changed: make sure it's really them" : "Make sure nobody is in between", url: "code" })
-        return items
-    }
     function startCall() {
         const w = Calls.call(openKey)
         if (w !== "") Ui.say(w, true)
-    }
-    function conversationOptions() {
-        const k = openKey
-        Ui.pickFrom(openName, [{ header: "", items: conversationItems() }], a => {
-            if (a === "call") startCall()
-            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
-            else if (a === "picture") pickPicture()
-            else if (a === "rename") rename(k)
-            else if (a === "code") checkCode(k)
-            else if (a === "folders") pickFolders(k)
-            else if (a === "pins") openPins()
-            else if (a === "file") PeopleActions.sendFile(k)
-            else if (a === "introduce") PeopleActions.introduce(k)
-            else if (a === "shared") more.openShared()
-            else if (a === "limit") pickLimit(k)
-            else if (a === "person") Ui.showPerson(k, openName, {})
-            else if (a === "keep") Chat.keepInTouch(k)
-            else if (a === "notnow") Chat.notNow(k)
-        })
-    }
-    // Cap d1: how long this chat keeps messages. My choice only for someone in my Family or Work folder; the shorter one counts.
-    function pickLimit(k) {
-        const l = Chat.limitInfo(k), n = Chat.nameOf(k)
-        const note = l.older ? n + "'s app is older: it keeps messages until it updates" : l.d1 ? n + " keeps them " + l.theirs + " days. The shorter one counts" : ""
-        if (!l.close) {
-            Ui.say("Messages disappear after " + l.days + " days. Put " + n + " in your Family or Work folder to keep them up to 30." + (note ? " " + note + "." : ""))
-            return
-        }
-        Ui.pickFrom("Keep messages with " + n, [{ header: note, items: l.choices.map(d => ({ name: d + " days", detail: d === l.mine ? "Your choice now" : "", url: String(d) })) }],
-                    d => { Chat.setKeep(k, Number(d)); Ui.say("Messages with " + n + " now disappear after " + Chat.chatDays(k) + " days.") })
-    }
-    // ------------------------------------------------------------- folders (only on this computer)
-    function folderNames(k) {
-        const ids = Chat.foldersOf(k)
-        const names = Chat.folders.filter(f => ids.indexOf(f.id) >= 0).map(f => f.name)
-        return names.length ? "In " + names.join(", ") : "Sort them into Family, Work, Folk or your own"
-    }
-    function pickFolders(k) {
-        const ids = Chat.foldersOf(k)
-        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: ids.indexOf(f.id) >= 0 ? "In it · choose to take them out" : "Choose to put them in" }))
-        items.push({ name: "New folder", detail: "Make one and put them in it", url: "+" })
-        Ui.pickFrom("Folders for " + Chat.nameOf(k), [{ header: "Only on this computer", items: items }], id => {
-            if (id === "+") {
-                Ui.ask("New folder", "A name only you see", "", "Make it", t => { const f = Chat.addFolder(t); if (f !== "") Chat.setInFolder(f, k, true) }, false, true)
-                return
-            }
-            const on = Chat.foldersOf(k).indexOf(id) < 0
-            Chat.setInFolder(id, k, on)
-            const f = Chat.folders.find(x => x.id === id)
-            Ui.say((on ? "Added to " : "Taken out of ") + (f ? f.name : "the folder") + ".")
-        })
     }
     // ------------------------------------------------------------- sections: folders, order, trash
     function folderName(id) {
@@ -1254,101 +1169,53 @@ Rectangle {
         Qt.callLater(() => { const i = page.entries.findIndex(test); if (i >= 0) page.row = i })
     }
     function newFolder(key, from) {
-        Ui.ask("New folder", "A name only you see, like Family, Work or Folk", "", "Make it", t => {
+        Ui.ask("New folder", "Only you see it", "", "Make it", t => {
             const f = Chat.addFolder(t)
             if (f === "") { Ui.say("Give the folder a name.", true); return }
             if (key) Chat.placeIn(key, from || "", f, [key])
         }, false, true)
     }
-    // X (or a right click) on a row of the list.
+    // X (or a right click) on a row of the list: a person's menu, a folder's, or the list's own.
     function listOptions() {
         const e = entries[row]
         if (!e) return
-        if (e.kind === "chat") { page.pad ? personOptions(e) : personPanel(e); return }
+        if (e.kind === "chat") { rowMenu(e); return }
         if (e.kind === "folder") { folderOptions(e); return }
-        if (e.kind === "trash") { openTrash(); return }
-        Ui.pickFrom("Direct messages", [{ header: "", items: [{ name: "New folder", detail: "A section of the list, only on this computer", url: "folder" },
-                                                             { name: "One-time invite link", detail: "Works for the first person who uses it, within a day", url: "once" }] }],
-                    a => { if (a === "folder") newFolder(""); else if (a === "once") PeopleActions.inviteLink() })
-    }
-    function personOptions(e) {
-        const k = e.key, section = e.section, keys = sectionKeys(section), at = keys.indexOf(k)
-        const items = [{ name: "Open", url: "open" }]
-        if (at > 0) items.push({ name: "Move up", url: "up" })
-        if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
-        items.push({ name: "Move to folder…", detail: section === "" ? "Now in no folder" : "Now in " + folderName(section), url: "move" },
-                   { name: "Folders", detail: folderNames(k), url: "folders" },
-                   { name: "Nickname", detail: "A name only you see", url: "rename" },
-                   { name: "Role and permissions", detail: "Everything about them in one place", url: "person" },
-                   { name: "Move to trash", detail: "Your chat goes too. Restore brings both back within 30 days", url: "remove" })
-        Ui.pickFrom(e.name, [{ header: "", items: items }], a => {
-            if (a === "open") { openKey = k; picked = true; zone = "messages" }
-            else if (a === "up" || a === "down") {
-                const next = keys.slice()
-                const to = a === "up" ? at - 1 : at + 1
-                next.splice(at, 1)
-                next.splice(to, 0, k)
-                Chat.placeIn(k, section, section, next)
-                focusEntry(x => x.kind === "chat" && x.key === k && x.section === section)
-            }
-            else if (a === "move") moveToFolder(e)
-            else if (a === "folders") pickFolders(k)
-            else if (a === "rename") rename(k)
-            else if (a === "remove") removePerson(k, e.name)
-            else if (a === "person") personPanel(e)
-        })
-    }
-    function moveToFolder(e) {
-        const k = e.key, from = e.section
-        const items = from === "" ? [] : [{ name: "No folder", detail: "Near the top of the list", url: "-" }]
-        Chat.folders.filter(f => f.id !== from).forEach(f => items.push({ name: f.name, detail: Chat.foldersOf(k).indexOf(f.id) >= 0 ? "Already in it too" : "", url: f.id }))
-        items.push({ name: "New folder", detail: "Make one and move them into it", url: "+" })
-        Ui.pickFrom("Move " + e.name + " to", [{ header: from === "" ? "" : "Out of " + folderName(from), items: items }], id => {
-            if (id === "+") { newFolder(k, from); return }
-            const to = id === "-" ? "" : id
-            Chat.placeIn(k, from, to, sectionKeys(to).concat([k]))
-            focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
-        })
-    }
-    function removePerson(k, name) {
-        Ui.sure("Move " + name + " to trash?", "They go to the Trash with your chat for 30 days, then are deleted for good. Meanwhile nothing from them reaches you. Restore brings everything back.",
-                "Move to trash", () => { if (openKey === k) { openKey = ""; picked = false; zone = "list" } Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
+        listMenu()
     }
     function folderOptions(e) {
         const id = e.id, ids = Chat.folders.map(f => f.id), at = ids.indexOf(id)
         const items = [{ name: e.collapsed ? "Expand" : "Collapse", url: "fold" }]
         if (at > 0) items.push({ name: "Move up", url: "up" })
         if (at >= 0 && at < ids.length - 1) items.push({ name: "Move down", url: "down" })
-        items.push({ name: "Rename", url: "rename" },
-                   { name: "Delete the folder", detail: "The people in it stay", url: "delete" },
-                   { name: "New folder", url: "new" })
-        Ui.pickFrom(e.name, [{ header: "Only on this computer", items: items }], a => {
+        items.push({ name: "Rename", icon: "edit", url: "rename" },
+                   { name: "Delete folder", url: "delete", danger: true })
+        Ui.pickFrom(e.name, [{ header: "", items: items }], a => {
             if (a === "fold") Chat.setCollapsed(id, !e.collapsed)
             else if (a === "up" || a === "down") { Chat.moveFolder(id, a === "up" ? -1 : 1); focusEntry(x => x.kind === "folder" && x.id === id) }
-            else if (a === "rename") Ui.ask("Rename " + e.name, "A name only you see", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
-            else if (a === "delete") Ui.sure("Delete " + e.name + "?", "Only the folder goes. Everyone in it stays in your chats.", "Delete", () => Chat.deleteFolder(id), false, false)
-            else if (a === "new") newFolder("")
+            else if (a === "rename") Ui.ask("Rename " + e.name, "Only you see it", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
+            else if (a === "delete") Ui.sure("Delete " + e.name + "?", "The people in it stay.", "Delete", () => Chat.deleteFolder(id), false, true)
         })
     }
     function openTrash() {
         const t = Chat.trash
         if (!t.length) { Ui.say("The Trash is empty."); return }
-        const items = t.map(p => ({ name: p.name, detail: p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left · Restore or Delete for good", url: p.key }))
-        Ui.pickFrom("Trash", [{ header: "Deleted for good after 30 days", items: items },
-                              { header: "", items: [{ name: "Empty trash", detail: "Everyone here and your chats with them go for good", url: "!empty" }] }], k => {
+        const items = t.map(p => ({ name: p.name, detail: p.daysLeft + (p.daysLeft === 1 ? " day left" : " days left"), url: p.key }))
+        items.push({ name: "Empty trash", url: "!empty", danger: true })
+        Ui.pickFrom("Trash", [{ header: "Restore within 30 days.", items: items }], k => {
             if (k === "!empty") {
-                Ui.sure("Empty trash?", "Everyone in the Trash and your chats with them are deleted for good.", "Hold to empty", () => { Chat.emptyTrash(); Ui.say("Trash emptied.") }, true, true)
+                Ui.sure("Empty trash?", "Can't be undone.", "Hold to empty", () => { Chat.emptyTrash(); Ui.say("Trash emptied.") }, true, true)
                 return
             }
             const p = t.find(x => x.key === k)
             if (!p) return
-            Ui.pickFrom(p.name, [{ header: "In the Trash · " + p.daysLeft + (p.daysLeft === 1 ? " day" : " days") + " left", items: [
-                { name: "Restore", detail: "They and your chat come back", url: "restore" },
-                { name: "Delete for good", detail: "Your chat with them goes too", url: "delete" }] }], a => {
+            Ui.pickFrom(p.name, [{ header: "", items: [
+                { name: "Restore", url: "restore" },
+                { name: "Delete for good", url: "delete", danger: true }] }], a => {
                 if (a === "restore") { Chat.restore(k); Ui.say(p.name + " is back.") }
-                else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "They and your chat with them can't be brought back.", "Delete for good",
+                else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "Can't be undone.", "Delete for good",
                                                  () => { Chat.deleteForGood(k); Ui.say(p.name + " deleted for good.") }, false, true)
-            })
+            }, () => page.openTrash())
         })
     }
     // ------------------------------------------------------------- dragging people with the mouse
@@ -1377,7 +1244,7 @@ Rectangle {
             dropLine = after ? item.y + item.height + listPane.spacing / 2 : item.y + item.labelHeight - listPane.spacing / 2
             return
         }
-        if (e.kind === "add" || e.kind === "code" || e.kind === "ginvite" || e.kind === "request") {
+        if (e.kind === "ginvite" || e.kind === "request" || e.kind === "intro" || e.kind === "mirror") {
             const first = entries.findIndex(x => x.kind === "chat" && x.section === "")
             const at = first >= 0 ? first : i + 1
             const it = listPane.itemAtIndex(first >= 0 ? first : i)
@@ -1406,30 +1273,26 @@ Rectangle {
         const e = entries[row]
         if (!e) return
         switch (e.kind) {
-        case "add": addSomeone(); return
-        case "code": Chat.newLink(); showCode = true; return
         case "nearby": openKey = ""; picked = true; zone = "messages"; return
         case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
-        case "trash": openTrash(); return
         case "ginvite":
             if (e.waiting) {
-                Ui.sure("Waiting for " + e.fromName, "They let you in to " + e.name + " when their app gets your request. Stop waiting?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
+                Ui.sure("Waiting for " + e.fromName, "Stop waiting to join " + e.name + "?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
                 return
             }
-            Ui.sure(e.fromName + " invited you to " + e.name, "Everyone in a group sees your name and can message the group. You can leave any time.", "Join",
+            Ui.sure(e.fromName + " invited you to " + e.name, "Everyone there sees your name.", "Join",
                     () => { const r = Chat.acceptGroupInvite(e.g); if (r === "") Ui.say("Joining " + e.name + "…"); else Ui.say(r, true) }, false, false,
                     () => Chat.declineGroupInvite(e.g))
             Ui.confirm.cancelText = "Decline"
             return
         case "request":
             if (e.replaces) {
-                Ui.sure(e.name + " says they're " + e.replacesName, "Their security key isn't the one you have for " + e.replacesName + ". Accept only if you've checked with them "
-                        + "another way (in person or a call). Your chat with " + e.replacesName + " then carries on with the new key, marked not verified.", "Accept",
+                Ui.sure(e.name + " says they're " + e.replacesName, "New key. Check with them first.", "Accept",
                         () => { Chat.acceptRequest(e.key); openKey = e.key; picked = true; zone = "messages" }, false, true, () => Chat.declineRequest(e.key))
                 Ui.confirm.cancelText = "Decline"
                 return
             }
-            Ui.sure(e.name + " wants to chat", "They have your code. Only accept if you know who it is.", "Accept",
+            Ui.sure(e.name + " wants to chat", "Only accept if you know them.", "Accept",
                     () => { Chat.acceptRequest(e.key); openKey = e.key; picked = true; zone = "messages" }, false, false, () => Chat.declineRequest(e.key))
             Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
             return
@@ -1444,8 +1307,8 @@ Rectangle {
     // A controller: the quick reactions in a list (the emoji panel needs a pointer).
     function pickReaction(m) {
         const k = openKey, id = m.id
-        const items = Chat.quickReactions().map(e => ({ name: e, detail: e === m.myReaction ? "Yours · choose to take it back" : "", url: e }))
-        if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, detail: "Yours · choose to take it back", url: m.myReaction })
+        const items = Chat.quickReactions().map(e => ({ name: e, check: e === m.myReaction, url: e }))
+        if (m.myReaction && Chat.quickReactions().indexOf(m.myReaction) < 0) items.push({ name: m.myReaction, check: true, url: m.myReaction })
         items.push({ name: "More emoji", url: "+" })
         Ui.pickFrom("React", [{ header: "", items: items }], e => {
             if (e === "+") { openReact(id, m.myReaction || ""); return }
@@ -1457,32 +1320,30 @@ Rectangle {
         const m = messages[sel]
         if (m && m.system) {
             const k = openKey
-            const items = Chat.isVerified(k) ? [] : [{ name: "Check code", detail: "Make sure it's really them", url: "code" }]
-            items.push({ name: "Delete for me", detail: "Only on this computer", url: "delete" })
+            const items = Chat.isVerified(k) ? [] : [{ name: "Check safety code", icon: "check", url: "code" }]
+            items.push({ name: "Delete for me", url: "delete", danger: true })
             Ui.pickFrom("Security key", [{ header: "", items: items }], a => { if (a === "code") checkCode(k); else if (a === "delete") Chat.deleteMessage(k, m.id) })
             return
         }
-        if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "It's deleted on this computer only.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
+        if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this PC.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
         if (openKey !== "" && !m.unsent && !m.failed) {
-            items.push({ name: "React", detail: m.myReaction ? "Yours: " + m.myReaction : "❤️ 😂 👍 😮 😢 or any emoji", url: "react" })
-            items.push({ name: "Reply", detail: "Quotes it in your answer", url: "reply" })
-            items.push({ name: "Open thread", detail: (m.replies || 0) + ((m.replies || 0) === 1 ? " reply" : " replies"), url: "thread" })
+            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react" })
+            items.push({ name: "Reply", icon: "reply", url: "reply" })
+            items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
-        if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", detail: "Only on this computer", url: "pin" })
-        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", detail: "They see it marked (edited)", url: "edit" })
+        if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", detail: m.file, url: "savefile" })
-        else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", url: "view" }, { name: "Save to Pictures", url: "save" })
-        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", url: "play" })
-        if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it from both sides; they'll see “Message deleted by " + Chat.username + "”", url: "unsend" })
+        if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", icon: "file", url: "savefile" })
+        else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
+        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
-        if (openKey === "" && !m.mine) items.push({ name: "Mute " + m.name, detail: "Hide their messages here", url: "mute" })
-        items.push({ name: openKey === "" ? "Delete" : "Delete for me", detail: "Only on this computer", url: "delete" })
+        if (openKey === "" && !m.mine) items.push({ name: "Mute " + m.name, url: "mute" })
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it for both", url: "unsend", danger: true })
+        items.push({ name: openKey === "" ? "Delete" : "Delete for me", url: "delete", danger: true })
         const k = openKey
-        const sections = [{ header: "", items: items }]
-        if (k !== "") sections.push({ header: "Conversation", items: conversationItems() })
-        Ui.pickFrom("Message", sections, a => {
+        Ui.pickFrom("Message", [{ header: "", items: items }], a => {
             if (a === "react") pickReaction(m)
             else if (a === "reply") startReply(m.id)
             else if (a === "thread") openThread(m.id)
@@ -1496,17 +1357,7 @@ Rectangle {
             else if (a === "retry") Chat.retry(k, m.id)
             else if (a === "mute") Chat.block(m.peer, true)
             else if (a === "delete") { if (k === "") Chat.deleteNearbyMessage(m.id); else Chat.deleteMessage(k, m.id) }
-            else if (a === "picture") pickPicture()
-            else if (a === "rename") rename(k)
-            else if (a === "code") checkCode(k)
-            else if (a === "folders") pickFolders(k)
-            else if (a === "pins") openPins()
-            else if (a === "shared") more.openShared()
-            else if (a === "call") startCall()
-            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
             else if (a === "savefile") PeopleActions.saveFile(k, m)
-            else if (a === "file") PeopleActions.sendFile(k)
-            else if (a === "introduce") PeopleActions.introduce(k)
         })
     }
 
@@ -1536,10 +1387,10 @@ Rectangle {
     }
     function startEdit(m) {
         if (!m || !m.mine || m.photo || m.unsent || openKey === "") return
-        if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs a newer Huginn or Muninn to see edits.", true); return }
+        if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs an update to see edits.", true); return }
         replyId = ""
         if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
-        else { const k = openKey, id = m.id; Ui.ask("Edit your message", "They see it marked (edited)", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
+        else { const k = openKey, id = m.id; Ui.ask("Edit your message", "", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
     }
     // Up in an empty box: edit my last text message.
     function editLast() {
@@ -1580,7 +1431,7 @@ Rectangle {
         if (tour || openKey === "") return
         const on = pins.indexOf(id) < 0
         Chat.setPinned(openKey, id, on)
-        Ui.say(on ? "Pinned. Pins are only on this computer." : "Unpinned.")
+        Ui.say(on ? "Pinned on this PC." : "Unpinned.")
     }
     // re: the message answered; a reply in a thread passes the thread's first message.
     function sendText(t, re) {
@@ -1591,7 +1442,7 @@ Rectangle {
             return
         }
         if (openKey === "") {
-            if (!Chat.nearbyOn) { Ui.say("Nearby chat is off. Turn it on in Settings › More settings › Find people close by.", true); return }
+            if (!Chat.nearbyOn) { Ui.say("Nearby room is off: Settings › Privacy and lock.", true); return }
             Chat.sendNearby(t)
         } else Chat.sendPrivate(openKey, t, re !== undefined ? re : replyId)
         if (re === undefined) replyId = ""
@@ -1606,7 +1457,7 @@ Rectangle {
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
     function boxButton(box, b) {
         switch (b) {
-        case "a": case "start": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "a": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
         case "y": System.showSteamKeyboard(); return true
         case "x": boxOptions(box); return true
         case "down": return true
@@ -1615,10 +1466,11 @@ Rectangle {
         return b === "b"
     }
     function boxOptions(box) {
-        const items = [{ name: "Send", url: "send" }, { name: "Emoji", detail: page.pad ? "Pick one with the D-pad" : "", url: "emoji" }]
-        if (openKey !== "") items.push({ name: "Send pictures, a video or a poll", detail: "Location and camera details are removed from pictures", url: "picture" })
+        const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" }]
+        if (openKey !== "") items.push({ name: "Pictures, video or poll", icon: "image", url: "picture" })
+        if (openKey !== "" && Chat.isContact(openKey)) items.push({ name: "Send a file", icon: "attach", url: "file" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
-        items.push({ name: "Done typing", detail: "What you wrote stays in the box", url: "leave" })
+        items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
@@ -1640,7 +1492,7 @@ Rectangle {
             if (side === "thread") threadBox.focusField()
             else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
             return true
-        case "x": if (sideSel >= 0) sideOptions(sideSel); else conversationOptions(); return true
+        case "x": if (sideSel >= 0) sideOptions(sideSel); else chatMenu(); return true
         case "y": return true
         case "b": side = ""; threadRoot = ""; return true
         }
@@ -1651,9 +1503,9 @@ Rectangle {
         if (lock.visible) return lock.handleButton(b)
         if (mirror.visible) return mirror.handleButton(b)
         if (more.busy) return more.handleButton(b)
-        if (!picked && !locked && zone === "messages" && b === "a") { addSomeone(); return true }
+        if (!picked && !locked && zone === "messages" && b === "a") { addMenu(); return true }
         if (showCode) {
-            if (b === "a") { Chat.copyLink(); Ui.say("Link copied. It works for an hour.") }
+            if (b === "a") { Chat.copyLink(); Ui.say("Link copied.") }
             else if (b === "x") Chat.newLink()
             else if (b === "b") showCode = false
             return true
@@ -1665,9 +1517,8 @@ Rectangle {
         if (threadBox.emojiShown) return threadBox.emojiButton(b)
         if (typingIn && boxButton(typingIn, b)) return true
         if (zone === "side") return sideButton(b)
-        if (zone === "messages" && openKey !== "" && keep.visible) {
-            if (b === "start") { Chat.keepInTouch(openKey); return true }
-        }
+        // Keep in touch: A says yes (Menu always opens Settings).
+        if (zone === "messages" && openKey !== "" && keep.visible && sel < 0 && b === "a") { Chat.keepInTouch(openKey); return true }
         switch (b) {
         case "up":
             if (zone === "list") row = Math.max(0, row - 1)
@@ -1689,7 +1540,7 @@ Rectangle {
         case "x":
             if (zone === "list") listOptions()
             else if (zone === "messages" && sel >= 0) options()
-            else if (zone === "messages" && openKey !== "") conversationOptions()
+            else if (zone === "messages" && openKey !== "") chatMenu()
             else if (zone === "messages") write()
             return true
         case "y":

@@ -32,7 +32,7 @@ class Settings : public QObject
     Q_PROPERTY(bool showMembers READ showMembers WRITE setShowMembers NOTIFY appearanceChanged)
     // Settings › Calls › Push to talk: in a voice room the microphone only sends while the key is held.
     Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
-    // Settings › Lock and privacy: the pattern's line and lit dots show while it's drawn (off: only
+    // Settings › Privacy and lock: the pattern's line and lit dots show while it's drawn (off: only
     // a brief pulse on each dot, so someone looking over your shoulder can't read it).
     Q_PROPERTY(bool patternTrail READ patternTrail WRITE setPatternTrail NOTIFY changed)
     // Autumn's falling leaves: how big and how many (percent of the usual).

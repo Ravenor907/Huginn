@@ -1,13 +1,16 @@
 package io.github.ravenor907.muninn
 
+import io.github.ravenor907.muninn.tv.ParentTvMenu
 import io.github.ravenor907.muninn.tv.TvRules
+import io.github.ravenor907.muninn.tv.TvWords
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The Kids' TV screens' choices that don't need a TV: where the remote starts, and when a permission needs its settings page. */
+/** The Kids' TV screens' choices that don't need a TV: where the remote starts, the recording guard, the kids' words, the parent menu. */
 class TvScreenRulesTest {
     @Test
     fun aPermissionAndroidWontAskForGoesToItsSettingsPage() {
@@ -18,13 +21,45 @@ class TvScreenRulesTest {
     }
 
     @Test
-    fun theRemoteStartsOnTheFirstButtonThere() {
+    fun theRemoteStartsOnCall() {
         val quick = listOf("q1", "q2")
-        assertEquals("say", TvRules.firstTalkFocus(dictate = true, mic = true, calls = true, quick = quick))
-        assertEquals("rec", TvRules.firstTalkFocus(dictate = false, mic = true, calls = true, quick = quick))
-        assertEquals("q1", TvRules.firstTalkFocus(dictate = false, mic = false, calls = true, quick = quick))
-        // Calls on, no microphone, no quick messages: the Call button is all there is.
-        assertEquals("call", TvRules.firstTalkFocus(dictate = false, mic = false, calls = true, quick = emptyList()))
-        assertNull(TvRules.firstTalkFocus(dictate = false, mic = false, calls = false, quick = emptyList()))
+        assertEquals(listOf("call", "rec", "say"), TvRules.talkButtons(calls = true, mic = true, dictate = true))
+        assertEquals("call", TvRules.firstTalkFocus(calls = true, mic = true, dictate = true, quick = quick))
+        // Calls off: the next big button, then the first quick message, then nothing.
+        assertEquals("rec", TvRules.firstTalkFocus(calls = false, mic = true, dictate = true, quick = quick))
+        assertEquals(listOf("say"), TvRules.talkButtons(calls = false, mic = false, dictate = true))
+        assertEquals("q1", TvRules.firstTalkFocus(calls = false, mic = false, dictate = false, quick = quick))
+        assertNull(TvRules.firstTalkFocus(calls = false, mic = false, dictate = false, quick = emptyList()))
+        assertEquals(4, TvRules.QUICK_SHOWN)
+    }
+
+    @Test
+    fun recordingIgnoresOkForTwoSeconds() {
+        assertFalse(TvRules.recordingArmed(0))
+        assertFalse(TvRules.recordingArmed(1_999))
+        assertTrue(TvRules.recordingArmed(2_000))
+    }
+
+    @Test
+    fun kidsReadAFewWordsWithAnIcon() {
+        for (w in TvWords.ALL) {
+            assertTrue(w, w.split(' ').size <= 3)
+            assertFalse(w, w.contains('\u2014'))
+            assertNotEquals("info", TvWords.icon(w))
+        }
+        assertEquals("Too short", TvWords.TOO_SHORT)
+        assertEquals("Can't call now", TvWords.CANT_CALL)
+        assertEquals("No microphone", TvWords.NO_MIC)
+        assertEquals("Ask a parent", TvWords.ASK_PARENT)
+    }
+
+    @Test
+    fun theParentMenuHasEveryPartOnceWithDisconnectLast() {
+        val ids = ParentTvMenu.items.map { it.first }
+        assertEquals(listOf("people", "parents", "quick", "sound", "names", "apps", "permissions", "storage", "keep", "disconnect"), ids)
+        assertEquals(ids.distinct(), ids)
+        assertEquals("Disconnect TV", ParentTvMenu.label("disconnect"))
+        assertNull(ParentTvMenu.label("nope"))
+        assertNull(ParentTvMenu.label(null))
     }
 }

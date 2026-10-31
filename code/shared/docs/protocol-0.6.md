@@ -71,6 +71,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `d1` | message limits (section 16): group `kind` and `days` in the state, and `days` in every envelope. Muninn and Huginn. |
 | `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only. |
 | `k7` | kids' TV config field `upd`, automatic update checks (7.12). Muninn only. |
+| `k8` | kids' TV config field `keep`, the `allow` message and `off` in `status` (7.13). Muninn only. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn. |
 | `x1` | moving to another device (section 18). Muninn and Huginn. |
 | `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn. |
@@ -109,7 +110,7 @@ Caps are also learned these ways:
 
 - Never send rooms `group`, `gmsg`, `gphoto`, `greceipt`, `call`, `tvconfig` to a peer without the matching
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
-  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `k7` for a config with `upd`; `m1` for rooms `rich`, `mx` and
+  and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `k7` for a config with `upd`; `k8` for a config with `keep` and for `allow`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). A peer without the token answers 400 and drops it.
 - UI: the call button on a contact without `c1` says "Needs Muninn or Huginn 0.6"; inviting a contact without
   `g1` to a group says the same and sends nothing.
@@ -917,8 +918,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr` and the k7 field `upd`
-(7.5, 7.10, 7.12); `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd` and the k8 field `keep`
+(7.5, 7.10, 7.12, 7.13); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -948,7 +949,7 @@ screen. To drop just one of two parents, the other sends a config without them.
 
 The TV has no app lock, panic lock or hidden erase: anyone in the room can read what's on it. Parents'
 apps say so when pairing. Nothing secret is in the config, and messages on the TV follow the "Delete
-messages after" setting the parent sets on the TV during setup.
+messages after" setting a parent sets from their phone (`keep`, 7.13).
 
 ### 7.5 Calls, microphone level and updates (`k2`)
 
@@ -989,7 +990,8 @@ To put the person in a family group, the parent's app uses the normal group invi
 
 ### 7.7 Microphone level on the TV, storage and Clear history (`k3`)
 
-Anyone at the TV can set its microphone level on the TV itself (no parent unlock). The TV uses that
+A TV may keep a microphone level of its own, set on the TV (the Muninn kids' TV sets none: its level comes from the
+parents' phones). The TV uses that
 level until a parent picks another one: it applies a new config's `mic` only when it differs from the
 `mic` of the config it had (a parent changed it; the last change wins), and keeps its own otherwise.
 
@@ -1129,6 +1131,26 @@ next to the k2 fields), set to that phone's own "Check for updates automatically
 
 Anything else (a number, text) makes the config malformed. When the parent changes the switch, the parent's app sends
 a new config to every TV that said `k7`. Vectors: `tv.configs.cfg6` (`upd` false) and step 9 of `tv.accept`.
+
+### 7.13 Parent settings from the phone (`k8`)
+
+The Muninn kids' TV has no parent screens: every setting comes from a parent's phone. A TV whose app says `k8`
+takes one more optional config field. A parent's app puts it in only for such a TV (and only next to the k2 fields).
+
+| field | value | absent means | what the TV does |
+|---|---|---|---|
+| `keep` | integer 1 to 7 | the TV keeps its own setting | messages on the TV are deleted after that many days (7: each chat's own limit) |
+
+Anything else (0, 8, text, true) makes the config malformed.
+
+A parent (only a current parent; anyone else gets 403) may send `{"t":"allow","p":<perm>}`, exactly these two
+fields, `perm` one of `mic`, `notify`, `overlay`, `install`. The TV then shows Android's own prompt for that
+permission, or opens its Android settings page, with one short line. It is not retried.
+
+The TV's `status` (7.7) carries `"off":[<perm>, ...]`, the permissions from that list still off on the TV (empty
+when all are on). When present it MUST be an array of strings, else the status is malformed; unknown names are
+ignored. A status without it means not known. The TV also sends `status` when one of them changes. Apps that don't
+know `off` ignore it.
 
 ## 8. Message types
 

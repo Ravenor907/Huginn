@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
         if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
-        if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: the press-and-hold sheet
+        if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: a person's three-dot menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
             Thread { android.util.Log.i("Muninn", "TvVoice self-check: " + io.github.ravenor907.muninn.tv.TvVoice.selfCheck()) }.start()
@@ -416,6 +416,9 @@ class MainActivity : ComponentActivity() {
         // Your profile asked for a chat page (My code): over to Chats with it open.
         val goChat = SettingsNav.goChat
         LaunchedEffect(goChat) { if (goChat.isNotEmpty()) { SettingsNav.goChat = ""; show("chat"); ChatNav.open = goChat } }
+        // A chat page asked for a Settings page (the chat list's "to finish" sheet): over to Settings with it open.
+        val goSettings = SettingsNav.goSettings
+        LaunchedEffect(goSettings) { if (goSettings.isNotEmpty()) { SettingsNav.goSettings = ""; show("settings"); SettingsNav.folder = goSettings } }
         // On the Files tab, Muninn looks for devices on the Wi-Fi at full speed (slower elsewhere, to save battery).
         LaunchedEffect(tab) { app.power.filesOpen.value = tab == "files" }
         // Back from another tab (or Settings) goes to where you came from, then the chat list.
@@ -473,7 +476,7 @@ class MainActivity : ComponentActivity() {
                 dismissButton = { MButton("Don't install") { io.github.ravenor907.muninn.update.ApkInstall.decline(o) } },
             )
         }
-        // Press and hold a person or chat, from anywhere: one sheet.
+        // Every item's three-dot menu (also on holding a chat or person), from anywhere: one sheet.
         LaunchedEffect(ready) { if (ready) io.github.ravenor907.muninn.screens.People.load(app) }
         if (ciHold) LaunchedEffect(Unit) {
             ciHold = false
@@ -481,7 +484,10 @@ class MainActivity : ComponentActivity() {
             app.chat.contacts.all.value.firstOrNull { !it.groupOnly }?.let { ChatNav.hold = it.chatKey }
                 ?: app.chat.groups.all.value.keys.firstOrNull()?.let { ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(it) }
         }
-        if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.HoldSheet(app, ChatNav.hold, ChatNav.holdMoves) { ChatNav.hold = ""; ChatNav.holdMoves = null }
+        if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.ItemMenu(app, ChatNav.hold, onChats = { tab = "chat" }, onLock = { uiLocked = true }) {
+            ChatNav.hold = ""; ChatNav.menuGroup = ""
+        }
+        io.github.ravenor907.muninn.screens.GroupCallPicker(app)
         // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
         io.github.ravenor907.muninn.screens.LinkCheck()
         ask?.let { AskDialog(it) }
@@ -533,7 +539,7 @@ class MainActivity : ComponentActivity() {
                     .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
                     contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
                 if (tab == "chat") IconAction("plus", "Add someone", Palette.onGold, Modifier.padding(end = 4.dp).clip(CircleShape).background(Palette.gold)) { ChatNav.open = "add" }
-                if (tab == "chat" && app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                if (tab == "chat") io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
                 SettingsButton(if (tab == "settings") "Close settings" else "Settings", tab == "settings") { toggleSettings() }
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
@@ -675,7 +681,9 @@ class MainActivity : ComponentActivity() {
                             if (space != null) {
                                 // A group: its channels (TEXT, then VOICE rooms), the conversation in the main column.
                                 ColumnHeader(space.state.name) {
-                                    IconAction("gear", "Group settings") { ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(space.g) + "/settings" }
+                                    io.github.ravenor907.muninn.ui.DotsButton("Menu for ${space.state.name}") {
+                                        ChatNav.menuGroup = ""; ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(space.g)
+                                    }
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
                             } else {
@@ -684,7 +692,7 @@ class MainActivity : ComponentActivity() {
                                         .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
                                         contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
                                     IconAction("plus", "Add someone", Palette.goldBright) { ChatNav.open = "add" }
-                                    if (app.vault.hasPassword) IconAction("lock", "Lock Muninn") { uiLocked = true }
+                                    io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
                             }

@@ -2,9 +2,9 @@ import QtQuick
 import Huginn
 
 // Huginn's lock, required like Muninn's. "setup": first time, pick a 9-dot pattern or a password.
-// "unlock": draw or type it. "change": Settings › Lock and privacy › Lock (already unlocked).
+// "unlock": draw or type it. "change": Settings › Privacy and lock › Lock (already unlocked).
 // Everything Huginn keeps is locked with it; there's no way to recover it. The pattern sits in the
-// lower half (Settings › Lock and privacy › Where the pattern sits: Top, Middle or Lower).
+// lower half (Settings › Privacy and lock › Pattern position: Top, Middle or Lower).
 Item {
     id: panel
     property string mode: Vault.exists ? "unlock" : "setup"
@@ -24,7 +24,7 @@ Item {
 
     function saveSecret(secret, pattern) {
         if (Vault.setSecret(secret, pattern)) {
-            Ui.say(pattern ? "Pattern set. Don't forget it: it can't be recovered." : "Password set. Don't lose it: it can't be recovered.")
+            Ui.say(pattern ? "Pattern set." : "Password set.")
             first = null; note = ""; bad = false
             finished(mode === "setup" ? "setup" : "change")
         } else { note = "That didn't save. Try again."; bad = true }
@@ -52,7 +52,7 @@ Item {
         saveSecret(t, false)
     }
     function forgot() {
-        Ui.sure("Erase everything and start over?", "Without your " + (usePattern ? "pattern" : "password") + " nobody can open your messages, not even Huginn. Erasing removes every message, contact and key from this computer, and Huginn closes. Your contacts can add you again.",
+        Ui.sure("Erase everything and start over?", "Deletes everything on this PC. Can't be undone.",
                 "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
     }
     function focusField() { if (!usePattern) pw.forceActiveFocus() }
@@ -80,7 +80,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.mode === "unlock"
                   ? (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : "Huginn opens with a pattern or password. Everything it keeps is locked with it: without it nobody can read your messages, not even Huginn. There's no way to recover it."
+                  : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
@@ -94,9 +94,8 @@ Item {
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             visible: text !== ""
-            text: panel.wait > 0 ? "Too many tries. Try again in " + panel.wait + " s."
+            text: panel.wait > 0 ? "Too many tries. Wait " + panel.wait + " s."
                 : panel.note !== "" ? panel.note
-                : panel.usePattern && panel.mode !== "unlock" ? "Draw a pattern: connect at least 6 dots." + (Settings.patternTrail ? "" : " It stays hidden as you draw.")
                 : ""
             color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
@@ -129,7 +128,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(parent.width, Theme.px(320))
                 spacing: Theme.px(8)
-                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (at least 6 characters)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
+                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (6 or more)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
                 PwField { id: pw2; visible: panel.mode !== "unlock"; placeholder: "Type it again"; onEnter: panel.submitPassword() }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
             }
@@ -146,7 +145,7 @@ Item {
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             visible: Gamepad.connected && panel.usePattern
-            text: "Controller: move with the D-pad, A starts on a dot, move to the next dots, A again when done. B starts over."
+            text: "D-pad moves. A starts and ends. B clears."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         Text {

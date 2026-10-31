@@ -106,9 +106,9 @@ fun ProfileScreen(app: Muninn) {
     Section("Picture")
     MButton("Change picture", Modifier.fillMaxWidth(), Kind.Accent, icon = "image") { picking = true }
     if (pictures["me"] != null) MButton("Remove picture", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Danger) {
-        profile.clearMyPicture(); Ui.say("Picture removed. Your contacts see your initial now.")
+        profile.clearMyPicture(); Ui.say("Picture removed.")
     }
-    Text("Saved small (256 × 256) and sent only to your contacts, end-to-end encrypted like a message. No picture leaves your phone for anyone else.",
+    Text("Only your contacts see it.",
         style = Type.small, modifier = Modifier.padding(top = 4.dp))
     if (picking) PicturePickerSheet(app) { picking = false }
 
@@ -126,7 +126,7 @@ fun ProfileScreen(app: Muninn) {
             }
         }
     }
-    Text("Shows with your initial when there's no picture.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+    Text("Shows when there's no picture.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
 
     Section("Name")
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -135,7 +135,7 @@ fun ProfileScreen(app: Muninn) {
             id.username = name; app.net.announce(); app.close.readvertise(); Ui.say("You're “${id.username}” now.")
         }
     }
-    Text("What people see. It doesn't have to be your real name.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+    Text("Any name you like.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
 
     Section("Status")
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -159,15 +159,15 @@ fun ProfileScreen(app: Muninn) {
         }
     }
     Text(when (current) {
-        Status.ONLINE -> "Contacts see a green dot. After 10 minutes without a touch you show as Away, and Online again at the next one."
+        Status.ONLINE -> "Green dot. Away after 10 minutes."
         Status.AWAY -> "Contacts see an amber dot."
-        Status.DND -> "Contacts see a red dot. Messages don't make a sound and calls don't ring out loud; they still show."
-        Status.INVISIBLE -> "Contacts see you as offline. You still get everything."
+        Status.DND -> "Red dot. No sounds or ringing."
+        Status.INVISIBLE -> "Look offline. You still get everything."
     }, style = Type.small, modifier = Modifier.padding(top = 4.dp))
 
     Section("More")
-    ProfileRow("My code", "For someone to scan and add you") { SettingsNav.goChat = "code" }
-    ProfileRow("Link a computer", "Use Muninn on a tablet or second phone too") { SettingsNav.folder = "link" }
+    ProfileRow("My code", "For someone to scan") { SettingsNav.goChat = "code" }
+    ProfileRow("Link a computer", "Tablet or second phone") { SettingsNav.folder = "link" }
     Spacer(Modifier.height(8.dp))
 }
 

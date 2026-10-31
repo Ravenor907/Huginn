@@ -1,10 +1,9 @@
 import QtQuick
 import Huginn
 
-// Someone's profile card (a click on a name, or A on a member): their avatar and name, the nickname
-// and note you gave them (only on this computer, never sent), the folders they're in, how they are
-// right now, and Message, Call and Video. From a group it also says their role there, and Group
-// options opens what an admin can do. D-pad moves along the buttons, A chooses, B closes.
+// Someone's profile card (a click on a name or picture): their avatar and name, the note you gave
+// them (only on this computer), how they are right now, and Message, Call and the three dots, their
+// one menu (from a group, the member menu). D-pad moves along the buttons, A chooses, B closes.
 Item {
     id: card
     property string key: ""
@@ -15,7 +14,7 @@ Item {
     anchors.fill: parent
 
     readonly property bool me: key === "me"
-    // Opened straight into Your picture (Settings › Look): only the picker shows, and closing it closes this.
+    // Opened straight into Your picture (Settings › You): only the picker shows, and closing it closes this.
     property bool pickingOnly: false
     readonly property bool tour: !!extra.tour
     // Chat.chats and Chat.people make these follow renames, notes and folder changes.
@@ -24,11 +23,6 @@ Item {
     readonly property string realName: me ? Chat.username : tour ? name : (Chat.chats, Chat.realNameOf(key)) || name
     readonly property string shownName: me ? Chat.username : nick !== "" ? nick : realName
     readonly property string note: me ? "" : tour ? (extra.note || "") : (Chat.people, Chat.noteOf(key))
-    readonly property var folderNames: {
-        if (me || tour) return tour ? ["Folk"] : []
-        const mine = (Chat.chats, Chat.foldersOf(key))
-        return Chat.folders.filter(f => mine.indexOf(f.id) >= 0).map(f => f.name)
-    }
     readonly property string status: {
         if (extra.room) return "In " + extra.room
         if (me) return "Online (you)"
@@ -37,30 +31,14 @@ Item {
         return p === "online" ? "Online" : p === "idle" ? "Idle" : ""
     }
     readonly property bool canCall: !me && !tour && Calls.canCall(key)
-    readonly property bool canVideo: !me && !tour && Calls.canVideo(key)
 
-    // Every button, in the order the controller steps through them.
-    readonly property var actions: {
-        const a = []
-        if (me) {
-            a.push({ id: "picture", label: "Your picture", on: true })
-            a.push({ id: "name", label: "Change your name", on: true })
-        } else {
-            a.push({ id: "message", label: "Message", icon: "thread", on: contact, main: true })
-            a.push({ id: "call", label: "Call", icon: "call", on: canCall, main: true })
-            a.push({ id: "video", label: "Video", icon: "video", on: canVideo, main: true })
-            a.push({ id: "nick", label: nick !== "" ? "Change nickname" : "Nickname", on: !tour })
-            a.push({ id: "note", label: note !== "" ? "Change note" : "Add a note", on: !tour })
-            if (contact) a.push({ id: "folders", label: "Folders", on: true })
-            // Cap i1: introduce a contact to another one, or ask someone from a group to be contacts.
-            if (contact && !tour) a.push({ id: "introduce", label: "Introduce", on: true })
-            else if (!contact && !tour && extra.g) a.push({ id: "addme", label: "Add as a contact", on: true })
-        }
-        if (extra.more) a.push({ id: "more", label: "Group options", on: true })
-        return a
-    }
-    readonly property var mainActions: actions.filter(x => !!x.main)
-    readonly property var otherActions: actions.filter(x => !x.main)
+    // Every button, in the order the controller steps through them. Yours has none: Settings › You changes you.
+    readonly property var actions: me ? [] : [
+        { id: "message", label: "Message", icon: "thread", on: contact || tour, main: true },
+        { id: "call", label: "Call", icon: "call", on: canCall || tour, main: true },
+        { id: "more", label: "More", icon: "more", on: true, main: true }
+    ]
+    readonly property var mainActions: actions
 
     function show(k, n, x) {
         key = k; name = n; extra = x || {}
@@ -78,31 +56,20 @@ Item {
         const k = key, n = shownName
         const a = actions.find(x => x.id === id)
         if (!a || !a.on) {
-            if (id === "message") Ui.say(n + " isn't a contact yet. Add them first, then you can message them.", true)
-            else if (id === "call" || id === "video") Ui.say(n + " can't be called from here yet.", true)
+            if (id === "message") Ui.say(n + " isn't a contact yet.", true)
+            else if (id === "call") Ui.say(n + " can't be called yet.", true)
             return
         }
+        if (tour && id !== "more") return
         if (id === "message") { close(); Ui.openPage("dms", { open: k }) }
         else if (id === "call") { const w = Calls.call(k); if (w !== "") Ui.say(w, true); else close() }
-        else if (id === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true); else close() }
-        else if (id === "picture") picker.open()
-        else if (id === "name") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
-        else if (id === "nick") Ui.ask("Nickname for " + realName, "Only on this computer. Leave it empty for their own name", nick, "Save", t => Chat.setNickname(k, t), false, true)
-        else if (id === "note") Ui.ask("Note about " + n, "Only on this computer, never sent", note, "Save", t => Chat.setNote(k, t), false, true)
-        else if (id === "folders") pickFolders()
-        else if (id === "introduce") { close(); PeopleActions.introduce(k) }
-        else if (id === "addme") { const g = extra.g; close(); PeopleActions.askToAdd(g, { key: k, name: n }) }
-        else if (id === "more") { const f = extra.more; close(); f() }
-    }
-    function pickFolders() {
-        const k = key
-        const mine = Chat.foldersOf(k)
-        const items = Chat.folders.map(f => ({ name: f.name, url: f.id, detail: mine.indexOf(f.id) >= 0 ? "In it · choose to take them out" : "Choose to put them in" }))
-        if (!items.length) { Ui.say("No folders yet. Make one from Direct messages.", true); return }
-        Ui.pickFrom("Folders for " + shownName, [{ header: "", items: items }], id => {
-            Chat.setInFolder(id, k, Chat.foldersOf(k).indexOf(id) < 0)
-            Qt.callLater(card.pickFolders)
-        })
+        // The three dots: a group member's menu from a group, otherwise the contact menu.
+        else if (id === "more") {
+            const f = extra.more, t = tour
+            close()
+            if (f) f()
+            else PeopleActions.contactMenu(k, n, { tour: t })
+        }
     }
     function handleButton(b) {
         if (picker.visible) return picker.handleButton(b)
@@ -116,7 +83,7 @@ Item {
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.6); visible: !card.pickingOnly }
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: card.close() }
-    // Your picture: choose, crop, use an initial and a colour, or remove it.
+    // Your picture: choose, crop, use an initial and a color, or remove it.
     PicturePicker {
         id: picker
         z: 2
@@ -227,9 +194,9 @@ Item {
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
             }
-            Rectangle { width: parent.width; height: 1; color: Theme.line; visible: !card.me }
+            Rectangle { width: parent.width; height: 1; color: Theme.line; visible: card.note !== "" }
             Column {
-                visible: !card.me
+                visible: card.note !== ""
                 width: parent.width
                 spacing: Theme.px(3)
                 Label { text: "NOTE" }
@@ -238,25 +205,12 @@ Item {
                     wrapMode: Text.WordWrap
                     maximumLineCount: 5
                     elide: Text.ElideRight
-                    text: card.note !== "" ? card.note : "None yet. Only you see it."
-                    color: card.note !== "" ? Theme.text : Theme.textMuted
+                    text: card.note
+                    color: Theme.text
                     font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
-            Column {
-                visible: !card.me && (card.contact || card.tour)
-                width: parent.width
-                spacing: Theme.px(3)
-                Label { text: "FOLDERS" }
-                Text {
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    text: card.folderNames.length ? card.folderNames.join(", ") : "In no folder"
-                    color: card.folderNames.length ? Theme.text : Theme.textMuted
-                    font.family: Theme.body; font.pixelSize: Theme.fs(15)
-                }
-            }
-            // Message, Call and Video.
+            // Message, Call and the three dots.
             Row {
                 visible: card.mainActions.length > 0
                 width: parent.width
@@ -268,14 +222,6 @@ Item {
                         action: modelData || ({})
                         primary: true
                     }
-                }
-            }
-            Flow {
-                width: parent.width
-                spacing: Theme.px(8)
-                Repeater {
-                    model: card.otherActions
-                    ActionButton { action: modelData || ({}) }
                 }
             }
         }

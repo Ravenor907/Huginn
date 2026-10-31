@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Said wherever a move is about to start. */
-const val MOVE_WARNING = "Only continue if the other device is yours and in front of you."
+const val MOVE_WARNING = "Only if it's yours and here."
 
 /**
  * Two ways to use another device, on the code screen: "Use on both" (linked devices) and "Move here"
@@ -57,13 +57,12 @@ fun MoveSection(app: Muninn) {
     }
     Section("Move here")
     Panel {
-        Text("Moving to a new phone, tablet or computer? Everything comes here: you, your contacts, groups and chats, straight over your home Wi-Fi. " +
-            "Your contacts don't have to add you again. The old device is locked out, and can become a linked device of this one.", style = Type.small)
+        Text("Bring everything here over home Wi-Fi.", style = Type.small)
         MButton("Move here", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { showing = true }
     }
     Section("Move from this device")
     Panel {
-        Text("On the new device, open Move here, then scan its code or paste it here. Both must be on the same Wi-Fi.", style = Type.small)
+        Text("Scan the new device's code. Same Wi-Fi.", style = Type.small)
         Text(MOVE_WARNING, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
         if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp)) { code -> scanning = false; takeIt(code) }
         else MButton("Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "qr") { scanning = true }
@@ -87,16 +86,16 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
                 val i = inc
                 when (i?.state) {
                     "hello", "receiving" -> {
-                        Text("Check these are the same on both screens:", style = Type.normal)
+                        Text("Same on both screens?", style = Type.normal)
                         Text(i.emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
                         if (i.of > 0) Text("${i.have} of ${i.of} parts here", style = Type.small)
-                        if (i.confirmed) Text("Taking it in as soon as everything is here. Muninn then opens again as you.", style = Type.small, textAlign = TextAlign.Center)
+                        if (i.confirmed) Text("Almost done. Muninn reopens as you.", style = Type.small, textAlign = TextAlign.Center)
                     }
-                    "done" -> Text("Everything is here. Muninn opens again in a moment as you.", style = Type.normal)
+                    "done" -> Text("Done. Muninn reopens as you.", style = Type.normal)
                     else -> {
-                        Text("On your old device: Settings › Linked devices › Move from this device, and paste this code (or scan it). Keep both on the same Wi-Fi.",
+                        Text("Scan this on your old device.",
                             style = Type.small)
-                        if (code.isEmpty()) Text("Connect to your home Wi-Fi first: moving only works there.", style = Type.normal.copy(color = Palette.danger))
+                        if (code.isEmpty()) Text("Connect to your home Wi-Fi first.", style = Type.normal.copy(color = Palette.danger))
                         else Box(Modifier.padding(vertical = 10.dp)) { Qr(code, 220.dp) }
                         if (code.isNotEmpty()) MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
                             io.github.ravenor907.muninn.ui.Clip.copy(ctx, "Move code", code)
@@ -127,7 +126,7 @@ fun MoveCover(app: Muninn): Boolean {
         // Back is Don't link.
         AlertDialog(onDismissRequest = { Move.answerLink(app, false) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
             title = { Text("Link $name?", style = Type.big) },
-            text = { Text("$name, the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
+            text = { Text("$name wants to be a linked device.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
             confirmButton = { MButton("Link", kind = Kind.Accent) { Move.answerLink(app, true) } },
             dismissButton = { MButton("Don't link") { Move.answerLink(app, false) } })
     }
@@ -143,24 +142,24 @@ fun MoveCover(app: Muninn): Boolean {
             AlertDialog(onDismissRequest = { Move.cancelOut(app) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
                 title = { Text("Moving to ${o.to}", style = Type.big) },
                 text = { Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Check these are the same on both screens, then tap They match on both:", style = Type.normal)
+                    Text("Same on both screens? Tap They match.", style = Type.normal)
                     Text(o.emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
                     Text(MOVE_WARNING, style = Type.normal.copy(color = Palette.danger))
-                    Text("This device is then locked out: it can't send, read or receive as you.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+                    Text("This device is then locked out.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
                 } },
                 confirmButton = { MButton("They match", kind = Kind.Accent) { scope.launch { withContext(Dispatchers.IO) { Move.go(app) }?.let { Ui.say(it, true) } } } },
                 dismissButton = { MButton("Cancel") { Move.cancelOut(app) } })
             return false
         }
         "moving" -> Cover("Moving to ${o.to}", if (o.of > 0) "${o.sent} of ${o.of} parts there. ${o.note}" else o.note.ifEmpty { "Getting ready…" },
-            "Keep both on the same Wi-Fi. This device stays locked until the move is done, or an hour without the other device.") {
+            "Keep both on the same Wi-Fi.") {
             MButton("Stop moving", Modifier.fillMaxWidth().padding(top = 16.dp)) { unlocking = true }
         }
-        "moved" -> Cover("Moved to ${o.to}", "You, your contacts and chats are on ${o.to} now. Nothing of yours is left here.", "") {
+        "moved" -> Cover("Moved to ${o.to}", "Everything is on ${o.to} now.", "") {
             if (o.canLink) MButton("Use as a linked device", Modifier.fillMaxWidth().padding(top = 16.dp), Kind.Accent) {
                 scope.launch {
                     val err = withContext(Dispatchers.IO) { Move.becomeLinked(app) }
-                    Ui.say(err ?: "Asked ${o.to}. Say yes there, and your chats show up here.", err != null)
+                    Ui.say(err ?: "Say yes on ${o.to}.", err != null)
                 }
             }
             MButton("Start fresh", Modifier.fillMaxWidth().padding(top = 8.dp)) { Move.startFresh(app) }

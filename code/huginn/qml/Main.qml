@@ -28,22 +28,23 @@ Window {
     Leaves { anchors.fill: parent; z: -1 }
 
     // ------------------------------------------------------------- the rail
-    // Direct messages, then every group (round initials), + for a new group, then the bottom buttons.
+    // Chats, then every group (round initials), + for a new group; at the foot, always on show,
+    // Contacts, Calls, Files, Settings (the valknut) and the power button (lock or close).
     readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2, mentions: 1 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Direct messages", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
     // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
     ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
      .concat([
         { id: "newgroup", kind: "add", label: "New group", action: true },
         { id: "contacts", kind: "icon", icon: "person", label: "Contacts", bottom: true },
+        { id: "calls", kind: "icon", icon: "call", label: "Calls", bottom: true, badge: Vault.screenLocked ? 0 : Calls.missedCount },
         { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
-        // Settings lives in your panel at the bottom left (the valknut); the controller still reaches it here.
-        { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true, hidden: true },
-        // Lock Huginn or close it (a small menu). Calls has no rail entry: Ctrl+Shift+C, or Settings › Calls and voice › Call history.
+        { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
+        // Lock Huginn or close it (a small menu).
         { id: "exit", kind: "icon", icon: "power", label: "Lock or close", bottom: true, action: true }
     ])
     // LB steps through the sections and groups (New group and the power menu are reached with the D-pad).
@@ -81,9 +82,9 @@ Window {
     function newGroup() {
         if (Vault.screenLocked || !Vault.exists) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
         // Family and Work groups can keep messages up to 30 days (set later under Messages).
-        Ui.askWith("New group", "Give it the name everyone in it sees, like Family or Folk. You can change it later.", "", "Make the group",
+        Ui.askWith("New group", "Everyone in it sees the name", "", "Make the group",
                    [{ value: "family", label: "Family" }, { value: "work", label: "Work" }, { value: "standard", label: "Standard" }], "family",
-                   "Type. Messages disappear after 7 days; Family and Work admins can make it up to 30", (t, kind) => {
+                   "Type", (t, kind) => {
             const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
             if (g === "") { Ui.say("Give the group a name.", true); return }
             openPage("g:" + g, {})
@@ -210,7 +211,7 @@ Window {
         z: 2
     }
     Binding { target: Ui; property: "dock"; value: voicePanel.visible ? voicePanel.height + Theme.px(16) : 0 }
-    // Your card (a click on your name in the panel): status, name and colour, picture, code, phone.
+    // Your card (a click on your name in the panel): your status. Name, picture, color and code are in Settings › You.
     MeCard { id: meCard; z: 24; above: voicePanel }
     // Drag the edges between the list, the conversation and the member list. The list handle sits on
     // the edge of the list the page shows (a page says where with listEdge; one whose list can't be
@@ -298,11 +299,11 @@ Window {
             if (incomingCall.visible) return incomingCall.prompts
             if (callPage.visible) return callPage.prompts
             const lb = [{ key: "lb", label: "Next section" }]
-            // Select only ever shows or hides this legend (Main.press), so that's all it says here.
-            const hide = [{ key: "back", label: "Hide buttons" }]
+            // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
+            const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
             if (app.focusZone === "rail")
                 return lb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }], hide)
-            const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts.filter(x => x.key !== "back") : []
+            const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts.filter(x => x.key !== "back" && x.key !== "start") : []
             return lb.concat(p, hide)
         }
         // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section.
@@ -335,7 +336,7 @@ Window {
     Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(-1) }
     Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(0) }
     Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", {}) }
-    // Calls (the history) has no rail entry.
+    // Calls (the history), also on the rail.
     Shortcut { sequence: "Ctrl+Shift+C"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("calls", {}) }
     function showShortcuts() { shortcutsPanel.open() }
     // Size of everything, like a web browser's zoom; saved at once.
@@ -350,7 +351,7 @@ Window {
     }
     // A click on a name: their profile card (under the lists it can open).
     ProfileCard { id: profileCard; z: 24 }
-    // Right click or hold on a person: their role, what they can do and where their chat sits.
+    // The bigger sub-pages of a contact's menu: Edit, and What they can do.
     PersonPanel { id: personPanel; z: 24 }
     // Ctrl+/: every keyboard shortcut.
     ShortcutsPanel { id: shortcutsPanel; z: 27 }
@@ -496,7 +497,7 @@ Window {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // An @mention always says so (without the text unless previews are on).
             const mention = name.indexOf(" mentioned you in ") > 0
-            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : mention && !Vault.screenLocked ? name + "." : "New message. Open Direct messages to read it.")
+            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : mention && !Vault.screenLocked ? name + "." : "New message.")
         }
     }
     // Calls: how a call ended, as a toast.
@@ -728,7 +729,7 @@ Window {
             { page: "files", file: "03-files" },
             { page: "calls", file: "04-calls" },
             { page: "settings", file: "05-settings" },
-            { page: "settings", section: "lock", file: "06-settings-lock" },
+            { page: "settings", section: "privacy", file: "06-settings-lock" },
             { page: "contacts", file: "07-contacts" },
             { page: "dms", picker: true, file: "08-options" },
             { page: "dms", prompt: true, file: "09-write" },
@@ -744,7 +745,7 @@ Window {
             { page: "g:tour-crew", zone: "messages", voicePanel: true, file: "19-voice-members" },
             { page: "g:tour-crew", zone: "members", profile: true, file: "20-profile-card" },
             { page: "dms", zone: "messages", shortcuts: true, file: "21-shortcuts" },
-            { page: "settings", section: "more", file: "22-more-settings" },
+            { page: "settings", section: "devices", file: "22-devices" },
             { page: "g:tour-crew", zone: "messages", theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
             { page: "dms", zone: "messages", theme: "black", file: "24-true-black" },
             { page: "g:tour-crew", zone: "messages", theme: "seasonal", density: "spacious", file: "25-autumn" },
@@ -753,7 +754,10 @@ Window {
             { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
             { page: "dms", changeLock: true, file: "29-lock" },
             // A small window (1024 by 768): the squeezed layouts, as on a laptop or handheld screen.
-            { page: "settings", section: "look", small: true, file: "30-small-window" }
+            { page: "settings", section: "look", small: true, file: "30-small-window" },
+            // A contact's menu › Edit, the other sub-page.
+            { page: "dms", zone: "messages", person: true, personPage: "edit", file: "31-edit" },
+            { page: "files", filesMenu: true, file: "32-files-menu" }
         ]
         interval: 1500
         repeat: true
@@ -783,12 +787,13 @@ Window {
             if (s.changeLock) args.changeLock = true
             app.openPage(s.page, args)
             if (s.rail) app.focusRail()
-            if (s.picker) picker.openList("Message", [{ header: "", items: [{ name: "Unsend", detail: "Removes it from both sides", url: "unsend" }, { name: "Delete for me", detail: "Only on this computer", url: "delete" }] },
-                                                     { header: "Conversation", items: [{ name: "Send a picture", detail: "Location and camera details are removed", url: "picture" }] }], null)
+            // A contact's one menu, as the three dots, a right click or LT open it.
+            if (s.picker) PeopleActions.contactMenu("tour", "Mira", { tour: true })
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Chat.username, "", "Send", null, false, true)
             if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
-            if (s.person) personPanel.show("tour", "Mira", { tour: true })
+            if (s.person) personPanel.show("tour", "Mira", { tour: true, page: s.personPage || "can" })
+            if (s.filesMenu) Qt.callLater(() => { const p = app.page(); if (p && p.filesMenu) p.filesMenu() })
             if (s.newGroup) app.newGroup()
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
