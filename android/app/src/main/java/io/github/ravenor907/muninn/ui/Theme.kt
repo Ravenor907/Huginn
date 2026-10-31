@@ -142,7 +142,28 @@ fun MuninnTheme(content: @Composable () -> Unit) {
     // Size scales everything (dp and sp); text scales only sp, on top of Android's own font size.
     val base = androidx.compose.ui.platform.LocalDensity.current
     val density = androidx.compose.ui.unit.Density(base.density * Access.size, base.fontScale * Access.text)
-    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides density) { Themed(content) }
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides density) { Private { Themed(content) } }
+}
+
+/** Every text field under it asks the keyboard for private mode: nothing typed is learned or synced by the keyboard. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun Private(content: @Composable () -> Unit) = androidx.compose.ui.platform.InterceptPlatformTextInput(Incognito, content)
+
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private object Incognito : androidx.compose.ui.platform.PlatformTextInputInterceptor {
+    override suspend fun interceptStartInputMethod(
+        request: androidx.compose.ui.platform.PlatformTextInputMethodRequest,
+        nextHandler: androidx.compose.ui.platform.PlatformTextInputSession,
+    ): Nothing {
+        val private = object : androidx.compose.ui.platform.PlatformTextInputMethodRequest {
+            override fun createInputConnection(outAttributes: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection =
+                request.createInputConnection(outAttributes).also {
+                    outAttributes.imeOptions = outAttributes.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                }
+        }
+        nextHandler.startInputMethod(private)
+    }
 }
 
 @Composable
