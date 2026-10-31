@@ -17,6 +17,10 @@ import javax.crypto.spec.SecretKeySpec
  * Only what the relay client needs; no Android, so RFC 5769's test vectors check it in unit tests.
  */
 object Stun {
+    /** The STUN servers for the address lookup, tried in this order: the next one is asked if one gives no answer.
+     *  Calls and files both use this list, so another server can be added here with one line. */
+    val SERVERS: List<Pair<String, Int>> = listOf("stun.cloudflare.com" to 3478)
+
     const val MAGIC = 0x2112A442
     const val HEADER = 20
 

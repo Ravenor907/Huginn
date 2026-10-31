@@ -63,8 +63,10 @@ class Close(private val context: Context, private val identity: Identity) {
     /** Progress of incoming or outgoing files: (payload id, bytes done, total). */
     var onProgress: ((Long, Long, Long) -> Unit)? = null
 
-    /** Breaks the tie when two phones find each other at once: the one with the lower id asks. */
-    private val myId = identity.fingerprint.take(8)
+    /** Breaks the tie when two phones find each other at once: the one with the lower id asks.
+     *  A random one made fresh at each start (8 hex digits, like older phones send), so it can't be used to follow the phone. */
+    @Volatile private var myId = freshId()
+    private fun freshId() = ByteArray(4).also { java.security.SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     /** Hidden from people nearby: no name in what's advertised (contacts learn who it is from the chat key in the hello). */
     private fun advertisedName() = "$myId|${if (identity.visibleNearby) identity.username.take(24) else Identity.HIDDEN_NAME}"
 
@@ -80,6 +82,7 @@ class Close(private val context: Context, private val identity: Identity) {
     fun start(hello: () -> JSONObject) {
         if (running) return
         running = true
+        myId = freshId()
         _error.value = null
         this.hello = hello
         looking = false

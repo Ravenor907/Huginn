@@ -77,7 +77,8 @@ void Updater::check()
 QNetworkRequest Updater::request(const QUrl &url) const
 {
     QNetworkRequest req(url);
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Huginn/") + m_current);
+    // A plain agent with no app name or version, so GitHub can't tell which app or version is asking.
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0"));
     return req;
 }
 
