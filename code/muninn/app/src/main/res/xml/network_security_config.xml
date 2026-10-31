@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- No plain HTTP anywhere: relays, updates, calls and link previews all use TLS.
-     The one exception is a device on this phone's own network (a LocalSend app without TLS): those requests go
-     over a socket of their own (net/LanHttp), and only to a home-network address. -->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-</network-security-config>

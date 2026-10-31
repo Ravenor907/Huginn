@@ -835,8 +835,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
      */
     /** [anonymous]: no client certificate (hidden from people nearby: nothing that names this phone). */
     private fun open(url: String, timeout: Int, expected: String?, anonymous: Boolean = false): HttpURLConnection {
-        // Plain HTTP (a LocalSend app without TLS) only ever to a home-network address (LanHttp).
-        val c = LanHttp.open(URL(url))
+        val c = URL(url).openConnection() as HttpURLConnection
         if (c is HttpsURLConnection) {
             c.sslSocketFactory = (if (anonymous) null else tls?.client(expected)) ?: Tls.anonymousClient(expected)
             c.hostnameVerifier = anyHost
@@ -879,7 +878,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
          */
         fun postTo(addr: String, path: String, json: String): Pair<Int, String>? {
             for (scheme in listOf("https", "http")) try {
-                val c = LanHttp.open(URL("$scheme://$addr$path"))
+                val c = URL("$scheme://$addr$path").openConnection() as HttpURLConnection
                 if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = anyHost }
                 c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json")

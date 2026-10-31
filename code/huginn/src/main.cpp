@@ -68,6 +68,8 @@
 namespace
 {
 QtMessageHandler s_previous = nullptr;
+// Screenshot tour only: each counted warning is also written here (Windows builds have no console to show them).
+QString s_warningFile;
 
 // Counts QML warnings so the CI screenshot tour can fail the build on any of them.
 void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
@@ -75,7 +77,14 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
     if (type >= QtWarningMsg) {
         const QString file = QString::fromUtf8(ctx.file ? ctx.file : "");
         if (file.endsWith(QLatin1String(".qml")) || msg.contains(QLatin1String(".qml:")) || msg.contains(QLatin1String("QML")))
+        {
             ++System::s_qmlWarnings;
+            if (!s_warningFile.isEmpty()) {
+                QFile f(s_warningFile);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+                    f.write((msg + QLatin1Char('\n')).toUtf8());
+            }
+        }
     }
     if (s_previous)
         s_previous(type, ctx, msg);
@@ -119,6 +128,10 @@ int main(int argc, char *argv[])
     QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(releaseSigTest);
     args.process(app);
+    if (args.isSet(tour)) {
+        QDir().mkpath(args.value(tour));
+        s_warningFile = QDir(args.value(tour)).filePath(QStringLiteral("warnings.txt"));
+    }
     const bool wifiSelf = args.isSet(wifiTest);
     if (wifiSelf)
         WifiSelfTest::isolate();
