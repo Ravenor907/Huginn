@@ -391,6 +391,8 @@ void Vault::eraseAll()
     // The inbox address and chat identity go too, so an erased computer doesn't keep the old mailbox.
     settings().remove(QStringLiteral("nostr"));
     settings().remove(QStringLiteral("chat"));
+    // Written now, so what Move saves right after (its "Moved to" note, through its own QSettings) isn't removed later.
+    settings().sync();
     Q_EMIT changed();
 }
 
@@ -552,6 +554,59 @@ void restartHuginn()
     QTimer::singleShot(300, qApp, &QCoreApplication::quit);
 }
 }
+
+Vault::Files Vault::everything() const
+{
+    if (m_key.isEmpty())
+        return {};
+    if (beforeBackup)
+        beforeBackup();
+    Files files = collect(m_key, dataDir());
+    files.emplace_back(kSettingsEntry, settingsBlob());
+    return files;
+}
+
+bool Vault::takeEverything(const Files &files, QString *error)
+{
+    if (m_key.isEmpty()) {
+        *error = QStringLiteral("Open Chat and unlock it first.");
+        return false;
+    }
+    if (!replaceAll(m_key, dataDir(), files, error))
+        return false;
+    for (const auto &e : files)
+        if (e.first == kSettingsEntry)
+            applySettingsBlob(e.second);
+    m_key.fill(0);
+    m_key.clear();
+    m_restarting = true;
+    m_busy = true;
+    Q_EMIT changed();
+    QTimer::singleShot(3000, this, [] { restartHuginn(); });
+    return true;
+}
+
+QByteArray Vault::settingsWith(const QVariantMap &set, const QStringList &drop)
+{
+    QVariantMap all;
+    const QByteArray blob = settingsBlob();
+    {
+        QDataStream ds(blob);
+        ds.setVersion(QDataStream::Qt_6_0);
+        ds >> all;
+    }
+    for (const QString &k : drop)
+        all.remove(k);
+    for (auto it = set.cbegin(); it != set.cend(); ++it)
+        all.insert(it.key(), it.value());
+    QByteArray out;
+    QDataStream ds(&out, QIODevice::WriteOnly);
+    ds.setVersion(QDataStream::Qt_6_0);
+    ds << all;
+    return out;
+}
+
+QString Vault::settingsEntry() { return kSettingsEntry; }
 
 QString Vault::backupFolder() const
 {

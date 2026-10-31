@@ -162,7 +162,7 @@ QString CallManager::cameraName() const { return m_camera ? m_camera->cameraName
 
 // ------------------------------------------------------------------ video (5.8.5)
 
-bool CallManager::canVideo(const QString &key) const { return canCall(key) && vpxAvailable() && m_signal->hasCap(key, QStringLiteral("c2")); }
+bool CallManager::canVideo(const QString &key) const { return canCall(key) && vpxAvailable() && m_signal->mayHave(key, QStringLiteral("c2")); }
 
 QString CallManager::callVideo(const QString &key) { return startCall(key, vpxAvailable()); }
 

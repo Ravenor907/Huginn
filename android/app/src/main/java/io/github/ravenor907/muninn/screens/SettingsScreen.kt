@@ -636,20 +636,22 @@ private fun LinkedDevices(app: Muninn) {
             }
         }
     }
-    Section("Link a device to this phone")
+    // Use on both (linked devices, below), or Move here (cap x1).
+    MoveSection(app)
+    Section("Use on both: link a device to this phone")
     Panel {
         Text("On the other device: Settings › More settings › Linked devices › Show the link code. Then scan it here, or paste it.", style = Type.small)
         var scanning by remember { mutableStateOf(false) }
         if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp).height(260.dp)) { c ->
             scanning = false
             val err = io.github.ravenor907.muninn.net.Link.link(c)
-            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Linked. Your chats are on their way to it.", err != null)
+            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Now check the 4 emoji on both screens.", err != null)
         }
         MButton(if (scanning) "Stop scanning" else "Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "qr") { scanning = !scanning }
         io.github.ravenor907.muninn.ui.Field(pasted, { pasted = it }, "Paste the link code", Modifier.padding(top = 8.dp), single = false)
         MButton("Link", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = pasted.isNotBlank()) {
             val err = io.github.ravenor907.muninn.net.Link.link(pasted)
-            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Linked. Your chats are on their way to it.", err != null)
+            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Now check the 4 emoji on both screens.", err != null)
             if (err == null) pasted = ""
         }
     }

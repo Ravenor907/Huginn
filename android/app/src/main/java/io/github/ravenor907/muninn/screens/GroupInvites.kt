@@ -45,8 +45,8 @@ import io.github.ravenor907.muninn.ui.Ui
  * trust work's and set [ready] to true; the screens need no other change.
  */
 object GroupLinks {
-    /** True once the trust work's links are wired in. */
-    const val ready = false
+    /** True once the trust work's links are wired in (cap j1, docs/protocol-0.6.md section 17). */
+    const val ready = true
 
     /** One link: who made it, how often it was used and may be, and when it stops working (0: never). */
     data class Link(val id: String, val text: String, val by: String, val uses: Int, val max: Int, val expires: Long)
@@ -59,9 +59,9 @@ object GroupLinks {
         86_400_000L to "1 day", 7 * 86_400_000L to "7 days", 0L to "Never")
     /** Max uses (0: no limit). */
     val USES = listOf(0 to "No limit", 1 to "1", 5 to "5", 10 to "10", 25 to "25", 50 to "50", 100 to "100")
-    const val DEFAULT_EXPIRE = 7 * 86_400_000L
+    const val DEFAULT_EXPIRE = Proto06.LINK_TTL_DEFAULT
 
-    // ---- n95-trust hooks
+    // ---- the trust work's links (Groups.createLink, links, revokeLink, setMembersInvite)
 
     /** Whether I may make links for [g]: an admin, or anyone when the group lets members invite. */
     fun canInvite(app: Muninn, g: String): Boolean {
@@ -70,18 +70,22 @@ object GroupLinks {
         return grp.state.isAdmin(app.identity.publicKey) || membersCanInvite(app, g)
     }
 
-    /** A new link, or why not. Falls back to the one-hour group code (admins only) until [ready]. */
+    /** A new link, or why not. The admin it names counts its uses and expiry. */
     fun create(app: Muninn, g: String, expireMs: Long, maxUses: Int): Pair<Link?, String?> {
-        val code = app.chat.groups.code(g) ?: return null to "Only admins can make an invite link for now."
-        return Link("code", code, app.identity.publicKey, 0, 0, System.currentTimeMillis() + 3_600_000L) to null
+        val (link, err) = app.chat.groups.createLink(g, expireMs, maxUses)
+        if (link == null) return null to (err ?: "Couldn't make a link.")
+        val token = Proto06.parseCode(link)?.i ?: ""
+        return Link(Proto06.linkId(token), link, app.identity.publicKey, 0, maxUses, if (expireMs == 0L) 0L else System.currentTimeMillis() + expireMs) to null
     }
 
-    fun list(app: Muninn, g: String): List<Link> = emptyList()
+    /** The group's active links: admins see all, members their own. */
+    fun list(app: Muninn, g: String): List<Link> =
+        app.chat.groups.links(g).map { Link(it.id, it.link, it.byName.ifBlank { app.chat.nameOf(it.by) }, it.uses, it.max, it.x) }
 
-    fun revoke(app: Muninn, g: String, id: String) { app.chat.groups.revokeCodes(g) }
+    fun revoke(app: Muninn, g: String, id: String) { app.chat.groups.revokeLink(g, id)?.let { Ui.say(it, true) } }
 
-    fun membersCanInvite(app: Muninn, g: String): Boolean = false
-    fun setMembersCanInvite(app: Muninn, g: String, on: Boolean): String? = "This arrives with the next update."
+    fun membersCanInvite(app: Muninn, g: String): Boolean = app.chat.groups.group(g)?.state?.mi == true
+    fun setMembersCanInvite(app: Muninn, g: String, on: Boolean): String? = app.chat.groups.setMembersInvite(g, on)
 
     /** What a pasted or scanned link says, or null if it isn't one. Falls back to a group code. */
     fun parse(app: Muninn, text: String): Preview? {

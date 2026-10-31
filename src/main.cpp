@@ -31,6 +31,7 @@
 #include "livelist.h"
 #include "updater.h"
 #include "wifiselftest.h"
+#include "move.h"
 #include "morewire.h"
 #include "linkpreview.h"
 #include "videomsg.h"
@@ -136,7 +137,9 @@ int main(int argc, char *argv[])
         const bool f = LinkPreview::selfTest();
         const bool g = Limits::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("d1-vectors.json")));
         const bool h = Trust::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("i1f1-vectors.json")));
-        return selfTested(a && b && c && d && e && f && g && h);
+        // 0.95: moving (x1), invite links (j1) and "mi" in a group state.
+        const bool i = MoveWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("p95-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h && i);
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
@@ -222,6 +225,7 @@ int main(int argc, char *argv[])
         return false;
     };
     cs->onHasCap = [chat](const QString &k, const QString &c) { return chat->hasCap(k, c); };
+    cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.
@@ -238,6 +242,9 @@ int main(int argc, char *argv[])
     files->trusted = [calls](const QString &k) { return calls->trusted(k); };
     auto *linked = new Link(chat, &app);
     chat->setExtras(trust, files, linked);
+    // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
+    auto *mover = new Move(chat, vault, linked, localSend, &app);
+    localSend->moveReceive = [mover](const QByteArray &body) { return mover->handle(body); };
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
@@ -269,7 +276,8 @@ int main(int argc, char *argv[])
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
-        if (looking)
+        // A muted chat makes no sound; an archived one comes back to the list.
+        if (!chat->notifyFor(key) || looking)
             return;
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
@@ -321,6 +329,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Mover", mover);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
 
     QQmlApplicationEngine engine;

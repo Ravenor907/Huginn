@@ -27,6 +27,11 @@ object Backup {
         return BackupFormat.write(out, password, entries, progress = progress)
     }
 
+    /** Everything a backup holds, read now (moving to another device, cap x1). */
+    fun entries(context: Context, vault: Vault): List<Pair<String, ByteArray>> =
+        vault.sealedFiles().filter { it.first != "move-out.bin" }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
+            (PREFS_ENTRY to prefsJson(context).toByteArray())
+
     /** Reads and checks a backup. Throws [BackupFormat.WrongPassword] or [BackupFormat.NotABackup]. */
     fun open(context: Context, uri: Uri, password: String): BackupFormat.Opened {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw BackupFormat.NotABackup("Couldn't open that file.")
@@ -56,7 +61,7 @@ object Backup {
         Runtime.getRuntime().exit(0)
     }
 
-    private fun prefsJson(context: Context): String {
+    internal fun prefsJson(context: Context): String {
         val o = JSONObject()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).all.forEach { (k, v) ->
             if (k in phoneOnly || v == null) return@forEach

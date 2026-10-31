@@ -642,6 +642,11 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         return;
     }
 
+    if (path == QStringLiteral("/api/huginn/v1/move")) {
+        const QPair<int, QByteArray> r = moveReceive ? moveReceive(c.body) : qMakePair(404, QByteArrayLiteral("{}"));
+        reply(s, r.first, r.second);
+        return;
+    }
     if (path == QStringLiteral("/api/huginn/v1/message")) {
         reply(s, chatReceive ? chatReceive(c.body, ip) : 404, "{}");
         return;

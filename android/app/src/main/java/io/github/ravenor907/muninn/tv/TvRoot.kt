@@ -60,6 +60,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -140,6 +141,7 @@ fun TvRoot(app: Muninn) {
                 else -> TvKids(app, cfg)
             }
         }
+        TvReconnectBanner(Modifier.align(Alignment.TopCenter))
         TvToast(Modifier.align(Alignment.BottomCenter))
         val ask by Ui.ask.collectAsState()
         ask?.let { AskDialog(it) }
@@ -250,6 +252,71 @@ private fun TvChip(text: String, requester: FocusRequester?, quiet: Boolean = fa
     }
 }
 
+/** While someone asked to look after this TV (k6): always on screen, so nobody misses it. */
+@Composable
+private fun TvReconnectBanner(modifier: Modifier) {
+    val j by TvReconnect.joiner.collectAsState()
+    val joiner = j ?: return
+    val left = ((TvReconnect.WAIT_MS - (System.currentTimeMillis() - joiner.at)) / 3_600_000L).coerceAtLeast(0)
+    Row(modifier.padding(16.dp).clip(RoundedCornerShape(13.dp)).background(Palette.dangerFill).padding(horizontal = 22.dp, vertical = 12.dp)) {
+        Text(if (joiner.orphan) "${joiner.n} is taking over this TV." else "${joiner.n} asked to look after this TV. Unless a parent says no, they will in about $left hours.",
+            style = tvText(17.sp, Palette.danger))
+    }
+}
+
+/** Opens only after OK is held for 5 seconds on the remote, so a child doesn't wander in. */
+@Composable
+private fun TvHoldChip(text: String, onHeld: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    var down by remember { mutableLongStateOf(0L) }
+    val shape = RoundedCornerShape(13.dp)
+    Box(Modifier.onFocusChanged { focused = it.isFocused; if (!it.isFocused) down = 0L }
+        .onPreviewKeyEvent { e ->
+            if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+            when (e.type) {
+                KeyEventType.KeyDown -> { if (down == 0L) down = System.currentTimeMillis(); true }
+                KeyEventType.KeyUp -> {
+                    val held = if (down == 0L) 0L else System.currentTimeMillis() - down
+                    down = 0L
+                    if (held >= HOLD_MS) onHeld() else Ui.say("Hold OK for 5 seconds.")
+                    true
+                }
+                else -> false
+            }
+        }
+        .focusable()
+        .heightIn(min = 52.dp).clip(shape).background(if (!focused) Color.Transparent else Palette.field)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .padding(horizontal = 22.dp, vertical = 12.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(text, style = tvText(18.sp, Palette.textMuted, FontWeight.Medium))
+    }
+}
+
+private const val HOLD_MS = 5_000L
+
+/**
+ * k6: a parent whose phone was wiped scans this to look after the TV again. Every parent is told: one approves with one
+ * tap, any can block it, and if nobody blocks it in 24 hours that phone takes over and the old parents go.
+ */
+@Composable
+private fun TvConnectParent(app: Muninn, onBack: () -> Unit) {
+    val code = remember { try { TvReconnect.code(app) } catch (e: Exception) { "" } }
+    val joiner by TvReconnect.joiner.collectAsState()
+    BackHandler { onBack() }
+    TvDialog(onBack = onBack) {
+        Text("Connect a parent", style = tvTitle(28.sp))
+        Text("On the parent's phone, point the camera at this code. Every parent of this TV is told: one can approve at once, any can say no. " +
+            "If nobody says no in 24 hours, that phone looks after the TV and the other parents are taken off.", style = tvText(17.sp, Palette.textSoft), textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 12.dp, bottom = 18.dp))
+        if (code.isNotEmpty()) Qr(Contacts.link(code), 240.dp)
+        joiner?.let { Text(if (it.orphan) "${it.n} is taking over…" else "Waiting: ${it.n} looks after this TV in 24 hours unless a parent says no.",
+            style = tvText(17.sp, Palette.textMuted), modifier = Modifier.padding(top = 14.dp)) }
+        Spacer(Modifier.height(18.dp))
+        TvChip("Close", null) { onBack() }
+    }
+}
+
 // ------------------------------------------------------------------ the kids' screens
 
 @Composable
@@ -348,6 +415,7 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
     val focusAt = people.indexOfFirst { it.k == focusKey }.coerceAtLeast(0)
     val first = remember { FocusRequester() }
     val list = rememberLazyListState()
+    var connect by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         TvHeader()
         Text("Who do you want to talk to?", style = tvTitle(32.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 30.dp))
@@ -367,8 +435,10 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         Latest(people, convs, onOpen)
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TvChip(if (setupLeft) "For a parent: finish setting up this TV" else "For a parent", null, quiet = true, onClick = onSetup)
+            TvHoldChip("Connect a parent (hold OK)") { connect = true }
         }
     }
+    if (connect) TvConnectParent(app) { connect = false }
     LaunchedEffect(people) {
         if (people.isEmpty()) return@LaunchedEffect
         try { list.scrollToItem(focusAt) } catch (_: Exception) {}

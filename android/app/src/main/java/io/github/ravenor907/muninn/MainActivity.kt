@@ -222,12 +222,18 @@ class MainActivity : ComponentActivity() {
     private fun openAdd(i: Intent?) {
         val d = i?.data ?: return
         val code = when {
+            // A group invite link (cap j1) comes as muninn://add/MUNINNG1:CODE.
             d.scheme == "muninn" && d.host == "add" ->
-                d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
-            d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString())
-                .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) && it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) }
+                d.path?.trim('/')?.takeIf { it.isNotEmpty() }?.let {
+                    if (it.startsWith(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) it
+                    else io.github.ravenor907.muninn.net.Contacts.PREFIX + it }
+            d.scheme == "https" -> io.github.ravenor907.muninn.net.Contacts.unlink(d.toString()).replace("MUNINNG1%3A", io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)
+                .takeIf { it.startsWith(io.github.ravenor907.muninn.net.Contacts.PAGE.substringBefore('#')) &&
+                    (it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) || it.contains(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) }
             else -> null
         } ?: return
+        // A move code (cap x1) is only ever taken inside the Move screen, never from a link.
+        if (code.contains(io.github.ravenor907.muninn.net.MoveWire.PREFIX)) return
         ChatNav.incoming = code
         tab = "chat"; ChatNav.open = "add"; intentChose = true
     }
@@ -368,6 +374,8 @@ class MainActivity : ComponentActivity() {
         val ready by app.ready.collectAsState()
         val panic by io.github.ravenor907.muninn.ui.Panic.locked.collectAsState()
         LaunchedEffect(panic) { if (panic) toList() }
+        // Moving to another device (cap x1): locked while it moves, then "Moved to [name]".
+        if (io.github.ravenor907.muninn.screens.MoveCover(app)) return
         if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }; return }
         // A lock is required: on first open (or from a version before it was), set one before anything else.
         var locked by remember { mutableStateOf(app.vault.hasPassword || ciSkip) }
@@ -447,6 +455,8 @@ class MainActivity : ComponentActivity() {
                 ?: app.chat.groups.all.value.keys.firstOrNull()?.let { ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(it) }
         }
         if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.HoldSheet(app, ChatNav.hold, ChatNav.holdMoves) { ChatNav.hold = ""; ChatNav.holdMoves = null }
+        // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
+        io.github.ravenor907.muninn.screens.LinkCheck()
         ask?.let { AskDialog(it) }
     }
 

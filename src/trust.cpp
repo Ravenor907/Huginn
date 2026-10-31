@@ -223,7 +223,8 @@ QString Trust::askToAdd(const QString &g, const QString &key)
         return QString();
     if (!hasI1(key))
         return QStringLiteral("%1 needs a newer Muninn or Huginn for this.").arg(m_chat->memberName(g, key));
-    const QString id = groupId(g, m_chat->myKey(), key);
+    // The local id of a member's "add", kept apart from introducers' ids so none can be planted (13, sec M5).
+    const QString id = QStringLiteral("add:") + groupId(g, m_chat->myKey(), key);
     if (!find(id)) {
         const QJsonObject m = GroupWire::memberEntry(it->state, key);
         Intro i;
@@ -252,6 +253,7 @@ void Trust::finish(const Intro &i)
         m_chat->saveContacts();
         m_chat->saveMet();
         m_chat->refreshGroupPeers();
+        m_chat->sayHello(i.k);
         Q_EMIT m_chat->notice(QStringLiteral("You and %1 are in touch now. Check the 4 pictures with them to be sure.").arg(i.n));
         Q_EMIT m_chat->changed();
     }
@@ -285,7 +287,7 @@ int Trust::receive(const QString &fromKey, const QString &name, const QString &m
     }
     if (t == QLatin1String("yes")) {
         const Intro *f = find(jstr(p, "id"));
-        if (!f || f->k != fromKey)
+        if (!f || f->k != fromKey || f->by.startsWith(QLatin1String("g:")))
             return m_chat->isContact(fromKey) ? 200 : 403;
         Intro i = *f;
         i.theySaid = true;
@@ -304,9 +306,9 @@ int Trust::receive(const QString &fromKey, const QString &name, const QString &m
         return 403;
     if (m_chat->isContact(fromKey))
         return 200;
-    const QString id = groupId(g, me, fromKey);
+    const QString id = QStringLiteral("add:") + groupId(g, me, fromKey);
     Intro i;
-    if (const Intro *f = find(id)) {
+    if (const Intro *f = find(id); f && f->by == QStringLiteral("g:") + g && f->k == fromKey) {
         i = *f;
     } else {
         const QJsonObject m = GroupWire::memberEntry(it->state, fromKey);
@@ -359,7 +361,7 @@ QList<Trust::Intro> Trust::familyOffers() const
                 continue;
             seen.insert(k);
             Intro i;
-            i.id = groupId(it.key(), me, k);
+            i.id = QStringLiteral("add:") + groupId(it.key(), me, k);
             i.by = QStringLiteral("g:") + it.key();
             i.k = k;
             i.n = jstr(m, "n");
@@ -506,6 +508,9 @@ int Chat::receiveExtra(const QString &room, const QString &fromKey, const QStrin
             return 403;
         if (!m_files || !FileLink::ok(p))
             return 400;
+        // Files turned off for them: their offers are dropped quietly.
+        if (!filesAllowed(fromKey))
+            return 200;
         if (!rateOk(m_recentCall, QStringLiteral("file|") + fromKey, 30))
             return 429;
         m_files->onSignal(fromKey, p);
