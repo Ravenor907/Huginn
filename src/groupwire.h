@@ -84,6 +84,15 @@ QString code(const QString &g, const QString &groupName, const QString &adminKey
 // {g, name, admin, adminName, mailbox, token, expires (ms), expired} or empty when it isn't one.
 QVariantMap parseCode(const QString &text, qint64 nowMs);
 
+// Cap j1 (section 17): invite links. A link is the add page's address with a group code after "#".
+extern const char kAddPage[];         // "https://ravenor907.github.io/Huginn-Muninn/add/#"
+extern const qint64 kNeverS;          // "never" as a code's x: 100 years on, so older apps don't call it expired
+const int kMaxLinkUses = 100;
+const int kMaxLinks = 50;
+QString linkId(const QString &token); // first 16 hex of SHA-256("link|" + token)
+// Whether a link still lets someone in, decided only on the admin that counts it (17.3).
+bool linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool makerMay, qint64 nowMs);
+
 // Checks tests/proto06-vectors.json (group section and canonical JSON, with chat-vectors.json next
 // to it for the keys), plus state limits, signing and group codes. Prints what it found.
 bool selfTest(const QString &vectorsPath);

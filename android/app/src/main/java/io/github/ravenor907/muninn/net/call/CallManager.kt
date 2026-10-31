@@ -106,8 +106,11 @@ object CallManager {
         try { a.vault.write(trustFile(a), JSONObject().put("on", JSONArray(trustOn.toList())).put("off", JSONArray(trustOff.toList())).toString()) } catch (_: Exception) {}
     }
 
-    /** Can [peerKey] get calls? Only 0.6 apps with "c1" (1.3); the button otherwise says why not. */
-    fun canCall(peerKey: String): Boolean = app?.let { a -> try { "c1" in (a.contacts.get(peerKey)?.caps ?: emptySet()) } catch (e: Exception) { false } } == true
+    /**
+     * Can [peerKey] get calls? Apps with "c1" (1.3), and anyone whose app hasn't said yet (counted as current; an
+     * old app just doesn't answer). Someone met close by only while on the same Wi-Fi or close by.
+     */
+    fun canCall(peerKey: String): Boolean = app?.let { a -> try { a.chat.mayCall(peerKey) } catch (e: Exception) { false } } == true
 
     /** Settings › "Internet calls" (default on). Off: only Wi-Fi and Bluetooth, the relay is never asked. */
     fun internetCalls(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("internetCalls", true)
@@ -127,7 +130,7 @@ object CallManager {
     /** This phone sends and shows video: it has VP8 and isn't a Kids' TV (the TV call screen shows no video). */
     fun videoHere(): Boolean = Vp8.available && !io.github.ravenor907.muninn.tv.TvMic.active
 
-    fun canVideo(peerKey: String): Boolean = videoHere() && app?.let { a -> try { "c2" in (a.contacts.get(peerKey)?.caps ?: emptySet()) } catch (e: Exception) { false } } == true
+    fun canVideo(peerKey: String): Boolean = videoHere() && app?.let { a -> try { a.chat.mayVideo(peerKey) } catch (e: Exception) { false } } == true
 
     /** Starts a call to [peerKey] ([video]: with the camera on). False if a call is already going on or calling isn't set up yet. */
     fun start(peerKey: String, video: Boolean = false): Boolean {

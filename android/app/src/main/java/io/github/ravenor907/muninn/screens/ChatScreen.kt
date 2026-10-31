@@ -642,6 +642,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     // Permissions still missing (microphone, camera, notifications, running in the background).
                     SetupCard(app, Modifier.padding(bottom = 8.dp))
                     LimitsNote(Modifier.padding(bottom = 8.dp))
+                    // Linked devices: always says where these chats are mirrored.
+                    MirroredNote(Modifier.padding(bottom = 8.dp))
                 }
             }
             // Message requests: people who have my code but aren't contacts yet, and group invites. Their own page.
@@ -981,7 +983,8 @@ private fun Conversation(app: Muninn, key: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(name, 40.dp, 16.sp, online = activeNow) }, actions = {
-            if (c != null) {
+            // Someone met close by can be called too while on the same Wi-Fi.
+            if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
                 IconAction("call", if (callable) "Call $name" else "Calling needs a newer Muninn or Huginn", if (callable) Palette.text else Palette.textSoft) {
                     if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
@@ -1611,6 +1614,9 @@ private fun RequestsScreen(app: Muninn, back: () -> Unit) {
             items(requests, key = { "r" + it.peerKey }) { r ->
                 Panel(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
                     Text("${r.name} wants to chat", style = Type.big)
+                    // Cap: a new key with a contact's inbox (sec H1): never taken on quietly.
+                    if (r.replaces.isNotEmpty()) Text("Says it replaces ${app.chat.nameOf(r.replaces)} with a new security key. Check with them some other way before accepting.",
+                        style = Type.small.copy(color = Palette.danger))
                     if (r.viaInternet) Text("They have your code. Only accept if you know who it is.", style = Type.small)
                     else {
                         Text("Code: ${r.code}", style = Type.title.copy(color = Palette.accent), modifier = Modifier.padding(vertical = 6.dp))

@@ -211,12 +211,17 @@ object KidTv {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         val me = app.identity.publicKey
         val s = _state.value
+        // k6: a parent reconnecting after a wipe (TvReconnect).
+        if (s.parents.isNotEmpty()) TvReconnect.onTv(app, fromKey, mailbox, o, s.parents, s.cfg?.raw)?.let { return it }
         when (o.optString("t")) {
             "config" -> {
                 val new = o.optJSONObject("cfg") ?: return false
                 val parents = if (s.parents.isEmpty()) {
                     // Pairing: only from the one who scanned a code this TV showed in the last hour, signing for themselves.
                     if (!inviteOk || new.opt("by") != fromKey) return false
+                    listOf(fromKey)
+                } else if (TvReconnect.orphanFrom(fromKey) && new.opt("by") == fromKey) {
+                    // k6: 24 hours and no parent blocked it; the one who scanned "Connect a parent" signs for themselves.
                     listOf(fromKey)
                 } else s.parents
                 val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)
@@ -246,6 +251,7 @@ object KidTv {
                     if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
                 }
                 answer(app, cfg.parents, cfg.v, cfg.raw)
+                TvReconnect.configured(cfg.parents)
                 statusSoon(app)
                 true
             }
@@ -300,7 +306,7 @@ object KidTv {
         }
         for (p in cfg.contacts) upsert(app, p.k, p.n, p.p.takeIf { it.length == 64 })
         for (k in cfg.parents) if (cfg.contacts.none { it.k == k })
-            upsert(app, k, app.contacts.get(k)?.name ?: "Parent", if (k == fromKey) mailbox else null)
+            upsert(app, k, app.contacts.get(k)?.name ?: "Parent", if (k == fromKey) mailbox else TvReconnect.mailboxFor(k))
     }
 
     private fun upsert(app: Muninn, key: String, name: String, mailbox: String?) {
@@ -372,6 +378,7 @@ object Tv : TvHandler {
         TvUpdate.start(app)
         TvStorage.start(app)
         KidTv.askParents(app)
+        TvReconnect.load(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

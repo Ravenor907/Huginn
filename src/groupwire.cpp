@@ -275,6 +275,10 @@ QString GroupWire::checkState(const QJsonObject &s)
     QJsonObject base = s;
     base.remove(QStringLiteral("kind"));
     base.remove(QStringLiteral("days"));
+    // Cap j1 (17.1): "Members can invite", only ever true (off is left out).
+    base.remove(QStringLiteral("mi"));
+    if (s.contains(QStringLiteral("mi")) && s.value(QStringLiteral("mi")) != QJsonValue(true))
+        return QStringLiteral("mi");
     if (!sameFields(base, {QStringLiteral("g"), QStringLiteral("v"), QStringLiteral("owner"), QStringLiteral("by"), QStringLiteral("name"),
                            QStringLiteral("admins"), QStringLiteral("members"), QStringLiteral("channels"), QStringLiteral("ts"), QStringLiteral("sig")}))
         return QStringLiteral("fields");
@@ -569,8 +573,24 @@ QString GroupWire::code(const QString &g, const QString &groupName, const QStrin
     return QLatin1String(kCodePrefix) + b64url(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
-QVariantMap GroupWire::parseCode(const QString &text, qint64 nowMs)
+const char GroupWire::kAddPage[] = "https://ravenor907.github.io/Huginn-Muninn/add/#";
+const qint64 GroupWire::kNeverS = qint64(100) * 365 * 86400;
+
+QString GroupWire::linkId(const QString &token)
 {
+    return QString::fromLatin1(QCryptographicHash::hash(QByteArrayLiteral("link|") + token.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+}
+
+bool GroupWire::linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool makerMay, qint64 nowMs)
+{
+    return !off && (x == 0 || x > nowMs) && (max == 0 || uses < max) && makerIn && makerMay;
+}
+
+QVariantMap GroupWire::parseCode(const QString &raw, qint64 nowMs)
+{
+    // A pasted invite link too (some apps write its ":" as "%3A").
+    QString text = raw;
+    text.replace(QStringLiteral("MUNINNG1%3A"), QLatin1String(kCodePrefix), Qt::CaseInsensitive);
     const QString prefix = QLatin1String(kCodePrefix);
     const int at = int(text.indexOf(prefix));
     if (at < 0)

@@ -14,6 +14,9 @@ interface TvBridge {
      * until the other side answers, so Chat keeps no outbox entry for it.
      */
     fun sendTvRoom(peerKey: String, plain: String)
+
+    /** The same on every route at once, the internet included (so nobody nearby can stand in the way, 7.11). */
+    fun sendTvRoomEverywhere(peerKey: String, plain: String) = sendTvRoom(peerKey, plain)
 }
 
 interface TvHandler {

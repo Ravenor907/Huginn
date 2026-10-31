@@ -192,6 +192,7 @@ class Vault(private val context: Context) {
     fun eraseAll() {
         context.filesDir.listFiles()?.forEach { it.deleteRecursively() }
         context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("muninn-move", Context.MODE_PRIVATE).edit().clear().commit()
         try { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) } catch (_: Exception) {}
         dataKey = null
     }

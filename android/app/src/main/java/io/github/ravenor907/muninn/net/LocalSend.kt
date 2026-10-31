@@ -858,6 +858,25 @@ class LocalSend(private val context: Context, val identity: Identity) {
         /** Devices are reached by IP and certificates carry no names: the fingerprint check replaces the name check. */
         private val anyHost = HostnameVerifier { _, _ -> true }
 
+        /**
+         * A JSON POST straight to [addr] ("ip:port") on the same network (moving to another device, cap x1): HTTPS with
+         * any certificate first (everything inside is sealed), then HTTP. (status, body), or null when it can't connect.
+         */
+        fun postTo(addr: String, path: String, json: String): Pair<Int, String>? {
+            for (scheme in listOf("https", "http")) try {
+                val c = URL("$scheme://$addr$path").openConnection() as HttpURLConnection
+                if (c is HttpsURLConnection) { c.sslSocketFactory = Tls.anonymousClient(null); c.hostnameVerifier = anyHost }
+                c.connectTimeout = 4000; c.readTimeout = 30_000; c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(json.toByteArray()) }
+                val code = c.responseCode
+                val text = (if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readBytes()) } ?: ""
+                c.disconnect()
+                return code to text
+            } catch (e: Exception) {}
+            return null
+        }
+
         /** Mobile-data interfaces (often on 10.x addresses, which look like a home network). */
         private val MOBILE = listOf("rmnet", "ccmni", "pdp", "clat", "v4-", "tun", "dummy", "ifb", "r_rmnet", "seth", "usb")
 

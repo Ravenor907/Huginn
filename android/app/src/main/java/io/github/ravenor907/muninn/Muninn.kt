@@ -85,6 +85,8 @@ class Muninn : Application() {
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
         power.install()
+        // Moving to another device (cap x1): one under way goes on, and this device stays locked until it's done.
+        io.github.ravenor907.muninn.net.Move.init(this)
         if (vault.openDefault()) start()
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Check the internet inbox even when Muninn is closed: every 15 minutes (Android's shortest) or every
@@ -124,6 +126,7 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        io.github.ravenor907.muninn.net.Move.ready(this)
         // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
         chat.foreground(visible)
         power.ready()

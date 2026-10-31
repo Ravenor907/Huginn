@@ -104,6 +104,15 @@ public:
     static bool replaceAll(const QByteArray &key, const QString &dir, const Files &files, QString *error);
     static bool backupSelfTest();
 
+    // ---------------------------------------------------------------- moving to another device (cap x1, move.cpp)
+    // Everything a backup holds (the settings blob too), read now.
+    Files everything() const;
+    // Replaces everything here with files (like a restore) and restarts Huginn. False with error when it can't.
+    bool takeEverything(const Files &files, QString *error);
+    // This computer's chat settings as a backup carries them, with set put in and drop taken out.
+    static QByteArray settingsWith(const QVariantMap &set, const QStringList &drop);
+    static QString settingsEntry();
+
     // ---------------------------------------------------------------- panic lock
     // Hold L3 and R3 for a second anywhere in Huginn: Chat locks at once. Main.qml passes every
     // controller press and release here.
