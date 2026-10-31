@@ -85,6 +85,9 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     , m_ble(ble)
     , m_settings(QStringLiteral("Huginn"), QStringLiteral("Huginn"))
 {
+    // Link previews are off for new installs (0.95). One set up before that keeps them on unless it turned them off.
+    if (m_settings.contains(QStringLiteral("chat/pub")) && !m_settings.contains(QStringLiteral("chat/linkPreviews")))
+        m_settings.setValue(QStringLiteral("chat/linkPreviews"), true);
     connect(&m_http, &QNetworkAccessManager::sslErrors, this, [](QNetworkReply *r, const QList<QSslError> &) { r->ignoreSslErrors(); });
     // Nothing is readable until the vault is open: start then.
     connect(m_vault, &Vault::opened, this, &Chat::start);

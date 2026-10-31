@@ -59,7 +59,7 @@ class TvConfigTest {
     @Test
     fun acceptsAndRefusesInOrder() {
         val acc = tv.getJSONArray("accept")
-        assertEquals(8, acc.length())
+        assertEquals(9, acc.length())
         for (i in 0 until acc.length()) {
             val a = acc.getJSONObject(i)
             val parents = a.getJSONArray("parents").let { p -> (0 until p.length()).map { if (p.getString(it) == "A") kA else kB } }
@@ -195,6 +195,15 @@ class TvConfigTest {
         badK5("nr over 3") { it.put("nr", 4) }
         badK5("nr not a number") { it.put("nr", true) }
         badK5("nr as text") { it.put("nr", "1") }
+        // k7 (7.12): automatic update checks, true or false; absent means on.
+        val k7 = cfg("cfg6")
+        assertFalse(TvRules.parse(k7).upd)
+        assertTrue(TvRules.parse(k5).upd)
+        TvRules.check(k7)
+        for (bad in listOf<Any>(0, "off")) {
+            val c = JSONObject(k7.toString()).put("upd", bad)
+            try { TvRules.check(c); fail("should refuse upd $bad") } catch (e: IllegalArgumentException) {}
+        }
         // 80 characters counted as code points: 80 runes are fine.
         val ok = JSONObject(good.toString()); ok.getJSONArray("quick").getJSONObject(0).put("text", "ᚺ".repeat(80)); TvRules.check(ok)
     }

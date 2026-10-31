@@ -13,6 +13,7 @@ class Settings : public QObject
     Q_PROPERTY(bool highContrast READ highContrast WRITE setHighContrast NOTIFY changed)
     Q_PROPERTY(bool colorBlind READ colorBlind WRITE setColorBlind NOTIFY changed)
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
+    Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
     Q_PROPERTY(QString transferFolder READ transferFolder WRITE setTransferFolder NOTIFY changed)
@@ -41,6 +42,8 @@ public:
     bool highContrast() const { return value("highContrast", false).toBool(); }
     bool colorBlind() const { return value("colorBlind", false).toBool(); }
     bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
+    // Looks for a new release at start. Off: only Check now asks GitHub.
+    bool autoUpdate() const { return value("autoUpdate", true).toBool(); }
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
     bool nearbySharing() const { return value("nearbySharing", true).toBool(); }
     QString transferFolder() const;
@@ -72,6 +75,7 @@ public:
     void setHighContrast(bool v) { set("highContrast", v); }
     void setColorBlind(bool v) { set("colorBlind", v); }
     void setReduceMotion(bool v) { set("reduceMotion", v); }
+    void setAutoUpdate(bool v) { set("autoUpdate", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setNearbySharing(bool v) { set("nearbySharing", v); }
     void setTransferFolder(const QString &v) { set("transferFolder", v); }

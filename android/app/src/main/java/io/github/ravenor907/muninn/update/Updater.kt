@@ -93,7 +93,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
                 // GitHub's download links redirect to another host; OkHttp follows them.
                 val c = Net.client.newBuilder().readTimeout(2, java.util.concurrent.TimeUnit.MINUTES).build()
-                c.newCall(Request.Builder().url(u).header("User-Agent", "Muninn").build()).execute().use { r ->
+                c.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
                     if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
                     val body = r.body ?: throw IOException("No body")
                     val total = body.contentLength()
@@ -126,7 +126,7 @@ class Updater(private val context: Context, private val identity: Identity) {
 
     /** The newest release with an APK, from GitHub's API: (version, download link, SHA-256), or nulls if the API said no. */
     private fun fromApi(): Triple<String?, String?, String?> {
-        val req = Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").header("User-Agent", "Muninn").build()
+        val req = Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").header("User-Agent", AGENT).build()
         val text = Net.client.newCall(req).execute().use { r ->
             if (r.code == 403 || r.code == 429) return Triple(null, null, null)   // rate limited
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
@@ -153,21 +153,21 @@ class Updater(private val context: Context, private val identity: Identity) {
 
     /** The hex SHA-256 in a release's ".sha256" file (as sha256sum writes it), or null. */
     private fun sidecar(u: String): String? = try {
-        Net.client.newCall(Request.Builder().url(u).header("User-Agent", "Muninn").build()).execute().use { r ->
+        Net.client.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
             if (r.isSuccessful) shaOf(r.body?.string().orEmpty()) else null
         }
     } catch (e: Exception) { null }
 
     /** The 64 bytes of a release's ".sig" file, or null when there is none. */
     private fun signature(u: String): ByteArray? = try {
-        Net.client.newCall(Request.Builder().url(u).header("User-Agent", "Muninn").build()).execute().use { r ->
+        Net.client.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
             if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size == 64 } else null
         }
     } catch (e: Exception) { null }
 
     /** The website's "latest release" link redirects to its tag; the APK is always named Muninn.apk. */
     private fun fromWebsite(): Triple<String?, String?, String?> {
-        val req = Request.Builder().url(LATEST).header("User-Agent", "Muninn").head().build()
+        val req = Request.Builder().url(LATEST).header("User-Agent", AGENT).head().build()
         val finalUrl = Net.client.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
             r.request.url.toString()
@@ -193,6 +193,8 @@ class Updater(private val context: Context, private val identity: Identity) {
         private const val LATEST = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest"
         private const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download"
         private const val RECHECK_MS = 5 * 60_000L
+        /** A plain agent with no app name or version, so GitHub can't tell which app or version is asking. */
+        private const val AGENT = "Mozilla/5.0"
         private const val NOT_SIGNED = "This update isn't signed with the project's key, so it wasn't installed."
         /** The project's release key (Ed25519, docs/release-key.pem). CI signs every release file with its private half. */
         const val RELEASE_KEY = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06"

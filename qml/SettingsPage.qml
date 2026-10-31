@@ -120,8 +120,9 @@ Rectangle {
             { kind: "button", key: "resetPanels", title: "Panel sizes", note: "Drag the edge between two panels to resize them. This puts them back", label: "Reset" }
         ]
         case "about": return [
-            { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + ". Updates install by themselves when Huginn starts",
+            { kind: "button", key: "check", title: Updater.status, note: "Huginn " + System.version + (Settings.autoUpdate ? ". Updates install by themselves when Huginn starts" : ". Huginn only checks when you press Check now"),
               label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
+            { kind: "toggle", key: "autoUpdate", title: "Check for updates automatically", note: "Asks GitHub for a new version when Huginn starts" },
             { kind: "info", title: "Huginn " + System.version, note: "Private messages, calls and file sharing for Windows and Linux. Made by Ravenor907." },
             { kind: "info", title: "License", note: "GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic under the SIL Open Font License." }
         ]

@@ -157,7 +157,7 @@ public:
     // the Shared page. where: a contact's key or "g:<group>:<channel>". Calls that can fail return what to tell
     // the person, "" when done.
     Q_INVOKABLE bool hasM2(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m2")); }
-    bool linkPreviews() const { return m_settings.value(QStringLiteral("chat/linkPreviews"), true).toBool(); }
+    bool linkPreviews() const { return m_settings.value(QStringLiteral("chat/linkPreviews"), false).toBool(); }
     void setLinkPreviews(bool on) { m_settings.setValue(QStringLiteral("chat/linkPreviews"), on); Q_EMIT changed(); }
     // Several pictures at once: albums of up to 10 (one picture goes on its own).
     Q_INVOKABLE QString sendPhotos(const QString &where, const QStringList &paths, bool hd);

@@ -36,7 +36,7 @@ class CallSession(
         fun trusted(peerKey: String): Boolean = false
         /** This phone can send and show VP8 video (5.8.5). */
         fun videoCodec(): Boolean = false
-        /** A STUN server other than stun.cloudflare.com ("host:port"), for tests. */
+        /** A STUN server other than the ones in [Stun.SERVERS] ("host:port"), for tests. */
         fun stunServer(): String? = null
         fun newMedia(s: CallSession): CallMedia
         fun changed(s: CallSession)
@@ -285,7 +285,7 @@ class CallSession(
         val m = media ?: return
         work.execute {
             val stun = host.stunServer()
-            val mapped = if (stun != null) m.probeStun(stun.substringBeforeLast(':'), stun.substringAfterLast(':').toInt(), host::resolve) else m.probeStun(resolve = host::resolve)
+            val mapped = if (stun != null) m.probeStun(listOf(stun.substringBeforeLast(':') to stun.substringAfterLast(':').toInt()), host::resolve) else m.probeStun(resolve = host::resolve)
             val port = m.lanPort
             val list = ArrayList<CallLogic.Direct>()
             if (mapped != null) list += CallLogic.Direct("srflx", mapped)

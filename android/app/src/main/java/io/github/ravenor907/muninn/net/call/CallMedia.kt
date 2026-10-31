@@ -22,8 +22,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
-private const val STUN_HOST = "stun.cloudflare.com"
-private const val STUN_PORT = 3478
 private const val KEEP_FRAMES = 64
 private const val MAX_RESEND = 120
 private const val KEY_GAP_MS = 300L
@@ -168,8 +166,17 @@ class CallMedia(
     /**
      * Asks the STUN server what address the call socket has on the internet (blocking, at most about 3 s): one Binding
      * request, resent after 300, 900 and 1800 ms. Null when there was no usable answer. Only in a call with someone trusted.
+     * Each server in the list gets that long; the next one is asked if one gives no answer.
      */
-    fun probeStun(host: String = STUN_HOST, port: Int = STUN_PORT, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
+    fun probeStun(servers: List<Pair<String, Int>> = Stun.SERVERS, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
+        for ((host, port) in servers) {
+            if (stopped) break
+            probeOne(host, port, resolve)?.let { return it }
+        }
+        return null
+    }
+
+    private fun probeOne(host: String, port: Int, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
         val s = lan ?: return null
         val ip = try { resolve(host) } catch (e: Exception) { null } ?: return null
         val server = InetSocketAddress(ip, port)

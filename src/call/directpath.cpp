@@ -5,7 +5,13 @@
 #include <QNetworkInterface>
 #include <QUdpSocket>
 
-const char DirectPath::kStunHost[] = "stun.cloudflare.com";
+QList<QPair<QString, quint16>> DirectPath::stunServers()
+{
+    QList<QPair<QString, quint16>> out;
+    out.append(qMakePair(QStringLiteral("stun.cloudflare.com"), quint16(3478)));
+    return out;
+}
+
 bool DirectPath::g_testLocal = false;
 
 bool DirectPath::isLocal(const QHostAddress &h)
@@ -51,27 +57,48 @@ StunProbe::StunProbe(QUdpSocket *socket, QObject *parent) : QObject(parent), m_s
     m_retry.setSingleShot(true);
     connect(&m_retry, &QTimer::timeout, this, &StunProbe::sendOnce);
     m_giveUp.setSingleShot(true);
+    // No answer from this server in time: ask the next one, or give up after the last.
     connect(&m_giveUp, &QTimer::timeout, this, [this] {
-        if (m_done)
-            return;
-        m_done = true;
-        m_retry.stop();
-        Q_EMIT finished();
+        if (!m_done)
+            tryNext();
     });
 }
 
-void StunProbe::start(const QString &host, quint16 port)
+void StunProbe::start(const QList<QPair<QString, quint16>> &servers)
 {
-    m_port = port;
+    m_servers = servers;
+    m_next = 0;
+    tryNext();
+}
+
+void StunProbe::finish()
+{
+    m_done = true;
+    m_retry.stop();
+    m_giveUp.stop();
+    Q_EMIT finished();
+}
+
+void StunProbe::tryNext()
+{
+    m_retry.stop();
+    if (m_next >= m_servers.size()) {
+        finish();
+        return;
+    }
+    const auto s = m_servers.at(m_next++);
+    const int round = ++m_round;
+    m_server = QHostAddress();
+    m_port = s.second;
     m_tid = Stun::newTid();
+    m_tries = 0;
     m_giveUp.start(3000);
-    CallNet::resolve(host, this, [this](const QHostAddress &a) {
-        if (m_done)
+    CallNet::resolve(s.first, this, [this, round](const QHostAddress &a) {
+        if (m_done || round != m_round)
             return;
         if (a.isNull()) {
             m_giveUp.stop();
-            m_done = true;
-            Q_EMIT finished();
+            tryNext();
             return;
         }
         m_server = a;
@@ -109,9 +136,6 @@ bool StunProbe::take(const QByteArray &bytes, const QHostAddress &from, quint16 
     if (a.valid() && !DirectPath::usable(CallNet::toHost(a)))
         a = Stun::Address();
     m_mapped = a;
-    m_done = true;
-    m_retry.stop();
-    m_giveUp.stop();
-    Q_EMIT finished();
+    finish();
     return true;
 }

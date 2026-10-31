@@ -63,8 +63,10 @@ class Close(private val context: Context, private val identity: Identity) {
     /** Progress of incoming or outgoing files: (payload id, bytes done, total). */
     var onProgress: ((Long, Long, Long) -> Unit)? = null
 
-    /** Breaks the tie when two phones find each other at once: the one with the lower id asks. */
-    private val myId = identity.fingerprint.take(8)
+    /** Breaks the tie when two phones find each other at once: the one with the lower id asks.
+     *  A random one made fresh at each start (8 hex digits, like older phones send), so it can't be used to follow the phone. */
+    @Volatile private var myId = freshId()
+    private fun freshId() = ByteArray(4).also { java.security.SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
     /** Hidden from people nearby: no name in what's advertised (contacts learn who it is from the chat key in the hello). */
     private fun advertisedName() = "$myId|${if (identity.visibleNearby) identity.username.take(24) else Identity.HIDDEN_NAME}"
 
@@ -80,6 +82,7 @@ class Close(private val context: Context, private val identity: Identity) {
     fun start(hello: () -> JSONObject) {
         if (running) return
         running = true
+        myId = freshId()
         _error.value = null
         this.hello = hello
         looking = false
@@ -110,6 +113,8 @@ class Close(private val context: Context, private val identity: Identity) {
         main.post {
             main.removeCallbacks(duty)
             if (!running) return@post
+            // "Use Google Nearby too" off: never advertise or discover (Muninn's own Bluetooth and Wi-Fi carry on).
+            if (!identity.useGoogleNearby) { if (looking) quiet(); return@post }
             val want = level == PowerLogic.Radio.FULL || (level == PowerLogic.Radio.LOW && dutyOn)
             if (want && !looking) {
                 looking = true
@@ -121,6 +126,15 @@ class Close(private val context: Context, private val identity: Identity) {
                     .addOnFailureListener { fail(it) }
             } else if (!want && looking) quiet()
             if (level == PowerLogic.Radio.LOW) main.postDelayed(duty, PowerLogic.dutyNext(dutyOn))
+        }
+    }
+
+    /** "Use Google Nearby too" was switched: start or stop looking with Google Nearby. */
+    fun googleChanged() {
+        main.post {
+            _error.value = null
+            if (!identity.useGoogleNearby) { main.removeCallbacks(duty); if (looking) quiet() }
+            else if (running) { dutyOn = true; look() }
         }
     }
 

@@ -331,7 +331,10 @@ class MainActivity : ComponentActivity() {
         intentChose = false
         // Kids' TV: a call that came in over a show just ended; the show goes on, not Muninn.
         if (io.github.ravenor907.muninn.tv.TvCallFocus.sendBack()) moveTaskToBack(true)
-        app.updater.checkOnOpen()
+        // "Check for updates automatically" off: nothing asks GitHub here (Check now still does). A Kids' TV follows its parent (k7).
+        val autoUpdate = if (io.github.ravenor907.muninn.tv.KidMode.on(app)) io.github.ravenor907.muninn.tv.KidTv.state.value.cfg?.upd ?: true
+            else app.identity.autoUpdate
+        if (autoUpdate) app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()
         // Back from Muninn's app settings with the permission now allowed: start close-by chat.
         if (netStarted && !app.close.running && app.close.error.value != null && closePerms().all { granted(it) }) {

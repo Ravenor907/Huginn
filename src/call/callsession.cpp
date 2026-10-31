@@ -348,14 +348,12 @@ void CallSession::startProbe()
         QPointer<StunProbe> probe = m_probe;
         m_media->onOther = [probe](const QByteArray &b, const QHostAddress &from, quint16 port) { return probe && probe->take(b, from, port); };
     }
-    QString host = QString::fromLatin1(DirectPath::kStunHost);
-    quint16 port = DirectPath::kStunPort;
-    if (!stunHost.isEmpty()) {
-        const int colon = stunHost.lastIndexOf(QLatin1Char(':'));
-        host = stunHost.left(colon);
-        port = quint16(stunHost.mid(colon + 1).toUInt());
+    if (stunHost.isEmpty()) {
+        m_probe->start();
+        return;
     }
-    m_probe->start(host, port);
+    const int colon = stunHost.lastIndexOf(QLatin1Char(':'));
+    m_probe->start(stunHost.left(colon), quint16(stunHost.mid(colon + 1).toUInt()));
 }
 
 void CallSession::onLanEarly()

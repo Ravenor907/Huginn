@@ -1,6 +1,5 @@
 #include "vault.h"
 #include "platform/powerwatch.h"
-#include "platform/protect.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
 
@@ -101,6 +100,15 @@ QByteArray lockKey(const QJsonObject &o, const QString &secret)
         return scrypt(secret.toUtf8(), salt, quint64(o.value(QStringLiteral("N")).toDouble()), quint64(o.value(QStringLiteral("r")).toInt()),
                       quint64(o.value(QStringLiteral("p")).toInt()));
     return Vault::derive(secret, salt, o.value(QStringLiteral("rounds")).toInt(kRounds));
+}
+
+// The vault key from a lock file and its secret. Only the lock guards it: nothing outside Huginn is asked.
+QByteArray openLock(const QJsonObject &o, const QString &secret, bool *ok)
+{
+    *ok = false;
+    const QByteArray kek = lockKey(o, secret);
+    const QByteArray wrapped = QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1());
+    return kek.isEmpty() || wrapped.isEmpty() ? QByteArray() : Vault::open(kek, wrapped, ok);
 }
 
 // "pattern:0,3,6,..." counts dots; a password counts characters.
@@ -273,13 +281,8 @@ bool Vault::unlock(const QString &secret)
         return false;
     const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
     f.close();
-    const QByteArray kek = lockKey(o, secret);
-    QByteArray wrapped = QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1());
     bool ok = false;
-    const bool dpapi = o.value(QStringLiteral("dpapi")).toInt() == 1;
-    if (dpapi && !Platform::unprotect(wrapped, &wrapped))
-        wrapped.clear();   // another Windows account or computer: it can't open here
-    const QByteArray key = kek.isEmpty() || wrapped.isEmpty() ? QByteArray() : open(kek, wrapped, &ok);
+    const QByteArray key = openLock(o, secret, &ok);
     if (!ok || key.size() != 32) {
         // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
         const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
@@ -302,8 +305,7 @@ bool Vault::unlock(const QString &secret)
     m_key = key;
     m_weak = !strongSecret(secret);
     // A lock from before 0.95 (PBKDF2 only): store it again the new way, now that the secret is known.
-    bool redo = o.value(QStringLiteral("kdf")).toString().isEmpty();
-    redo = redo || dpapi;   // a test build tied it to the Windows account: store it again without that
+    const bool redo = o.value(QStringLiteral("kdf")).toString().isEmpty();
     if (redo)
         writeLock(secret, o.value(QStringLiteral("kind")).toString() == QLatin1String("pattern"));
     m_screenLocked = false;
@@ -1083,12 +1085,20 @@ bool Vault::selfTest()
         && !strongSecret(QStringLiteral("abcde")) && strongSecret(QStringLiteral("abcdef"));
     std::printf("vault lock length rules: %s\n", rules ? "ok" : "FAILED");
     all &= rules;
-    // Windows: what's locked to this account opens again, and damaged data doesn't.
-    QByteArray bound, back;
-    if (Platform::protect("vault key", &bound)) {
-        const bool dp = Platform::unprotect(bound, &back) && back == "vault key" && !Platform::unprotect(bound.left(bound.size() - 3), &back);
-        std::printf("vault Windows account lock: %s\n", dp ? "ok" : "FAILED");
-        all &= dp;
+    // A lock file opens with its secret alone (no "dpapi" or anything else outside Huginn), and not with a wrong one.
+    {
+        const QByteArray salt = random(16), vk = random(32);
+        const QByteArray kek = scrypt(QByteArrayLiteral("pattern:0,1,2,5,8,7"), salt, 1024, 8, 1);
+        const QJsonObject lock{{QStringLiteral("mode"), QStringLiteral("password")}, {QStringLiteral("kind"), QStringLiteral("pattern")},
+                               {QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())}, {QStringLiteral("kdf"), QStringLiteral("scrypt")},
+                               {QStringLiteral("N"), 1024.0}, {QStringLiteral("r"), 8}, {QStringLiteral("p"), 1},
+                               {QStringLiteral("wrapped"), QString::fromLatin1(seal(kek, vk).toBase64())}};
+        bool good = false, bad = true;
+        const QByteArray got = openLock(lock, QStringLiteral("pattern:0,1,2,5,8,7"), &good);
+        openLock(lock, QStringLiteral("pattern:0,1,2,5,8,6"), &bad);
+        const bool lk = !kek.isEmpty() && good && got == vk && !bad;
+        std::printf("vault lock opens with its secret only: %s\n", lk ? "ok" : "FAILED");
+        all &= lk;
     }
     return all;
 }

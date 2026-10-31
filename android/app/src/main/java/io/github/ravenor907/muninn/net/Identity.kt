@@ -12,6 +12,11 @@ class Identity(context: Context, private val vault: Vault) {
     private val secrets = java.io.File(context.filesDir, "secrets.json")
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
 
+    init {
+        // Link previews are off for new installs (0.95). A phone set up before that keeps them on unless it turned them off.
+        if (prefs.contains("fingerprint") && !prefs.contains("linkPreviews")) prefs.edit().putBoolean("linkPreviews", true).apply()
+    }
+
     /** Random and stable: LocalSend uses it to tell devices apart and to skip itself. */
     val fingerprint: String = prefs.getString("fingerprint", null) ?: UUID.randomUUID().toString().replace("-", "").also {
         prefs.edit().putString("fingerprint", it).apply()
@@ -43,6 +48,14 @@ class Identity(context: Context, private val vault: Vault) {
     /** The Nearby room is on: its own switch, and only while visible to people nearby. */
     val nearbyRoom: Boolean get() = nearbyChat && visibleNearby
 
+    /** Checks GitHub for a new Muninn when it opens. Off: only "Check now" does. */
+    var autoUpdate: Boolean
+        get() = prefs.getBoolean("autoUpdate", true)
+        set(v) = prefs.edit().putBoolean("autoUpdate", v).apply()
+    /** Google Nearby (Close) on top of Muninn's own Bluetooth and Wi-Fi. Off for everyone until turned on: it needs Google Play services. */
+    var useGoogleNearby: Boolean
+        get() = prefs.getBoolean("googleNearby", false)
+        set(v) = prefs.edit().putBoolean("googleNearby", v).apply()
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
@@ -126,7 +139,7 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("activeStatus", v).apply()
     /** Link previews (cap m2): this phone looks up a link I send and adds its title and picture. Never for links I get. */
     var linkPreviews: Boolean
-        get() = prefs.getBoolean("linkPreviews", true)
+        get() = prefs.getBoolean("linkPreviews", false)
         set(v) = prefs.edit().putBoolean("linkPreviews", v).apply()
     /** Notifications say only "New message" unless this is on. */
     var showPreview: Boolean

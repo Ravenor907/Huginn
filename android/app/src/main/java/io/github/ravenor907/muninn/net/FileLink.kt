@@ -38,8 +38,6 @@ object FileLink {
     const val PUNCH_MS = 20_000L
     const val IDLE_MS = 30_000L
     const val MAX_BYTES = 4L * 1024 * 1024 * 1024
-    private const val STUN_HOST = "stun.cloudflare.com"
-    private const val STUN_PORT = 3478
 
     const val PROBE: Byte = 1
     const val DATA: Byte = 2
@@ -371,8 +369,14 @@ object FileLink {
         return out
     }
 
-    private fun stun(sock: DatagramSocket): InetSocketAddress? = try {
-        val server = InetSocketAddress(InetAddress.getByName(STUN_HOST), STUN_PORT)
+    /** Asks each server in [Stun.SERVERS] in turn until one answers. */
+    private fun stun(sock: DatagramSocket): InetSocketAddress? {
+        for ((host, port) in Stun.SERVERS) stunOne(sock, host, port)?.let { return it }
+        return null
+    }
+
+    private fun stunOne(sock: DatagramSocket, host: String, port: Int): InetSocketAddress? = try {
+        val server = InetSocketAddress(InetAddress.getByName(host), port)
         val tid = Stun.newTid()
         val req = Stun.encode(Stun.type(Stun.BINDING, Stun.REQUEST), tid, emptyList(), fingerprint = true)
         sock.soTimeout = 300

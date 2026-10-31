@@ -21,7 +21,7 @@ class StunProbe;
 
 // Files over the internet, straight from one device to the other (cap f1, docs/protocol-0.6.md
 // section 14), the same as Muninn's FileLink.kt. Never through Cloudflare's call relay: both sides
-// learn their own internet address from a STUN server (stun.cloudflare.com, the address lookup only),
+// learn their own internet address from a STUN server (DirectPath::stunServers(), the address lookup only),
 // swap it in a sealed `file` message, and punch through their routers by sending to each other at
 // once, as the Direct path of calls does (5.8.2). Only between two people who trust each other with
 // their addresses ("Direct calls" on, as for Family). The file then goes in numbered 1100-byte pieces,
