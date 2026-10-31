@@ -96,8 +96,7 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
                         if (code.isEmpty()) Text("Connect to your home Wi-Fi first: moving only works there.", style = Type.normal.copy(color = Palette.danger))
                         else Box(Modifier.padding(vertical = 10.dp)) { Qr(code, 220.dp) }
                         if (code.isNotEmpty()) MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
-                            (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
-                                .setPrimaryClip(android.content.ClipData.newPlainText("Move code", code))
+                            io.github.ravenor907.muninn.ui.Clip.copy(ctx, "Move code", code)
                             Ui.say("Code copied.")
                         }
                     }

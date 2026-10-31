@@ -79,6 +79,8 @@
     <application
         android:name=".Muninn"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/tv_banner"

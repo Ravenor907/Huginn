@@ -37,7 +37,7 @@ Item {
     function onPattern(dots) {
         const secret = "pattern:" + dots.join(",")
         if (mode === "unlock") { tryUnlock(secret); return }
-        if (dots.length < 4) { note = "Connect at least 4 dots."; bad = true; pad.shake(); return }
+        if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
         saveSecret(secret, true)
@@ -46,7 +46,7 @@ Item {
     function submitPassword() {
         const t = pw.text
         if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
-        if (t.length < 4) { note = "At least 4 characters."; bad = true; return }
+        if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
         if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
         pw.text = ""; pw2.text = ""
         saveSecret(t, false)
@@ -96,7 +96,7 @@ Item {
             visible: text !== ""
             text: panel.wait > 0 ? "Too many tries. Try again in " + panel.wait + " s."
                 : panel.note !== "" ? panel.note
-                : panel.usePattern && panel.mode !== "unlock" ? "Draw a pattern: connect at least 4 dots."
+                : panel.usePattern && panel.mode !== "unlock" ? "Draw a pattern: connect at least 6 dots."
                 : ""
             color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
@@ -129,7 +129,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(parent.width, Theme.px(320))
                 spacing: Theme.px(8)
-                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (at least 4 characters)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
+                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (at least 6 characters)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
                 PwField { id: pw2; visible: panel.mode !== "unlock"; placeholder: "Type it again"; onEnter: panel.submitPassword() }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
             }

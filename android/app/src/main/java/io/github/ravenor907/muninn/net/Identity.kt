@@ -142,20 +142,13 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putLong("lockAfter", v).apply()
     val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
 
-    // Private chats: a device is trusted once both people saw the same code. Stored as key -> name.
+    // From before contacts: devices trusted once both people saw the same code, stored as key -> name.
+    // Chat moves them into contacts once, then they're dropped from here (they sat in plain settings).
     fun trusted(): Map<String, String> = prefs.getStringSet("trusted", emptySet())!!.mapNotNull {
         val i = it.indexOf('|'); if (i < 0) null else it.substring(0, i) to it.substring(i + 1)
     }.toMap()
 
-    fun trust(key: String, name: String) {
-        val set = prefs.getStringSet("trusted", emptySet())!!.filterNot { it.startsWith("$key|") }.toMutableSet()
-        set.add("$key|$name")
-        prefs.edit().putStringSet("trusted", set).apply()
-    }
-
-    fun forget(key: String) {
-        prefs.edit().putStringSet("trusted", prefs.getStringSet("trusted", emptySet())!!.filterNot { it.startsWith("$key|") }.toSet()).apply()
-    }
+    fun dropTrusted() { prefs.edit().remove("trusted").apply() }
 
     fun muted(): Set<String> = prefs.getStringSet("muted", emptySet())!!
     fun setMuted(key: String, on: Boolean) {

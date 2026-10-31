@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn.net
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
@@ -17,8 +18,66 @@ object LinkPreview {
     private const val THUMB_SIDE = 240
     private const val THUMB_BYTES = 16 * 1024
 
+    // Only https, never into this phone's own network: names that point at a private or LAN address are refused,
+    // and every hop (redirects too) is checked again on the address actually connected to.
     private val client by lazy {
-        Net.client.newBuilder().callTimeout(6, TimeUnit.SECONDS).connectTimeout(4, TimeUnit.SECONDS).followRedirects(true).build()
+        Net.client.newBuilder().callTimeout(6, TimeUnit.SECONDS).connectTimeout(4, TimeUnit.SECONDS)
+            .followRedirects(true).followSslRedirects(false)
+            .dns(object : okhttp3.Dns {
+                override fun lookup(hostname: String): List<java.net.InetAddress> =
+                    okhttp3.Dns.SYSTEM.lookup(hostname).filter { publicAddress(it) }.ifEmpty { throw java.net.UnknownHostException("not a public address") }
+            })
+            .addNetworkInterceptor { chain ->
+                val req = chain.request()
+                val at = chain.connection()?.route()?.socketAddress?.address
+                if (!req.url.isHttps || at == null || !publicAddress(at)) throw java.io.IOException("not a public https address")
+                chain.proceed(req)
+            }
+            .build()
+    }
+
+    /** Only https addresses whose host isn't a private or LAN address written out. */
+    fun allowedUrl(url: String): Boolean {
+        val u = url.toHttpUrlOrNull() ?: return false
+        if (!u.isHttps) return false
+        val literal = literalAddress(u.host) ?: return true   // a name: checked once it's looked up
+        return publicAddress(literal)
+    }
+
+    private fun literalAddress(host: String): java.net.InetAddress? {
+        val h = host.removePrefix("[").removeSuffix("]")
+        val v4 = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
+        if (!v4.matches(h) && !h.contains(':')) return null
+        return try { java.net.InetAddress.getByName(h) } catch (_: Exception) { null }
+    }
+
+    /** False for this device, the LAN, link-local, carrier-grade NAT, multicast and other non-internet addresses. */
+    fun publicAddress(a: java.net.InetAddress): Boolean {
+        if (a.isAnyLocalAddress || a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isMulticastAddress) return false
+        val b = a.address.map { it.toInt() and 0xff }
+        if (b.size == 4) return v4Public(b)
+        if (b.size == 16) {
+            if (b[0] and 0xfe == 0xfc) return false                              // fc00::/7, unique local
+            if (b[0] == 0xfe && b[1] and 0xc0 == 0xc0) return false              // fec0::/10, old site-local
+            if ((0 until 10).all { b[it] == 0 } && b[10] == 0xff && b[11] == 0xff) return v4Public(b.subList(12, 16))   // ::ffff:a.b.c.d
+            if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8) return false   // 2001:db8::/32, documentation
+            if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b) return v4Public(b.subList(12, 16))   // 64:ff9b::/96
+            return true
+        }
+        return false
+    }
+
+    private fun v4Public(b: List<Int>): Boolean = when {
+        b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 -> false
+        b[0] == 100 && b[1] in 64..127 -> false        // carrier-grade NAT
+        b[0] == 169 && b[1] == 254 -> false
+        b[0] == 172 && b[1] in 16..31 -> false
+        b[0] == 192 && b[1] == 168 -> false
+        b[0] == 192 && b[1] == 0 && (b[2] == 0 || b[2] == 2) -> false
+        b[0] == 198 && (b[1] == 18 || b[1] == 19) -> false
+        b[0] == 198 && b[1] == 51 && b[2] == 100 -> false
+        b[0] == 203 && b[1] == 0 && b[2] == 113 -> false
+        else -> true
     }
 
     /** Null when the page couldn't be read or has no title. Call off the main thread. */
@@ -36,7 +95,7 @@ object LinkPreview {
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
     private fun get(url: String, max: Int, type: String): ByteArray? {
-        if (!url.startsWith("https://") && !url.startsWith("http://")) return null
+        if (!allowedUrl(url)) return null
         val req = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (compatible; link preview)").header("Accept", if (type.endsWith("/")) "image/*" else type).build()
         client.newCall(req).execute().use { r ->
             if (!r.isSuccessful) return null

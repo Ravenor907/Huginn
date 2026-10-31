@@ -22,8 +22,9 @@ import javax.crypto.spec.SecretKeySpec
  * Everything Muninn keeps (chats, contacts, keys) is encrypted on the phone with one random data
  * key (AES-256-GCM). That data key is itself locked:
  *  - by default, with a key in Android's hardware key store, so only Muninn on this phone can open it;
- *  - with a password set, by the password instead (PBKDF2, 310,000 rounds): without the password
- *    nothing is readable, not even by Muninn.
+ *  - with a password set, by the password (PBKDF2, 310,000 rounds) and then by the hardware key too:
+ *    without the password nothing is readable, not even by Muninn, and copied files can't be guessed
+ *    at on another computer, only on this phone (with its waits after wrong tries).
  */
 class Vault(private val context: Context) {
     private val keyFile = File(context.filesDir, "vault.key")
@@ -58,11 +59,22 @@ class Vault(private val context: Context) {
         if (o.optString("mode") != "password") return openDefault()
         val kek = Crypto.derive(password, Crypto.b64d(o.getString("salt")), o.optInt("rounds", ROUNDS))
         val wasClosed = dataKey == null
-        dataKey = Crypto.open(kek, Crypto.b64d(o.getString("wrapped"))) ?: return false
+        val hw = o.optInt("hw", 0) == 1
+        val wrapped = Crypto.b64d(o.getString("wrapped"))
+        val inner = if (hw) Crypto.open(systemKey(), wrapped) ?: return false else wrapped
+        val k = Crypto.open(kek, inner) ?: return false
+        dataKey = k
+        // Locks from before 0.95 were only the password: wrap with the hardware key too, now that it's known.
+        if (!hw) try { store(k, password, o.optString("kind") == "pattern") } catch (_: Exception) {}
+        weak = !LockRules.strong(password)
         if (wasClosed) applyRestore()   // only on a fresh open, before chats load
         _locked.value = false
         return true
     }
+
+    /** The lock just opened is shorter than new locks may be (from before 0.95). Only known after an unlock. */
+    @Volatile var weak = false
+        private set
 
     fun lock() {
         if (!hasPassword) return   // without a password there's nothing to lock with
@@ -75,6 +87,7 @@ class Vault(private val context: Context) {
     fun setPassword(password: String?, pattern: Boolean = false) {
         val k = dataKey ?: return
         store(k, password, pattern)
+        if (!password.isNullOrEmpty()) weak = !LockRules.strong(password)
     }
 
     private fun store(k: ByteArray, password: String?, pattern: Boolean = false) {
@@ -83,8 +96,9 @@ class Vault(private val context: Context) {
             o.put("mode", "keystore").put("wrapped", Crypto.b64(Crypto.seal(systemKey(), k)))
         } else {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+            // The password's lock, then the hardware key's around it ("hw": 1), so guessing has to happen on this phone.
             o.put("mode", "password").put("kind", if (pattern) "pattern" else "text").put("salt", Crypto.b64(salt)).put("rounds", ROUNDS)
-                .put("wrapped", Crypto.b64(Crypto.seal(Crypto.derive(password, salt, ROUNDS), k)))
+                .put("hw", 1).put("wrapped", Crypto.b64(Crypto.seal(systemKey(), Crypto.seal(Crypto.derive(password, salt, ROUNDS), k))))
         }
         val tmp = File(keyFile.path + ".tmp")
         tmp.writeText(o.toString())
@@ -118,16 +132,12 @@ class Vault(private val context: Context) {
         return Crypto.open(k, b.copyOfRange(Crypto.MAGIC.size, b.size))
     }
 
-    /** Null if missing, locked or damaged. Files from before encryption are read once and re-saved encrypted. */
+    /** Null if missing, locked or damaged. A file that isn't sealed is never taken (another app could have put it there). */
     fun read(file: File): String? {
         if (!file.exists()) return null
         val k = dataKey ?: return null
         val b = file.readBytes()
-        if (!b.take(Crypto.MAGIC.size).toByteArray().contentEquals(Crypto.MAGIC)) {
-            val plain = String(b)
-            write(file, plain)
-            return plain
-        }
+        if (b.size < Crypto.MAGIC.size || !b.copyOfRange(0, Crypto.MAGIC.size).contentEquals(Crypto.MAGIC)) return null
         return Crypto.open(k, b.copyOfRange(Crypto.MAGIC.size, b.size))?.let { String(it) }
     }
 
@@ -188,12 +198,25 @@ class Vault(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    /** Erases everything Muninn keeps: chats, contacts, keys, settings. */
+    /**
+     * Erases everything Muninn keeps: chats, contacts, keys, settings, files waiting in the cache (shared in,
+     * camera shots, parts of a move), every settings file (moving ones too) and the background work list.
+     */
     fun eraseAll() {
         context.filesDir.listFiles()?.forEach { it.deleteRecursively() }
-        context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().clear().commit()
-        context.getSharedPreferences("muninn-move", Context.MODE_PRIVATE).edit().clear().commit()
+        context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+        val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
+        prefsDir.listFiles()?.forEach { f ->
+            if (!f.name.endsWith(".xml")) return@forEach
+            try { context.getSharedPreferences(f.name.removeSuffix(".xml"), Context.MODE_PRIVATE).edit().clear().commit() } catch (_: Exception) {}
+            try { context.deleteSharedPreferences(f.name.removeSuffix(".xml")) } catch (_: Exception) {}
+            f.delete()
+        }
+        // WorkManager's list of background jobs (the inbox check): it holds no messages, but it shows Muninn was used.
+        for (name in listOf("androidx.work.workdb", "androidx.work.workdb-wal", "androidx.work.workdb-shm")) context.getDatabasePath(name).delete()
+        context.getDatabasePath("androidx.work.workdb").parentFile?.listFiles()?.forEach { if (it.name.startsWith("androidx.work")) it.delete() }
         try { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) } catch (_: Exception) {}
+        dataKey?.fill(0)
         dataKey = null
     }
 
@@ -233,6 +256,15 @@ class Vault(private val context: Context) {
             SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(PBEKeySpec(password.toCharArray(), salt, rounds, 256)).encoded
         fun b64(b: ByteArray): String = java.util.Base64.getEncoder().encodeToString(b)
         fun b64d(s: String): ByteArray = java.util.Base64.getDecoder().decode(s)
+    }
+
+    /** How long a new lock must be. Locks from before 0.95 may be shorter: they keep working, with one suggestion. */
+    object LockRules {
+        const val MIN = 6
+        /** "pattern:0,3,6,..." counts dots; a password counts characters. */
+        fun strong(secret: String): Boolean =
+            if (secret.startsWith("pattern:")) secret.removePrefix("pattern:").split(',').count { it.isNotEmpty() } >= MIN
+            else secret.length >= MIN
     }
 
     companion object {

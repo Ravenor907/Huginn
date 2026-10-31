@@ -6,7 +6,7 @@ The Cloudflare TURN token stays inside Cloudflare, never inside the apps.
 Files:
 
 - `worker.js`: the Worker. Paste this into the Cloudflare editor.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `11 tests passed`.
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `14 tests passed`.
 
 ## Setup steps
 
@@ -78,14 +78,31 @@ dash.cloudflare.com. If a button has a slightly different name, pick the closest
 
 ## Good to know
 
-- Limits: each app install gets at most 30 logins a day, and everyone together at most 3000 a day.
+- Limits: each app install gets at most 30 logins a day, each internet address at most 60 a day (a home
+  shares one address, so this is a few installs' worth), and everyone together at most 3000 a day.
   The day resets at midnight UTC. When a limit is hit the Worker answers 429.
+- The per-address count is kept under a scrambled form of the address and the day (a hash), so the KV store
+  never holds anyone's address. It goes away by itself after two days.
+- Each login lasts 30 minutes. The apps ask for a fresh one for a call when less than 5 minutes are left.
 - If the KV store is missing or not working, the Worker refuses every request (answers 503).
   So if step F is skipped, nothing works. That is on purpose.
-- KV on the free Workers plan allows about 1000 writes a day. Each login uses 2 writes, so the free plan
-  stops at about 500 logins a day (the Worker then answers 503). The paid Workers plan lifts this.
+- KV on the free Workers plan allows about 1000 writes a day. Each login uses 3 writes, so the free plan
+  stops at about 330 logins a day (the Worker then answers 503). The paid Workers plan lifts this.
 - KV counts are close, not exact. A burst from many places at once can go a little over a limit.
 - TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage.
 - The Worker logs nothing about requests.
 - To change the code later: open the Worker, click **Edit code**, paste the new `worker.js`, click **Deploy**.
   The secrets and the KV binding stay.
+
+## Updating to the 0.95 Worker
+
+The 0.95 `worker.js` adds the per-address limit and shortens logins to 30 minutes. Nothing else changes:
+the same secrets and the same KV binding.
+
+1. Open **Workers & Pages**, then `huginn-relay`.
+2. Click **Edit code**.
+3. Select everything in the editor and delete it.
+4. Paste all of the new `worker.js`.
+5. Click **Deploy**.
+6. Open the Worker's address with `/health` on the end. You should still see `{"ok":true}`.
+7. Optional: in **Notifications** (left sidebar or account menu), add a usage or billing alert, so you hear about unexpected TURN traffic.

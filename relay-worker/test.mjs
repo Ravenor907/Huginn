@@ -40,15 +40,16 @@ function sign(id, t, secret = SECRET) {
   return createHmac("sha256", secret).update(id + "." + t).digest("hex");
 }
 
-function req(body, method = "POST", path = "/turn") {
+function req(body, method = "POST", path = "/turn", ip = "203.0.113.7") {
   return new Request("https://relay.example.workers.dev" + path, {
     method,
+    headers: ip ? { "CF-Connecting-IP": ip } : {},
     body: method === "POST" ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
   });
 }
 
 async function call(e, body, opts = {}) {
-  const res = await handle(req(body, opts.method, opts.path), e, opts.now ?? NOW);
+  const res = await handle(req(body, opts.method, opts.path, opts.ip === undefined ? "203.0.113.7" : opts.ip), e, opts.now ?? NOW);
   return { status: res.status, data: await res.json() };
 }
 
@@ -72,14 +73,14 @@ await test("valid request returns relay-only credentials", async () => {
   assert.equal(r.status, 200);
   assert.equal(r.data.username, "user123");
   assert.equal(r.data.credential, "cred456");
-  assert.equal(r.data.ttl, 7200);
+  assert.equal(r.data.ttl, 1800);
   assert.equal(r.data.urls.length, 4);
   assert.ok(r.data.urls.every((u) => /^turns?:/.test(u)));
   assert.equal(upstreamCalls.length, 1);
   const c = upstreamCalls[0];
   assert.equal(c.url, "https://rtc.live.cloudflare.com/v1/turn/keys/kid/credentials/generate-ice-servers");
   assert.equal(c.init.headers.Authorization, "Bearer tok");
-  assert.deepEqual(JSON.parse(c.init.body), { ttl: 7200 });
+  assert.deepEqual(JSON.parse(c.init.body), { ttl: 1800 });
 });
 
 await test("bad signature is 401", async () => {
@@ -112,6 +113,39 @@ await test("per id cap of 30 per day", async () => {
   assert.equal((await call(e, { id: other, t: NOW, sig: sign(other, NOW) })).status, 200);
   const tomorrow = NOW + 86400;
   assert.equal((await call(e, { id: ID, t: tomorrow, sig: sign(ID, tomorrow) }, { now: tomorrow })).status, 200);
+});
+
+await test("per address cap of 60 per day, whatever the ids", async () => {
+  const e = env();
+  for (let i = 0; i < 60; i++) {
+    const id = i.toString(16).padStart(64, "c");
+    assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) })).status, 200);
+  }
+  const fresh = "d".repeat(64);
+  const r = await call(e, { id: fresh, t: NOW, sig: sign(fresh, NOW) });
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "ip_limit");
+  // Another address is still fine, and so is the same one the next day.
+  assert.equal((await call(e, { id: fresh, t: NOW, sig: sign(fresh, NOW) }, { ip: "198.51.100.9" })).status, 200);
+  const tomorrow = NOW + 86400;
+  assert.equal((await call(e, { id: fresh, t: tomorrow, sig: sign(fresh, tomorrow) }, { now: tomorrow })).status, 200);
+});
+
+await test("addresses are never stored as they are", async () => {
+  const kv = new FakeKV();
+  await call(env(kv), { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip: "203.0.113.99" });
+  for (const k of kv.map.keys()) assert.ok(!k.includes("203.0.113.99"), k);
+  assert.equal([...kv.map.keys()].filter((k) => k.startsWith("i:")).length, 1);
+});
+
+await test("no address header still counts (as one shared address)", async () => {
+  const e = env();
+  for (let i = 0; i < 60; i++) {
+    const id = i.toString(16).padStart(64, "e");
+    assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: null })).status, 200);
+  }
+  const id = "f".repeat(64);
+  assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: null })).data.error, "ip_limit");
 });
 
 await test("global cap of 3000 per day", async () => {

@@ -1,7 +1,5 @@
 package io.github.ravenor907.muninn.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
@@ -145,7 +143,7 @@ fun InviteLinkDialog(app: Muninn, g: String, groupName: String, done: () -> Unit
                     if (!GroupLinks.ready) Text("For now links work for an hour. Longer links come with the next update.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Qr(l.text, 220.dp) }
                     MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
-                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Muninn invite link", l.text))
+                        io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn invite link", l.text)
                         Ui.say("Invite link copied.")
                     }
                     MButton("Share", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "send") {

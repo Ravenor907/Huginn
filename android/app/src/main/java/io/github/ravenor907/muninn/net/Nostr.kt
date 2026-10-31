@@ -19,8 +19,11 @@ import kotlin.random.Random
 /**
  * Messages for people who aren't nearby, through public Nostr relays (no accounts, no server to
  * run). Each phone has a Nostr key; its public half is its mailbox. A message is an event of
- * kind 1059 addressed to the mailbox, signed by a throwaway key so relays can't tell who sent it.
- * The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text.
+ * kind 1059 addressed to the mailbox, signed by a throwaway key, so the event itself doesn't name its sender.
+ * The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text, padded to
+ * a few fixed sizes (EnvelopePad). Sending uses its own short-lived sockets that never ask for my inbox or
+ * sign in as my mailbox, so a relay can't tie what I send to who I am from the socket. The internet address
+ * still can link them (the relay sees the same address on both), unless a VPN or Tor app is in use.
  */
 class Nostr(private val context: Context, private val secretHex: () -> String?) {
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
@@ -365,13 +368,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             liveSince[url] = now
             _connected.value = live.size
             subscribe(url, webSocket)
-            synchronized(outbox) { outbox.forEach { webSocket.send(it) } }
-            // What was just sent goes to this relay too (relays drop an event they already have).
+            // This relay is reachable again: what still waits, and what was just sent, goes to it on a sending
+            // socket of its own, never on this one (relays drop an event they already have).
+            val again = ArrayList<String>()
+            synchronized(outbox) { again.addAll(outbox) }
             synchronized(recent) {
                 val now = android.os.SystemClock.elapsedRealtime()
-                recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> synchronized(outbox) { if (m !in outbox) webSocket.send(m) } }
+                recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> if (m !in again) again.add(m) }
             }
-            burst[url]?.let { m -> synchronized(m) { m.forEach { webSocket.send(it) }; m.clear() } }
+            burst[url]?.let { m -> synchronized(m) { m.forEach { if (it !in again) again.add(it) }; m.clear() } }
+            if (again.isNotEmpty()) send(url, again)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -398,17 +404,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     webSocket.send(JSONArray().put("AUTH").put(ev).toString())
                     subscribe(url, webSocket)
                 }
-                "OK" -> if (a.optBoolean(2)) {
-                    val id = a.optString(1)
-                    synchronized(outbox) { outbox.removeAll { it.contains(id) } }
-                    stored[id]?.let { w ->
-                        // The first relay to store it: "sent". The second: it waits there safely (see NetLogic).
-                        val n = synchronized(w) { if (w.relays.add(url)) w.relays.size else 0 }
-                        if (n == 1) try { w.ok?.invoke() } catch (_: Exception) {}
-                        if (n == NetLogic.HELD_RELAYS) { stored.remove(id); try { w.held?.invoke() } catch (_: Exception) {} }
-                        if (w.held == null && n >= 1) stored.remove(id)
-                    }
-                }
+                "OK" -> if (a.optBoolean(2)) storedAt(url, a.optString(1))
             }
         }
 
@@ -505,16 +501,77 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     // ------------------------------------------------------------------ sending
 
+    /** A relay said it stored event [id]. */
+    private fun storedAt(url: String, id: String) {
+        if (id.isEmpty()) return
+        synchronized(outbox) { outbox.removeAll { it.contains(id) } }
+        stored[id]?.let { w ->
+            // The first relay to store it: "sent". The second: it waits there safely (see NetLogic).
+            val n = synchronized(w) { if (w.relays.add(url)) w.relays.size else 0 }
+            if (n == 1) try { w.ok?.invoke() } catch (_: Exception) {}
+            if (n == NetLogic.HELD_RELAYS) { stored.remove(id); try { w.held?.invoke() } catch (_: Exception) {} }
+            if (w.held == null && n >= 1) stored.remove(id)
+        }
+    }
+
+    /**
+     * A socket that only sends: it never asks for an inbox (REQ) and never signs in (AUTH), so the relay can't
+     * tie what it carries to my mailbox. It closes [SEND_SECONDS] after the last thing given to it.
+     */
+    private inner class Sender(val url: String) : WebSocketListener() {
+        val queue = mutableListOf<String>()
+        @Volatile var ws: WebSocket? = null
+        private var open = false
+        @Volatile var until = 0L
+
+        /** Sends now if open, else once it opens. */
+        fun give(msgs: List<String>) {
+            synchronized(queue) { val w = ws; if (open && w != null) msgs.forEach { w.send(it) } else queue.addAll(msgs) }
+        }
+
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (senders[url] !== this) { webSocket.cancel(); return }
+            synchronized(queue) { open = true; queue.forEach { webSocket.send(it) }; queue.clear() }
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            val a = try { JSONArray(text) } catch (e: Exception) { return }
+            // "AUTH" is never answered here: signing in would name my mailbox.
+            if (a.optString(0) == "OK" && a.optBoolean(2)) storedAt(url, a.optString(1))
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { senders.remove(url, this) }
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); senders.remove(url, this) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { senders.remove(url, this) }
+    }
+    private val senders = ConcurrentHashMap<String, Sender>()
+
+    /** Gives [msgs] to [url]'s sending socket, opening one if needed. */
+    private fun send(url: String, msgs: List<String>) {
+        val s = synchronized(senders) {
+            senders[url] ?: Sender(url).also { n -> senders[url] = n; n.ws = client.newWebSocket(Request.Builder().url(url).build(), n) }
+        }
+        s.until = android.os.SystemClock.elapsedRealtime() + SEND_SECONDS * 1000 - 500
+        s.give(msgs)
+        timer.schedule(Runnable {
+            if (android.os.SystemClock.elapsedRealtime() < s.until) return@Runnable   // used again meanwhile
+            if (senders.remove(url, s)) s.ws?.close(1000, null)
+        }, SEND_SECONDS, TimeUnit.SECONDS)
+    }
+
     /**
      * Sends sealed content to someone's mailbox through the relays open now. Returns how many relays are
      * connected now. [ok] runs once a relay has said it stored the event (its "OK"), not before; [held] once
      * [NetLogic.HELD_RELAYS] relays have.
      *
-     * Saving battery, relays not open now get it through a short-lived socket each, so it reaches whichever
-     * relay the other phone listens on. Sockets that connect within [RECENT_MS] get it too ([recent]).
+     * Every relay gets it through a short-lived sending socket (never the one listening for my inbox), so it
+     * reaches whichever relay the other phone listens on. A relay that connects again within [RECENT_MS] gets
+     * it too ([recent]). [days]: the chat's message limit, for the NIP-40 expiration tag (0: none).
      */
-    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null): Int {
+    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
+        // NIP-40: relays may drop it once the chat's message limit has passed (it's gone from both phones by then).
+        if (days > 0) tags.put(JSONArray().put("expiration").put((System.currentTimeMillis() / 1000 + days * 86_400L).toString()))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         val ev = event(KIND, tags, content, Schnorr.newSecret(), System.currentTimeMillis() / 1000 - Random.nextLong(0, 600))
         val msg = JSONArray().put("EVENT").put(ev).toString()
@@ -525,13 +582,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             recent.addLast(now to msg)
             while (recent.size > 100 || (recent.isNotEmpty() && now - recent.first().first > RECENT_MS)) recent.removeFirst()
         }
-        var n = 0
-        for ((url, ws) in sockets) if (live[url] == true && ws.send(msg)) n++
-        // Every relay gets it: the other phone may be listening on just one, and not one of mine. Relays
-        // not open now get a short-lived socket that closes again after [BURST_SECONDS].
-        if (keep != null) for (url in relays) if (live[url] != true) openBurst(url, listOf(msg))
+        // Every relay gets it, each on a sending socket of its own: the other phone may be listening on
+        // just one, and not one of mine.
+        for (url in relays) send(url, listOf(msg))
         if (sockets.isEmpty()) connect()
-        return n
+        return live.size
     }
 
     /** Events sent in the last [RECENT_MS]: a relay that connects meanwhile gets them too, even once another said OK. */
@@ -550,6 +605,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val SERVER_PING = "serverPing"
         private const val SAVE_EVERY_S = 30L
         private const val BURST_SECONDS = 20L
+        /** How long a sending socket stays open after the last thing given to it. */
+        private const val SEND_SECONDS = 20L
         /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */
         private const val RECENT_MS = 60_000L
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")

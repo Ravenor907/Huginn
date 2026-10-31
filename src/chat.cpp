@@ -18,6 +18,7 @@
 #include <QThreadPool>
 #include <QBuffer>
 #include <QClipboard>
+#include <QMimeData>
 #include <QCryptographicHash>
 #include <QDirIterator>
 #include <QFileInfo>
@@ -300,7 +301,7 @@ QString Chat::wrap(const QString &peerKey, const QByteArray &body) const
     QByteArray nonce, data;
     ChatCrypto::seal(key, body, &nonce, &data);
     const QJsonObject o{{QStringLiteral("e"), b64(eph.publicDer)}, {QStringLiteral("n"), b64(nonce)}, {QStringLiteral("d"), b64(data)}};
-    return b64(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    return b64(Nostr::pad(QJsonDocument(o).toJson(QJsonDocument::Compact)));   // padded to a fixed size (section 20)
 }
 
 QByteArray Chat::unwrap(const QString &content) const
@@ -589,12 +590,14 @@ QString Chat::netStatus() const
     return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
 }
 
-bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent)
+bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent, int days)
 {
     if (bodies.isEmpty() || mailbox.isEmpty() || m_moving)
         return false;
+    // Relays may drop it after the chat's message limit (a group's, for group messages): it's gone from both sides by then.
+    const int keep = days > 0 ? days : chatDays(key);
     for (const QByteArray &b : bodies)
-        m_nostr->publish(mailbox, wrap(key, b));
+        m_nostr->publish(mailbox, wrap(key, b), keep);
     if (sent)
         sent();
     return true;
@@ -1687,10 +1690,25 @@ void Chat::copyLink() const
         c->setText(myLink());
 }
 
+// Messages and codes copied from Chat: kept out of Windows clipboard history and cloud clipboard, and out of
+// KDE's clipboard history, and cleared after a minute if they're still there.
 void Chat::copyText(const QString &text) const
 {
-    if (auto *c = QGuiApplication::clipboard())
-        c->setText(text);
+    auto *c = QGuiApplication::clipboard();
+    if (!c)
+        return;
+    auto *data = new QMimeData;
+    data->setText(text);
+    const QByteArray no(4, 0);   // a DWORD 0
+    data->setData(QStringLiteral("application/x-qt-windows-mime;value=\"CanIncludeInClipboardHistory\""), no);
+    data->setData(QStringLiteral("application/x-qt-windows-mime;value=\"CanUploadToCloudClipboard\""), no);
+    data->setData(QStringLiteral("application/x-qt-windows-mime;value=\"ExcludeClipboardContentFromMonitorProcessing\""), QByteArray(1, 0));
+    data->setData(QStringLiteral("x-kde-passwordManagerHint"), QByteArrayLiteral("secret"));
+    c->setMimeData(data);
+    QTimer::singleShot(60000, qApp, [text] {
+        if (auto *c = QGuiApplication::clipboard(); c && c->text() == text)
+            c->clear();
+    });
 }
 
 QList<QJsonObject> Chat::pieces(const QVariantMap &m)
