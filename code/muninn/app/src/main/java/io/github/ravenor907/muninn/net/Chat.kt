@@ -54,7 +54,27 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             ble.send(contactKey, body, strict(contactKey))
             wifiTo(contactKey)?.let { net.post(it, PATH, body) }
             internet(contactKey, listOf(body), contacts.get(contactKey)?.mailbox)
+            ring(contactKey, json)
         }
+    }
+
+    /**
+     * Cap b1: a 1:1 offer also goes as a ring envelope to their ring mailbox, sealed to their ring key (section 23), so
+     * their phone rings even while Muninn is locked there. Once per call.
+     */
+    private fun ring(contactKey: String, json: String) {
+        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        if (o.optString("t") != "offer" || o.has("g")) return
+        val c = contacts.get(contactKey) ?: return
+        if (RingWire.RING_CAP !in c.caps) return
+        val k = peerKeys.get(contactKey) ?: return
+        val rk = k.rk ?: return
+        val rp = k.rp ?: return
+        val call = o.optString("call")
+        val ts = o.optLong("ts", System.currentTimeMillis())
+        if (call.isEmpty() || !rung.add(call)) return
+        if (rung.size > 200) rung.clear()
+        nostr.publish(rp, RingWire.ringContent(rk, call, ts), days = Limits.LONGEST)
     }
     @Volatile override var tvHandler: io.github.ravenor907.muninn.tv.TvHandler? = null
     override fun sendTvRoom(peerKey: String, plain: String) {
@@ -204,6 +224,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val seen = Seen(read = { vault.read(File(context.filesDir, "seen.json")) }, write = { vault.write(File(context.filesDir, "seen.json"), it) })
     /** Ratchet envelopes that didn't open, per sender: too many and the next wait (cap s1). */
     private val failures = Failures()
+    /** Cap e1: this phone's day keys for the relay wrapping (section 23), kept in the vault. */
+    private val wrapKeys = WrapKeys({ vault.read(File(context.filesDir, "wrapkeys.json")) }, { vault.write(File(context.filesDir, "wrapkeys.json"), it) })
+    /** Caps b1 and e1: the ring key, ring mailbox and newest day key each contact announced. */
+    private val peerKeys = PeerKeys({ vault.read(File(context.filesDir, "peerkeys.json")) }, { vault.write(File(context.filesDir, "peerkeys.json"), it) })
+    /** Cap b1: this device's ring key, outside the vault (set by the app). */
+    @Volatile var ringKey: RingKey? = null
+    /** Call ids a ring envelope already went out for (one per call). */
+    private val rung: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Contacts my keys went to when their app first said b1 or e1 (once each while Muninn runs). */
+    private val keysSent: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /** Cap s1 for someone who isn't a contact (a linked device, someone met close by): what their app said, and that it seals. */
     private val s1Said: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val s1Bound = ConcurrentHashMap<String, Long>()
@@ -306,7 +336,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
         bg { emptyOldTrash() }
-        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save() } catch (_: Exception) {} } }
+        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune() } catch (_: Exception) {} } }
     }
 
     /**
@@ -482,6 +512,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Over the internet the whole message is sealed to their chat key with a one-off key, so relays
      *  see only which inbox it's for: not who sent it, not their name. */
     private fun wrap(peerKey: String, body: String): String {
+        // Cap e1: sealed to one of their day keys too, so their chat key alone never opens it once that day key is gone.
+        val day = if (contacts.get(peerKey)?.caps?.contains(RingWire.WRAP_CAP) == true) peerKeys.wrapFor(peerKey) else null
+        if (day != null) return Base64.getEncoder().encodeToString(EnvelopePad.pad(RingWire.sealWrap(peerKey, day, body.toByteArray()).toString()).toByteArray())
         val eph = ChatCrypto.newKeyPair()
         val key = ChatCrypto.sharedKey(eph.private, eph.public, ChatCrypto.publicFrom(peerKey))
         val s = ChatCrypto.sealBytes(key, body.toByteArray())
@@ -492,7 +525,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun unwrap(content: String): String? {
         val raw = String(Base64.getDecoder().decode(content))
         val o = JSONObject(raw)
-        if (!o.has("e")) return raw   // from a version before sealing
+        if (!o.has("e")) return raw   // not sealed
+        // Cap e1: wrapped for one of my day keys as well; one that's gone (or never was) doesn't open.
+        if (o.has("w")) return RingWire.openWrap(o, id.keys) { wrapKeys.find(it) }?.let { String(it) }
         val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(o.getString("e")))
         return ChatCrypto.openBytes(key, ChatCrypto.Sealed(o.getString("n"), o.getString("d")))?.let { String(it) }
     }
@@ -648,6 +683,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Still in a group together: they stay reachable for the group, as a group peer.
         if (was != null && groups.sharesGroup(peerKey)) contacts.peer(peerKey, was.name, was.mailbox ?: "")
         synchronized(ratchets.lock(peerKey)) { ratchets.drop(peerKey) }
+        if (contacts.get(peerKey) == null) peerKeys.forget(peerKey)
         synchronized(lock) { _met.update { it - peerKey }; saveMet() }
         // Not in touch any way now: their profile picture goes too.
         if (contacts.get(peerKey) == null) profile?.forget(peerKey)
@@ -870,6 +906,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             boundAt = if (c.boundAt == 0L && Proof.isBound(o)) System.currentTimeMillis() else c.boundAt)
         if (now != c) contacts.set(now)
         if (days != c.days) bg { prune() }
+        // Caps b1 and e1: their app says so now, so my ring key and day key go to them.
+        if ((RingWire.RING_CAP in caps && RingWire.RING_CAP !in c.caps) || (RingWire.WRAP_CAP in caps && RingWire.WRAP_CAP !in c.caps)) sendKeys(fromKey)
     }
 
     private fun handle(o: JSONObject, envRoom: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
@@ -900,7 +938,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (q.size >= 5) return 429 to "{}"
             q.addLast(now)
         }
-        val text = if (room == "receipt" || room == "mx" || room == "live" || room == "link" || room == "intro" || room == "file" || room == "profile") opened else opened.take(MAX)
+        // Section 9: text over the limit is malformed and refused, never cut.
+        if ((room == "private" || room == "nearby") && Proto06.chars(opened) > MAX) return 400 to "{}"
+        val text = opened
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
         val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp)
         // A message from them ends their "typing".
@@ -1006,12 +1046,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 // Group peers send receipts too (a caps probe, or its answer).
                 if (contacts.get(fromKey) == null && !_met.value.containsKey(fromKey)) return 403 to "{}"
                 val r = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                // Section 9: at most 40 ids a receipt; more is malformed and refused.
+                val a = r.optJSONArray("ids") ?: return 400 to "{}"
+                if (a.length() > Proto06.MAX_RECEIPT_IDS) return 400 to "{}"
                 // A caps probe (1.2): the answer's envelope carries my caps.
                 if (r.optString("q") == "caps") bg {
-                    deliver(fromKey, envelope("receipt", fromKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").toString(),
+                    deliver(fromKey, envelope("receipt", fromKey, withKeys(fromKey, JSONObject().put("ids", JSONArray()).put("s", "delivered")).toString(),
                         UUID.randomUUID().toString()), mailbox ?: contacts.get(fromKey)?.mailbox)
                 }
-                val ids = r.optJSONArray("ids")?.let { a -> (0 until minOf(a.length(), 200)).map { a.optString(it) }.toSet() } ?: return 400 to "{}"
+                // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
+                if (contacts.get(fromKey) != null) peerKeys.take(fromKey, RingWire.announceOf(r, System.currentTimeMillis() / 1000))
+                val ids = (0 until a.length()).map { a.optString(it) }.toSet()
                 val st = r.optString("s")
                 if (st != "delivered" && st != "read" && st != "unsent") return 400 to "{}"
                 // A reaction or edit (cap m1) got there: stop resending it.
@@ -1380,17 +1425,37 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         bg {
             // 40 ids a receipt keeps each one small on every route.
             ids.takeLast(200).chunked(40).forEach { part ->
-                val body = JSONObject().put("ids", JSONArray(part)).put("s", state).toString()
+                val body = withKeys(peerKey, JSONObject().put("ids", JSONArray(part)).put("s", state)).toString()
                 deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()),
                     mailbox ?: contacts.get(peerKey)?.mailbox ?: _met.value[peerKey]?.mailbox)
             }
         }
     }
 
+    /**
+     * Caps b1 and e1 (section 23): a receipt to an app that says them carries my ring key and ring mailbox ("rk", "rp")
+     * and my day key for the relay wrapping ("wk", "wt").
+     */
+    private fun withKeys(peerKey: String, o: JSONObject): JSONObject {
+        val caps = capsOf(peerKey)
+        if (RingWire.RING_CAP in caps) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
+        if (RingWire.WRAP_CAP in caps) try { wrapKeys.current().let { d -> o.put("wk", d.pub).put("wt", d.t) } } catch (_: Exception) {}
+        return o
+    }
+
+    /** Their app just said b1 or e1: my keys go to them at once, in an empty receipt (once each while Muninn runs). */
+    private fun sendKeys(peerKey: String) {
+        if (!keysSent.add(peerKey)) return
+        bg {
+            val body = withKeys(peerKey, JSONObject().put("ids", JSONArray()).put("s", "delivered")).toString()
+            deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()), contacts.get(peerKey)?.mailbox)
+        }
+    }
+
     // ------------------------------------------------------------------ sending
 
     fun sendNearby(text: String) {
-        val t = text.trim().take(MAX)
+        val t = ChatWire.clip(text.trim(), MAX)
         if (t.isEmpty() || !id.nearbyRoom) return
         val mine = Msg(UUID.randomUUID().toString(), id.publicKey, id.username, t, true, System.currentTimeMillis())
         addNearby(mine)
@@ -1419,7 +1484,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** [re]: the id of the message this answers (a reply, cap m1; to an app without m1 it goes as plain text). */
     fun sendPrivate(peerKey: String, text: String, re: String = "") {
-        val t = text.trim().take(MAX)
+        val t = ChatWire.clip(text.trim(), MAX)
         if (t.isEmpty()) return
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
@@ -1529,7 +1594,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Changes the text of one of my messages, on both sides ("(edited)"). Null when done, else what to say. */
     fun editMessage(peerKey: String, msgId: String, text: String): String? {
-        val t = text.trim().take(MAX)
+        val t = ChatWire.clip(text.trim(), MAX)
         if (t.isEmpty()) return "A message can't be empty. Unsend it instead."
         if (!hasM1(peerKey)) { probeCaps(peerKey); return "${nameOf(peerKey)} needs a newer Muninn or Huginn to see edits." }
         val ts = System.currentTimeMillis()
@@ -1563,7 +1628,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             mine?.let { m -> arrivals.tryEmit(Triple(contacts.get(fromKey)?.shown ?: name, "Reacted $e to “${preview(m)}”", fromKey)) }
         } else {
-            val t = p.getString("text").take(MAX)
+            val t = p.getString("text")
             edit { map ->
                 val list = map[fromKey] ?: return@edit false
                 val m = list.firstOrNull { it.id == msgId && !it.mine && it.unsent.isEmpty() && it.photo.isEmpty() } ?: return@edit false
@@ -1885,7 +1950,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun stale(k: String): (String) -> Boolean = { body ->
         try {
             val o = JSONObject(body)
-            (strict(k) && !Proof.isBound(o)) || (!ChatWire.isRatchet(o) && ChatWire.useRatchet(o.optString("room"), contacts.get(k)))
+            (strict(k) && !Proof.isBound(o)) || (!ChatWire.isRatchet(o) && (ChatWire.useRatchet(o.optString("room"), contacts.get(k)) ||
+                RingWire.fileRatchet(o.optString("room"), contacts.get(k))))
         } catch (e: Exception) { false }
     }
 
@@ -1897,7 +1963,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
     private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Boolean {
         if (mailbox == null || Move.locked) return false
-        // Relays may drop it after the chat's message limit (a group's, for group messages): it's gone from the phones by then.
+        // Relays may drop it after the longest message limit (Nostr.expiration): it's gone from the phones by then.
         val keep = if (days > 0) days else try { chatDays(peerKey) } catch (_: Exception) { Limits.LONGEST }
         // [stored]: once a relay has said OK to every one of them. [held]: once enough relays have (NetLogic.HELD_RELAYS).
         val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
@@ -1946,7 +2012,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (hasD1(theirKey)) myDays(theirKey).let { d -> items.forEach { it.first.put("days", d) } }
         // Cap s1: the clear fields are sealed in too, for an app that reads them.
         val bind = strict(theirKey)
-        if (!ChatWire.useRatchet(room, contacts.get(theirKey)))
+        // Cap e1: room "file" goes through the ratchet too, for an app that says e1.
+        if (!ChatWire.useRatchet(room, contacts.get(theirKey)) && !RingWire.fileRatchet(room, contacts.get(theirKey)))
             return items.map { (o, plain) -> ChatWire.seal(o, plain, sk, theirKey, null, ChatCrypto::newKeyPair, bind) }
         synchronized(ratchets.lock(theirKey)) {
             val peer = ratchets.get(theirKey)
@@ -1993,7 +2060,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** A link gets its preview first (cap m2), made on this phone only when Settings › Privacy allows it. */
     fun sendGroupText(g: String, ch: String, text: String, re: String = ""): Boolean {
-        val t = text.trim().take(MAX)
+        val t = ChatWire.clip(text.trim(), MAX)
         sends.tryEmit(Folders.groupKey(g))
         val link = if (id.linkPreviews) More.firstLink(t) else null
         if (link == null) return groups.sendText(g, ch, t, re)

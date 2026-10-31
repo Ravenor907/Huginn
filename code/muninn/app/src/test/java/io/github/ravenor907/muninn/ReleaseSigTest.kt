@@ -26,6 +26,29 @@ class ReleaseSigTest {
         }
     }
 
+    /** .vsig (shared/docs/releases.md): the text both apps build, and which signatures check out for which tag. */
+    @Test
+    fun versionSignatures() {
+        val v = JSONObject(javaClass.classLoader!!.getResource("release-sig-vectors.json")!!.readText())
+        assertEquals(Updater.VERSION_DOMAIN, v.getString("domain"))
+        val cases = v.getJSONArray("versioned")
+        assertTrue(cases.length() >= 5)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val name = c.getString("name")
+            assertEquals(name, c.getString("message"),
+                Updater.versionMessage(c.getString("version"), c.getString("file"), c.getString("sha256")).joinToString("") { "%02x".format(it) })
+            assertEquals(name, c.getBoolean("valid"), Updater.versionSigned(c.getString("version"), c.getString("file"), c.getString("sha256"),
+                hex(c.getString("signature")), hex(c.getString("public"))))
+        }
+        val newer = v.getJSONArray("newer")
+        assertTrue(newer.length() > 0)
+        for (i in 0 until newer.length()) {
+            val c = newer.getJSONObject(i)
+            assertEquals("${c.getString("tag")} over ${c.getString("current")}", c.getBoolean("install"), Updater.mayInstall(c.getString("tag"), c.getString("current")))
+        }
+    }
+
     @Test
     fun streamsInPieces() {
         val c = JSONObject(javaClass.classLoader!!.getResource("release-sig-vectors.json")!!.readText()).getJSONArray("cases").getJSONObject(3)
@@ -65,6 +88,11 @@ class ReleaseSigTest {
         val sig = File(dir, "test.bin.sig").readBytes()
         assertTrue(Ed25519.verify(pub, file, sig))
         assertFalse(Ed25519.verify(pub, file + byteArrayOf(0), sig))
+        // And its .vsig, made the way the release job makes it (version 0.96, as Muninn.apk).
+        val vsig = File(dir, "test.bin.vsig").readBytes()
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(file).joinToString("") { "%02x".format(it) }
+        assertTrue(Updater.versionSigned("0.96", "Muninn.apk", sha, vsig, pub))
+        assertFalse(Updater.versionSigned("0.97", "Muninn.apk", sha, vsig, pub))
     }
 
     @Test

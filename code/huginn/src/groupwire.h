@@ -41,6 +41,8 @@ bool verify(const QString &publicKeyB64, const QString &domain, const QJsonObjec
 
 // Code points, as the limits count them.
 int length(const QString &s);
+// The first max code points of s (never half of a surrogate pair), so what is sent is never over a limit.
+QString clip(const QString &s, int max);
 // Empty when well-formed (3.2), otherwise the reason. Does not check the signature.
 QString checkState(const QJsonObject &s);
 // 3.3 without step 2's extras (those need the app's own key and invite): cur null is first sight.

@@ -267,6 +267,20 @@ int GroupWire::length(const QString &s)
     return n;
 }
 
+QString GroupWire::clip(const QString &s, int max)
+{
+    int n = 0;
+    for (int i = 0; i < s.size(); ++i) {
+        const ushort c = s.at(i).unicode();
+        if (c >= 0xDC00 && c <= 0xDFFF)
+            continue;   // a low surrogate belongs to the character before it
+        if (n == max)
+            return s.left(i);
+        ++n;
+    }
+    return s;
+}
+
 // ------------------------------------------------------------------ group state
 
 QString GroupWire::checkState(const QJsonObject &s)
@@ -655,6 +669,14 @@ bool GroupWire::selfTest(const QString &vectorsPath)
         return false;
     }
     check(v.value(QStringLiteral("domains")).toObject().value(QStringLiteral("group")).toString() == QLatin1String(kDomain), "group domain");
+    // Section 9: what is sent is cut at a whole character, never over the limit and never half an emoji.
+    {
+        const QString emoji = QString::fromUtf8("\xF0\x9F\xA6\x8A");   // one character, two UTF-16 units
+        const QString cut = clip(QString(1999, QLatin1Char('a')) + emoji + emoji, 2000);
+        check(clip(QStringLiteral("abc"), 2) == QLatin1String("ab") && length(cut) == 2000 && cut.endsWith(emoji)
+                  && length(clip(emoji.repeated(2001), 2000)) == 2000 && clip(emoji.repeated(2001), 2000).size() == 4000,
+              QStringLiteral("text is cut at whole characters"));
+    }
 
     // Canonical JSON: the same bytes as the reference, and the same refusals.
     const QJsonArray good = v.value(QStringLiteral("canonical")).toObject().value(QStringLiteral("good")).toArray();

@@ -2,10 +2,12 @@
 
 #include "chatwire.h"
 #include "ratchet.h"
+#include "ring.h"
 
 #include <QHash>
 #include <QJsonObject>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <QNetworkAccessManager>
 #include <QObject>
@@ -353,6 +355,8 @@ public:
     void setExtras(Trust *trust, FileLink *files, Link *link) { m_trust = trust; m_files = files; m_linked = link; }
     // Cap p1, profile pictures and status (profile.*), made in main.cpp too.
     void setProfile(Profile *profile) { m_profile = profile; }
+    // Cap b1: this device's ring key, outside the vault (main.cpp makes it).
+    void setRingKey(RingKey *ring) { m_ringKey = ring; }
 
     static const int kMax = 2000;
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
@@ -447,6 +451,20 @@ private:
     QString myKey() const { return QString::fromLatin1(m_pub.toBase64()); }
     QString wrap(const QString &peerKey, const QByteArray &body) const;
     QByteArray unwrap(const QString &content) const;
+    // Caps b1 and e1 (shared/docs/protocol-0.6.md section 23, ring.*): my day keys for the relay wrapping and what each
+    // contact announced (both in the vault, made when it opens), my ring key (outside it).
+    std::unique_ptr<WrapKeys> m_wrapKeys;
+    std::unique_ptr<PeerKeys> m_peerKeys;
+    RingKey *m_ringKey = nullptr;
+    QSet<QString> m_rung;       // call ids a ring envelope already went out for
+    QSet<QString> m_keysSent;   // contacts my keys went to when their app first said b1 or e1
+    // A receipt to an app that says b1 or e1 carries my ring key and mailbox ("rk", "rp") and my day key ("wk", "wt").
+    QJsonObject withKeys(const QString &key, QJsonObject o) const;
+    void sendKeys(const QString &key);
+    // A 1:1 offer also goes as a ring envelope to their ring mailbox (b1).
+    void ring(const QString &key, const QJsonObject &msg);
+    // Room "file" goes through the ratchet for a contact whose app says e1.
+    bool fileRatchet(const QString &room, const QString &key) const;
     bool inviteOk(const QString &token) const;
     void saveInvites();
     QString mailboxOf(const QString &key) const;

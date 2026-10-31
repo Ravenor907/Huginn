@@ -276,26 +276,32 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
         return m_net.get(req);
     };
-    // Huginn-Windows.zip.sig or Huginn.flatpak.sig: the project's signature, published by the release job.
-    // Always required.
+    // Huginn-Windows.zip.sig or Huginn.flatpak.sig: the project's signature, published by the release job; and .vsig,
+    // its signature of this release's version. Both always required.
     QNetworkReply *s = get(name + QStringLiteral(".sig"));
-    connect(s, &QNetworkReply::finished, this, [this, s, path, name, get] {
+    connect(s, &QNetworkReply::finished, this, [this, s, path, name, tag, get] {
         s->deleteLater();
         const QByteArray sig = s->error() == QNetworkReply::NoError ? s->read(256) : QByteArray();
-        if (!m_assetDigest.isEmpty()) {
-            checkThenInstall(path, m_assetDigest, sig);
-            return;
-        }
-        // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
-        QNetworkReply *r = get(name + QStringLiteral(".sha256"));
-        connect(r, &QNetworkReply::finished, this, [this, r, path, sig] {
-            r->deleteLater();
-            checkThenInstall(path, r->error() == QNetworkReply::NoError ? WinUpdate::parseDigest(r->read(4096)) : QByteArray(), sig);
+        QNetworkReply *vs = get(name + QStringLiteral(".vsig"));
+        connect(vs, &QNetworkReply::finished, this, [this, vs, path, name, tag, get, sig] {
+            vs->deleteLater();
+            const QByteArray vsig = vs->error() == QNetworkReply::NoError ? vs->read(256) : QByteArray();
+            if (!m_assetDigest.isEmpty()) {
+                checkThenInstall(path, tag, name, m_assetDigest, sig, vsig);
+                return;
+            }
+            // Huginn-Windows.zip.sha256 or Huginn.flatpak.sha256, published by the release job beside the file.
+            QNetworkReply *r = get(name + QStringLiteral(".sha256"));
+            connect(r, &QNetworkReply::finished, this, [this, r, path, name, tag, sig, vsig] {
+                r->deleteLater();
+                checkThenInstall(path, tag, name, r->error() == QNetworkReply::NoError ? WinUpdate::parseDigest(r->read(4096)) : QByteArray(), sig, vsig);
+            });
         });
     });
 }
 
-void Updater::checkThenInstall(const QString &path, const QByteArray &expected, const QByteArray &sig)
+void Updater::checkThenInstall(const QString &path, const QString &tag, const QString &name, const QByteArray &expected, const QByteArray &sig,
+                               const QByteArray &vsig)
 {
     QFile f(path);
     if (expected.size() != 64 || !f.open(QIODevice::ReadOnly)) {
@@ -316,6 +322,20 @@ void Updater::checkThenInstall(const QString &path, const QByteArray &expected, 
         qWarning("update: no valid project signature (%d bytes of .sig)", int(sig.size()));
         QFile::remove(path);
         failed(QStringLiteral("This update isn't signed with the project's key, so it wasn't installed."));
+        return;
+    }
+    // The version signed in .vsig must be the one this release's tag names, and newer than this copy: an older
+    // signed file posted again under a newer tag is never installed.
+    const QString version = versionFromTag(tag);
+    if (version.isEmpty() || !versionSignedBy(version, name, got, vsig, QByteArray::fromHex(kReleaseKey))) {
+        qWarning("update: no valid version signature (%d bytes of .vsig)", int(vsig.size()));
+        QFile::remove(path);
+        failed(QStringLiteral("This update's version isn't signed with the project's key, so it wasn't installed."));
+        return;
+    }
+    if (!newer(version, m_current)) {
+        QFile::remove(path);
+        failed(QStringLiteral("This update isn't newer than the Huginn you have, so it wasn't installed."));
         return;
     }
     if (!WinUpdate::supported()) {
@@ -355,6 +375,17 @@ bool Updater::signedByProject(const QByteArray &data, const QByteArray &sig)
     return signedBy(data, sig, QByteArray::fromHex(kReleaseKey));
 }
 
+QByteArray Updater::versionMessage(const QString &version, const QString &file, const QByteArray &shaHex)
+{
+    return QByteArrayLiteral("huginn-muninn release v1\n") + version.toUtf8() + '\n' + file.toUtf8() + '\n' + shaHex.toLower();
+}
+
+bool Updater::versionSignedBy(const QString &version, const QString &file, const QByteArray &shaHex, const QByteArray &vsig,
+                              const QByteArray &publicKey)
+{
+    return signedBy(versionMessage(version, file, shaHex), vsig, publicKey);
+}
+
 bool Updater::selfTest(const QString &vectorsPath)
 {
     QFile f(vectorsPath);
@@ -372,6 +403,33 @@ bool Updater::selfTest(const QString &vectorsPath)
             fprintf(stderr, "release-sig self-test: case \"%s\" should be %s\n", qPrintable(c.value(QStringLiteral("name")).toString()), want ? "valid" : "refused");
             ok = false;
         }
+    }
+    // Version signatures (.vsig): the text each app builds, and which signatures check out for which tag.
+    const QJsonObject all = QJsonDocument::fromJson([&] { f.seek(0); return f.readAll(); }()).object();
+    if (all.contains(QStringLiteral("versioned"))) {
+        const QJsonArray vc = all.value(QStringLiteral("versioned")).toArray();
+        bool vok = !vc.isEmpty() && all.value(QStringLiteral("domain")).toString() == QLatin1String("huginn-muninn release v1");
+        for (const QJsonValue &v : vc) {
+            const QJsonObject c = v.toObject();
+            const QString ver = c.value(QStringLiteral("version")).toString(), file = c.value(QStringLiteral("file")).toString();
+            const QByteArray sha = c.value(QStringLiteral("sha256")).toString().toLatin1();
+            const bool msgOk = versionMessage(ver, file, sha) == b(c, "message");
+            const bool good = versionSignedBy(ver, file, sha, b(c, "signature"), b(c, "public")) == c.value(QStringLiteral("valid")).toBool();
+            if (!msgOk || !good) {
+                fprintf(stderr, "release-sig self-test: version case \"%s\" %s\n", qPrintable(c.value(QStringLiteral("name")).toString()),
+                        msgOk ? "gave the wrong answer" : "builds a different text");
+                vok = false;
+            }
+        }
+        for (const QJsonValue &v : all.value(QStringLiteral("newer")).toArray()) {
+            const QJsonObject c = v.toObject();
+            if (newer(c.value(QStringLiteral("tag")).toString(), c.value(QStringLiteral("current")).toString()) != c.value(QStringLiteral("install")).toBool()) {
+                fprintf(stderr, "release-sig self-test: %s over %s\n", qPrintable(c.value(QStringLiteral("tag")).toString()),
+                        qPrintable(c.value(QStringLiteral("current")).toString()));
+                vok = false;
+            }
+        }
+        ok = ok && vok;
     }
     // The built-in project key is a real Ed25519 key, and refuses a signature it didn't make.
     const QByteArray key = QByteArray::fromHex(kReleaseKey);

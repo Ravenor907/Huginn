@@ -84,10 +84,14 @@ public:
     static bool selfTest();
 
     // ---------------------------------------------------------------- encrypted backup
-    // The same file Muninn makes: "MUNB1", a 4-byte big-endian header length, the header JSON
-    // {v, salt, rounds, created, app}, then AES-256-GCM (iv, ciphertext, tag, like seal()) of the
-    // files one after another: [uint32 BE name length][name][uint32 BE data length][data].
-    // Names are paths inside the chat folder; data is each file's plain contents.
+    // The same file Muninn makes: "MUNB1", a 4-byte big-endian header length, the header JSON, then
+    // AES-256-GCM (iv, ciphertext, tag, like seal()) of the files one after another:
+    // [uint32 BE name length][name][uint32 BE data length][data]. Names are paths inside the chat folder;
+    // data is each file's plain contents. The header says how the password makes the key:
+    //   {"v":2, salt, "kdf":"argon2id", m, t, p, created, app}   Argon2id, like the lock (what Huginn writes)
+    //   {"v":2, salt, "kdf":"scrypt", N, r, p, created, app}     scrypt (what Muninn writes; Huginn too without Argon2id)
+    //   {"v":1, salt, rounds, created, app}                      PBKDF2-SHA256 (still restored)
+    // New backups need a password of at least kMinBackupPassword characters.
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(QString backupFolder READ backupFolder CONSTANT)
     bool busy() const { return m_busy; }
@@ -107,7 +111,9 @@ public:
 
     using Files = std::vector<std::pair<QString, QByteArray>>;
     // The format, separate so --backup-selftest can run it on a temp folder.
-    static QByteArray packBackup(const QString &password, const Files &files, const QString &app, int rounds = 310000);
+    // kdf "pbkdf2" writes the v1 header (310000 rounds), only so --backup-selftest can check it still restores.
+    static QByteArray packBackup(const QString &password, const Files &files, const QString &app, const QString &kdf = QString());
+    static constexpr int kMinBackupPassword = 12;
     // 0 ok, 1 not a backup or damaged, 2 wrong password (or changed), 3 another app's backup.
     static int unpackBackup(const QByteArray &bytes, const QString &password, const QString &app, Files *files, QString *created, QString *error);
     static bool safeName(const QString &name);

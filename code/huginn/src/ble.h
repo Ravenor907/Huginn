@@ -35,7 +35,7 @@ class Ble : public QObject
 
 public:
     // hello gives the JSON for our first message on every link:
-    // {"t":"hello","name","chatKey","mailbox","app":"huginn"} (an "onion" field is ignored)
+    // {"t":"hello","name","chatKey","mailbox","app":"huginn"} (an "onion" field is ignored); empty sends none.
     explicit Ble(std::function<QByteArray()> hello, QObject *parent = nullptr);
     ~Ble() override;
 
@@ -57,6 +57,11 @@ public:
     // Cap s1: signs the phone's number with my chat key (Proof::close); the contact a hidden phone's hint stands for.
     std::function<QString(const QString &nonce)> prove;
     std::function<QString(const QString &hint)> hintKey;
+    // Hidden from people nearby (21.3): while it says true, Bluetooth is silent. No scanning (an active scan names this
+    // computer's adapter), no connecting, no hello, and links already open end.
+    std::function<bool()> hidden;
+    // Hidden from people nearby was turned on or off: goes silent at once, or starts looking again.
+    void hiddenChanged();
 
 Q_SIGNALS:
     void changed();
@@ -107,6 +112,7 @@ private:
     Link *linkFor(const QString &chatKey, bool strict) const;
     // Compares pointers only, so it's safe to ask about a link that was already deleted.
     bool alive(const Link *l) const { return l && std::find(m_links.cbegin(), m_links.cend(), l) != m_links.cend(); }
+    bool silent() const { return hidden && hidden(); }
 
     std::function<QByteArray()> m_hello;
     QBluetoothDeviceDiscoveryAgent *m_agent = nullptr;

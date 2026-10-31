@@ -36,6 +36,19 @@ class ChatWireTest {
         return { f: File -> if (f.exists()) disk[f.path] else null } to { f: File, t: String -> f.writeText("x"); disk[f.path] = t }
     }
 
+    /** Section 9: what is sent is cut at a whole character (code point), never over the limit and never half an emoji. */
+    @Test
+    fun clipKeepsWholeCharacters() {
+        assertEquals("abc", ChatWire.clip("abc", 2000))
+        assertEquals("ab", ChatWire.clip("abc", 2))
+        val emoji = "\uD83E\uDD8A"   // one character, two UTF-16 units
+        val text = "a".repeat(1999) + emoji + emoji
+        val cut = ChatWire.clip(text, 2000)
+        assertEquals(2000, cut.codePointCount(0, cut.length))
+        assertTrue(cut.endsWith(emoji))
+        assertEquals(2000, ChatWire.clip(emoji.repeat(2001), 2000).codePointCount(0, 4000))
+    }
+
     @Test
     fun v1EnvelopeHasCapAndOpens() {
         val o = ChatWire.seal(base(), "hi".toByteArray(), skA, bPub, null, newKey)

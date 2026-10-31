@@ -818,7 +818,7 @@ private fun NearbyRoom(app: Muninn) {
                 val hidden = !app.identity.visibleNearby
                 Text(if (hidden) "You're hidden from people nearby, so nobody can see or message you here." else "Nearby chat is off, so nobody can see or message you here.", style = Type.normal)
                 MButton(if (hidden) "Be visible to people nearby" else "Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
-                    app.identity.visibleNearby = true; app.identity.nearbyChat = true; on = true; app.net.announce(); app.close.readvertise()
+                    app.identity.visibleNearby = true; app.identity.nearbyChat = true; on = true; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
                 }
             }
             return@Column

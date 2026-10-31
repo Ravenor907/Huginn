@@ -142,5 +142,41 @@
    "zeros": 11335,
    "content": 81920
   }
+ ],
+ "blur": 600,
+ "longestDays": 30,
+ "expiry": [
+  {
+   "created": 0,
+   "expiration": 2678400
+  },
+  {
+   "created": 1,
+   "expiration": 2678400
+  },
+  {
+   "created": 1761500000,
+   "expiration": 1764115200
+  },
+  {
+   "created": 1761522599,
+   "expiration": 1764115200
+  },
+  {
+   "created": 1761522600,
+   "expiration": 1764115200
+  },
+  {
+   "created": 1761522599,
+   "expiration": 1764115200
+  },
+  {
+   "created": 1761523200,
+   "expiration": 1764201600
+  },
+  {
+   "created": 1761609599,
+   "expiration": 1764288000
+  }
  ]
 }

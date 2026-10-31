@@ -568,8 +568,8 @@ Rectangle {
     // ------------------------------------------------------------- chat backup
     function startBackup() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-        Ui.ask("Backup password", "At least 8 characters. You need it to restore, and it can't be recovered", "", "Next", t => {
-            if (t.length < 8) { Ui.say("The backup password needs at least 8 characters.", true); return }
+        Ui.ask("Backup password", "At least 12 characters. You need it to restore, and it can't be recovered", "", "Next", t => {
+            if (t.length < 12) { Ui.say("The backup password needs at least 12 characters.", true); return }
             Ui.ask("Type it again", "To be sure", "", "Back up", t2 => {
                 if (t2 !== t) { Ui.say("They didn't match. Nothing was saved.", true); return }
                 Ui.say("Backing up your chats...")

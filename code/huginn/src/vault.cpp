@@ -551,6 +551,40 @@ QString sizeText(qint64 n)
     return QString::number(double(n) / (1024.0 * 1024.0), 'f', 1) + QStringLiteral(" MB");
 }
 
+// The backup key from its header (see vault.h). The header isn't protected, so anything weaker than what the apps
+// write, or so big it would exhaust memory, is refused: empty key and *bad set.
+QByteArray backupKey(const QJsonObject &h, const QString &password, bool *bad)
+{
+    *bad = true;
+    const QByteArray salt = QByteArray::fromBase64(h.value(QStringLiteral("salt")).toString().toLatin1());
+    if (salt.size() < 16)
+        return {};
+    const int v = h.value(QStringLiteral("v")).toInt();
+    if (v == 1) {
+        const int rounds = h.value(QStringLiteral("rounds")).toInt();
+        if (rounds < 100000 || rounds > 10000000)
+            return {};
+        *bad = false;
+        return Vault::derive(password, salt, rounds);
+    }
+    const QString kdf = h.value(QStringLiteral("kdf")).toString();
+    if (kdf == QLatin1String("argon2id")) {
+        const qint64 m = h.value(QStringLiteral("m")).toInteger(), t = h.value(QStringLiteral("t")).toInteger(), p = h.value(QStringLiteral("p")).toInteger();
+        if (m < 65536 || m > 1048576 || t < 3 || t > 16 || p < 1 || p > 16)
+            return {};
+        *bad = false;
+        return argon2id(password.toUtf8(), salt, quint32(m), quint32(t), quint32(p));
+    }
+    if (kdf == QLatin1String("scrypt")) {
+        const qint64 n = h.value(QStringLiteral("N")).toInteger(), r = h.value(QStringLiteral("r")).toInteger(), p = h.value(QStringLiteral("p")).toInteger();
+        if (n < 65536 || n > 1048576 || (n & (n - 1)) != 0 || r < 8 || r > 32 || p < 1 || p > 16 || n * r * 128 > (qint64(1) << 30))
+            return {};
+        *bad = false;
+        return scrypt(password.toUtf8(), salt, quint64(n), quint64(r), quint64(p));
+    }
+    return {};
+}
+
 QByteArray settingsBlob()
 {
     QVariantMap all;
@@ -673,11 +707,35 @@ bool Vault::safeName(const QString &name)
     return true;
 }
 
-QByteArray Vault::packBackup(const QString &password, const Files &files, const QString &app, int rounds)
+QByteArray Vault::packBackup(const QString &password, const Files &files, const QString &app, const QString &kdf)
 {
     const QByteArray salt = random(16);
-    const QJsonObject h{{QStringLiteral("v"), 1}, {QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())}, {QStringLiteral("rounds"), rounds},
-                        {QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {QStringLiteral("app"), app}};
+    QJsonObject h{{QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())},
+                  {QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {QStringLiteral("app"), app}};
+    QByteArray key;
+    if (kdf == QLatin1String("pbkdf2")) {
+        h.insert(QStringLiteral("v"), 1);
+        h.insert(QStringLiteral("rounds"), kRounds);
+        key = derive(password, salt, kRounds);
+    } else {
+        // Argon2id like the lock when this OpenSSL has it, scrypt otherwise: both slow to guess on a graphics card.
+        h.insert(QStringLiteral("v"), 2);
+        key = argon2id(password.toUtf8(), salt, kArgonMem, kArgonIter, kArgonLanes);
+        if (!key.isEmpty()) {
+            h.insert(QStringLiteral("kdf"), QStringLiteral("argon2id"));
+            h.insert(QStringLiteral("m"), int(kArgonMem));
+            h.insert(QStringLiteral("t"), int(kArgonIter));
+            h.insert(QStringLiteral("p"), int(kArgonLanes));
+        } else {
+            key = scrypt(password.toUtf8(), salt, kScryptN, kScryptR, kScryptP);
+            h.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
+            h.insert(QStringLiteral("N"), double(kScryptN));
+            h.insert(QStringLiteral("r"), int(kScryptR));
+            h.insert(QStringLiteral("p"), int(kScryptP));
+        }
+    }
+    if (key.isEmpty())
+        return {};
     const QByteArray header = QJsonDocument(h).toJson(QJsonDocument::Compact);
     QByteArray body;
     for (const auto &f : files) {
@@ -687,7 +745,6 @@ QByteArray Vault::packBackup(const QString &password, const Files &files, const 
         put32(body, quint32(f.second.size()));
         body.append(f.second);
     }
-    QByteArray key = derive(password, salt, rounds);
     QByteArray out = kBackupMagic;
     put32(out, quint32(header.size()));
     out.append(header);
@@ -712,14 +769,17 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
     if (!get32(bytes, kBackupMagic.size(), &len) || len == 0 || len > quint32(kMaxHeader) || kBackupMagic.size() + 4 + qsizetype(len) > bytes.size())
         return damaged();
     const QJsonObject h = QJsonDocument::fromJson(bytes.mid(kBackupMagic.size() + 4, len)).object();
-    if (h.value(QStringLiteral("v")).toInt() != 1) {
+    const int v = h.value(QStringLiteral("v")).toInt();
+    if (v != 1 && v != 2) {
         *error = h.isEmpty() ? QStringLiteral("This backup is damaged.") : QStringLiteral("This backup is from a newer version. Update Huginn first.");
         return 1;
     }
+    // The key's settings come from the unprotected header: a weakened one is refused rather than trusted.
+    const QString kdf = h.value(QStringLiteral("kdf")).toString();
     const QByteArray salt = QByteArray::fromBase64(h.value(QStringLiteral("salt")).toString().toLatin1());
-    const int rounds = h.value(QStringLiteral("rounds")).toInt();
-    // Rounds come from the unprotected header: refuse a weakened one rather than trust it.
-    if (salt.size() < 16 || rounds < 100000 || rounds > 10000000)
+    const qint64 rounds = h.value(QStringLiteral("rounds")).toInteger();
+    if (salt.size() < 16 || (v == 1 && (rounds < 100000 || rounds > 10000000))
+        || (v == 2 && kdf != QLatin1String("argon2id") && kdf != QLatin1String("scrypt")))
         return damaged();
     if (created)
         *created = h.value(QStringLiteral("created")).toString();
@@ -731,7 +791,14 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
     const qsizetype at = kBackupMagic.size() + 4 + qsizetype(len);
     if (bytes.size() - at < 12 + 16)
         return damaged();
-    QByteArray key = derive(password, salt, rounds);
+    bool bad = false;
+    QByteArray key = backupKey(h, password, &bad);
+    if (bad)
+        return damaged();
+    if (key.isEmpty()) {
+        *error = QStringLiteral("This backup needs Argon2id, which this copy of Huginn doesn't have.");
+        return 1;
+    }
     bool ok = false;
     QByteArray plain = open(key, bytes.mid(at), &ok);
     key.fill(0);
@@ -837,8 +904,8 @@ void Vault::backup(const QString &password)
         Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
-    if (password.size() < 8) {
-        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("The backup password needs at least 8 characters."));
+    if (password.size() < kMinBackupPassword) {
+        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("The backup password needs at least %1 characters.").arg(kMinBackupPassword));
         return;
     }
     if (beforeBackup)
@@ -856,6 +923,10 @@ void Vault::backup(const QString &password)
         Files files = collect(key, dir);
         files.emplace_back(kSettingsEntry, extra);
         const QByteArray bytes = packBackup(password, files, QStringLiteral("huginn"));
+        if (bytes.isEmpty()) {
+            *result = QStringLiteral("Couldn't make the backup's key on this computer.");
+            return;
+        }
         QDir().mkpath(folder);
         QSaveFile f(file);
         if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) {
@@ -1017,7 +1088,11 @@ bool Vault::backupSelfTest()
     quint32 len = 0;
     const bool lenOk = bytes.startsWith("MUNB1") && get32(bytes, 5, &len) && len > 0 && len <= 4096;
     const QJsonObject h = QJsonDocument::fromJson(bytes.mid(9, len)).object();
-    check("header", lenOk && h.value(QStringLiteral("v")).toInt() == 1 && h.value(QStringLiteral("rounds")).toInt() == 310000
+    const QString kdf = h.value(QStringLiteral("kdf")).toString();
+    check("header", lenOk && h.value(QStringLiteral("v")).toInt() == 2 && !h.contains(QStringLiteral("rounds"))
+                        && ((kdf == QLatin1String("argon2id") && h.value(QStringLiteral("m")).toInt() == int(kArgonMem)
+                             && h.value(QStringLiteral("t")).toInt() == int(kArgonIter) && h.value(QStringLiteral("p")).toInt() == int(kArgonLanes))
+                            || (kdf == QLatin1String("scrypt") && h.value(QStringLiteral("N")).toInteger() == qint64(kScryptN)))
                         && h.value(QStringLiteral("app")).toString() == QLatin1String("huginn")
                         && QByteArray::fromBase64(h.value(QStringLiteral("salt")).toString().toLatin1()).size() == 16
                         && QDateTime::fromString(h.value(QStringLiteral("created")).toString(), Qt::ISODate).isValid());
@@ -1032,6 +1107,40 @@ bool Vault::backupSelfTest()
     check("changed file refused", unpackBackup(changedBytes, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 2);
     check("not a backup refused", unpackBackup(QByteArrayLiteral("MUNV1 something else"), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1);
     check("round trip", unpackBackup(bytes, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 0 && back == want);
+    // A PBKDF2 backup (v1) still restores.
+    {
+        Files v1back;
+        const QByteArray v1 = packBackup(QStringLiteral("correct horse"), got, QStringLiteral("huginn"), QStringLiteral("pbkdf2"));
+        quint32 l1 = 0;
+        const QJsonObject h1 = get32(v1, 5, &l1) ? QJsonDocument::fromJson(v1.mid(9, l1)).object() : QJsonObject();
+        check("PBKDF2 backup restores", h1.value(QStringLiteral("v")).toInt() == 1 && h1.value(QStringLiteral("rounds")).toInt() == 310000
+                                            && unpackBackup(v1, QStringLiteral("correct horse"), QStringLiteral("huginn"), &v1back, &created, &error) == 0
+                                            && v1back == want);
+    }
+    // Weakened settings in the (unprotected) header are refused, not used.
+    {
+        const auto withHeader = [&bytes, len](const QJsonObject &nh) {
+            const QByteArray js = QJsonDocument(nh).toJson(QJsonDocument::Compact);
+            QByteArray out = QByteArrayLiteral("MUNB1");
+            put32(out, quint32(js.size()));
+            return out + js + bytes.mid(9 + qsizetype(len));
+        };
+        QJsonObject weakA = h;
+        weakA.insert(QStringLiteral("kdf"), QStringLiteral("argon2id"));
+        weakA.insert(QStringLiteral("m"), 1024);
+        weakA.insert(QStringLiteral("t"), 3);
+        weakA.insert(QStringLiteral("p"), 1);
+        QJsonObject weakS = h;
+        weakS.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
+        weakS.insert(QStringLiteral("N"), 1024.0);
+        weakS.insert(QStringLiteral("r"), 8);
+        weakS.insert(QStringLiteral("p"), 1);
+        QJsonObject none = h;
+        none.remove(QStringLiteral("kdf"));
+        check("weakened key settings refused", unpackBackup(withHeader(weakA), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1
+                                                   && unpackBackup(withHeader(weakS), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1
+                                                   && unpackBackup(withHeader(none), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1);
+    }
 
     // Restore onto another computer's chat: its own lock stays, everything else is replaced.
     const Files stale{{QStringLiteral("chats.json"), QByteArrayLiteral("old")}, {QStringLiteral("photos/old"), QByteArrayLiteral("old")}};

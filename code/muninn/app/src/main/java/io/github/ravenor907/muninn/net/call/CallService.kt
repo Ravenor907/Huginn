@@ -137,9 +137,10 @@ object Ringer {
     private fun action(c: Context, action: String) = PendingIntent.getBroadcast(c, action.hashCode(),
         Intent(c, CallActions::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
+    /** [name] empty: a call that rang while Muninn is locked (cap b1), shown as "Incoming call" with no name. */
     fun ring(c: Context, callId: String, name: String, key: String) {
         channels(c)
-        val who = shown(c, name)
+        val who = if (name.isEmpty()) null else shown(c, name)
         val person = Person.Builder().setName(who ?: "Muninn call").setImportant(true).build()
         val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(who ?: "Muninn").setContentText("Incoming call")

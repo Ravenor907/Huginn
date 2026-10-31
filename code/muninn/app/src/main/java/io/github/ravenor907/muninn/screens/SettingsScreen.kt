@@ -148,7 +148,7 @@ private fun ShortList(app: Muninn) {
     // Nearby as one switch: on, people close by or on the same Wi-Fi can find you; the details are under More.
     var nearby by remember { mutableStateOf(id.visibleNearby && id.nearbyChat) }
     ToggleRow("Find people close by", "Chat and share files with no internet", nearby) {
-        nearby = it; id.visibleNearby = it; id.nearbyChat = it; app.net.announce(); app.close.readvertise()
+        nearby = it; id.visibleNearby = it; id.nearbyChat = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
     }
     PageRow("More settings", "Everything else") { SettingsNav.folder = "more" }
 }
@@ -471,7 +471,7 @@ private fun NearbyPage(app: Muninn) {
     var device by remember { mutableStateOf(id.deviceName) }
     ToggleRow("Visible to people nearby", if (visible) "People close by or on the same Wi-Fi can see your name and message you"
         else "Hidden: only your contacts can reach you close by or on the same Wi-Fi. Your name isn't sent out", visible) {
-        visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise()
+        visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
     }
     if (visible) ToggleRow("Nearby room", "A chat room for everyone close by or on the same Wi-Fi with Huginn or Muninn", nearby) {
         nearby = it; id.nearbyChat = it; app.net.announce()

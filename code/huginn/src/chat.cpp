@@ -5,6 +5,7 @@
 #include "morewire.h"
 #include "ble.h"
 #include "chatcrypto.h"
+#include "ring.h"
 #include "call/callcrypto.h"
 #include "filelink.h"
 #include "link.h"
@@ -101,6 +102,8 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
             m_peers.clear();
             m_capable.clear();
             m_caps.clear();
+            m_wrapKeys.reset();
+            m_peerKeys.reset();
             m_outbox.clear();
             m_unsentKeeps.clear();
             m_groups.clear();
@@ -146,6 +149,11 @@ void Chat::start()
     }
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
+    // Caps b1 and e1: my day keys and what contacts announced, read from the vault now it's open.
+    m_wrapKeys = std::make_unique<WrapKeys>([this] { return m_vault->read(QStringLiteral("wrapkeys.json")); },
+                                            [this](const QByteArray &b) { m_vault->write(QStringLiteral("wrapkeys.json"), b); });
+    m_peerKeys = std::make_unique<PeerKeys>([this] { return m_vault->read(QStringLiteral("peerkeys.json")); },
+                                            [this](const QByteArray &b) { m_vault->write(QStringLiteral("peerkeys.json"), b); });
     loadPrefs();
     load();
     m_seen.load(m_vault->read(QStringLiteral("seen.json")), now(), 2 * kDay);
@@ -227,6 +235,8 @@ void Chat::start()
     connect(&m_prune, &QTimer::timeout, this, [this] {
         prune();
         sweepSealed();
+        if (m_wrapKeys)
+            m_wrapKeys->prune(now() / 1000);
         m_seen.prune(now(), 2 * kDay, 5000);
         // Kept on disk too (written at most once a minute), so a restart doesn't let an old copy in again.
         if (m_seen.dirty())
@@ -314,8 +324,8 @@ void Chat::setVisibleNearby(bool v)
     if (v == visibleNearby())
         return;
     m_settings.setValue(QStringLiteral("chat/visibleNearby"), v);
-    // New Bluetooth links get a hello without the name too (main.cpp); links already open keep the
-    // hello they had until they reconnect.
+    // Hidden, Bluetooth goes silent at once (links end, no scanning); visible again, it starts looking.
+    m_ble->hiddenChanged();
     m_net->announce();
     Q_EMIT changed();
 }
@@ -375,6 +385,13 @@ bool Chat::inviteOk(const QString &token) const { return !token.isEmpty() && m_i
 // see only which inbox it's for: not who sent it, not their name. The same as Muninn's wrap().
 QString Chat::wrap(const QString &peerKey, const QByteArray &body) const
 {
+    // Cap e1: sealed to one of their day keys too, so their chat key alone never opens it once that day key is gone.
+    const QString day = m_peerKeys && hasCap(peerKey, QLatin1String(RingWire::kWrapCap)) ? m_peerKeys->wrapFor(peerKey, now() / 1000) : QString();
+    if (!day.isEmpty()) {
+        const QJsonObject w = RingWire::sealWrap(peerKey, day, body);
+        if (!w.isEmpty())
+            return b64(Nostr::pad(QJsonDocument(w).toJson(QJsonDocument::Compact)));
+    }
     const ChatCrypto::KeyPair eph = ChatCrypto::newKeyPair();
     const QByteArray key = ChatCrypto::sharedKey(eph.privateDer, eph.publicDer, QByteArray::fromBase64(peerKey.toLatin1()));
     QByteArray nonce, data;
@@ -390,6 +407,15 @@ QByteArray Chat::unwrap(const QString &content) const
     if (!o.contains(QStringLiteral("e")))
         return raw;   // not sealed
     bool ok = false;
+    // Cap e1: wrapped for one of my day keys as well; one that's gone (or never was) doesn't open.
+    if (o.contains(QStringLiteral("w"))) {
+        if (!m_wrapKeys)
+            return QByteArray();
+        WrapKeys *days = m_wrapKeys.get();
+        const QByteArray plain = RingWire::openWrap(o, ChatCrypto::KeyPair{m_priv, m_pub},
+                                                    [days](const QString &id) { return days->find(id, now() / 1000); }, &ok);
+        return ok ? plain : QByteArray();
+    }
     const QByteArray plain = ChatCrypto::open(keyWith(o.value(QStringLiteral("e")).toString()), QByteArray::fromBase64(o.value(QStringLiteral("n")).toString().toLatin1()),
                                               QByteArray::fromBase64(o.value(QStringLiteral("d")).toString().toLatin1()), &ok);
     return ok ? plain : QByteArray();
@@ -673,7 +699,7 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
 {
     if (bodies.isEmpty() || mailbox.isEmpty() || m_moving)
         return false;
-    // Relays may drop it after the chat's message limit (a group's, for group messages): it's gone from both sides by then.
+    // Relays may drop it after the longest message limit (Nostr::expiration): it's gone from both sides by then.
     const int keep = days > 0 ? days : chatDays(key);
     for (const QByteArray &b : bodies)
         m_nostr->publish(mailbox, wrap(key, b), keep);
@@ -703,9 +729,14 @@ void Chat::noteCaps(const QString &key, bool present, const QStringList &caps)
         }
     if (known && !grew)
         return;
+    const QStringList before = m_caps.value(key);
     m_caps.insert(key, have);
     saveRatchet(key);
     Q_EMIT changed();
+    // Caps b1 and e1: their app says so now, so my ring key and day key go to them.
+    const QString ringCap = QLatin1String(RingWire::kRingCap), wrapCap = QLatin1String(RingWire::kWrapCap);
+    if ((have.contains(ringCap) && !before.contains(ringCap)) || (have.contains(wrapCap) && !before.contains(wrapCap)))
+        QTimer::singleShot(0, this, [this, key] { sendKeys(key); });
 }
 
 void Chat::probeCaps(const QString &key)
@@ -731,6 +762,54 @@ void Chat::sendCall(const QString &key, const QJsonObject &msg)
     if (!base.isEmpty())
         post(base, json);
     sendInternet(key, {json}, mailboxOf(key));
+    ring(key, msg);
+}
+
+void Chat::ring(const QString &key, const QJsonObject &msg)
+{
+    // Cap b1 (section 23): their device rings even while their app is locked. Once per call, 1:1 offers only.
+    if (msg.value(QStringLiteral("t")).toString() != QLatin1String("offer") || msg.contains(QStringLiteral("g")) || !m_peerKeys
+        || !hasCap(key, QLatin1String(RingWire::kRingCap)))
+        return;
+    const RingWire::Announce k = m_peerKeys->get(key);
+    const QString call = msg.value(QStringLiteral("call")).toString();
+    if (k.rk.isEmpty() || k.rp.isEmpty() || call.isEmpty() || m_rung.contains(call))
+        return;
+    if (m_rung.size() > 200)
+        m_rung.clear();
+    m_rung.insert(call);
+    const qint64 ts = msg.contains(QStringLiteral("ts")) ? msg.value(QStringLiteral("ts")).toInteger() : now();
+    const QString content = RingWire::ringContent(k.rk, call, ts);
+    if (!content.isEmpty())
+        m_nostr->publish(k.rp, content, Nostr::kLongestDays);
+}
+
+QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
+{
+    if (m_ringKey && hasCap(key, QLatin1String(RingWire::kRingCap))) {
+        o.insert(QStringLiteral("rk"), m_ringKey->publicKey());
+        o.insert(QStringLiteral("rp"), m_ringKey->mailbox());
+    }
+    if (m_wrapKeys && hasCap(key, QLatin1String(RingWire::kWrapCap))) {
+        const WrapKeys::Day d = m_wrapKeys->current(now() / 1000);
+        o.insert(QStringLiteral("wk"), d.pub);
+        o.insert(QStringLiteral("wt"), d.t);
+    }
+    return o;
+}
+
+void Chat::sendKeys(const QString &key)
+{
+    if (m_keysSent.contains(key))
+        return;
+    m_keysSent.insert(key);
+    const QJsonObject r = withKeys(key, QJsonObject{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}});
+    deliver(key, envelope(QStringLiteral("receipt"), key, compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(key));
+}
+
+bool Chat::fileRatchet(const QString &room, const QString &key) const
+{
+    return room == QLatin1String("file") && isContact(key) && m_capable.value(key) && hasCap(key, QLatin1String(RingWire::kWrapCap));
 }
 
 QByteArray Chat::signWithChatKey(const QByteArray &bytes) const { return CallCrypto::signDer(m_priv, bytes); }
@@ -1169,6 +1248,8 @@ void Chat::emptyTrash()
 void Chat::forgetPerson(const QString &key)
 {
     forgetFlags(key);
+    if (m_peerKeys && !isGroupPeer(key))
+        m_peerKeys->forget(key);
     m_contacts.remove(key);
     m_met.remove(key);
     // Not in touch any way now: their profile picture goes too (a group peer keeps it while the group lasts).
@@ -1288,8 +1369,9 @@ bool Chat::staleSealed(const QString &key, const QByteArray &body) const
         return false;
     if (strict(key) && !Proof::isBound(o))
         return true;
-    return !ChatWire::isRatchet(o) && ChatWire::useRatchet(o.value(QStringLiteral("room")).toString(), isContact(key) || isGroupPeer(key),
-                                                           m_capable.value(key) || isGroupPeer(key));
+    return !ChatWire::isRatchet(o) && (ChatWire::useRatchet(o.value(QStringLiteral("room")).toString(), isContact(key) || isGroupPeer(key),
+                                                            m_capable.value(key) || isGroupPeer(key))
+                                       || fileRatchet(o.value(QStringLiteral("room")).toString(), key));
 }
 
 QString Chat::stranger(const QString &name) { return QStringLiteral("\u201C%1\u201D \u00B7 Not a contact \u00B7 nearby").arg(name); }
@@ -1525,7 +1607,12 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             return 429;
         q << now();
     }
-    const QString text = room == QLatin1String("receipt") ? QString::fromUtf8(body) : QString::fromUtf8(body).left(kMax);
+    const QString text = QString::fromUtf8(body);
+    // Section 9: text over the limit is malformed and refused, never cut.
+    if ((room == QLatin1String("private") || room == QLatin1String("rich") || room == QLatin1String("nearby")) && GroupWire::length(text) > kMax) {
+        m_pendingPeer.reset();
+        return 400;
+    }
     const QString msgId = sentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : sentId;
     QVariantMap incoming = message(msgId, fromKey, name, text, false, via);
     if (!re.isEmpty())
@@ -1620,18 +1707,24 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         const QString st = r.value(QStringLiteral("s")).toString();
         if (st != QLatin1String("delivered") && st != QLatin1String("read") && st != QLatin1String("unsent"))
             return 400;
+        // Section 9: at most 40 ids a receipt; more is malformed and refused.
+        const QJsonArray a = r.value(QStringLiteral("ids")).toArray();
+        if (a.size() > GroupWire::kMaxReceiptIds)
+            return 400;
         commitPeer();
         m_seen.add(fromKey, sentId, now());
         // A caps probe: answer with an empty receipt, whose envelope carries our caps.
+        // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
+        if (m_peerKeys && (isContact(fromKey) || isGroupPeer(fromKey)))
+            m_peerKeys->take(fromKey, RingWire::announceOf(r, now() / 1000));
         if (r.value(QStringLiteral("q")).toString() == QLatin1String("caps")) {
-            const QJsonObject a{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}};
+            const QJsonObject a = withKeys(fromKey, QJsonObject{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}});
             deliver(fromKey, envelope(QStringLiteral("receipt"), fromKey, compact(a), QUuid::createUuid().toString(QUuid::WithoutBraces)),
                     mailbox.isEmpty() ? mailboxOf(fromKey) : mailbox);
         }
         QSet<QString> ids;
-        const QJsonArray a = r.value(QStringLiteral("ids")).toArray();
-        for (int i = 0; i < qMin(int(a.size()), 200); ++i)
-            ids.insert(a.at(i).toString());
+        for (const QJsonValue &v : a)
+            ids.insert(v.toString());
         // A reaction or edit (cap m1) got there: stop resending it.
         bool mxDone = false;
         for (const QString &id : std::as_const(ids))
@@ -2029,8 +2122,10 @@ QJsonObject Chat::seal(const QJsonObject &fields, const QString &theirKey, const
     // A message from them that just opened moves the same peer: keep that first.
     if (m_pendingPeer && m_pendingKey == theirKey)
         commitPeer();
+    // Cap e1: room "file" goes through the ratchet too, for an app that says e1.
     const bool r1 = ChatWire::useRatchet(fields.value(QStringLiteral("room")).toString(), isContact(theirKey) || isGroupPeer(theirKey),
-                                         m_capable.value(theirKey) || isGroupPeer(theirKey));
+                                         m_capable.value(theirKey) || isGroupPeer(theirKey))
+        || fileRatchet(fields.value(QStringLiteral("room")).toString(), theirKey);
     Ratchet::Peer *peer = r1 ? &m_peers[theirKey] : nullptr;
     // Cap d1: how long I keep our chat, next to "caps" (only to an app that reads it).
     QJsonObject f = fields;
@@ -2091,7 +2186,7 @@ QString Chat::backupMailbox(const QVariantMap &m) const
 
 void Chat::sendNearby(const QString &text)
 {
-    const QString t = text.trimmed().left(kMax);
+    const QString t = GroupWire::clip(text.trimmed(), kMax);
     if (t.isEmpty() || !nearbyOn() || !m_ready)
         return;
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -2119,7 +2214,7 @@ void Chat::sendPrivate(const QString &key, const QString &text, const QString &r
 // poll: cap m2, a poll whose text says the same for apps without m2.
 QString Chat::sendPrivateWith(const QString &key, const QString &text, const QString &re, const QJsonObject &poll)
 {
-    const QString t = text.trimmed().left(kMax);
+    const QString t = GroupWire::clip(text.trimmed(), kMax);
     if (t.isEmpty() || !m_ready)
         return QString();
     const QString name = nameOf(key);
@@ -2316,7 +2411,7 @@ void Chat::receipt(const QString &key, const QStringList &ids, const QString &st
     // 40 ids a receipt keeps each one small on every route.
     const QStringList last = ids.mid(qMax(0, int(ids.size()) - 200));
     for (int i = 0; i < last.size(); i += 40) {
-        const QJsonObject r{{QStringLiteral("ids"), QJsonArray::fromStringList(last.mid(i, 40))}, {QStringLiteral("s"), state}};
+        const QJsonObject r = withKeys(key, QJsonObject{{QStringLiteral("ids"), QJsonArray::fromStringList(last.mid(i, 40))}, {QStringLiteral("s"), state}});
         deliver(key, envelope(QStringLiteral("receipt"), key, QJsonDocument(r).toJson(QJsonDocument::Compact), QUuid::createUuid().toString(QUuid::WithoutBraces)), box);
     }
 }
@@ -2994,7 +3089,7 @@ QString Chat::react(const QString &key, const QString &id, const QString &emoji)
 
 QString Chat::editMessage(const QString &key, const QString &id, const QString &text)
 {
-    const QString t = text.trimmed().left(kMax);
+    const QString t = GroupWire::clip(text.trimmed(), kMax);
     if (t.isEmpty())
         return QStringLiteral("A message can't be empty. Unsend it instead.");
     if (!hasM1(key)) {

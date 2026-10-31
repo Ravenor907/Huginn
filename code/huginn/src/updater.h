@@ -9,7 +9,8 @@ class Settings;
 
 // Updates from GitHub releases (tagged v0.3, v0.31...). Updates install the
 // release's Flatpak bundle for this user, then Huginn restarts. Only a file that matches the release's
-// SHA-256 and carries the project's signature is installed.
+// SHA-256, carries the project's signature (.sig) and the project's signature of its version (.vsig, for the
+// release tag being installed) and is newer than this copy is installed.
 class Updater : public QObject
 {
     Q_OBJECT
@@ -40,6 +41,12 @@ public:
     // signed with the project's release key (shared/docs/releases.md); Huginn installs nothing without it.
     static bool signedBy(const QByteArray &data, const QByteArray &sig, const QByteArray &publicKey);
     static bool signedByProject(const QByteArray &data, const QByteArray &sig);
+    // <file>.vsig signs this text (shared/docs/releases.md): "huginn-muninn release v1\n" version "\n" file name "\n"
+    // lowercase hex SHA-256 of the file. Built from the tag being installed, so an older signed file posted again under
+    // a newer tag doesn't check out.
+    static QByteArray versionMessage(const QString &version, const QString &file, const QByteArray &shaHex);
+    static bool versionSignedBy(const QString &version, const QString &file, const QByteArray &shaHex, const QByteArray &vsig,
+                                const QByteArray &publicKey);
     // Checks signedBy() against shared/vectors/release-sig-vectors.json (for CI).
     static bool selfTest(const QString &vectorsPath);
 
@@ -53,10 +60,11 @@ private:
     void chosen(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
     QNetworkRequest request(const QUrl &url) const;
     void download(const QString &url, const QString &tag);
-    // Checks the download against the release's SHA-256 (GitHub's digest or the .sha256 file) and the project's
-    // signature (the .sig file beside it), then installs it.
+    // Checks the download against the release's SHA-256 (GitHub's digest or the .sha256 file), the project's
+    // signature (the .sig file beside it) and its signature of the version (the .vsig file), then installs it.
     void verifyThenInstall(const QString &path, const QString &tag);
-    void checkThenInstall(const QString &path, const QByteArray &expected, const QByteArray &sig);
+    void checkThenInstall(const QString &path, const QString &tag, const QString &name, const QByteArray &expected, const QByteArray &sig,
+                          const QByteArray &vsig);
     void installFlatpak(const QString &path);
     void failed(const QString &status);
     Settings *m_settings;

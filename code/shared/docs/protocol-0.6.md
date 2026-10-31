@@ -17,7 +17,8 @@ does otherwise still interoperates.
   `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps, [invite], [o], (nonce, data) | (rh, data)}`
   (`caps` is 1.1, `o` is 0.1).
 - Routes: Bluetooth LE (BleFrames), local Wi-Fi `POST /api/huginn/v1/message`, internet as a Nostr kind 1059
-  event whose content is the envelope sealed to the recipient's chat key with a one-off key.
+  event whose content is the envelope sealed to the recipient's chat key with a one-off key (to someone whose caps
+  include `e1`, also to one of their day keys, 23.1).
 - Pairwise sealing: the message ratchet per contact (`shared/tools/ratchet_ref.py`), or v1 (static shared key)
   where the ratchet isn't used.
 - Every message goes out on every route at once; the receiver keeps the first copy (dedupe by id) and
@@ -74,6 +75,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `x1` | moving to another device (section 18). Muninn and Huginn. |
 | `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn. |
 | `p1` | profile pictures and status (section 22): room `profile`, and `st` and `cs` on `active`. Muninn and Huginn. |
+| `b1` | the ring key (section 23.2): `rk` and `rp` in receipts, ring envelopes for 1:1 offers. Muninn and Huginn. |
+| `e1` | the relay wrapping sealed to a day key too, and room `file` through the ratchet (section 23.1): `wk` and `wt` in receipts. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -1153,6 +1156,8 @@ a new config to every TV that said `k7`. Vectors: `tv.configs.cfg6` (`upd` false
 | `group` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
 | `photo`, `gphoto` | | pieces with `kind:"video"` (12.2) | yes | as photo | as photo | m2 |
 | `intro` | `intro` `yes` `add` | 13 | v1 (it may go to a non-contact) | no (the relays keep it) | Seen | i1 |
+| `file` | `offer` `accept` `decline` | 14.1 | to `e1`; v1 otherwise | no | Seen | f1 |
+| `receipt` | | `rk` `rp` `wk` `wt` (23) | yes | no | Seen | b1, e1 |
 
 ## 9. Size limits
 
@@ -1219,6 +1224,11 @@ next to `chat-vectors.json`).
 hints for three days and which match, bound fields for good and malformed envelopes, a bound v1 envelope (byte for
 byte from its nonce) with the changed copies that must not open, a bound ratchet envelope Bob opens on a new session,
 and the group state cases. Muninn checks it in `S1Test`, Huginn in `--chat-selftest`.
+
+`python3 shared/tools/e1b1_ref.py` writes `shared/vectors/e1b1-vectors.json` (section 23): the day key wrapping (both
+ECDH keys, the key, the id, a wrapping that opens and ones that don't), the ring envelope, which ring plaintexts are
+well-formed and fresh, which receipt fields are taken, and the day key rules. Muninn checks it in `E1B1Test`, Huginn in
+`--chat-selftest` (the file next to `chat-vectors.json`).
 
 `python3 shared/tools/m1_ref.py` writes `shared/vectors/m1-vectors.json` (section 11): every `good` payload is well-formed for its
 room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
@@ -1414,6 +1424,8 @@ as a contact at once (no request to accept), and the token is used up; the app t
 Never through the call relay. Only between two people who trust each other with their addresses (5.8.1).
 
 Room `file`, sealed like a call signal and sent once on every route (5.1); deduped with Seen. Limit: 30 per sender per 10 s.
+To someone whose caps include `e1` (and who has the ratchet) it goes through the ratchet like `call`; to anyone else it
+is v1. Receivers take both (23.1).
 
 | t | fields | |
 |---|---|---|
@@ -1681,7 +1693,7 @@ changes what a receiver must understand, so there is **no cap token**: every app
 ### 20.1 Padding
 
 The event's `content` is base64 of the outer wrapping `{"e": .., "n": .., "d": ..}` (the throwaway key, the nonce and the
-sealed envelope). The wrapping gets one more field, `"z"`, a string of `0` characters, so that the base64 is
+sealed envelope; with `e1` also `"w"`, 23.1; a ring envelope is the same shape, 23.2). The wrapping gets one more field, `"z"`, a string of `0` characters, so that the base64 is
 exactly one of these lengths:
 
 - 1024, 4096, 16384 or 32768 characters, the smallest that fits;
@@ -1706,9 +1718,17 @@ address on both kinds of socket; only a VPN or Tor hides that.
 
 ### 20.3 Expiry (NIP-40)
 
-Each event carries `["expiration", "<unix seconds>"]`: the time of sending plus the chat's message limit in days
-(section 16; a group's limit for group messages), so relays that follow NIP-40 drop it once it is gone from the devices
-anyway. Receivers ignore the tag.
+Each event's `created_at` is the time of sending less a random 0 to 599 seconds. Each event carries
+`["expiration", "<unix seconds>"]`:
+
+```
+expiration = ceil_day(created_at + 600 + 30 * 86400)      ceil_day(t) = the smallest multiple of 86400 >= t
+```
+
+30 is the longest message limit (section 16), so relays that follow NIP-40 never drop an event before any chat's limit
+has passed, and drop it once it is gone from the devices anyway. It is taken from the blurred `created_at` and is a
+whole day (UTC) the same for every chat, so it reveals neither the exact sending time nor the chat's limit. Receivers
+ignore the tag. Vectors: `expiry` in `pad-vectors.json` (with `blur` and `longestDays`).
 
 ## 21. Proven routes and bound envelopes (cap `s1`)
 
@@ -1744,11 +1764,16 @@ A proof is a signed object (2.2) by the chat key, without the object itself on t
 
 ### 21.3 Hidden from people nearby
 
-Hidden, a device sends no name, `chatKey` or `mailbox` in announces and hellos. Instead it sends
-`"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]`, where day is the
-number of whole days since 1970 (UTC). A contact matches it against each contact's key for yesterday, today and
-tomorrow and, on a match, treats the device as that contact (its proof must still check out). Anyone else learns
-nothing they can follow from place to place.
+Hidden, a device sends nothing about itself close by. On the Wi-Fi it makes no announcement and answers no scan or
+`info` request. On Bluetooth LE it is silent: Muninn doesn't advertise, serves nothing on HELLO and lets go of any
+connection; Huginn doesn't scan (an active scan names its adapter), doesn't connect and sends no hello. Anyone close
+by learns nothing they can follow from place to place; contacts still reach it over the internet.
+
+A hello or announce may still carry
+`"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]` in place of the name,
+`chatKey` and `mailbox`, where day is the number of whole days since 1970 (UTC); Muninn's `prepare-upload` carries
+one when a hidden phone sends a file over the Wi-Fi. Both apps match one against each contact's key for yesterday,
+today and tomorrow and, on a match, treat the device as that contact (its proof must still check out).
 
 ### 21.4 Bound envelopes
 
@@ -1862,3 +1887,77 @@ move (18). Between Muninn and Huginn `@move.json` (18.4) carries it as
 after the move. Received pictures travel too (they are vault files), with the per-person sent versions, so nothing is
 sent twice.
 
+## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`)
+
+Everything here is in `shared/tools/e1b1_ref.py`, which writes `shared/vectors/e1b1-vectors.json`. `ECDH(a, B)` below is
+`ChatCrypto.sharedKey` (section 0: HKDF over the P-256 secret, salted with both public keys).
+
+### 23.1 Day keys and the relay wrapping (`e1`)
+
+Without `e1`, the relay wrapping (20.1) is sealed to the recipient's chat key alone, so whoever later steals that key
+can open every saved relay event and read who sent it, their name and the room. With `e1` it is also sealed to a
+**day key** the recipient deletes after a while; once it is gone, the chat key alone opens nothing.
+
+- Each device makes a new P-256 day key when its newest is a day old (or more than a day ahead of its clock), keeps the
+  private halves in the vault, and deletes each 40 days after it was made (7 days of use, 31 on a relay, a margin).
+  Its id is the first 16 lowercase hex characters of SHA-256 of its SubjectPublicKeyInfo.
+- It announces the newest in every receipt (room `receipt`, also caps probes and their answers) to someone whose caps
+  include `e1`: `"wk"` (the public key, base64 SPKI) and `"wt"` (when it was made, unix seconds, an integer). The
+  first time a contact's caps gain `e1` (or `b1`), an empty receipt `{"ids":[],"s":"delivered"}` carrying them goes to
+  that contact at once.
+- A receiver takes `wk` and `wt` from an authentic receipt of a contact or group peer when `wk` is a P-256 SPKI of 91
+  bytes (uncompressed point) and `wt` is an integer no more than 40 days old and no more than a day ahead; it keeps
+  the newest per person (a lower `wt` changes nothing). Anything else in those fields is ignored; the receipt itself
+  is still taken.
+- A sender wraps with the day key it holds for someone whose caps include `e1`, only while that key is at most 7 days
+  old (`wt`, by the sender's clock, and at most a day ahead). Otherwise (no day key, or an older one) it sends the
+  wrapping of 20.1. The wrapping:
+
+  ```
+  k1  = ECDH(one-off key, recipient's chat key)
+  k2  = ECDH(one-off key, day key)
+  key = SHA-256(UTF-8("huginn-muninn wrap v2") || k1 || k2)
+  {"e": one-off public key (base64 SPKI), "w": day key id, "n": nonce, "d": AES-256-GCM(key, envelope, AAD "huginn-muninn")}
+  ```
+
+  then padded (20.1). A receiver opens a wrapping with `"w"` only with its own chat key and the day key that id names
+  while it still has it; without `"w"` as in 20.1.
+- Room `file` (14.1) goes through the ratchet to someone whose caps include `e1`, so file offers and accepts (with
+  their one-off keys and addresses) are forward secret like call signals.
+
+### 23.2 The ring key (`b1`)
+
+A device whose vault is locked can't open anything (every envelope is sealed with keys in the vault), so a call to it
+can't ring. With `b1` it can:
+
+- Each device makes a **ring key**: a P-256 key pair and a Nostr secret for its **ring mailbox**, kept in the app's own
+  private storage **outside the vault** (Muninn: `ring-key.json` in its files; Huginn: `ring-key.json` in its data
+  folder, beside the vault folder), never in an OS key store. It is not the chat key and is not in backups.
+- Its public half goes in every receipt to someone whose caps include `b1`: `"rk"` (base64 SPKI) and `"rp"` (the ring
+  mailbox, 64 lowercase hex). A receiver takes both from an authentic receipt of a contact or group peer when `rk` is a
+  P-256 SPKI as in 23.1 and `rp` is 64 lowercase hex, and keeps the latest.
+- A caller sending a 1:1 `offer` (5.2, not one inside a voice room) to someone whose caps include `b1` and whose ring
+  key it holds also publishes, once per call, a **ring envelope** to their ring mailbox, padded and expiring like
+  any other event (section 20):
+
+  ```
+  key = SHA-256(UTF-8("huginn-muninn ring v1") || ECDH(one-off key, ring key))
+  {"e": one-off public key, "n": nonce, "d": AES-256-GCM(key, {"t":"ring","call":<call id>,"ts":<the offer's ts>}, AAD "huginn-muninn")}
+  ```
+
+  Nothing else is in it: no name, no key, no sender. A ring plaintext is well-formed when `t` is `ring`, `call` is a
+  call id (22 base64url characters) and `ts` an integer 0 <= ts < 2^53; other fields are ignored.
+- A device subscribes to its ring mailbox on an inbox request of its own (locked or not), and when a relay asks for a
+  sign-in (NIP-42) signs in as the ring mailbox too, so a ring envelope arrives without anything from the vault.
+  An event for the ring mailbox is only ever tried with the ring key and then dropped: never kept or opened otherwise.
+- **Locked**, a well-formed ring that opens and is fresh like an offer (no more than 60 s old, 120 s ahead) rings
+  "Incoming call" with no name, as long as any call rings (45 s). Answer is kept (Muninn opens its unlock screen); once
+  unlocked, the offer (kept sealed with everything else that came while locked, or fetched from the relays again) is
+  answered at once, even if it is up to 105 s old.
+  Decline: once unlocked, the offer is answered with `decline`. **Unlocked**, a ring envelope is ignored: the offer
+  itself rings, with the name.
+- Someone holding a locked device learns only that calls came and when; the relays learn that the ring mailbox got an
+  event, as they learn that the mailbox did.
+
+An app without `b1` or `e1` ignores the receipt fields and gets neither ring envelopes nor day key wrappings; with
+mixed versions everything falls back to sections 14 and 20.

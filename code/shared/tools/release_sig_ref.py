@@ -6,6 +6,12 @@ vectors; it checks every case twice (building, then from the file).
 The vectors hold the RFC's own test cases 1 to 3, one signature from a throwaway key over a longer file, and
 cases that must be refused (a changed file, a changed signature, a wrong key, an over-large S, a key that is not
 a point on the curve, a short signature). Neither app ever signs: CI signs with openssl in the release job.
+
+Each release file also has <file>.vsig: the Ed25519 signature of
+    UTF-8("huginn-muninn release v1" "\n" version "\n" file name "\n" lowercase hex SHA-256 of the file)
+An app builds that text from the release tag it is installing (v0.97 -> "0.97"), the file's name and the SHA-256 of
+what it downloaded, so an older signed file posted again under a newer tag doesn't check out. It installs only a
+version newer than its own. Vectors: "versioned" (signatures) and "newer" (which versions may be installed).
 """
 import hashlib, json, os
 
@@ -176,16 +182,74 @@ def cases():
     return out
 
 
+DOMAIN = "huginn-muninn release v1"
+
+
+def version_message(version, name, sha_hex):
+    return ("%s\n%s\n%s\n%s" % (DOMAIN, version, name, sha_hex)).encode("utf-8")
+
+
+def rank(v):
+    """Versions have one dot and read as decimals (0.3 < 0.31 < 0.4 < 1.0); a test build sits just below its version."""
+    import re
+    m = re.match(r"^(\d+)\.(\d+)( Test \d+)?", v)
+    if not m:
+        return 0
+    return (int(m.group(1)) * 1000000 + int((m.group(2) + "000000")[:6])) * 10 + (0 if m.group(3) else 5)
+
+
+def versioned():
+    seed = hashlib.sha256(b"Huginn and Muninn throwaway release key").digest()
+    pub = public_key(seed).hex()
+    data = hashlib.sha256(b"Muninn.apk 0.96").digest() * 40
+    sha = hashlib.sha256(data).hexdigest()
+    sig = sign(seed, version_message("0.96", "Muninn.apk", sha)).hex()
+    other = hashlib.sha256(data + b"!").hexdigest()
+
+    def case(name, version, file, sha_hex, signature, valid, public=pub):
+        return {"name": name, "public": public, "version": version, "file": file, "sha256": sha_hex,
+                "message": version_message(version, file, sha_hex).hex(), "signature": signature, "valid": valid}
+    return [
+        case("signed for 0.96", "0.96", "Muninn.apk", sha, sig, True),
+        case("the 0.96 file posted again as 0.97", "0.97", "Muninn.apk", sha, sig, False),
+        case("the 0.96 file posted again as 0.9", "0.9", "Muninn.apk", sha, sig, False),
+        case("another file name", "0.96", "Huginn.flatpak", sha, sig, False),
+        case("another file", "0.96", "Muninn.apk", other, sig, False),
+        case("signature changed", "0.96", "Muninn.apk", sha, flip(sig, 10), False),
+        case("someone else's key", "0.96", "Muninn.apk", sha, sig, False, RFC[0][1]),
+        case("Huginn's zip", "1.2", "Huginn-Windows.zip", other,
+             sign(seed, version_message("1.2", "Huginn-Windows.zip", other)).hex(), True),
+    ]
+
+
+def newer_cases():
+    pairs = [("0.97", "0.96"), ("0.96", "0.96"), ("0.9", "0.96"), ("0.96", "0.96 Test 2"), ("1.0", "0.99"),
+             ("0.31", "0.3"), ("0.3", "0.31"), ("0.4", "0.39")]
+    return [{"tag": t, "current": c, "install": rank(t) > rank(c)} for t, c in pairs]
+
+
 def check(v):
     for c in v["cases"]:
         got = verify(bytes.fromhex(c["public"]), bytes.fromhex(c["message"]), bytes.fromhex(c["signature"]))
         if got != c["valid"]:
             raise SystemExit("case %r: got %s" % (c["name"], got))
+    if v["domain"] != DOMAIN:
+        raise SystemExit("domain")
+    for c in v["versioned"]:
+        msg = version_message(c["version"], c["file"], c["sha256"])
+        if msg.hex() != c["message"]:
+            raise SystemExit("versioned %r: message" % c["name"])
+        got = verify(bytes.fromhex(c["public"]), msg, bytes.fromhex(c["signature"]))
+        if got != c["valid"]:
+            raise SystemExit("versioned %r: got %s" % (c["name"], got))
+    for c in v["newer"]:
+        if (rank(c["tag"]) > rank(c["current"])) != c["install"]:
+            raise SystemExit("newer %r" % c)
 
 
 def main():
     v = {"note": "Ed25519 release signatures (RFC 8032), shared/docs/releases.md; written by shared/tools/release_sig_ref.py",
-         "cases": cases()}
+         "cases": cases(), "domain": DOMAIN, "versioned": versioned(), "newer": newer_cases()}
     check(v)
     here = os.path.dirname(os.path.abspath(__file__))
     for path in (os.path.join(here, "..", "vectors", "release-sig-vectors.json"),

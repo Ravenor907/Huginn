@@ -41,6 +41,18 @@ class SecDataTest {
         }
     }
 
+    @Test fun expirationMatchesTheReference() {
+        assertEquals(v.getLong("blur"), io.github.ravenor907.muninn.net.Nostr.BLUR_S)
+        val a = v.getJSONArray("expiry")
+        assertTrue(a.length() > 0)
+        for (i in 0 until a.length()) {
+            val c = a.getJSONObject(i)
+            val e = io.github.ravenor907.muninn.net.Nostr.expiration(c.getLong("created"))
+            assertEquals("created=${c.getLong("created")}", c.getLong("expiration"), e)
+            assertEquals(0L, e % 86_400L)
+        }
+    }
+
     @Test fun newLocksNeedSixDotsOrCharacters() {
         assertFalse(Vault.LockRules.strong("pattern:0,1,2,5,8"))
         assertTrue(Vault.LockRules.strong("pattern:0,1,2,5,8,7"))

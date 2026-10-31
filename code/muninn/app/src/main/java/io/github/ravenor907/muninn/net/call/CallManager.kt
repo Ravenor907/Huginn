@@ -51,8 +51,69 @@ object CallManager {
     @Volatile private var session: CallSession? = null
     /** Call ids already seen, so a late retry of an ended call doesn't ring again. */
     private val seen = LinkedHashMap<String, Long>()
+
+    /**
+     * Cap b1: a call ringing while Muninn is locked, from a ring envelope (section 23). Nothing is known but its id and
+     * time: no name, no key. [answered] or [declined] is what the person did; the offer itself, kept sealed while
+     * locked, is handled after unlocking and follows that.
+     */
+    private class LockedRing(val app: Muninn, val callId: String, val at: Long) {
+        @Volatile var answered = false
+        @Volatile var declined = false
+    }
+    @Volatile private var lockedRing: LockedRing? = null
+    private val lockedSeen = LinkedHashMap<String, Long>()
+
+    /** A ring envelope opened while Muninn is locked: rings as "Incoming call", with no name. */
+    fun ringLocked(a: Muninn, callId: String, ts: Long) {
+        exec.execute {
+            val now = System.currentTimeMillis()
+            // Unlocked: the offer itself rings, with the name.
+            if (!a.vault.locked.value) return@execute
+            if (session != null || lockedRing != null || RoomManager.busy) return@execute
+            if (!io.github.ravenor907.muninn.net.RingWire.ringFresh(ts, now)) return@execute
+            synchronized(lockedSeen) {
+                lockedSeen.entries.removeAll { now - it.value > 10 * 60_000 }
+                if (lockedSeen.containsKey(callId)) return@execute
+                lockedSeen[callId] = now
+            }
+            // Extreme battery saver: calls ring only while Muninn is open.
+            if (a.quietUntilOpen()) return@execute
+            val r = LockedRing(a, callId, now)
+            lockedRing = r
+            _call.value = Ui(callId, "", LOCKED_NAME, false, CallSession.Phase.INCOMING, 0, false, false, false, false, false, false, false, "",
+                "Unlock Muninn to answer")
+            Ringer.ring(a, callId, "", "")
+            // Rings as long as any call does; then quiet. What the person chose stays a while for the offer to find.
+            exec.schedule(Runnable {
+                if (lockedRing !== r) return@Runnable
+                if (!r.answered && !r.declined) { Ringer.stop(a); if (_call.value?.callId == callId && session == null) _call.value = null }
+            }, CallLogic.RING_MS, TimeUnit.MILLISECONDS)
+            exec.schedule(Runnable { if (lockedRing === r) lockedRing = null }, CallLogic.RING_MS + 3 * 60_000L, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    /** Answered while locked: the lock screen opens, and the call is answered once the offer is opened after unlocking. */
+    private fun answerLocked(r: LockedRing) {
+        r.answered = true
+        Ringer.stop(r.app)
+        if (_call.value?.callId == r.callId) _call.value = null
+        try {
+            r.app.startActivity(android.content.Intent(r.app, io.github.ravenor907.muninn.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (_: Exception) {}
+    }
+
+    /** Declined while locked: quiet now, and a decline goes back once the offer is opened after unlocking. */
+    private fun declineLocked(r: LockedRing) {
+        r.declined = true
+        Ringer.stop(r.app)
+        if (_call.value?.callId == r.callId) _call.value = null
+    }
     private const val MAX_HISTORY = 200
     private const val PREFS = "muninn"
+    /** What the ringing screen shows for a call that rang while Muninn was locked: no name is known then. */
+    const val LOCKED_NAME = "Muninn call"
 
     fun init(app: Muninn, signal: CallSignal) {
         this.app = app; this.signal = signal
@@ -163,7 +224,8 @@ object CallManager {
     }
 
     /** Answers the ring; [video]: with the camera on (only when they started a video call and the camera may be used). */
-    fun answer(video: Boolean = false) { exec.execute { session?.let { s ->
+    fun answer(video: Boolean = false) { exec.execute { lockedRing?.takeIf { session == null && !it.answered && !it.declined }?.let { answerLocked(it); return@execute }
+        session?.let { s ->
         app?.let { Ringer.stop(it) }
         s.wantVideo = video && videoHere()
         CallVideo.want(s, s.wantVideo)
@@ -171,7 +233,8 @@ object CallManager {
     } } }
     fun setCamera(on: Boolean) = CallVideo.setCamera(on)
     fun switchCamera() = CallVideo.switchCamera()
-    fun decline() { exec.execute { session?.decline() } }
+    fun decline() { exec.execute { lockedRing?.takeIf { session == null && !it.answered && !it.declined }?.let { declineLocked(it); return@execute }
+        session?.decline() } }
     fun hangup() { exec.execute { session?.hangup() } }
     fun setMuted(on: Boolean) { exec.execute { session?.setMuted(on) } }
     fun setSpeaker(on: Boolean) { exec.execute { session?.setSpeaker(on) } }
@@ -205,7 +268,18 @@ object CallManager {
             if (cur != null && cur.callId == s.call) { if (cur.peerKey == fromKey) cur.onSignal(s); return@execute }
             if (s.t != "offer") return@execute
             if (s.codec != CallCrypto.CODEC) { send(fromKey, CallLogic.simple("decline", s.call)); return@execute }
-            if (!CallLogic.fresh(s.ts, System.currentTimeMillis())) {
+            // Cap b1: this call already rang while Muninn was locked, and the person answered or declined it then.
+            val pre = lockedRing?.takeIf { it.callId == s.call }
+            if (pre != null) lockedRing = null
+            if (pre?.declined == true) {
+                val no = CallLogic.simple("decline", s.call)
+                send(fromKey, no); exec.schedule(Runnable { send(fromKey, no) }, 1, TimeUnit.SECONDS); exec.schedule(Runnable { send(fromKey, no) }, 2, TimeUnit.SECONDS)
+                if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "declined"))
+                return@execute
+            }
+            // Answered while locked: unlocking took a moment, so the offer may be older than usual (never past the ring).
+            val answeredLocked = pre?.answered == true && s.ts >= System.currentTimeMillis() - CallLogic.RING_MS - 60_000
+            if (!answeredLocked && !CallLogic.fresh(s.ts, System.currentTimeMillis())) {
                 // Sat on a relay too long: a missed call, no ringing.
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts, 0, "missed")).also { Ringer.missed(a, nameOf(fromKey), fromKey) }
                 return@execute
@@ -226,6 +300,19 @@ object CallManager {
             session = ns
             ns.startIncoming(s)
             publish(ns)
+            if (answeredLocked) {
+                // The person already said yes on the ringing screen: answered now (voice), and the call screen comes back.
+                ns.wantVideo = false
+                CallVideo.want(ns, false)
+                ns.answer()
+                CallService.start(a)
+                try {
+                    a.startActivity(android.content.Intent(a, io.github.ravenor907.muninn.screens.CallActivity::class.java)
+                        .setAction(io.github.ravenor907.muninn.screens.CallActivity.SHOW)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                } catch (_: Exception) {}
+                return@execute
+            }
             Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey)
         }
     }

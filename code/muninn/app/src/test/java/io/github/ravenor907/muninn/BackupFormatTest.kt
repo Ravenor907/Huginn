@@ -14,7 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class BackupFormatTest {
-    // Fewer rounds keep the test quick; the format and the math are the same.
+    /** PBKDF2 backups (v1): written here only to check they still open. */
     private val rounds = 100_000
 
     private fun files() = listOf(
@@ -25,11 +25,12 @@ class BackupFormatTest {
         "voice/ünïcode name" to byteArrayOf(1, 2, 3),
     )
 
-    private fun make(password: String = "correct horse", list: List<Pair<String, ByteArray>> = files(), app: String = "muninn"): ByteArray {
+    private fun make(password: String = "correct horse", list: List<Pair<String, ByteArray>> = files(), app: String = "muninn",
+                     v1: Boolean = false): ByteArray {
         val out = ByteArrayOutputStream()
         val steps = ArrayList<Float>()
         val n = BackupFormat.write(out, password, list.map { (n, d) -> BackupFormat.Entry(n) { d } }, app = app,
-            created = "2026-10-26T12:00:00Z", rounds = rounds) { steps += it }
+            created = "2026-10-26T12:00:00Z", rounds = if (v1) rounds else 0) { steps += it }
         assertEquals(list.size, n)
         if (list.isNotEmpty()) assertEquals(1f, steps.last(), 0f)
         return out.toByteArray()
@@ -39,11 +40,43 @@ class BackupFormatTest {
         val opened = BackupFormat.open(make(), "correct horse")
         assertEquals(files().map { it.first }, opened.files.map { it.first })
         files().zip(opened.files).forEach { (a, b) -> assertArrayEquals(a.second, b.second) }
-        assertEquals(1, opened.header.v)
+        assertEquals(2, opened.header.v)
+        assertEquals("scrypt", opened.header.kdf)
+        assertEquals(65_536, opened.header.n); assertEquals(8, opened.header.r); assertEquals(1, opened.header.p)
         assertEquals("muninn", opened.header.app)
         assertEquals("2026-10-26T12:00:00Z", opened.header.created)
-        assertEquals(rounds, opened.header.rounds)
         assertEquals(16, opened.header.salt.size)
+    }
+
+    /** Backups made with PBKDF2 (v1) still restore. */
+    @Test fun pbkdf2BackupStillOpens() {
+        val opened = BackupFormat.open(make(v1 = true), "correct horse")
+        assertEquals(1, opened.header.v)
+        assertEquals(rounds, opened.header.rounds)
+        files().zip(opened.files).forEach { (a, b) -> assertArrayEquals(a.second, b.second) }
+    }
+
+    @Test fun newBackupsNeedTwelveCharacters() {
+        assertEquals(12, BackupFormat.MIN_PASSWORD)
+    }
+
+    /** Weakened key settings in the (unprotected) header are refused, not used. */
+    @Test fun weakKeySettingsAreRefused() {
+        val salt = java.util.Base64.getEncoder().encodeToString(ByteArray(16))
+        listOf(
+            """{"v":2,"salt":"$salt","kdf":"scrypt","N":1024,"r":8,"p":1,"created":"","app":"muninn"}""",
+            """{"v":2,"salt":"$salt","kdf":"scrypt","N":65537,"r":8,"p":1,"created":"","app":"muninn"}""",
+            """{"v":2,"salt":"$salt","kdf":"argon2id","m":1024,"t":3,"p":1,"created":"","app":"huginn"}""",
+            """{"v":2,"salt":"$salt","created":"","app":"muninn"}""",
+        ).forEach { j ->
+            val b = j.toByteArray()
+            try { BackupFormat.header("MUNB1".toByteArray() + ByteBuffer.allocate(4).putInt(b.size).array() + b + ByteArray(40)); fail(j) }
+            catch (e: BackupFormat.NotABackup) {}
+        }
+        // What Huginn writes reads (its Argon2id backups then only open in Huginn).
+        val ok = """{"v":2,"salt":"$salt","kdf":"argon2id","m":65536,"t":3,"p":4,"created":"","app":"huginn"}""".toByteArray()
+        val (h, _) = BackupFormat.header("MUNB1".toByteArray() + ByteBuffer.allocate(4).putInt(ok.size).array() + ok + ByteArray(40))
+        assertEquals("argon2id", h.kdf); assertEquals(65_536, h.m); assertEquals(3, h.t); assertEquals(4, h.p)
     }
 
     @Test fun emptyBackupOpens() {
@@ -52,7 +85,7 @@ class BackupFormatTest {
 
     @Test fun skippedEntriesAreLeftOut() {
         val out = ByteArrayOutputStream()
-        val n = BackupFormat.write(out, "pw-12345678", listOf(BackupFormat.Entry("a") { null }, BackupFormat.Entry("b") { byteArrayOf(9) }), rounds = rounds)
+        val n = BackupFormat.write(out, "pw-12345678", listOf(BackupFormat.Entry("a") { null }, BackupFormat.Entry("b") { byteArrayOf(9) }))
         assertEquals(1, n)
         assertEquals(listOf("b"), BackupFormat.open(out.toByteArray(), "pw-12345678").files.map { it.first })
     }
@@ -63,12 +96,13 @@ class BackupFormatTest {
         assertArrayEquals("MUNB1".toByteArray(), b.copyOfRange(0, 5))
         val len = ByteBuffer.wrap(b, 5, 4).int
         val json = String(b, 9, len)
-        assertTrue(json, json.startsWith("{\"v\":1,\"salt\":\""))
-        assertTrue(json, json.contains("\"rounds\":$rounds") && json.contains("\"app\":\"muninn\"") && json.contains("\"created\":\"2026-10-26T12:00:00Z\""))
+        assertTrue(json, json.startsWith("{\"v\":2,\"salt\":\""))
+        assertTrue(json, json.contains("\"kdf\":\"scrypt\",\"N\":65536,\"r\":8,\"p\":1") && json.contains("\"app\":\"muninn\"") &&
+            json.contains("\"created\":\"2026-10-26T12:00:00Z\""))
         val at = 9 + len
         val (h, start) = BackupFormat.header(b)
         assertEquals(at, start)
-        val key = BackupFormat.derive("correct horse", h.salt, h.rounds)
+        val key = io.github.ravenor907.muninn.net.Vault.Crypto.scrypt("correct horse".toByteArray(), h.salt, 65_536, 8, 1)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, b, at, 12))
         val plain = c.doFinal(b, at + 12, b.size - at - 12)

@@ -245,9 +245,25 @@ bool Ble::checkAdapter()
     return true;
 }
 
+void Ble::hiddenChanged()
+{
+    if (!m_running)
+        return;
+    if (silent()) {
+        if (m_agent && m_agent->isActive())
+            m_agent->stop();
+        dropAll();
+        m_seen.clear();
+        Q_EMIT changed();
+        return;
+    }
+    scan();
+}
+
 void Ble::scan()
 {
-    if (!m_running || !checkAdapter())
+    // Hidden from people nearby: nothing at all goes out over Bluetooth.
+    if (!m_running || silent() || !checkAdapter())
         return;
     if (!m_agent) {
         m_agent = new QBluetoothDeviceDiscoveryAgent(this);
@@ -312,6 +328,11 @@ void Ble::tick()
     }
     if (!m_error.isEmpty())
         return;   // Bluetooth isn't usable; the next scan checks again
+    if (silent()) {
+        if (!m_links.isEmpty())
+            dropAll();   // hidden from people nearby: no links at all
+        return;
+    }
     for (auto it = m_seen.cbegin(); it != m_seen.cend() && m_links.size() < kMaxLinks; ++it) {
         if (!m_links.contains(it.key()) && it->retryAtMs <= now)
             connectTo(it.key());
@@ -478,6 +499,8 @@ void Ble::sayHello()
 // over the number in its HELLO.
 QByteArray Ble::helloFor(Link *l) const
 {
+    if (silent())
+        return QByteArray();   // hidden from people nearby: nothing that says who this is
     const QByteArray hello = m_hello ? m_hello() : QByteArray();
     if (hello.isEmpty())
         return hello;

@@ -21,9 +21,10 @@ import java.util.concurrent.Executors
  * Checks GitHub for a newer Muninn every time the app is opened (not just when its process starts:
  * the background service keeps the process alive for days). A newer release downloads by itself and
  * goes straight to Android's installer, which always asks the person to tap Install. The download must
- * match the release's SHA-256 (GitHub's digest for the file, or the Muninn.apk.sha256 next to it) and carry
- * the project's signature (Muninn.apk.sig, Ed25519 over the file, see shared/docs/releases.md), so a broken or
- * swapped file is never installed.
+ * match the release's SHA-256 (GitHub's digest for the file, or the Muninn.apk.sha256 next to it), carry
+ * the project's signature (Muninn.apk.sig, Ed25519 over the file, see shared/docs/releases.md) and its signature of
+ * the release's version (Muninn.apk.vsig, [versionMessage]), and be newer than this copy, so a broken, swapped or
+ * older file is never installed.
  */
 class Updater(private val context: Context, private val identity: Identity) {
     data class State(val status: String = "", val latest: String = "", val busy: Boolean = false, val ready: Boolean = false, val progress: Float = 0f)
@@ -34,6 +35,8 @@ class Updater(private val context: Context, private val identity: Identity) {
     private var url: String? = null
     /** The SHA-256 (hex) the download must have, from the same release. */
     private var sha: String? = null
+    /** The version the release's tag names ("0.97" for v0.97): the one its .vsig must sign. */
+    private var version: String? = null
     private var lastCheck = 0L
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     /** A Kids' TV installs through its own PackageInstaller session (tv/TvUpdate); true when it took the file. */
@@ -61,6 +64,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 val (best, bestUrl, bestSha) = if (api.first == null) fromWebsite() else api
                 url = bestUrl
                 sha = bestSha
+                version = best
                 val newer = best != null && rank(best) > rank(current)
                 // Data saver on mobile data: the download waits for Wi-Fi, unless the person taps to get it now.
                 val wait = newer && installAfter && (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() == true
@@ -77,13 +81,21 @@ class Updater(private val context: Context, private val identity: Identity) {
     fun download() {
         val u = url ?: return
         val want = sha
+        val ver = version
         _state.value = _state.value.copy(busy = true, status = "Downloading Muninn ${_state.value.latest}…")
         pool.execute {
             try {
-                // The project's signature, published beside the APK by the release job. It is always required.
+                // The project's signatures, published beside the APK by the release job: of the file (.sig) and of the
+                // release's version (.vsig). Both are always required.
                 val sig = signature("$u.sig")
-                if (sig == null) {
+                val vsig = signature("$u.vsig")
+                if (sig == null || vsig == null || ver == null) {
                     _state.value = _state.value.copy(busy = false, status = NOT_SIGNED)
+                    return@execute
+                }
+                // Never an older (or the same) version, whatever a release's tag says.
+                if (!mayInstall(ver, current)) {
+                    _state.value = _state.value.copy(busy = false, status = NOT_NEWER)
                     return@execute
                 }
                 val signed = Ed25519.Check(hex(RELEASE_KEY), sig)
@@ -113,6 +125,13 @@ class Updater(private val context: Context, private val identity: Identity) {
                 if (!signed.valid()) {
                     out.delete()
                     _state.value = _state.value.copy(busy = false, status = NOT_SIGNED)
+                    return@execute
+                }
+                // The version signed in .vsig must be the one this release's tag names: an older signed file posted
+                // again under a newer tag doesn't check out.
+                if (!versionSigned(ver, u.substringAfterLast('/'), got, vsig)) {
+                    out.delete()
+                    _state.value = _state.value.copy(busy = false, status = VERSION_NOT_SIGNED)
                     return@execute
                 }
                 _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
@@ -195,6 +214,10 @@ class Updater(private val context: Context, private val identity: Identity) {
         /** A plain agent with no app name or version, so GitHub can't tell which app or version is asking. */
         private const val AGENT = "Mozilla/5.0"
         private const val NOT_SIGNED = "This update isn't signed with the project's key, so it wasn't installed."
+        private const val VERSION_NOT_SIGNED = "This update's version isn't signed with the project's key, so it wasn't installed."
+        private const val NOT_NEWER = "This update isn't newer than the Muninn you have, so it wasn't installed."
+        /** The first line of the text a .vsig signs (shared/docs/releases.md). */
+        const val VERSION_DOMAIN = "huginn-muninn release v1"
         /** The project's release key (Ed25519, shared/docs/release-key.pem). CI signs every release file with its private half. */
         const val RELEASE_KEY = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06"
 
@@ -202,6 +225,20 @@ class Updater(private val context: Context, private val identity: Identity) {
 
         /** True when [sig] is the project's signature of [data]. */
         fun signedByProject(data: ByteArray, sig: ByteArray): Boolean = Ed25519.verify(hex(RELEASE_KEY), data, sig)
+
+        /**
+         * What a release file's .vsig signs: [VERSION_DOMAIN], the version, the file's name and the lowercase hex SHA-256
+         * of the file, one per line (no newline at the end). Built from the tag being installed.
+         */
+        fun versionMessage(version: String, file: String, sha: String): ByteArray =
+            "$VERSION_DOMAIN\n$version\n$file\n${sha.lowercase()}".toByteArray(Charsets.UTF_8)
+
+        /** True when [vsig] is [key]'s signature of [version] for [file] with SHA-256 [sha] (the project's key by default). */
+        fun versionSigned(version: String, file: String, sha: String, vsig: ByteArray, key: ByteArray = hex(RELEASE_KEY)): Boolean =
+            Ed25519.verify(key, versionMessage(version, file, sha), vsig)
+
+        /** Only a version newer than the one installed ([current]) is ever installed. */
+        fun mayInstall(version: String, current: String) = rank(version) > rank(current)
 
         /** ".../releases/tag/v0.6" -> "v0.6" (where the "latest" link lands), else null. */
         fun tagFromLatest(url: String): String? =

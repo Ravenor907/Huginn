@@ -5,6 +5,7 @@ the release has:
 
 - its SHA-256, shown by GitHub beside the file on the release page.
 - `<file>.sig`: the project's signature of the file.
+- `<file>.vsig`: the project's signature of the file's version, name and SHA-256.
 - a GitHub build attestation: GitHub's own record that the file was built by this repository's CI, from a
   given commit.
 
@@ -19,13 +20,30 @@ The project signs every release file with its own Ed25519 key. No outside compan
   before publishing. If the secret is missing or wrong, the release fails and nothing is published.
 - `<file>.sig` is 64 bytes: the Ed25519 signature (RFC 8032) of the file's raw bytes, made with
   `openssl pkeyutl -sign -rawin`.
+- `<file>.vsig` is 64 bytes: the Ed25519 signature of this text (UTF-8, one item per line, no newline at the end):
 
-Huginn (Windows and Linux) and Muninn install an update only when both are true:
+  ```
+  huginn-muninn release v1
+  <version, as in the release tag without the v: 0.97>
+  <the file's name: Muninn.apk>
+  <the file's SHA-256, lowercase hex>
+  ```
 
-1. its SHA-256 matches the one GitHub lists for the file, and
-2. its `.sig` is a good signature from the project key.
+  The release job signs both and checks both against `release-key.pem` before publishing.
 
-Otherwise they say so and install nothing.
+Huginn (Windows and Linux) and Muninn install an update only when all are true:
+
+1. its SHA-256 matches the one GitHub lists for the file,
+2. its `.sig` is a good signature from the project key,
+3. its `.vsig` is a good signature from the project key of the text above, built from the tag of the release being
+   installed, the file's name and the SHA-256 of the download, and
+4. that version is newer than the one installed.
+
+Otherwise they say so and install nothing. Because the version is signed, an older release file can't be posted
+again under a newer tag to take anyone back to it. Copies that check only the `.sig` keep updating, since every
+release still carries it. `shared/tools/release_sig_ref.py` is the reference and writes
+`shared/vectors/release-sig-vectors.json` (`versioned` and `newer`); Muninn checks it in `ReleaseSigTest`, Huginn in
+`--release-sig-selftest`.
 
 If the key is ever lost, the apps can't accept updates signed with a new one. Everyone would have to download
 the new version by hand once. Keep a copy of the private key somewhere safe and offline.
@@ -39,8 +57,14 @@ download, its `.sig` and [release-key.pem](release-key.pem):
 openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin -in Huginn-Windows.zip -sigfile Huginn-Windows.zip.sig
 ```
 
-It prints `Signature Verified Successfully` for a good file. For the SHA-256, compare this with the digest GitHub
-shows beside the file:
+It prints `Signature Verified Successfully` for a good file. The version signature, for release 0.97:
+
+```
+printf 'huginn-muninn release v1\n%s\n%s\n%s' 0.97 Huginn-Windows.zip "$(sha256sum < Huginn-Windows.zip | cut -d' ' -f1)" > version.txt
+openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin -in version.txt -sigfile Huginn-Windows.zip.vsig
+```
+
+For the SHA-256, compare this with the digest GitHub shows beside the file:
 
 ```
 sha256sum Huginn-Windows.zip

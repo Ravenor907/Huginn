@@ -12,6 +12,7 @@
 #include "videoengine.h"
 #include "vpxcodec.h"
 #include "../vault.h"
+#include "../ring.h"
 
 #include <QVideoSink>
 
@@ -68,7 +69,13 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     m_ringtone = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), this);
     m_ringer.setInterval(3000);
     connect(&m_ringer, &QTimer::timeout, m_ringtone, &Chime::play);
+    // Cap b1: a call that rang while locked stops ringing after as long as any call rings.
+    m_lockedTimer.setSingleShot(true);
+    m_lockedTimer.setInterval(45000);
+    connect(&m_lockedTimer, &QTimer::timeout, this, &CallManager::endLockedRing);
     if (m_vault) {
+        // Unlocked: the offer itself comes in now (with the name), so the nameless ring stops.
+        connect(m_vault, &Vault::opened, this, &CallManager::endLockedRing);
         connect(m_vault, &Vault::opened, this, &CallManager::load);
         connect(m_vault, &Vault::opened, this, &CallManager::loadTrust);
         // Panic lock: the call ends at once and nothing about it stays on screen.
@@ -486,7 +493,24 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
     }
     if (t != QLatin1String("offer") || m_handled.contains(id))
         return;
-    const QString why = CallSession::checkOffer(msg, from, nowMs());
+    // Cap b1: this call already rang while Huginn was locked, and Answer or Decline was chosen then.
+    const int choice = id == m_lockedCall ? m_lockedChoice : 0;
+    if (id == m_lockedCall) {
+        endLockedRing();
+        m_lockedCall.clear();
+        m_lockedChoice = 0;
+    }
+    // Answered while locked: unlocking took a moment, so the offer may be older than usual (never past the ring).
+    const qint64 offerTs = qint64(msg.value(QStringLiteral("ts")).toDouble());
+    const bool answeredLocked = choice == 1 && offerTs >= nowMs() - 45000 - 60000;
+    const QString why = CallSession::checkOffer(msg, from, answeredLocked ? qMin(nowMs(), offerTs + 60000) : nowMs());
+    if (choice == 2 && why.isEmpty()) {
+        m_handled.insert(id);
+        const QJsonObject no{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), id}};
+        m_signal->send(from, no);
+        addHistory(from, false, QStringLiteral("Declined"), nowMs(), 0);
+        return;
+    }
     if (why == QLatin1String("signature") || why == QLatin1String("malformed"))
         return;   // refused: not from who it says
     if (!available() || why == QLatin1String("codec")) {
@@ -518,6 +542,12 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
     adopt(s);
     m_started = nowMs();
     s->takeOffer(msg);
+    if (answeredLocked) {
+        // Answer was already chosen on the ringing notification: answered now.
+        Q_EMIT incoming(peerName());
+        answer();
+        return;
+    }
     ring(true);
     notifyIncoming(true);
     Q_EMIT incoming(peerName());
@@ -567,11 +597,68 @@ void CallManager::notifyIncoming(bool on)
 #endif
 }
 
+void CallManager::ringLocked(const QString &callId, qint64 ts)
+{
+    // Unlocked: the offer itself rings, with the name.
+    if (!m_vault || !m_vault->locked() || callId.isEmpty() || callId == m_lockedCall || m_handled.contains(callId))
+        return;
+    if ((m_session && m_session->state() != CallSession::Ended) || !RingWire::ringFresh(ts, nowMs()))
+        return;
+    m_lockedCall = callId;
+    m_lockedChoice = 0;
+    m_lockedRinging = true;
+    ring(true);
+    notifyLocked(true);
+    m_lockedTimer.start();
+}
+
+void CallManager::endLockedRing()
+{
+    m_lockedTimer.stop();
+    if (!m_lockedRinging)
+        return;
+    m_lockedRinging = false;
+    ring(false);
+    notifyLocked(false);
+}
+
+void CallManager::notifyLocked(bool on)
+{
+#ifdef Q_OS_LINUX
+    QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
+                     QStringLiteral("org.freedesktop.Notifications"));
+    if (!on) {
+        if (m_notification)
+            n.call(QStringLiteral("CloseNotification"), m_notification);
+        m_notification = 0;
+        return;
+    }
+    QVariantMap hints{{QStringLiteral("urgency"), QVariant::fromValue(uchar(2))}, {QStringLiteral("category"), QStringLiteral("call.incoming")},
+                      {QStringLiteral("resident"), true}};
+    QDBusReply<uint> r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), m_notification, QStringLiteral("io.github.ravenor907.Huginn"),
+                                QStringLiteral("Incoming call"), QStringLiteral("Unlock Huginn to answer"),
+                                QStringList{QStringLiteral("answer"), QStringLiteral("Answer"), QStringLiteral("decline"), QStringLiteral("Decline")},
+                                hints, 45000);
+    if (r.isValid())
+        m_notification = r.value();
+#else
+    // Windows: a plain toast (no buttons); unlocking Huginn shows the call.
+    if (on)
+        Platform::notify(QStringLiteral("Incoming call"), QStringLiteral("Unlock Huginn to answer"), 45000);
+#endif
+}
+
 void CallManager::onNotificationAction(uint id, const QString &action)
 {
     if (!m_notification || id != m_notification)
         return;
     m_notification = 0;
+    // Cap b1: the nameless ring while locked. What was chosen waits for the offer, read once Huginn is unlocked.
+    if (m_lockedRinging && !m_session) {
+        m_lockedChoice = action == QLatin1String("answer") ? 1 : action == QLatin1String("decline") ? 2 : 0;
+        endLockedRing();
+        return;
+    }
     if (action == QLatin1String("answer"))
         answer();
     else if (action == QLatin1String("decline"))

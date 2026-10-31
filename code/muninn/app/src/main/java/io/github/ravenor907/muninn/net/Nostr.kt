@@ -85,6 +85,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     var onEnvelope: ((String) -> Boolean)? = null
     /** Something arrived while Muninn is locked (kept to open after unlocking, or left on the relays when the store is full). */
     var onLocked: (() -> Unit)? = null
+    /**
+     * Cap b1: this device's ring key (outside the vault). Its mailbox is asked for too, on its own inbox request, locked or
+     * not, and relays that ask may get a sign-in as it (NIP-42); nothing else of the vault is needed for that.
+     */
+    @Volatile var ring: RingKey? = null
+    /** Every event for the ring mailbox (its content): never kept, never handed to [onEnvelope]. */
+    var onRing: ((String) -> Unit)? = null
+    private val ringSubId = "muninn-r" + UUID.randomUUID().toString().take(8)
+    /** Per relay: its last sign-in challenge (NIP-42), to sign in again once the vault opens. */
+    private val challenges = ConcurrentHashMap<String, String>()
 
     /**
      * Envelopes that arrived while locked, kept as they came (still sealed, exactly what the relays hold) in Muninn's
@@ -383,7 +393,15 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     fun resubscribe() {
         refused = false
         synchronized(seen) { announced.clear() }
-        for ((url, ws) in sockets) if (live[url] == true) subscribe(url, ws)
+        // A relay that asked for a sign-in while locked gets one now, as the mailbox the vault holds the key of.
+        for ((url, ws) in sockets) if (live[url] == true) { challenges[url]?.let { signIn(url, ws, it) }; subscribe(url, ws) }
+    }
+
+    /** NIP-42: signs in as my mailbox (while unlocked) and as the ring mailbox (always, cap b1). */
+    private fun signIn(url: String, ws: WebSocket, challenge: String) {
+        val tags = JSONArray().put(JSONArray().put("relay").put(url)).put(JSONArray().put("challenge").put(challenge))
+        secret?.let { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) }
+        try { ring?.let { r -> ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", r.nostrSecret)).toString()) } } catch (_: Exception) {}
     }
 
     fun disconnect() {
@@ -399,6 +417,13 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
         val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since)
         ws.send(JSONArray().put("REQ").put(subId).put(filter).toString())
+        // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
+        try {
+            ring?.let { r ->
+                val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(r.mailbox)).put("since", since)
+                ws.send(JSONArray().put("REQ").put(ringSubId).put(rf).toString())
+            }
+        } catch (_: Exception) {}
     }
 
     private inner class Listener(val url: String) : WebSocketListener() {
@@ -445,9 +470,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 "EVENT" -> a.optJSONObject(2)?.let { handle(it) }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
-                    val secret = secret ?: return
-                    val ev = event(22242, JSONArray().put(JSONArray().put("relay").put(url)).put(JSONArray().put("challenge").put(a.optString(1))), "", secret)
-                    webSocket.send(JSONArray().put("AUTH").put(ev).toString())
+                    val challenge = a.optString(1)
+                    challenges[url] = challenge
+                    if (secret == null && ring == null) return
+                    signIn(url, webSocket, challenge)
                     subscribe(url, webSocket)
                 }
                 "OK" -> if (a.optBoolean(2)) storedAt(url, a.optString(1))
@@ -531,6 +557,17 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val id = ev.optString("id")
         // The same event comes from every relay at once: only one copy is handled at a time.
         synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
+        // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
+        val r = ring
+        if (r != null && pTag(ev) == (try { r.mailbox } catch (e: Exception) { null })) {
+            try {
+                val own = try { idOf(ev) == id } catch (e: Exception) { false }
+                if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
+                    try { onRing?.invoke(ev.optString("content")) } catch (_: Exception) {}
+            } finally { synchronized(seen) { working.remove(id); seen.add(id); while (seen.size > 2000) seen.remove(seen.first()) } }
+            saveSoon()
+            return
+        }
         val locked = secretHex() == null
         // Already said once that it's waiting on the relays (the store was full): not again for every relay.
         if (locked && synchronized(seen) { id in announced }) { synchronized(seen) { working.remove(id) }; return }
@@ -552,6 +589,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             while (seen.size > 2000) seen.remove(seen.first())
         }
         saveSoon()
+    }
+
+    /** The mailbox an event is for (its first "p" tag), or null. */
+    private fun pTag(ev: JSONObject): String? {
+        val tags = ev.optJSONArray("tags") ?: return null
+        for (i in 0 until tags.length()) {
+            val t = tags.optJSONArray(i) ?: continue
+            if (t.optString(0) == "p") return t.optString(1)
+        }
+        return null
     }
 
     // ------------------------------------------------------------------ sending
@@ -621,14 +668,16 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      *
      * Every relay gets it through a short-lived sending socket (never the one listening for my inbox), so it
      * reaches whichever relay the other phone listens on. A relay that connects again within [RECENT_MS] gets
-     * it too ([recent]). [days]: the chat's message limit, for the NIP-40 expiration tag (0: none).
+     * it too ([recent]). [days] > 0: the event carries a NIP-40 expiration tag ([expiration], the same for every chat).
      */
     fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
-        // NIP-40: relays may drop it once the chat's message limit has passed (it's gone from both phones by then).
-        if (days > 0) tags.put(JSONArray().put("expiration").put((System.currentTimeMillis() / 1000 + days * 86_400L).toString()))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
-        val ev = event(KIND, tags, content, Schnorr.newSecret(), System.currentTimeMillis() / 1000 - Random.nextLong(0, 600))
+        val createdAt = System.currentTimeMillis() / 1000 - Random.nextLong(0, BLUR_S)
+        // NIP-40: relays may drop it once the longest message limit has passed (it's gone from both phones by then). Taken
+        // from the blurred time and rounded up to a whole day, so it shows neither the sending time nor the chat's limit.
+        if (days > 0) tags.put(JSONArray().put("expiration").put(expiration(createdAt).toString()))
+        val ev = event(KIND, tags, content, Schnorr.newSecret(), createdAt)
         val msg = JSONArray().put("EVENT").put(ev).toString()
         if (ok != null || held != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = Waiting(ok, held) }
         synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
@@ -668,6 +717,18 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         /** How long a sent event is also given to relays that connect afterwards (the conversation window opening). */
         private const val RECENT_MS = 60_000L
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
+        /** An event's created_at is up to this many seconds before the real time (section 20.3). */
+        const val BLUR_S = 600L
+
+        /**
+         * NIP-40 expiration for an event made at [createdAt] (already blurred): that time plus [BLUR_S] plus the longest
+         * message limit, rounded up to the next whole day (UTC). Never before the real time plus any chat's limit, and
+         * the same for every chat, so a relay learns neither the sending time nor the chat's limit from it (section 20.3).
+         */
+        fun expiration(createdAt: Long): Long {
+            val at = createdAt + BLUR_S + Limits.LONGEST * 86_400L
+            return (at + 86_399L) / 86_400L * 86_400L
+        }
 
         /** NIP-01: the event id is the SHA-256 of [0, pubkey, created_at, kind, tags, content] as compact JSON. */
         fun serialize(pubkey: String, createdAt: Long, kind: Int, tags: JSONArray, content: String): String =

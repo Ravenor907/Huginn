@@ -796,7 +796,7 @@ void Chat::sendGroup(const QString &g, const QString &ch, const QString &text, c
 // poll: cap m2, a poll whose text says the same for apps without m2.
 void Chat::sendGroupWith(const QString &g, const QString &ch, const QString &text, const QString &re, const QJsonObject &poll)
 {
-    const QString t = text.trimmed().left(kMax);
+    const QString t = GroupWire::clip(text.trimmed(), kMax);
     const auto it = m_groups.constFind(g);
     if (t.isEmpty() || !m_ready || it == m_groups.cend() || it->state.isEmpty())
         return;
@@ -866,7 +866,7 @@ QString Chat::editGroup(const QString &g, const QString &id, const QString &text
     const auto it = m_groups.constFind(g);
     if (it == m_groups.cend() || it->state.isEmpty() || it->removed || it->left)
         return QStringLiteral("You're no longer in this group.");
-    const QString t = text.trimmed().left(kMax);
+    const QString t = GroupWire::clip(text.trimmed(), kMax);
     if (t.isEmpty())
         return QStringLiteral("A message can't be empty. Unsend it instead.");
     qint64 at = 0;
@@ -1197,9 +1197,12 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
         if (s != QLatin1String("delivered") && s != QLatin1String("read") && s != QLatin1String("unsent"))
             return 400;
         const QJsonArray idList = p.value(QStringLiteral("ids")).toArray();
+        // Section 9: at most 40 ids a receipt; more is malformed and refused.
+        if (idList.size() > GroupWire::kMaxReceiptIds)
+            return 400;
         QSet<QString> ids;
         bool dropped = false;
-        for (int i = 0; i < qMin(int(idList.size()), GroupWire::kMaxReceiptIds); ++i) {
+        for (int i = 0; i < int(idList.size()); ++i) {
             const QString id = idList.at(i).toString();
             ids.insert(id);
             const QString env = GroupWire::envelopeId(id, fromKey);

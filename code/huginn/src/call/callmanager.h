@@ -123,6 +123,10 @@ public:
 
     // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
     std::function<bool()> busyElsewhere;
+    // Cap b1 (shared/docs/protocol-0.6.md section 23): a ring envelope opened while Huginn is locked. It rings with
+    // "Incoming call" and no name (nothing else is known). Answer or Decline on the notification is kept, and the
+    // offer itself, read once Huginn is unlocked, follows it.
+    void ringLocked(const QString &callId, qint64 ts);
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
     QByteArray relayId();
@@ -144,6 +148,12 @@ private:
     void save();
     void ring(bool on);
     void notifyIncoming(bool on);
+    void notifyLocked(bool on);
+    void endLockedRing();
+    QString m_lockedCall;          // cap b1: the call ringing (or rung) while locked
+    int m_lockedChoice = 0;        // 0 nothing yet, 1 answer, 2 decline
+    bool m_lockedRinging = false;
+    QTimer m_lockedTimer;
     Q_SLOT void onNotificationAction(uint id, const QString &action);
 
     CallSignal *m_signal;

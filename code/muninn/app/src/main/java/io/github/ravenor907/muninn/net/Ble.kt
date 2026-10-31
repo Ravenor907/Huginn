@@ -68,6 +68,21 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
     /** Cap s1: signs Huginn's number with my chat key ([Proof.close]); the contact a hidden Huginn's hint stands for. */
     @Volatile var prove: ((String) -> String?)? = null
     @Volatile var hintKey: ((String) -> String?)? = null
+    /**
+     * Hidden from people nearby (21.3): while it says true, Bluetooth is silent. No advertising, HELLO answers nothing,
+     * and Huginns already connected are let go.
+     */
+    @Volatile var hidden: () -> Boolean = { false }
+
+    /** Hidden from people nearby was turned on or off: goes silent at once, or advertises again. */
+    fun hiddenChanged() {
+        handler.post {
+            if (hidden()) {
+                try { advertiser?.stopAdvertising(advertising) } catch (_: Exception) {}
+                server?.let { s -> for (c in conns.values) try { s.cancelConnection(c.device) } catch (_: Exception) {} }
+            } else restartAdvertising()
+        }
+    }
 
     private class Frame(val number: Int, val bytes: ByteArray)
 
@@ -276,7 +291,7 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
     private fun advertise() {
         val adv = advertiser ?: return
         handler.removeCallbacks(readvertise)
-        if (level == PowerLogic.Radio.OFF || (level == PowerLogic.Radio.LOW && !dutyOn)) return
+        if (hidden() || level == PowerLogic.Radio.OFF || (level == PowerLogic.Radio.LOW && !dutyOn)) return
         val low = level == PowerLogic.Radio.LOW
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(if (low) AdvertiseSettings.ADVERTISE_MODE_LOW_POWER else AdvertiseSettings.ADVERTISE_MODE_BALANCED)
@@ -344,14 +359,14 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
     }
 
     /**
-     * Just the fields Huginn needs, whatever else the app's hello carries. Hidden: a daily hint instead of the chat key
-     * and mailbox (cap s1). "n": this connection's number, which Huginn's hello signs.
+     * Just the fields Huginn needs, whatever else the app's hello carries. "n": this connection's number, which
+     * Huginn's hello signs. Hidden from people nearby: nothing (Bluetooth is silent then, [hidden]).
      */
     private fun helloBytes(c: Conn): ByteArray? = try {
         val h = hello()
-        JSONObject().put("name", h.optString("name")).apply {
-            if (h.has("hint")) put("hint", h.optString("hint")) else put("chatKey", h.optString("chatKey")).put("mailbox", h.optString("mailbox"))
-        }.put("app", "muninn").put("n", c.nonce).toString().toByteArray(Charsets.UTF_8)
+        if (hidden() || !h.has("chatKey")) null
+        else JSONObject().put("name", h.optString("name")).put("chatKey", h.optString("chatKey")).put("mailbox", h.optString("mailbox"))
+            .put("app", "muninn").put("n", c.nonce).toString().toByteArray(Charsets.UTF_8)
     } catch (_: Exception) { null }
 
     private inner class ServerCallback(private val g: Int) : BluetoothGattServerCallback() {
@@ -369,7 +384,11 @@ class Ble(context: Context, private val hello: () -> JSONObject) {
             device ?: return
             later {
                 when (newState) {
-                    BluetoothProfile.STATE_CONNECTED -> { conn(device); restartAdvertising() }
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        // Hidden from people nearby: nobody is let in.
+                        if (hidden()) { try { server?.cancelConnection(device) } catch (_: Exception) {}; return@later }
+                        conn(device); restartAdvertising()
+                    }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         conns.remove(device.address)?.let { handler.removeCallbacks(it.watchdog); handler.removeCallbacks(it.again) }
                         publish()

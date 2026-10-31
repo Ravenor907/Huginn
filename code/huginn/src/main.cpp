@@ -44,6 +44,7 @@
 #include "link.h"
 #include "trust.h"
 #include "profile.h"
+#include "ring.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -162,7 +163,9 @@ int main(int argc, char *argv[])
         const bool j = Proof::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("s1-vectors.json")));
         // Profile pictures and status (p1).
         const bool k = Profile::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("p1-vectors.json")));
-        return selfTested(a && b && c && d && e && f && g && h && i && j && k);
+        // The ring key and the relay wrapping (b1, e1).
+        const bool l = RingWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("e1b1-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h && i && j && k && l);
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
@@ -206,18 +209,13 @@ int main(int argc, char *argv[])
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
     Chat *chat = nullptr;
     auto *ble = new Ble([&chat] {
-        if (!chat || !chat->ready())
+        // Hidden from people nearby: no hello at all (no name, chat key, mailbox or hint), and Bluetooth stays silent
+        // (Ble::hidden), so nobody can follow this computer from place to place.
+        if (!chat || !chat->ready() || !chat->visibleNearby())
             return QByteArray();
-        // Hidden from people nearby: no name, chat key or mailbox, only a daily hint that contacts (who have the key)
-        // can match (cap s1), so nobody can follow this computer from place to place.
-        QJsonObject o{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->visibleNearby() ? chat->username() : QString()},
-                      {QStringLiteral("app"), QStringLiteral("huginn")}};
-        if (chat->visibleNearby()) {
-            o.insert(QStringLiteral("chatKey"), chat->chatKey());
-            o.insert(QStringLiteral("mailbox"), chat->mailbox());
-        } else {
-            o.insert(QStringLiteral("hint"), Proof::hintNow(chat->chatKey()));
-        }
+        const QJsonObject o{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("name"), chat->username()},
+                            {QStringLiteral("app"), QStringLiteral("huginn")}, {QStringLiteral("chatKey"), chat->chatKey()},
+                            {QStringLiteral("mailbox"), chat->mailbox()}};
         return QJsonDocument(o).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
@@ -246,6 +244,8 @@ int main(int argc, char *argv[])
     if (!vault->locked())
         nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json")));
     chat = new Chat(localSend, vault, nostr, ble, &app);
+    // Hidden from people nearby: Bluetooth is silent too (section 21.3).
+    ble->hidden = [chat] { return !chat->visibleNearby(); };
     vault->beforeBackup = [chat] { chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
     auto *videos = new VideoMsg(chat, &app);
@@ -272,6 +272,18 @@ int main(int argc, char *argv[])
     cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
+    // Cap b1: the ring key lives in Huginn's own data folder but outside the vault (never an OS key store), so a call
+    // rings even while Huginn is locked: only "Incoming call", no name, until it's unlocked.
+    auto *ringKey = new RingKey(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ring-key.json"));
+    chat->setRingKey(ringKey);
+    nostr->ringMailbox = [ringKey] { return ringKey->mailbox(); };
+    nostr->ringSecret = [ringKey] { return ringKey->nostrSecret(); };
+    nostr->onRing = [ringKey, calls](const QString &content) {
+        QString call;
+        qint64 ts = 0;
+        if (ringKey->open(content, &call, &ts))
+            calls->ringLocked(call, ts);
+    };
     // Call history keeps as long as that chat keeps messages (7 days, up to 30 in Family and Work).
     QObject::connect(chat, &Chat::pruned, calls, [chat, calls] { calls->pruneHistory([chat](const QString &k) { return chat->keepCutoff(k); }); });
     // Voice rooms and group calls: a mesh of 1:1 calls over the same signaling and relay logins.

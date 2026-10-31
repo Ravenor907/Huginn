@@ -37,7 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val MIN_PW = 8
+private const val MIN_PW = BackupFormat.MIN_PASSWORD
 
 /** Settings › Backup: one encrypted file with every chat, contact and key, and putting it back. */
 @Composable

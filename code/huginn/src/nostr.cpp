@@ -153,6 +153,7 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
     , m_secret(std::move(secret))
 {
     m_subId = QStringLiteral("huginn-") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
+    m_ringSubId = QStringLiteral("huginn-r") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
 }
 
 void Nostr::restoreSeen(const QByteArray &stored)
@@ -386,22 +387,46 @@ void Nostr::disconnect()
 void Nostr::resubscribe()
 {
     for (auto it = m_links.begin(); it != m_links.end(); ++it)
-        if (m_live.contains(it.key()) && it->ws)
+        if (m_live.contains(it.key()) && it->ws) {
+            // A relay that asked for a sign-in while locked gets one now, as the mailbox the vault holds the key of.
+            const QString challenge = m_challenges.value(it.key());
+            if (!challenge.isEmpty())
+                signIn(it.key(), it->ws.data(), challenge);
             subscribe(it->ws.data());
+        }
+}
+
+void Nostr::signIn(const QString &url, QWebSocket *ws, const QString &challenge)
+{
+    const QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("relay"), url}), QJsonValue(QJsonArray{QStringLiteral("challenge"), challenge})};
+    const QByteArray sk = secret();
+    if (!sk.isEmpty())
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), sk)}));
+    const QByteArray rs = ringSecret ? ringSecret() : QByteArray();
+    if (rs.size() == 32)
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), rs)}));
 }
 
 void Nostr::subscribe(QWebSocket *ws)
 {
-    const QString pub = publicKey();
-    if (pub.isEmpty())
-        return;
     // Events can be backdated a little (see publish), so look back two days and skip ones already seen.
     const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
     const qint64 since = qMax<qint64>(0, s.value(QStringLiteral("nostr/since"), 0).toLongLong() - 2 * 86400);
-    const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
-                             {QStringLiteral("#p"), QJsonArray{pub}},
-                             {QStringLiteral("since"), since}};
-    ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_subId, filter}));
+    const QString pub = publicKey();
+    if (!pub.isEmpty()) {
+        const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
+                                 {QStringLiteral("#p"), QJsonArray{pub}},
+                                 {QStringLiteral("since"), since}};
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_subId, filter}));
+    }
+    // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
+    const QString ring = ringMailbox ? ringMailbox() : QString();
+    if (!ring.isEmpty()) {
+        const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
+                                 {QStringLiteral("#p"), QJsonArray{ring}},
+                                 {QStringLiteral("since"), qMax<qint64>(0, now() - 2 * 86400)}};
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_ringSubId, filter}));
+    }
 }
 
 void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
@@ -416,11 +441,10 @@ void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
             handle(a.at(2).toObject());
     } else if (type == QLatin1String("AUTH")) {
         // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
-        const QByteArray sk = secret();
-        if (sk.isEmpty())
+        m_challenges.insert(url, a.at(1).toString());
+        if (secret().isEmpty() && !(ringSecret && ringSecret().size() == 32))
             return;
-        const QJsonArray tags{QJsonArray{QStringLiteral("relay"), url}, QJsonArray{QStringLiteral("challenge"), a.at(1).toString()}};
-        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), sk)}));
+        signIn(url, ws, a.at(1).toString());
         subscribe(ws);
     } else if (type == QLatin1String("OK")) {
         const QString id = a.at(1).toString();
@@ -435,6 +459,28 @@ void Nostr::handle(const QJsonObject &ev)
     // The same event comes from every relay at once: only one copy is handled at a time.
     if (id.isEmpty() || m_seenSet.contains(id) || m_working.contains(id))
         return;
+    // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
+    const QString ring = ringMailbox ? ringMailbox() : QString();
+    if (!ring.isEmpty()) {
+        QString p;
+        for (const QJsonValue &t : ev.value(QStringLiteral("tags")).toArray())
+            if (t.toArray().at(0).toString() == QLatin1String("p")) {
+                p = t.toArray().at(1).toString();
+                break;
+            }
+        if (p == ring) {
+            const bool good = idOf(ev) == id
+                && Schnorr::verify(Schnorr::unhex(id), Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
+                                   Schnorr::unhex(ev.value(QStringLiteral("sig")).toString()));
+            m_seen << id;
+            m_seenSet.insert(id);
+            while (m_seen.size() > kMaxSeen)
+                m_seenSet.remove(m_seen.takeFirst());
+            if (good && onRing)
+                onRing(ev.value(QStringLiteral("content")).toString());
+            return;
+        }
+    }
     // While locked, say "New message" once per event, not once per relay.
     if (secret().isEmpty()) {
         if (m_announced.contains(id))
@@ -526,11 +572,13 @@ int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
 {
     // QJsonValue(...) keeps the inner array nested: MSVC treats QJsonArray{QJsonArray{...}} as a copy.
     QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
-    // NIP-40: relays may drop it once the chat's message limit has passed (it's gone from both sides by then).
-    if (days > 0)
-        tags.append(QJsonValue(QJsonArray{QStringLiteral("expiration"), QString::number(now() + qint64(days) * 86400)}));
     // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
-    const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), now() - QRandomGenerator::global()->bounded(600));
+    const qint64 createdAt = now() - QRandomGenerator::global()->bounded(int(kBlurS));
+    // NIP-40: relays may drop it once the longest message limit has passed (it's gone from both sides by then). Taken from
+    // the blurred time and rounded up to a whole day, so it shows neither the sending time nor the chat's limit.
+    if (days > 0)
+        tags.append(QJsonValue(QJsonArray{QStringLiteral("expiration"), QString::number(expiration(createdAt))}));
+    const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), createdAt);
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
     m_outbox << msg;
     while (m_outbox.size() > kMaxOutbox)
@@ -541,6 +589,12 @@ int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
     if (m_links.isEmpty())
         connectRelays();
     return int(m_live.size());
+}
+
+qint64 Nostr::expiration(qint64 createdAt)
+{
+    const qint64 at = createdAt + kBlurS + qint64(kLongestDays) * 86400;
+    return (at + 86399) / 86400 * 86400;
 }
 
 // ------------------------------------------------------------------ self-test
@@ -624,10 +678,23 @@ bool Nostr::selfTest(const QString &vectorsPath)
                 && o.value(QStringLiteral("d")).toString().size() == d && o.size() == 4;
         }
     }
+    // The NIP-40 expiration tag (section 20.3), in the same file.
+    bool expiry = pf.isOpen();
+    if (expiry) {
+        pf.seek(0);
+        const QJsonObject pv = QJsonDocument::fromJson(pf.readAll()).object();
+        const QJsonArray ex = pv.value(QStringLiteral("expiry")).toArray();
+        expiry = !ex.isEmpty() && pv.value(QStringLiteral("blur")).toInteger() == kBlurS
+            && pv.value(QStringLiteral("longestDays")).toInt() == kLongestDays;
+        for (const QJsonValue &c : ex) {
+            const qint64 e = expiration(c[QStringLiteral("created")].toInteger());
+            expiry = expiry && e == c[QStringLiteral("expiration")].toInteger() && e % 86400 == 0;
+        }
+    }
 
     printf("nostr self-test: BIP-340 key %s, BIP-340 signature %s, serialization %s, event id and signature %s, "
-           "survives JSON round trip %s, NIP-01 escaping %s, rejects forged signature %s, envelope padding %s\n",
+           "survives JSON round trip %s, NIP-01 escaping %s, rejects forged signature %s, envelope padding %s, expiration %s\n",
            officialKey ? "ok" : "WRONG", officialSig ? "ok" : "WRONG", serialized ? "ok" : "WRONG", eventOk ? "ok" : "WRONG",
-           trip ? "ok" : "WRONG", escaping ? "ok" : "WRONG", forged ? "ok" : "WRONG", padded ? "ok" : "WRONG");
-    return officialKey && officialSig && serialized && eventOk && trip && escaping && forged && padded;
+           trip ? "ok" : "WRONG", escaping ? "ok" : "WRONG", forged ? "ok" : "WRONG", padded ? "ok" : "WRONG", expiry ? "ok" : "WRONG");
+    return officialKey && officialSig && serialized && eventOk && trip && escaping && forged && padded && expiry;
 }

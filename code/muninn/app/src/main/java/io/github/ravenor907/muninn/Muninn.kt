@@ -87,6 +87,14 @@ class Muninn : Application() {
         nostr.onEnvelope = { false }
         // While locked: one "Unlock Muninn to see new messages", with a sound only the first time.
         nostr.onLocked = { lockedNotice() }
+        // Cap b1: the ring key lives outside the vault (app-private files, never an OS key store), so a call rings even
+        // while Muninn is locked. Only "Incoming call", no name: answering opens the lock screen, and the call itself
+        // (kept sealed with everything else that came while locked) is picked up once Muninn is unlocked.
+        val ring = io.github.ravenor907.muninn.net.RingKey(java.io.File(filesDir, "ring-key.json"))
+        nostr.ring = ring
+        nostr.onRing = { content ->
+            ring.open(content)?.let { (call, ts) -> io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, call, ts) }
+        }
         // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
@@ -108,8 +116,11 @@ class Muninn : Application() {
         net.mailbox = nostr.publicKey
         close = Close(this, identity)
         ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
+        // Hidden from people nearby: Bluetooth is silent too (section 21.3).
+        ble.hidden = { !identity.visibleNearby }
         contacts = Contacts(this, vault)
         chat = Chat(this, net, close, ble, nostr, contacts, vault)
+        chat.ringKey = nostr.ring
         profile = io.github.ravenor907.muninn.net.Profile(this, vault, contacts, chat)
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)

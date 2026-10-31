@@ -38,6 +38,12 @@ public:
 
     // Every envelope that arrives for this device (content of the event). Return false to see it again later.
     std::function<bool(const QString &content)> onEnvelope;
+    // Cap b1: the ring mailbox and its Nostr secret, from this device's ring key outside the vault (empty: none). Its
+    // mailbox is asked for on an inbox request of its own, locked or not, and relays that ask get a sign-in as it.
+    std::function<QString()> ringMailbox;
+    std::function<QByteArray()> ringSecret;
+    // Every event for the ring mailbox (its content): never kept, never handed to onEnvelope.
+    std::function<void(const QString &content)> onRing;
     // The events already taken are kept in the vault (main.cpp): keepSeen saves the list, restoreSeen
     // reads it back when the vault opens (and moves in a list found in plain settings, removing it there).
     std::function<void(const QByteArray &stored)> keepSeen;
@@ -61,8 +67,16 @@ public:
     // Closes every relay and turns keepAlive off. Hides QObject::disconnect; call that one as QObject::disconnect.
     Q_INVOKABLE void disconnect();
     // Sends sealed content to someone's mailbox through every relay, on sending sockets of their own.
-    // days: the chat's message limit, for the NIP-40 expiration tag (0: none). Returns how many relays are connected now.
+    // days > 0: the event carries a NIP-40 expiration tag (expiration(), the same for every chat). Returns how many relays are connected now.
     Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content, int days = 0);
+    // An event's created_at is up to this many seconds before the real time (section 20.3).
+    static constexpr qint64 kBlurS = 600;
+    // The longest message limit in days (section 16).
+    static constexpr int kLongestDays = 30;
+    // NIP-40 expiration for an event made at createdAt (already blurred): that time plus kBlurS plus the longest message
+    // limit, rounded up to the next whole day (UTC). Never before the real time plus any chat's limit, and the same for
+    // every chat, so a relay learns neither the sending time nor the chat's limit from it (section 20.3).
+    static qint64 expiration(qint64 createdAt);
     // Opens the sending sockets now (a call is starting), so the next publish goes out at once.
     // They close after the usual 20 s of quiet: nothing is sent to keep them open.
     void warmSenders();
@@ -108,6 +122,10 @@ private:
     void gone(const QString &url, QWebSocket *ws);
     void drop(QWebSocket *ws);
     void subscribe(QWebSocket *ws);
+    // NIP-42: signs in as my mailbox (while unlocked) and as the ring mailbox (always, cap b1).
+    void signIn(const QString &url, QWebSocket *ws, const QString &challenge);
+    QString m_ringSubId;
+    QHash<QString, QString> m_challenges;   // per relay: its last sign-in challenge, to sign in again once unlocked
     void onMessage(const QString &url, QWebSocket *ws, const QString &text);
     void handle(const QJsonObject &ev);
     void setLive(const QString &url, bool live);

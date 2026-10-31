@@ -104,6 +104,10 @@ object ChatWire {
 
     fun capable(o: JSONObject) = o.optString("cap") == CAP
 
+    /** The first [max] code points of [s] (never half of a surrogate pair), so what is sent is never over a limit (section 9). */
+    fun clip(s: String, max: Int): String =
+        if (s.codePointCount(0, s.length) <= max) s else s.substring(0, s.offsetByCodePoints(0, max))
+
     /** The 0.6 tokens an envelope says its app speaks ("caps"), plus r1 from the "cap" field. */
     fun capsOf(o: JSONObject): Set<String> = Proto06.caps(o.optString("caps")) + (if (capable(o)) setOf(CAP) else emptySet())
 
