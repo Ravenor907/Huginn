@@ -68,10 +68,9 @@ fun ChatLimitDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
                 Text("Older messages, photos, voice clips, videos and files in this chat are deleted on both phones.", style = Type.normal)
                 if (close && c != null) {
                     Text("You keep them for", style = Type.small)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Limits.CHOICES.forEach { d ->
-                            MButton("$d days", Modifier.weight(1f), if (mine == d) Kind.Accent else Kind.Normal) { app.chat.setKeep(key, d) }
-                        }
+                    io.github.ravenor907.muninn.ui.ChoiceRow(Limits.CHOICES.size) { i, m ->
+                        val d = Limits.CHOICES[i]
+                        MButton("$d days", m, if (mine == d) Kind.Accent else Kind.Normal) { app.chat.setKeep(key, d) }
                     }
                     Text("If you and $name pick differently, the shorter one counts.", style = Type.small)
                 } else Text("Put $name in your Family or Work folder to keep messages up to 30 days.", style = Type.small)
@@ -95,20 +94,19 @@ fun GroupLimitPanel(app: Muninn, g: String, s: Proto06.State, admin: Boolean) {
     Text("${Limits.kindName(s.kind)} group · ${Limits.words(days)}", style = Type.normal)
     if (admin) {
         Text("Type", style = Type.small, modifier = Modifier.padding(top = 8.dp))
-        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            (listOf("") + Limits.KINDS).forEach { k ->
-                MButton(Limits.kindName(k), Modifier.weight(1f), if (s.kind == k) Kind.Accent else Kind.Normal) {
-                    if (s.kind != k) app.chat.groups.setLimit(g, k, if (k.isEmpty()) Limits.DEFAULT else days)?.let { Ui.say(it, true) }
-                }
+        val kinds = listOf("") + Limits.KINDS
+        io.github.ravenor907.muninn.ui.ChoiceRow(kinds.size, Modifier.padding(top = 4.dp), minWidth = 88.dp) { i, m ->
+            val k = kinds[i]
+            MButton(Limits.kindName(k), m, if (s.kind == k) Kind.Accent else Kind.Normal) {
+                if (s.kind != k) app.chat.groups.setLimit(g, k, if (k.isEmpty()) Limits.DEFAULT else days)?.let { Ui.say(it, true) }
             }
         }
         if (s.kind.isNotEmpty()) {
             Text("Keep messages for", style = Type.small, modifier = Modifier.padding(top = 8.dp))
-            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Limits.CHOICES.forEach { d ->
-                    MButton("$d days", Modifier.weight(1f), if (days == d) Kind.Accent else Kind.Normal) {
-                        if (days != d) app.chat.groups.setLimit(g, s.kind, d)?.let { Ui.say(it, true) }
-                    }
+            io.github.ravenor907.muninn.ui.ChoiceRow(Limits.CHOICES.size, Modifier.padding(top = 4.dp)) { i, m ->
+                val d = Limits.CHOICES[i]
+                MButton("$d days", m, if (days == d) Kind.Accent else Kind.Normal) {
+                    if (days != d) app.chat.groups.setLimit(g, s.kind, d)?.let { Ui.say(it, true) }
                 }
             }
         } else Text("Family and Work groups can keep messages up to 30 days.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
@@ -123,10 +121,10 @@ fun GroupLimitPanel(app: Muninn, g: String, s: Proto06.State, admin: Boolean) {
 @Composable
 fun GroupKindPicker(kind: String, onKind: (String) -> Unit) {
     Text("Type", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-    Row(Modifier.padding(top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        (listOf("") + Limits.KINDS).forEach { k ->
-            MButton(Limits.kindName(k), Modifier.weight(1f), if (kind == k) Kind.Accent else Kind.Normal) { onKind(k) }
-        }
+    val kinds = listOf("") + Limits.KINDS
+    io.github.ravenor907.muninn.ui.ChoiceRow(kinds.size, Modifier.padding(top = 4.dp, bottom = 4.dp), minWidth = 88.dp) { i, m ->
+        val k = kinds[i]
+        MButton(Limits.kindName(k), m, if (kind == k) Kind.Accent else Kind.Normal) { onKind(k) }
     }
     Text(if (kind.isEmpty()) "Messages disappear after 7 days." else "Messages disappear after 7 days; admins can make it up to 30.", style = Type.small)
 }

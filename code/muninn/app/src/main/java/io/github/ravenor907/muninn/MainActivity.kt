@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn
 
+import androidx.compose.ui.text.style.TextOverflow
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -443,7 +444,7 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { app.net.decline() },
                 containerColor = Palette.panel,
                 title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
-                text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal) },
+                text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.net.accept() } } },
                 dismissButton = { MButton("Decline") { app.net.decline() } },
             )
@@ -453,7 +454,7 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { app.closeFiles.decline() },
                 containerColor = Palette.panel,
                 title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
-                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal) },
+                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.closeFiles.accept() } } },
                 dismissButton = { MButton("Decline") { app.closeFiles.decline() } },
             )
@@ -464,7 +465,7 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { io.github.ravenor907.muninn.update.ApkInstall.decline(o) },
                 containerColor = Palette.panel,
                 title = { Text("Install ${o.name}?", style = Type.big) },
-                text = { Text("${o.from} sent it. Only install apps from someone you trust. Android asks once more before it installs.", style = Type.normal) },
+                text = { Text("${o.from} sent it. Only install apps from someone you trust. Android asks once more before it installs.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = { MButton("Install", kind = Kind.Accent) { io.github.ravenor907.muninn.update.ApkInstall.accept(this@MainActivity, o) } },
                 dismissButton = { MButton("Don't install") { io.github.ravenor907.muninn.update.ApkInstall.decline(o) } },
             )
@@ -525,7 +526,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val header: @Composable () -> Unit = { Brand(title = title(tab).uppercase()) {
                 // Your own picture on Chats opens Your profile (status, picture, name).
-                if (tab == "chat") Box(Modifier.padding(end = 6.dp).size(44.dp).clip(CircleShape)
+                if (tab == "chat") Box(Modifier.padding(end = 4.dp).size(48.dp).clip(CircleShape)
                     .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
                     contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
                 if (tab == "chat") IconAction("plus", "Add someone", Palette.onGold, Modifier.padding(end = 4.dp).clip(CircleShape).background(Palette.gold)) { ChatNav.open = "add" }
@@ -555,7 +556,7 @@ class MainActivity : ComponentActivity() {
             state = androidx.compose.material3.rememberTooltipState(),
         ) {
             // No circle behind the knot: while Settings is open, a very faint glow comes from its centre instead.
-            Box(Modifier.size(44.dp)
+            Box(Modifier.size(48.dp)
                 .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
                 .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
                 // Centred on the knot's weight, a touch below the middle of the button.
@@ -583,8 +584,9 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
                         .semantics { selected = on }.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         MIcon(v.first, tint, 22.dp)
+                        // One line under the icon: "Contacts" shortens rather than wrapping at a large text size.
                         Text(v.second, style = Type.small.copy(color = tint, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal),
-                            modifier = Modifier.padding(top = 4.dp))
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
@@ -622,8 +624,10 @@ class MainActivity : ComponentActivity() {
             Box(contentAlignment = Alignment.TopEnd) {
                 RailButton(if (grp.g in unread) "$name, unread" else name, on, round = !on, fill = if (on) Palette.gold else Palette.coolTint,
                     onClick = { show("chat"); ChatNav.space = grp.g; ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(grp.g) }) {
+                    // Sized to the button, not the font size, so the letter stays inside it.
+                    val letter = with(androidx.compose.ui.platform.LocalDensity.current) { 19.dp.toSp() }
                     Text(name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "#",
-                        style = Type.big.copy(fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = if (on) Palette.onGold else Palette.accent))
+                        style = Type.big.copy(fontSize = letter, lineHeight = letter, fontWeight = FontWeight.SemiBold, color = if (on) Palette.onGold else Palette.accent), maxLines = 1)
                 }
                 if (grp.g in unread && !on) Box(Modifier.padding(top = 2.dp, end = 12.dp).size(12.dp).clip(CircleShape).background(Palette.gold))
             }
@@ -673,7 +677,7 @@ class MainActivity : ComponentActivity() {
                                 Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
                             } else {
                                 ColumnHeader("Chats") {
-                                    Box(Modifier.padding(end = 4.dp).size(44.dp).clip(CircleShape)
+                                    Box(Modifier.padding(end = 4.dp).size(48.dp).clip(CircleShape)
                                         .clickable(role = Role.Button, onClick = { openProfile() }).semantics { contentDescription = "Your profile" },
                                         contentAlignment = Alignment.Center) { io.github.ravenor907.muninn.ui.Avatar("me", app.identity.username, 30.dp, showDot = true) }
                                     IconAction("plus", "Add someone", Palette.goldBright) { ChatNav.open = "add" }
@@ -699,7 +703,7 @@ class MainActivity : ComponentActivity() {
     private fun ColumnHeader(text: String, trailing: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}) {
         Column(Modifier.fillMaxWidth().bar()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(text.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, modifier = Modifier.weight(1f))
+                Text(text.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 trailing()
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))

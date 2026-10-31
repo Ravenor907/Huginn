@@ -31,6 +31,7 @@ import kotlin.math.roundToInt
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.PowerLogic.Check
 import io.github.ravenor907.muninn.ui.Bar
+import io.github.ravenor907.muninn.ui.ChoiceRow
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.MButton
@@ -126,10 +127,9 @@ private fun ShortList(app: Muninn) {
 
     Text("Battery", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 16.dp))
     var choice by remember { mutableStateOf(BatteryChoice.of(app)) }
-    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        BatteryChoice.entries.forEach { c ->
-            MButton(c.title, Modifier.weight(1f), if (choice == c) Kind.Accent else Kind.Normal) { c.apply(app); choice = c }
-        }
+    ChoiceRow(BatteryChoice.entries.size, Modifier.padding(top = 6.dp), minWidth = 96.dp) { i, m ->
+        val c = BatteryChoice.entries[i]
+        MButton(c.title, m, if (choice == c) Kind.Accent else Kind.Normal) { c.apply(app); choice = c }
     }
     Help(choice?.help ?: "Your own mix, set under More settings › Battery details.")
 
@@ -161,8 +161,8 @@ private fun MeRow(app: Muninn) {
         .padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         io.github.ravenor907.muninn.ui.Avatar("me", name, 48.dp, showDot = true)
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(name, style = Type.big)
-            Text(line, style = Type.small)
+            Text(name, style = Type.big, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text(line, style = Type.small, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }
         MIcon("forward", Palette.textMuted, 20.dp)
     }
@@ -173,7 +173,7 @@ private fun MeRow(app: Muninn) {
 private fun PageRow(title: String, value: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick).padding(vertical = 10.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(end = 8.dp)) {
             Text(title, style = Type.normal.copy(color = Palette.text))
             if (value.isNotEmpty()) Text(value, style = Type.small)
         }
@@ -254,20 +254,23 @@ private fun NotifyPage(app: Muninn) {
 private fun LookPage(app: Muninn) {
     val id = app.identity
     Text("Look", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
-    io.github.ravenor907.muninn.ui.Looks.ALL.chunked(2).forEach { row ->
-        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            row.forEach { (k, n) -> MButton(n, Modifier.weight(1f), if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k } }
-        }
+    val looks = io.github.ravenor907.muninn.ui.Looks.ALL
+    // Two a line; one a line at a large text size, so "Autumn (Experimental)" never breaks mid-word.
+    ChoiceRow(looks.size, Modifier.padding(top = 6.dp), minWidth = 140.dp, max = 2) { i, m ->
+        val (k, n) = looks[i]
+        MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
     }
     Help("True black saves a little battery on OLED screens. Light is parchment, like Huginn's. Autumn is still being worked on.")
     if (Access.look == io.github.ravenor907.muninn.ui.Looks.AUTUMN) io.github.ravenor907.muninn.ui.AutumnControls()
     Text("Size of everything", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(0.85f, 1f, 1.15f, 1.3f).forEach { v -> MButton(pct(v), Modifier.weight(1f), if (Access.size == v) Kind.Accent else Kind.Normal) { Access.size = v; id.uiSize = v } }
+    val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
+    ChoiceRow(sizes.size, Modifier.padding(top = 6.dp)) { i, m ->
+        val v = sizes[i]; MButton(pct(v), m, if (Access.size == v) Kind.Accent else Kind.Normal) { Access.size = v; id.uiSize = v }
     }
     Text("Text size", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(1f, 1.15f, 1.3f, 1.5f).forEach { v -> MButton(pct(v), Modifier.weight(1f), if (Access.text == v) Kind.Accent else Kind.Normal) { Access.text = v; id.textSize = v } }
+    val texts = listOf(1f, 1.15f, 1.3f, 1.5f)
+    ChoiceRow(texts.size, Modifier.padding(top = 6.dp)) { i, m ->
+        val v = texts[i]; MButton(pct(v), m, if (Access.text == v) Kind.Accent else Kind.Normal) { Access.text = v; id.textSize = v }
     }
     Help("100% is the usual. Text size adds to your phone's own font size.")
     PageRow("Accessibility", "High contrast, color-blind friendly, less motion") { SettingsNav.folder = "access" }
@@ -298,18 +301,19 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     MButton("Change lock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { SettingsNav.folder = "lockset" }
     if (app.vault.usesPattern) {
         Text("Pattern position", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("top", "middle", "lower").forEach { p -> MButton(posName(p), Modifier.weight(1f), if (pos == p) Kind.Accent else Kind.Normal) { pos = p; id.patternPos = p } }
+        val places = listOf("top", "middle", "lower")
+        ChoiceRow(places.size, Modifier.padding(top = 6.dp)) { i, m ->
+            val p = places[i]; MButton(posName(p), m, if (pos == p) Kind.Accent else Kind.Normal) { pos = p; id.patternPos = p }
         }
         Help("Where the dots sit when you unlock or set a pattern. Lower is easiest with one hand.")
         ToggleRow("Hide the pattern as I draw", "No line and no lit dots while you draw, so nobody watching sees it", !trail) { trail = !it; id.patternTrail = !it }
     }
     if (app.vault.hasPassword) {
         Text("Lock again after Muninn is in the background for", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min").forEach { (ms, label) ->
-                MButton(label, Modifier.weight(1f), if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
-            }
+        val afters = listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min")
+        ChoiceRow(afters.size, Modifier.padding(top = 6.dp)) { i, m ->
+            val (ms, label) = afters[i]
+            MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
         }
         Help("While locked, messages still arrive as “New message” and open once you unlock.")
         var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
@@ -371,10 +375,8 @@ private fun BatteryPage(app: Muninn) {
     // Only while this page is on screen.
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) }
     Text("Check for messages", style = Type.normal.copy(color = Palette.text))
-    Check.entries.chunked(2).forEach { row ->
-        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            row.forEach { c -> MButton(c.title, Modifier.weight(1f), if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c } }
-        }
+    ChoiceRow(Check.entries.size, Modifier.padding(top = 6.dp), minWidth = 140.dp, max = 2) { i, m ->
+        val c = Check.entries[i]; MButton(c.title, m, if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c }
     }
     Help(when (check) {
         Check.LIVE -> "Messages and calls arrive within seconds. In the background Muninn keeps one light connection, checked about every 5 minutes. No Google servers (a small silent “Listening” notification you can hide)."
@@ -607,10 +609,9 @@ private fun QuietHours(app: Muninn) {
 /** How Muninn checks during quiet hours and Do Not Disturb. */
 @Composable
 private fun QuietMode(mode: Check, set: (Check) -> Unit) {
-    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(Check.HOUR, Check.OPEN).forEach { c ->
-            MButton(c.title, Modifier.weight(1f), if (mode == c) Kind.Accent else Kind.Normal) { set(c) }
-        }
+    val modes = listOf(Check.HOUR, Check.OPEN)
+    ChoiceRow(modes.size, Modifier.padding(top = 6.dp), minWidth = 140.dp) { i, m ->
+        val c = modes[i]; MButton(c.title, m, if (mode == c) Kind.Accent else Kind.Normal) { set(c) }
     }
     Text("While quiet hours or Do Not Disturb last, Muninn checks this way unless your own choice saves more.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
 }
@@ -619,10 +620,10 @@ private fun QuietMode(mode: Check, set: (Check) -> Unit) {
 @Composable
 private fun FolderHeader(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Box(Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Back") { onBack() }.padding(10.dp)) {
+        Box(Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Back") { onBack() }.padding(12.dp)) {
             MIcon("back", Palette.text, 24.dp)
         }
-        Text(title.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), modifier = Modifier.padding(start = 4.dp))
+        Text(title.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), modifier = Modifier.weight(1f).padding(start = 4.dp))
     }
 }
 

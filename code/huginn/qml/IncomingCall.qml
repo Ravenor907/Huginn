@@ -29,8 +29,9 @@ Item {
 
     Rectangle {
         anchors.centerIn: parent
-        width: Math.min(parent.width - Theme.px(80), Theme.px(560))
-        height: col.implicitHeight + Theme.px(56)
+        width: Math.min(parent.width - Theme.px(32), Theme.px(560))
+        height: Math.min(parent.height - Theme.px(16), col.implicitHeight + Theme.px(56))
+        clip: true
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.accent
@@ -40,7 +41,9 @@ Item {
             anchors.margins: Theme.px(28)
             spacing: Theme.px(16)
             Text {
-                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
                 text: dlg.group ? "GROUP CALL" : dlg.video ? "VIDEO CALL" : "INCOMING CALL"
                 color: Theme.accent
                 font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
@@ -51,7 +54,8 @@ Item {
                 // A locked Chat shows no picture either.
                 key: Vault.screenLocked || dlg.group ? "" : Calls.peerKey
                 name: dlg.who
-                size: Theme.px(96)
+                // Smaller on a short window, so the buttons always show.
+                size: Math.max(Theme.px(48), Math.min(Theme.px(96), Math.round(dlg.height * 0.16)))
                 // A slow pulse while it rings.
                 SequentialAnimation on scale {
                     running: dlg.visible && Theme.motion

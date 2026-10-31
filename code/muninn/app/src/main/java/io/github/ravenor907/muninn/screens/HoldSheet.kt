@@ -182,11 +182,11 @@ internal fun HoldSheet(app: Muninn, key: String, moves: ListMoves?, done: () -> 
 
             SheetLabel("Role")
             val inRole = ROLES.firstOrNull { r -> folders.any { it.name.equals(r, true) && key in it.keys } }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (ROLES + "None").forEach { r ->
-                    val on = if (r == "None") inRole == null else inRole == r
-                    SheetChip(r, on, Modifier.weight(1f)) { setRole(app, key, if (r == "None") null else r) }
-                }
+            val roles = ROLES + "None"
+            io.github.ravenor907.muninn.ui.ChoiceRow(roles.size, minWidth = 88.dp, gap = 8.dp) { i, m ->
+                val r = roles[i]
+                val on = if (r == "None") inRole == null else inRole == r
+                SheetChip(r, on, m) { setRole(app, key, if (r == "None") null else r) }
             }
             Text("Family and Work chats can keep messages for up to 30 days. Roles are only on this phone.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
 
@@ -278,11 +278,12 @@ private fun SheetLabel(text: String) {
 /** A sharp-cornered choice: gold-tinted when on. */
 @Composable
 private fun SheetChip(text: String, on: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
-    Box(modifier.heightIn(min = 44.dp).clip(Corner).background(if (on) Palette.goldTint else Color.Transparent)
+    Box(modifier.heightIn(min = 48.dp).clip(Corner).background(if (on) Palette.goldTint else Color.Transparent)
         .border(1.dp, if (on) Palette.gold else Palette.line, Corner)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { selected = on }
         .padding(horizontal = 12.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
         Text(text, style = Type.normal.copy(fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (!enabled) Palette.textFaint else if (on) Palette.goldBright else Palette.textSoft), maxLines = 1)
+            color = if (!enabled) Palette.textFaint else if (on) Palette.goldBright else Palette.textSoft), maxLines = 2,
+            overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }

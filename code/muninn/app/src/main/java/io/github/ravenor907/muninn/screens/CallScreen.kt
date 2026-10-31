@@ -168,14 +168,14 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
 @Composable
 private fun TopBar(onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
+        Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
             contentAlignment = Alignment.Center) { Glyph(CallIcons.down, Palette.text, 24.dp) }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Glyph(CallIcons.shield, CallColors.encrypted, 14.dp, 2f)
             Spacer(Modifier.width(6.dp))
             Text("End-to-end encrypted", style = Type.small.copy(fontSize = 13.sp, color = CallColors.encrypted))
         }
-        Spacer(Modifier.width(44.dp))
+        Spacer(Modifier.width(48.dp))
     }
 }
 
@@ -192,6 +192,7 @@ private fun Paths(c: CallManager.Ui) {
 }
 
 /** Decline and Answer while it rings; Mute, Audio, Camera, Flip or Message and End once it's on ([gap] above End). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit,
                     onCamera: (Boolean) -> Unit, gap: Dp) {
@@ -204,7 +205,9 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
         }
         Phase.ENDED -> Spacer(Modifier.height(106.dp))
         else -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            // Wraps onto two lines when four don't fit (a small phone at a large size).
+            androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute" else "Mute", if (c.muted) Palette.accent else Palette.coolTint,
                     if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
                 AudioButton { CallManager.setOutput(it) }
@@ -245,7 +248,8 @@ private fun VideoCall(c: CallManager.Ui, video: CallVideo.State, showRemote: Boo
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(name, style = Type.title.copy(fontSize = 20.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text(status(c), style = Type.normal.copy(fontSize = 15.sp, color = Palette.textMuted), maxLines = 1, modifier = Modifier.padding(start = 12.dp))
+                Text(status(c), style = Type.normal.copy(fontSize = 15.sp, color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false))
             }
             if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
             Box(Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState())) { Paths(c) }
@@ -367,7 +371,9 @@ private fun Round(icon: String, text: String, bg: Color, fg: Color, size: Dp, on
         .semantics { contentDescription = text; if (on != null) stateDescription = if (on) "on" else "off" }.padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(size).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { Glyph(icon, fg, if (size > 70.dp) 32.dp else 26.dp, 2f) }
-        if (label) Text(text, style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(top = 8.dp))
+        // A long Bluetooth name wraps or shortens under its button instead of pushing the others away.
+        if (label) Text(text, style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 8.dp).widthIn(max = size + 24.dp))
     }
 }
 
@@ -402,7 +408,7 @@ internal fun AudioPicker(onDismiss: () -> Unit, onPick: (String) -> Unit) {
         containerColor = Palette.panel,
         title = { Text("Audio", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (all.isEmpty()) Text("Nothing to choose from right now.", style = Type.small)
                 all.forEach { o ->
                     val on = o.id == now?.id

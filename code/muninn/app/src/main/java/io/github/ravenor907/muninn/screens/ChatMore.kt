@@ -85,7 +85,7 @@ internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: (
         containerColor = Palette.panel,
         title = { Text("Send", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Line("Photos", "Up to 10 at once, as an album", icon = "image") { done(); onPhotos() }
                 Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
                 Line("Video message", "Up to a minute. You see it before it's sent", icon = "video") { done(); onVideo() }
@@ -174,7 +174,7 @@ internal fun PollCard(poll: More.Poll, votes: Map<String, More.Vote>, me: String
             onDismissRequest = { who = null },
             containerColor = Palette.panel,
             title = { Text(poll.options[i], style = Type.big) },
-            text = { Text(votes.filter { i in it.value.v }.keys.joinToString("\n") { if (it == me) "You" else names(it) }, style = Type.normal) },
+            text = { Text(votes.filter { i in it.value.v }.keys.joinToString("\n") { if (it == me) "You" else names(it) }, style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
             confirmButton = { MButton("Done") { who = null } },
         )
     }
@@ -197,7 +197,7 @@ internal fun PreviewCard(lp: More.Preview) {
         Column(Modifier.padding(start = if (thumb != null) 10.dp else 2.dp)) {
             Text(lp.title, style = Type.normal.copy(color = Palette.text, fontWeight = FontWeight.SemiBold), maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (lp.description.isNotEmpty()) Text(lp.description, style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(host, style = Type.small.copy(color = Palette.accent), maxLines = 1)
+            Text(host, style = Type.small.copy(color = Palette.accent), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

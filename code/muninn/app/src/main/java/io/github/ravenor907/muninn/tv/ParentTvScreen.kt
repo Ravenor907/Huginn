@@ -180,7 +180,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                     }
                 }
                 if (order.size < TvRules.MAX_QUICK) Row(
-                    Modifier.fillMaxWidth().height(50.dp).clip(io.github.ravenor907.muninn.ui.Corner).border(1.dp, Palette.lineMuted, io.github.ravenor907.muninn.ui.Corner)
+                    Modifier.fillMaxWidth().heightIn(min = 50.dp).clip(io.github.ravenor907.muninn.ui.Corner).border(1.dp, Palette.lineMuted, io.github.ravenor907.muninn.ui.Corner)
                         .clickable(role = Role.Button) { editing = Quick("", "") },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
                 ) {
@@ -218,10 +218,10 @@ fun ParentTvScreen(app: Muninn, tvKey: String, onBack: () -> Unit) {
                 if (!k2) Text("Calls and the microphone level reach the TV once it runs the newest Muninn.", style = Type.small.copy(fontSize = 13.sp))
                 // k5 (7.10): noise removal on the TV's microphone.
                 Text("Noise removal", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 12.dp))
-                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(TvRules.NR_NONE to "None", TvRules.NR_STANDARD to "Standard", TvRules.NR_STRONG to "Strong", TvRules.NR_BOTH to "Both").forEach { (v, w) ->
-                        MButton(w, Modifier.weight(1f), if (t.nr == v) Kind.Accent else Kind.Normal) { TvParent.setNoise(tvKey, v) }
-                    }
+                val levels = listOf(TvRules.NR_NONE to "None", TvRules.NR_STANDARD to "Standard", TvRules.NR_STRONG to "Strong", TvRules.NR_BOTH to "Both")
+                io.github.ravenor907.muninn.ui.ChoiceRow(levels.size, Modifier.padding(top = 6.dp), minWidth = 88.dp) { i, m ->
+                    val (v, w) = levels[i]
+                    MButton(w, m, if (t.nr == v) Kind.Accent else Kind.Normal) { TvParent.setNoise(tvKey, v) }
                 }
                 Text(if (TvParent.k5(app, tvKey)) "Takes the room's noise out of the kids' voice. Both is the usual; Standard is lighter. It can be changed on the TV too, and the last change counts."
                     else "Reaches the TV once it runs the newest Muninn.", style = Type.small.copy(fontSize = 13.sp))
@@ -519,7 +519,7 @@ private fun TextDialog(title: String, start: String, max: Int, onCancel: () -> U
         containerColor = Palette.panel,
         title = { Text(title, style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field(text, { v -> text = if (v.codePointCount(0, v.length) <= max) v else text }, "Up to $max letters")
                 Text("${clean.codePointCount(0, clean.length)} of $max", style = Type.small, modifier = Modifier.padding(top = 6.dp))
             }

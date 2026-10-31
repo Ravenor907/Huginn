@@ -1,5 +1,8 @@
 package io.github.ravenor907.muninn.tv
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -99,8 +102,10 @@ import kotlinx.coroutines.delay
 // Everything works with the D-pad, OK and Back alone: every action is a focusable tile, and focus shows as a
 // gold ring (never by color alone: the ring is 4 dp wide and the tile grows a little).
 
-private val TileFocus = Color(0xFF1D1A14)
-private val TheirBubble = Color(0xFF1D1A14)
+// A warm dark shade for a focused tile and their messages; on parchment (Light) the look's own light shades, so the
+// dark text stays readable.
+private val TileFocus get() = if (Palette.light) Palette.focusFill else Color(0xFF1D1A14)
+private val TheirBubble get() = if (Palette.light) Palette.field else Color(0xFF1D1A14)
 
 internal fun tvText(size: TextUnit, color: Color = Palette.text, weight: FontWeight = FontWeight.Normal) =
     TextStyle(fontFamily = Type.body, fontSize = size, fontWeight = weight, color = color)
@@ -206,7 +211,8 @@ private fun TvPairing(app: Muninn) {
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp)) {
         TvHeader()
         Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp)) {
-            Column(Modifier.weight(1f)) {
+            // Scrolls (the focused chip comes into view) if a large TV font size makes it taller than the screen.
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Text("Ask a parent to pair this TV", style = tvTitle(30.sp))
                 Text("On the parent's phone, point the camera at this code. Muninn opens: tap Add, then Set it up.",
                     style = tvText(19.sp, Palette.textSoft), modifier = Modifier.padding(top = 18.dp))
@@ -422,16 +428,21 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, setupLeft: Bool
         if (people.isEmpty()) {
             Text("No one is set up yet. Ask a parent to choose who this TV can reach.", style = tvText(20.sp, Palette.textMuted),
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 40.dp))
+            Spacer(Modifier.weight(1f))
         } else {
-            LazyRow(Modifier.fillMaxWidth().padding(top = 26.dp), state = list,
-                horizontalArrangement = Arrangement.spacedBy(45.dp, Alignment.CenterHorizontally),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)) {
-                itemsIndexed(people, key = { _, p -> p.k }) { i, p ->
-                    Tile(p, unreadCount(convs[p.k].orEmpty(), p.k in unread), if (i == focusAt) first else null) { onOpen(p.k) }
+            // The tiles take the room left over, up to their usual height: a TV screen is only about 540 dp tall, so with
+            // the latest message and the parent buttons showing they shrink a little rather than push those off screen.
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(top = 26.dp)) {
+                val tileH = (maxHeight - 32.dp).coerceIn(150.dp, 250.dp)
+                LazyRow(Modifier.fillMaxWidth(), state = list,
+                    horizontalArrangement = Arrangement.spacedBy(45.dp, Alignment.CenterHorizontally),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)) {
+                    itemsIndexed(people, key = { _, p -> p.k }) { i, p ->
+                        Tile(p, unreadCount(convs[p.k].orEmpty(), p.k in unread), if (i == focusAt) first else null, tileH) { onOpen(p.k) }
+                    }
                 }
             }
         }
-        Spacer(Modifier.weight(1f))
         Latest(people, convs, onOpen)
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TvChip(if (setupLeft) "For a parent: finish setting up this TV" else "For a parent", null, quiet = true, onClick = onSetup)
@@ -454,7 +465,7 @@ private fun Avatar(p: TvPerson, size: Dp, @Suppress("UNUSED_PARAMETER") font: Te
 }
 
 @Composable
-private fun Tile(p: TvPerson, count: Int, requester: FocusRequester?, onClick: () -> Unit) {
+private fun Tile(p: TvPerson, count: Int, requester: FocusRequester?, tileHeight: Dp = 250.dp, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused && !Access.reduceMotion) 1.06f else 1f, label = "tile")
     val shape = RoundedCornerShape(20.dp)
@@ -462,14 +473,14 @@ private fun Tile(p: TvPerson, count: Int, requester: FocusRequester?, onClick: (
         Modifier.then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .size(220.dp, 250.dp).clip(shape).background(if (focused) TileFocus else Palette.panel)
+            .size(220.dp, tileHeight).clip(shape).background(if (focused) TileFocus else Palette.panel)
             .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = if (count > 0) "${p.n}, $count new" else p.n },
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(17.dp)) {
-            Avatar(p, 125.dp, 55.sp)
+            Avatar(p, minOf(125.dp, tileHeight * 0.5f), 55.sp)
             Text(p.n, style = tvText(32.sp, weight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 12.dp))
         }
@@ -604,10 +615,12 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     Status(app, p.k)
                 }
             }
-            Spacer(Modifier.weight(1f))
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                if (msgs.isEmpty()) Text("Pick a message to send to ${p.n}.", style = tvText(17.sp, Palette.textMuted))
-                msgs.takeLast(5).forEach { TalkBubble(app, it, p.n, playing) { viewing = it.id } }
+            // The last messages sit at the bottom; when they're taller than the room left, they scroll and the newest shows.
+            Box(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.BottomStart) {
+                Column(Modifier.verticalScroll(rememberScrollState(), reverseScrolling = true), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    if (msgs.isEmpty()) Text("Pick a message to send to ${p.n}.", style = tvText(17.sp, Palette.textMuted))
+                    msgs.takeLast(5).forEach { TalkBubble(app, it, p.n, playing) { viewing = it.id } }
+                }
             }
         }
         LazyVerticalGrid(GridCells.Fixed(2), Modifier.weight(1f).fillMaxHeight(),
@@ -775,7 +788,7 @@ internal fun BigButton(text: String, icon: String? = null, sub: String? = null, 
     val shape = RoundedCornerShape(17.dp)
     val fg = if (enabled) Palette.text else Palette.textFaint
     Box(
-        Modifier.fillMaxWidth().height(95.dp)
+        Modifier.fillMaxWidth().heightIn(min = 95.dp)
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .clip(shape).background(if (enabled) Palette.field else Palette.panelLow)
@@ -785,7 +798,7 @@ internal fun BigButton(text: String, icon: String? = null, sub: String? = null, 
             .semantics { if (!enabled) disabled() },
         contentAlignment = Alignment.Center,
     ) {
-        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             if (icon != null) { MIcon(icon, if (enabled) Palette.goldBright else Palette.textFaint, 28.dp); Spacer(Modifier.width(12.dp)) }
             Column {
                 Text(text, style = tvText(23.sp, fg, FontWeight.SemiBold), maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -798,8 +811,10 @@ internal fun BigButton(text: String, icon: String? = null, sub: String? = null, 
 /** A dialog window of its own, so focus can't wander to the screen behind it. Back closes it. */
 @Composable
 internal fun TvDialog(onBack: () -> Unit, content: @Composable () -> Unit) {
+    // Scrolls when it's taller than the screen (For a parent has many buttons); the focused button comes into view.
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.widthIn(min = 420.dp, max = 720.dp).clip(RoundedCornerShape(20.dp)).background(Palette.panel).padding(36.dp),
+        Column(Modifier.widthIn(min = 420.dp, max = 720.dp).clip(RoundedCornerShape(20.dp)).background(Palette.panel)
+            .verticalScroll(rememberScrollState()).padding(36.dp),
             horizontalAlignment = Alignment.CenterHorizontally) { content() }
     }
 }

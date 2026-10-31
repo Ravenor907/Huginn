@@ -27,7 +27,8 @@ Column {
             Repeater {
                 model: grid.photos
                 delegate: Rectangle {
-                    width: Theme.px(grid.columns === 2 ? 140 : 96); height: width
+                    // Shrinks to fit a narrow chat.
+                    width: Math.min(Theme.px(grid.columns === 2 ? 140 : 96), Math.floor((parts.width - grid.spacing * (grid.columns - 1)) / grid.columns)); height: width
                     radius: Theme.radius; color: Theme.groundDeep; clip: true
                     Image {
                         anchors.fill: parent
@@ -48,7 +49,7 @@ Column {
     // A video message: a dark tile with a play mark and its length. Click to play it.
     Rectangle {
         visible: parts.live && parts.m.video > 0 && !!parts.m.photo
-        width: Theme.px(200); height: Theme.px(150)
+        width: Math.min(Theme.px(200), parts.width); height: Math.round(width * 0.75)
         radius: Theme.radius; color: "black"
         border.color: Theme.line; border.width: 1
         Rectangle {

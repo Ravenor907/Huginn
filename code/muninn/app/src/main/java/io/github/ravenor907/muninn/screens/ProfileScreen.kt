@@ -32,6 +32,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.material3.minimumInteractiveComponentSize
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.ui.Avatar
 import io.github.ravenor907.muninn.ui.Access
@@ -65,7 +69,7 @@ private fun colourOf(hex: String): Color = try { Color(android.graphics.Color.pa
 /** The colour of a status's square and dot. */
 private fun statusColour(s: Status): Color = when (s) {
     Status.ONLINE -> Palette.online
-    Status.AWAY -> if (Access.colorBlind) Palette.gold else Color(0xFFE0B44C)
+    Status.AWAY -> if (Access.colorBlind) Palette.gold else Palette.away
     Status.DND -> Palette.danger
     Status.INVISIBLE -> Palette.textFaint
 }
@@ -74,6 +78,7 @@ private fun statusColour(s: Status): Color = when (s) {
  * Settings › Your profile: your picture, name and status, as your contacts see them. Nothing here goes to anyone
  * but your contacts, end-to-end encrypted like a message.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(app: Muninn) {
     val id = app.identity
@@ -93,9 +98,9 @@ fun ProfileScreen(app: Muninn) {
             .semantics { contentDescription = "Your picture. Tap to change it" }) {
             Avatar("me", id.username, 112.dp, showDot = true)
         }
-        Text(id.username, style = Type.big.copy(fontSize = 22.sp), modifier = Modifier.padding(top = 10.dp))
-        Text(if (custom.isNotBlank()) "${current.title} · $custom" else current.title, style = Type.small, modifier = Modifier.padding(top = 2.dp))
-        Text("Only your contacts see this", style = Type.small.copy(color = Palette.textFaint), modifier = Modifier.padding(top = 2.dp))
+        Text(id.username, style = Type.big.copy(fontSize = 22.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+        Text(if (custom.isNotBlank()) "${current.title} · $custom" else current.title, style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 2.dp))
+        Text("Only your contacts see this", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 2.dp))
     }
 
     Section("Picture")
@@ -108,10 +113,11 @@ fun ProfileScreen(app: Muninn) {
     if (picking) PicturePickerSheet(app) { picking = false }
 
     Text("Colour of your initial", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    Row(Modifier.padding(top = 8.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    // Wraps onto a second line when six don't fit (a small phone at a large size); each is a full 48dp touch target.
+    FlowRow(Modifier.padding(top = 8.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         COLOURS.forEachIndexed { i, hex ->
             val on = colour.equals(hex, true)
-            Box(Modifier.size(40.dp).clip(CircleShape).background(colourOf(hex))
+            Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(colourOf(hex))
                 .border(if (on) 3.dp else 0.dp, if (on) Palette.text else Color.Transparent, CircleShape)
                 .selectable(selected = on, role = Role.RadioButton) { profile.setMyColour(hex) }
                 .semantics { contentDescription = "Colour ${i + 1} of ${COLOURS.size}" + if (on) ", chosen" else "" },
@@ -147,7 +153,8 @@ fun ProfileScreen(app: Muninn) {
                 .padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(14.dp).clip(Corner).background(statusColour(s)))
                 Text(s.title, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f).padding(start = 12.dp))
-                if (s.hint.isNotEmpty()) Text(s.hint, style = Type.small)
+                // The hint shares the row with the name instead of squeezing it out at a large text size.
+                if (s.hint.isNotEmpty()) Text(s.hint, style = Type.small, textAlign = TextAlign.End, modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp))
             }
         }
     }

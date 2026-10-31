@@ -38,7 +38,7 @@ Rectangle {
         Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
         Rectangle {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.radius; color: Theme.danger
+            width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
             Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
         }
     }
@@ -89,6 +89,8 @@ Rectangle {
             spacing: Theme.px(8)
             Text {
                 id: whoText
+                width: Math.min(implicitWidth, Math.round(col.width * 0.6))
+                elide: Text.ElideRight
                 text: msg.who
                 color: Theme.avatar(msg.who, msg.mine).fg
                 font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.Medium
@@ -130,7 +132,7 @@ Rectangle {
         }
         Image {
             visible: !!msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album
-            width: Theme.px(300); height: Theme.px(170)
+            width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             source: visible && !host.isTour ? Chat.photoUrl(msg.m.photo) : ""
@@ -155,7 +157,7 @@ Rectangle {
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
             font.italic: !!msg.m.unsent
             lineHeight: 1.2
-            color: msg.m.unsent ? Theme.textFaint : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
+            color: msg.m.unsent ? Theme.textMuted : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
         }
         // Cap m2: an album, a video message, a poll or a link preview.
         MoreParts { width: parent.width; host: msg.host; m: msg.m; where: msg.host && msg.host.more ? msg.host.more.where : "" }

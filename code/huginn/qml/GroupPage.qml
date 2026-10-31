@@ -504,7 +504,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -705,7 +705,8 @@ Rectangle {
                 }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, Theme.px(260)); height: width; color: Theme.text
+                    // The same light paper the code is drawn on, in every look, so it always scans.
+                    width: Math.min(parent.width, Theme.px(260), Math.max(Theme.px(120), Math.round(page.height * 0.4))); height: width; color: "#E4E1DA"
                     Image { anchors.fill: parent; anchors.margins: Theme.px(12); smooth: false; source: page.shownCode !== "" ? "image://qr/" + encodeURIComponent(page.shownCode) : "" }
                 }
                 Row {

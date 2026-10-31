@@ -121,7 +121,7 @@ Item {
                 Rectangle {
                     visible: panel.mode === "create" && panel.ready && panel.link !== ""
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, Theme.px(200)); height: width; color: Theme.text
+                    width: Math.min(parent.width, Theme.px(200)); height: width; color: "#E4E1DA"   // the light paper the code is drawn on, in every look
                     Image { anchors.fill: parent; anchors.margins: Theme.px(10); smooth: false; source: parent.visible ? "image://qr/" + encodeURIComponent(panel.link) : "" }
                 }
                 Text {

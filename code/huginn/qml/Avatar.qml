@@ -30,7 +30,9 @@ Item {
     // Their colour: the one sent with their profile, else one picked from their name.
     readonly property var tone: {
         rev
-        const hex = key === "" ? "" : mine ? Profile.myColour : Profile.colourOf(key)
+        let hex = key === "" ? "" : mine ? Profile.myColour : Profile.colourOf(key)
+        if (mine && !Theme.validColor(hex)) hex = Profile.colourOf("me")
+        if (mine && !Theme.validColor(hex)) hex = String(Theme.accentBase)
         if (Theme.validColor(hex) && !Theme.hc) return Theme.avatarFrom(hex)
         return Theme.avatar(name, mine)
     }
@@ -42,13 +44,13 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: width / 2
-        color: av.tone.bg
+        color: av.tone && av.tone.bg ? av.tone.bg : Theme.raised
         opacity: av.dim ? 0.5 : 1
         visible: !av.hasPicture || pic.status !== Image.Ready
         Text {
             anchors.centerIn: parent
             text: av.initial
-            color: av.tone.fg
+            color: av.tone && av.tone.fg ? av.tone.fg : Theme.text
             font.family: Theme.body; font.pixelSize: Math.round(av.size * 0.42); font.weight: Font.DemiBold
         }
     }

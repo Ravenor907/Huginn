@@ -33,14 +33,22 @@ Rectangle {
     Component {
         id: pathChips
         Row {
+            id: chipRow
             spacing: Theme.px(10)
-            Repeater {
-                model: (Calls.directTried ? [{ label: "Internet, straight to them", on: Calls.directLive }] : [])
+            // On a narrow window the chips share the width evenly and their words are cut short.
+            readonly property var chips: (Calls.directTried ? [{ label: "Internet, straight to them", on: Calls.directLive }] : [])
                        .concat([{ label: "Internet", on: Calls.relayLive && !(Calls.directLive || Calls.wifiLive) }, { label: "Wi-Fi", on: Calls.wifiLive },
                                 { label: "Bluetooth", on: Calls.bleLive }])
+            readonly property real avail: page.width - Theme.px(60)
+            readonly property real natural: chips.reduce((w, c) => w + Math.ceil(chipMetrics.advanceWidth(c.label)) + Theme.px(34), 0) + spacing * Math.max(0, chips.length - 1)
+            readonly property bool squeezed: natural > avail
+            readonly property real share: Math.max(Theme.px(60), (avail - spacing * Math.max(0, chips.length - 1)) / Math.max(1, chips.length))
+            FontMetrics { id: chipMetrics; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
+            Repeater {
+                model: chipRow.chips
                 Rectangle {
-                    height: Theme.px(32)
-                    width: chip.implicitWidth + Theme.px(34)
+                    height: Math.max(Theme.px(32), chip.implicitHeight + Theme.px(8))
+                    width: chipRow.squeezed ? chipRow.share : chip.implicitWidth + Theme.px(34)
                     radius: height / 2
                     color: modelData.on ? Theme.accentFill : Theme.tile
                     border.width: 1
@@ -51,14 +59,16 @@ Rectangle {
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(7); height: width; radius: width / 2
-                        color: modelData.on ? (Theme.hc ? Theme.text : "#7FB08A") : Theme.textFaint
+                        color: modelData.on ? (Theme.hc ? Theme.text : Theme.online) : Theme.textFaint
                     }
                     Text {
                         id: chip
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(25)
                         anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, parent.width - Theme.px(34))
+                        elide: Text.ElideRight
                         text: modelData.label
-                        color: modelData.on ? Theme.text : Theme.textFaint
+                        color: modelData.on ? Theme.text : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                     }
                 }
@@ -69,28 +79,45 @@ Rectangle {
     Component {
         id: callButtons
         Row {
+            id: buttonRow
             spacing: Theme.px(16)
+            // On a narrow window the buttons share the width evenly and their words are cut short.
+            readonly property real avail: page.width - Theme.px(48)
+            readonly property var shown: [muteBtn, outputBtn, cameraBtn, switchBtn, endBtn].filter(b => b.visible)
+            readonly property real natural: shown.reduce((w, b) => w + b.implicitWidth, 0) + spacing * Math.max(0, shown.length - 1)
+            readonly property bool squeezed: natural > avail
+            readonly property real share: (avail - spacing * Math.max(0, shown.length - 1)) / Math.max(1, shown.length)
             HButton {
+                id: muteBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 text: Calls.muted ? "Unmute" : "Mute"
                 kind: Calls.muted ? "accent" : "normal"
                 onClicked: Calls.toggleMute()
             }
             HButton {
+                id: outputBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 text: "Output: " + Calls.outputName
                 onClicked: Calls.nextOutput()
             }
             HButton {
+                id: cameraBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 visible: Calls.videoPossible
                 text: Calls.cameraOn ? "Camera off" : "Camera on"
                 kind: Calls.cameraOn ? "accent" : "normal"
                 onClicked: Calls.toggleCamera()
             }
             HButton {
+                id: switchBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 visible: Calls.cameraOn
                 text: "Switch camera"
                 onClicked: Calls.nextCamera()
             }
             HButton {
+                id: endBtn
+                width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 text: "End call"
                 kind: "danger"
                 onClicked: page.endCall()
@@ -102,7 +129,8 @@ Rectangle {
     Component {
         id: avatar
         Item {
-            width: Theme.px(132); height: width
+            // Smaller on a short window, so the name and buttons still fit under it.
+            width: Math.max(Theme.px(64), Math.min(Theme.px(132), Math.round(page.height * 0.22))); height: width
             Rectangle {
                 anchors.centerIn: parent
                 width: parent.width; height: width; radius: width / 2
@@ -116,7 +144,7 @@ Rectangle {
                 anchors.centerIn: parent
                 key: Calls.peerKey
                 name: Calls.peerName
-                size: Theme.px(116)
+                size: parent.width - Theme.px(16)
             }
         }
     }
@@ -152,7 +180,7 @@ Rectangle {
             visible: Calls.cameraOn && !page.ended
             anchors.right: parent.right; anchors.top: parent.top
             anchors.margins: Theme.px(24)
-            width: Theme.px(220); height: Theme.px(165)
+            width: Math.min(Theme.px(220), Math.round(parent.width * 0.35)); height: Math.round(width * 0.75)
             radius: Theme.radius
             color: Theme.tile
             border.width: 1; border.color: Theme.line
@@ -240,6 +268,7 @@ Rectangle {
         Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
             text: Calls.statusText + (Calls.peerMuted && !page.ended ? "  ·  they're muted" : "")
             color: page.ended || Calls.state === "reconnecting" ? Theme.danger : Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(19)

@@ -1,5 +1,7 @@
 package io.github.ravenor907.muninn.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,7 +32,7 @@ fun LinkCheck() {
     val emoji = Link.emojiWith(d.key)
     AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
         title = { Text("Check the link with ${d.name}", style = Type.big) },
-        text = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("These must be the same on both screens:", style = Type.normal)
             Text(emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
             Text(if (phone?.key == d.key) "Your phone's chats show here only after you tap They match."

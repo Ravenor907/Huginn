@@ -7,7 +7,8 @@ Rectangle {
     id: bar
     signal search()
     signal shortcuts()
-    height: Theme.px(36)
+    // Grows with Text size so the search box's words always fit.
+    height: Math.max(Theme.px(36), box.height + Theme.px(12))
     color: Theme.rail
 
     Row {
@@ -33,7 +34,7 @@ Rectangle {
         anchors.centerIn: parent
         width: Math.min(Theme.px(440), parent.width - Theme.px(320))
         visible: width > Theme.px(120)
-        height: Theme.px(24)
+        height: Math.max(Theme.px(24), boxText.implicitHeight + Theme.px(6))
         radius: Theme.radius
         color: boxHover.hovered ? Theme.tile : Theme.raised
         Accessible.role: Accessible.Button
@@ -41,6 +42,7 @@ Rectangle {
         Accessible.onPressAction: bar.search()
         Icon { id: lens; anchors.left: parent.left; anchors.leftMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; name: "search"; size: Theme.px(14); color: Theme.textMuted }
         Text {
+            id: boxText
             anchors.left: lens.right; anchors.leftMargin: Theme.px(6)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
             anchors.verticalCenter: parent.verticalCenter

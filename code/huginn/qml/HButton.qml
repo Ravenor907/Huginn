@@ -13,7 +13,7 @@ Rectangle {
     signal clicked()
 
     implicitWidth: label.implicitWidth + Theme.px(32)
-    implicitHeight: Theme.px(36)
+    implicitHeight: Math.max(Theme.px(36), label.implicitHeight + Theme.px(12))
     radius: Theme.radius
     opacity: enabled ? 1 : 0.45
     color: kind === "primary" ? (hover.hovered ? Qt.lighter(Theme.accent, 1.12) : Theme.accent)
@@ -30,8 +30,11 @@ Rectangle {
     Text {
         id: label
         anchors.centerIn: parent
+        // Never wider than the button: a squeezed button cuts its words short instead of spilling.
+        width: Math.min(implicitWidth, Math.max(0, btn.width - Theme.px(12)))
+        elide: Text.ElideRight
         text: btn.text
-        color: btn.kind === "primary" ? Theme.ground : btn.kind === "accent" ? Theme.accent : btn.kind === "danger" ? Theme.danger : Theme.text
+        color: btn.kind === "primary" ? Theme.onAccent : btn.kind === "accent" ? Theme.accent : btn.kind === "danger" ? Theme.danger : Theme.text
         font.family: Theme.body
         font.pixelSize: Theme.fs(btn.fontSize)
         font.weight: Font.DemiBold

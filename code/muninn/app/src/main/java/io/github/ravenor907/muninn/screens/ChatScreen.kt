@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package io.github.ravenor907.muninn.screens
 
 import android.content.ContentValues
@@ -68,6 +70,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -773,7 +776,7 @@ private fun ThreadBar(name: String, status: String, statusIcon: String, statusTi
             }
             actions()
             Box {
-                Column(Modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button) { showMenu = true }.semantics { contentDescription = "Chat options" },
+                Column(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button) { showMenu = true }.semantics { contentDescription = "Chat options" },
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.5.dp, Alignment.CenterVertically)) {
                     repeat(3) { Box(Modifier.size(3.5.dp).clip(CircleShape).background(Palette.text)) }
                 }
@@ -1086,10 +1089,13 @@ private fun Conversation(app: Muninn, key: String) {
                         Text("Location and camera details are removed.", style = Type.small)
                     }
                 }
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("Cancel", Modifier.weight(1f), enabled = !preparing) { picked = null }
-                    MButton("High quality", Modifier.weight(1f), enabled = !preparing) { sendPhoto(uri, true) }
-                    MButton("Send", Modifier.weight(1f), Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
+                // Three a line; fewer at a large text size, so "High quality" isn't squeezed.
+                io.github.ravenor907.muninn.ui.ChoiceRow(3, Modifier.padding(top = 8.dp), minWidth = 88.dp, gap = 8.dp) { n, m ->
+                    when (n) {
+                        0 -> MButton("Cancel", m, enabled = !preparing) { picked = null }
+                        1 -> MButton("High quality", m, enabled = !preparing) { sendPhoto(uri, true) }
+                        else -> MButton("Send", m, Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
+                    }
                 }
                 Text("Send: quick anywhere. High quality: sharper, best close by or on Wi-Fi; up to a minute over the internet.",
                     style = Type.small, modifier = Modifier.padding(top = 6.dp))
@@ -1100,7 +1106,7 @@ private fun Conversation(app: Muninn, key: String) {
         DirectFiles(key)
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
             Text(if (preparing) "Getting them ready…" else "Send ${pickedMany.size} photos as an album?", style = Type.big, modifier = Modifier.padding(top = 6.dp))
             Text("Location and camera details are removed.", style = Type.small)
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1192,7 +1198,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         }
         Spacer(Modifier.width(8.dp))
         if (voice != null && text.isBlank()) {
-            Box(Modifier.size(44.dp).clip(CircleShape).background(if (recording) Palette.danger else Palette.gold)
+            Box(Modifier.size(48.dp).clip(CircleShape).background(if (recording) Palette.danger else Palette.gold)
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
@@ -1215,7 +1221,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
                 contentAlignment = Alignment.Center) { MIcon("mic", if (recording) Palette.ground else Palette.onGold, 20.dp, weight = 2f) }
         } else {
             val ready = text.isNotBlank()
-            Box(Modifier.size(44.dp).clip(CircleShape).background(if (ready) Palette.gold else Palette.accentFill)
+            Box(Modifier.size(48.dp).clip(CircleShape).background(if (ready) Palette.gold else Palette.accentFill)
                 .clickable(enabled = ready, role = Role.Button) { onSend() }.semantics { contentDescription = "Send" },
                 contentAlignment = Alignment.Center) { MIcon("send", if (ready) Palette.onGold else Palette.textFaint, 20.dp, weight = 2f) }
         }
@@ -1402,7 +1408,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     val metaStyle = tinyStyle.copy(color = if (m.failed) Palette.danger else Palette.textMuted)
     val metaLine: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = if (showRead) Modifier.semantics { contentDescription = "$meta, read by $groupRead" } else Modifier) {
-            Text(meta, style = metaStyle, maxLines = 1)
+            // Wraps to a second line at a large text size; the read mark keeps its place beside it.
+            Text(meta, style = metaStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (showRead) { Spacer(Modifier.width(4.dp)); MIcon("check", Palette.gold, 13.dp, weight = 2.2f); Spacer(Modifier.width(3.dp)); Circled(groupRead) }
         }
     }
@@ -1553,7 +1560,8 @@ internal fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, labe
     LaunchedEffect(mine) { while (mine) { Voice.tick(); kotlinx.coroutines.delay(100) } }
     val scope = rememberCoroutineScope()
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(36.dp).clip(CircleShape).background(Palette.gold).clickable(role = Role.Button) {
+        // A 36dp button with a full 48dp touch area around it.
+        Box(Modifier.minimumInteractiveComponentSize().size(36.dp).clip(CircleShape).background(Palette.gold).clickable(role = Role.Button) {
             if (mine) Voice.stopPlaying()
             else scope.launch { val b = withContext(Dispatchers.IO) { sound() }; if (b != null) Voice.play(m.id, b) else Ui.say("This voice message can't be played.", true) }
         }.semantics { contentDescription = if (mine) "Pause voice message" else "Play voice message" },
@@ -1563,7 +1571,7 @@ internal fun VoiceNote(m: Chat.Msg, sound: () -> ByteArray?, label: String, labe
             Box(Modifier.fillMaxWidth(if (mine) progress.coerceIn(0f, 1f) else 0f).height(4.dp).background(Palette.gold))
         }
         Spacer(Modifier.width(10.dp))
-        Text(label, style = labelStyle, maxLines = 1)
+        Text(label, style = labelStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
     }
 }
 
@@ -1654,7 +1662,7 @@ internal fun MuteDialog(app: Muninn, key: String, name: String, done: () -> Unit
         containerColor = Palette.panel,
         title = { Text("Mute $name", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("No notifications or sounds from this chat. Messages still arrive, and calls still ring.", style = Type.small,
                     modifier = Modifier.padding(bottom = 8.dp))
                 Line("For 1 hour", "", icon = "clock") { mute(flags.HOUR, "$name is muted for an hour.") }
@@ -1732,18 +1740,21 @@ internal fun ColorDialog(app: Muninn, key: String, done: () -> Unit) {
         containerColor = Palette.panel,
         title = { Text("Chat color", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Your messages in this chat take this color. Only you see it.", style = Type.small, modifier = Modifier.padding(bottom = 12.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     val choices = listOf("" to (0xFF2B2E33L to 0xFFC8CDD3L)) + io.github.ravenor907.muninn.net.ChatFlags.COLORS.toList()
                     choices.forEach { (n, c) ->
                         val on = n == now
-                        Box(Modifier.size(44.dp).clip(CircleShape).background(Color(c.first))
+                        // The usual swatch shows the look's own bubble shade, so it reads on parchment too.
+                        val fill = if (n.isEmpty()) Palette.bubbleMine else Color(c.first)
+                        val dot = if (n.isEmpty()) Palette.accent else Color(c.second)
+                        Box(Modifier.size(48.dp).clip(CircleShape).background(fill)
                             .border(if (on) 3.dp else 1.dp, if (on) Palette.goldBright else Palette.line, CircleShape)
                             .clickable(role = Role.RadioButton, onClickLabel = if (n.isEmpty()) "Usual" else n) { app.chat.flags.color(key, n) }
                             .semantics { selected = on; contentDescription = if (n.isEmpty()) "Usual grey" else n.replaceFirstChar { it.uppercase() } },
                             contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(12.dp).clip(CircleShape).background(Color(c.second)))
+                            Box(Modifier.size(12.dp).clip(CircleShape).background(dot))
                         }
                     }
                 }
@@ -1762,7 +1773,7 @@ internal fun RenameDialog(c: io.github.ravenor907.muninn.net.Contact, done: (Str
         containerColor = Palette.panel,
         title = { Text("Nickname for ${c.name}", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Only you see this name. Leave it empty to use “${c.name}”.", style = Type.normal)
                 Field(text, { text = it.take(40) }, c.name, Modifier.padding(top = 10.dp))
             }
@@ -1832,7 +1843,8 @@ private fun GroupAvatar(name: String, others: List<Proto06.Member>, size: Dp) {
 @Composable
 private fun Chip(text: String, on: Boolean, icon: String? = null, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
     val shape = io.github.ravenor907.muninn.ui.Corner
-    Row(Modifier.heightIn(min = 40.dp).clip(shape)
+    // A 40dp chip with a full 48dp touch area.
+    Row(Modifier.minimumInteractiveComponentSize().heightIn(min = 40.dp).clip(shape)
         .then(if (on) Modifier.background(Palette.gold) else Modifier.border(1.dp, if (Access.contrast) Palette.lineMuted else Palette.line, shape))
         .combinedClickable(role = Role.Tab, onLongClickLabel = if (onLong != null) "Rename or delete" else null, onLongClick = onLong, onClick = onClick)
         .semantics { selected = on }.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1853,7 +1865,7 @@ private fun FolderHeader(f: Folders.Folder, unread: Int, hover: Boolean, onToggl
         .combinedClickable(role = Role.Button, onClickLabel = if (f.collapsed) "Show" else "Fold away", onLongClickLabel = "Rename or delete",
             onLongClick = onEdit, onClick = onToggle)
         .semantics { heading(); stateDescription = if (f.collapsed) "Folded away" else "Showing" }
-        .heightIn(min = 44.dp).padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+        .heightIn(min = 48.dp).padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         MIcon("forward", Palette.textMuted, 14.dp, Modifier.rotate(if (f.collapsed) 0f else 90f), weight = 2f)
         Spacer(Modifier.width(6.dp))
@@ -1890,6 +1902,7 @@ private fun TrashAvatar(size: Dp) {
 internal const val TRASH_NOTE = "Their chat is hidden and nothing from them reaches you. Restore them from the trash within 30 days, or they're deleted for good."
 
 /** A name in a dialog (new folder, rename folder). [done] gets null for Cancel. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun NameDialog(title: String, start: String, confirm: String, hint: String, note: String = "", max: Int = Folders.MAX_NAME,
                        extra: String? = null, onExtra: () -> Unit = {}, done: (String?) -> Unit) {
@@ -1899,14 +1912,14 @@ private fun NameDialog(title: String, start: String, confirm: String, hint: Stri
         containerColor = Palette.panel,
         title = { Text(title, style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (note.isNotEmpty()) Text(note, style = Type.normal)
                 Field(text, { text = it.take(max) }, hint, Modifier.padding(top = 10.dp))
             }
         },
         confirmButton = { MButton(confirm, kind = Kind.Accent, enabled = text.isNotBlank()) { done(text.trim()) } },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Cancel") { done(null) }
                 if (extra != null) MButton(extra, kind = Kind.Danger) { onExtra() }
             }
@@ -2302,10 +2315,13 @@ private fun GroupConversation(app: Muninn, g: String) {
                         Text("Location and camera details are removed.", style = Type.small)
                     }
                 }
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("Cancel", Modifier.weight(1f), enabled = !preparing) { picked = null }
-                    MButton("High quality", Modifier.weight(1f), enabled = !preparing) { sendPhoto(uri, true) }
-                    MButton("Send", Modifier.weight(1f), Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
+                // Three a line; fewer at a large text size, so "High quality" isn't squeezed.
+                io.github.ravenor907.muninn.ui.ChoiceRow(3, Modifier.padding(top = 8.dp), minWidth = 88.dp, gap = 8.dp) { n, m ->
+                    when (n) {
+                        0 -> MButton("Cancel", m, enabled = !preparing) { picked = null }
+                        1 -> MButton("High quality", m, enabled = !preparing) { sendPhoto(uri, true) }
+                        else -> MButton("Send", m, Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
+                    }
                 }
             }
         }
@@ -2313,7 +2329,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }) { attaching = false }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }
             Text(if (preparing) "Getting them ready…" else "Send ${pickedMany.size} photos as an album?", style = Type.big, modifier = Modifier.padding(top = 6.dp))
             Text("Location and camera details are removed.", style = Type.small)
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2417,7 +2433,7 @@ fun ChannelColumn(app: Muninn, g: String) {
 @Composable
 private fun ChannelRow(name: String, voice: Boolean, on: Boolean, onClick: () -> Unit) {
     val shape = io.github.ravenor907.muninn.ui.Corner
-    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(shape).background(if (on) Palette.raised else Color.Transparent)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(if (on) Palette.raised else Color.Transparent)
         .clickable(role = Role.Tab, onClick = onClick).semantics { selected = on }.padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         if (voice) MIcon("audio", Palette.textMuted, 18.dp) else Text("#", style = bodyStyle.copy(fontSize = 19.sp, color = Palette.textMuted))
@@ -2612,6 +2628,7 @@ private fun GroupCodeDialog(app: Muninn, g: String, s: Proto06.State, code: Stri
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: () -> Unit) {
     var name by remember { mutableStateOf(edit?.n ?: "") }
     var voice by remember { mutableStateOf(edit?.t == "voice") }
@@ -2620,7 +2637,7 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
         containerColor = Palette.panel,
         title = { Text(if (edit == null) "Add a channel" else if (edit.t == "voice") "Voice room" else "Channel", style = Type.big) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field(name, { name = it.take(Proto06.MAX_CHANNEL_NAME) }, "Channel name")
                 if (edit == null) Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MButton("Text", Modifier.weight(1f), if (!voice) Kind.Accent else Kind.Normal) { voice = false }
@@ -2636,7 +2653,7 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
             }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Cancel") { done() }
                 if (edit != null && edit.id != Proto06.MAIN) MButton("Remove", kind = Kind.Danger) {
                     done()

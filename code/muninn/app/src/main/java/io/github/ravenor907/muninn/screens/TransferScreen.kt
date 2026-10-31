@@ -278,7 +278,11 @@ fun Qr(text: String, size: Dp) {
             for (x in 0 until m.width) for (y in 0 until m.height) setPixel(x, y, if (m[x, y]) 0xFF101112.toInt() else 0xFFE4E1DA.toInt())
         }
     }
-    Box(Modifier.size(size + 20.dp).background(Palette.text), contentAlignment = Alignment.Center) {
-        Image(bmp.asImageBitmap(), contentDescription = "QR code", modifier = Modifier.size(size))
+    // A light quiet zone around the code in every look (scanners need it), and never wider than the space it's in.
+    androidx.compose.foundation.layout.BoxWithConstraints(contentAlignment = Alignment.Center) {
+        val side = minOf(size, maxWidth - 20.dp).coerceAtLeast(120.dp)
+        Box(Modifier.size(side + 20.dp).background(androidx.compose.ui.graphics.Color(0xFFE4E1DA)), contentAlignment = Alignment.Center) {
+            Image(bmp.asImageBitmap(), contentDescription = "QR code", modifier = Modifier.size(side))
+        }
     }
 }

@@ -98,65 +98,76 @@ Item {
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         // ------------------------------------------------------------- step one: choose
-        Column {
-            id: chooseCol
+        // Scrolls when the window is short or the Size is large.
+        Flickable {
+            id: chooseView
             visible: pp.step === "choose"
             x: Theme.px(24); y: Theme.px(24)
             width: parent.width - Theme.px(48)
-            spacing: Theme.px(14)
-            Text {
-                text: "YOUR PICTURE"
-                color: Theme.accent
-                font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
-            }
+            height: Math.max(0, parent.height - Theme.px(48))
+            contentWidth: width
+            contentHeight: chooseCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
             Column {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: Theme.px(8)
-                Avatar { anchors.horizontalCenter: parent.horizontalCenter; key: "me"; name: Chat.username; size: Theme.px(96); backdrop: Theme.panel }
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: Chat.username; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
-            }
-            Column {
-                width: parent.width
-                spacing: Theme.px(4)
-                Repeater {
-                    model: pp.choices
-                    Column {
-                        width: parent.width
-                        spacing: Theme.px(8)
-                        ChoiceRow { choice: modelData; at: index; width: parent.width }
-                        // The six colours, under Use my initial and a colour.
-                        Row {
-                            visible: modelData.id === "initial"
-                            x: Theme.px(40)
-                            spacing: Theme.px(10)
-                            Repeater {
-                                model: Theme.pictureColours
-                                Rectangle {
-                                    readonly property bool current: String(Profile.myColour).toUpperCase() === modelData && !Profile.hasMyPicture
-                                    readonly property bool focused: pp.swatch === index
-                                    width: Theme.px(34); height: width; radius: width / 2
-                                    color: modelData
-                                    border.width: current || focused ? Theme.px(3) : 1
-                                    border.color: focused ? Theme.text : current ? Theme.accent : Theme.lineMuted
-                                    Accessible.role: Accessible.RadioButton
-                                    Accessible.name: ["Gold", "Blue", "Brown", "Green", "Purple", "Grey"][index] + " for your initial"
-                                    Accessible.checked: current
-                                    Accessible.onPressAction: pp.useInitial(modelData)
-                                    Icon { visible: parent.current; anchors.centerIn: parent; name: "check"; size: Theme.px(16); color: Theme.avatarFrom(modelData).fg }
-                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                    TapHandler { onTapped: pp.useInitial(modelData) }
+                id: chooseCol
+                width: chooseView.width
+                spacing: Theme.px(14)
+                Text {
+                    text: "YOUR PICTURE"
+                    color: Theme.accent
+                    font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
+                }
+                Column {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: Theme.px(8)
+                    Avatar { anchors.horizontalCenter: parent.horizontalCenter; key: "me"; name: Chat.username; size: Theme.px(96); backdrop: Theme.panel }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: Chat.username; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
+                }
+                Column {
+                    width: parent.width
+                    spacing: Theme.px(4)
+                    Repeater {
+                        model: pp.choices
+                        Column {
+                            width: parent.width
+                            spacing: Theme.px(8)
+                            ChoiceRow { choice: modelData; at: index; width: parent.width }
+                            // The six colours, under Use my initial and a colour.
+                            Row {
+                                visible: modelData.id === "initial"
+                                x: Theme.px(40)
+                                spacing: Theme.px(10)
+                                Repeater {
+                                    model: Theme.pictureColours
+                                    Rectangle {
+                                        readonly property bool current: String(Profile.myColour).toUpperCase() === modelData && !Profile.hasMyPicture
+                                        readonly property bool focused: pp.swatch === index
+                                        width: Theme.px(34); height: width; radius: width / 2
+                                        color: modelData
+                                        border.width: current || focused ? Theme.px(3) : 1
+                                        border.color: focused ? Theme.text : current ? Theme.accent : Theme.lineMuted
+                                        Accessible.role: Accessible.RadioButton
+                                        Accessible.name: ["Gold", "Blue", "Brown", "Green", "Purple", "Grey"][index] + " for your initial"
+                                        Accessible.checked: current
+                                        Accessible.onPressAction: pp.useInitial(modelData)
+                                        Icon { visible: parent.current; anchors.centerIn: parent; name: "check"; size: Theme.px(16); color: Theme.avatarFrom(modelData).fg }
+                                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                        TapHandler { onTapped: pp.useInitial(modelData) }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Sent only to your contacts and the groups you're in, encrypted like a message."
-                color: Theme.textMuted
-                font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Sent only to your contacts and the groups you're in, encrypted like a message."
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                }
             }
         }
 
@@ -176,7 +187,7 @@ Item {
             Item {
                 id: frame
                 anchors.horizontalCenter: parent.horizontalCenter
-                readonly property int side: Math.min(Theme.px(280), cropCol.width)
+                readonly property int side: Math.min(Theme.px(280), cropCol.width, Math.max(Theme.px(120), Math.round(pp.height * 0.4)))
                 width: side; height: side
                 Accessible.role: Accessible.Graphic
                 Accessible.name: "Your picture under a round window. Drag to move, scroll or pinch to zoom"
@@ -288,6 +299,14 @@ Item {
         }
     }
 
+    // Scrolls the first step so the row the controller is on is in view.
+    function reveal(item) {
+        if (!item || !item.visible) return
+        const y = item.mapToItem(chooseCol, 0, 0).y
+        if (y < chooseView.contentY) chooseView.contentY = y
+        else if (y + item.height > chooseView.contentY + chooseView.height) chooseView.contentY = Math.min(chooseView.contentHeight - chooseView.height, y + item.height - chooseView.height)
+    }
+
     // One choice on the first step: an icon and its words, lit while focused.
     component ChoiceRow: Rectangle {
         id: cr
@@ -295,6 +314,7 @@ Item {
         property int at: 0
         readonly property bool focused: pp.focusIndex === at && pp.swatch < 0
         height: Theme.px(44)
+        onFocusedChanged: if (focused) Qt.callLater(pp.reveal, cr)
         radius: Theme.radius
         color: focused ? Theme.focusFill : crHover.hovered ? Theme.raised : "transparent"
         border.width: focused ? Theme.focusWidth : 0

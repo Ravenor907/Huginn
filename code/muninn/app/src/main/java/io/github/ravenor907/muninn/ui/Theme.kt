@@ -76,7 +76,8 @@ object Palette {
     val text get() = pick(0xFFE4E1DA, 0xFFE4E1DA, 0xFF1F1C17, 0xFFECDCC4, 0xFFFFFFFF)
     val textSoft get() = pick(0xFFC4C0B7, 0xFFC4C0B7, 0xFF3B362E, 0xFFD9C6AD, 0xFFFFFFFF)
     val textMuted get() = pick(0xFF9C978D, 0xFF9C978D, 0xFF615A4E, 0xFFA88C6C, 0xFFE0E0E0)
-    val textFaint get() = pick(0xFF6E6A62, 0xFF6E6A62, 0xFF877F71, 0xFF7E6548, 0xFFC8C8C8)
+    // Faint text (hints, times) still reads at 4.5:1 on parchment and on Autumn's bark.
+    val textFaint get() = pick(0xFF6E6A62, 0xFF6E6A62, 0xFF746C5F, 0xFF9A7F5E, 0xFFC8C8C8)
     /** Text that is brighter than the usual text: names in a list. */
     val textBright get() = pick(0xFFF2F0EA, 0xFFF2F0EA, 0xFF14120E, 0xFFF3E2C7, 0xFFFFFFFF)
     val accent get() = pick(0xFFC8CDD3, 0xFFC8CDD3, 0xFF4F5862, 0xFFD9853B, 0xFFFFFFFF)
@@ -179,10 +180,13 @@ fun androidx.compose.ui.Modifier.bar(fill: Color = Color.Unspecified, top: Boole
         (if (top) this else this.padding(horizontal = 10.dp, vertical = 4.dp)).clip(shape).background(tint)
     }
 
-/** The main list: a frosted panel in Autumn (about half see-through, so leaves show behind it); nothing elsewhere. */
+/**
+ * The main list: a frosted panel in Autumn (leaves show softly through it, dim enough that muted text on top of a
+ * bright leaf still reads); nothing elsewhere.
+ */
 fun androidx.compose.ui.Modifier.frosted(): androidx.compose.ui.Modifier =
     if (!Palette.autumn) this
-    else this.padding(start = 10.dp, end = 10.dp, top = 8.dp).clip(LookShapes.barTopShape).background(Palette.panel.copy(alpha = 0.5f))
+    else this.padding(start = 10.dp, end = 10.dp, top = 8.dp).clip(LookShapes.barTopShape).background(Palette.panel.copy(alpha = 0.8f))
 
 object Type {
     val display = FontFamily(Font(R.font.cinzel, FontWeight.Bold))

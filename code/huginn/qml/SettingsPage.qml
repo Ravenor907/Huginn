@@ -149,6 +149,13 @@ Rectangle {
         return []
     }
 
+    // Scrolls the left column so the row the controller is on is in view.
+    function revealNav(item) {
+        const y = item.mapToItem(nav, 0, 0).y
+        if (y < navView.contentY) navView.contentY = y
+        else if (y + item.height > navView.contentY + navView.height) navView.contentY = Math.min(navView.contentHeight - navView.height, y + item.height - navView.height)
+    }
+
     // ------------------------------------------------------------- left: name and the everyday choices
     Rectangle {
         id: middle
@@ -156,97 +163,112 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Ui.dock
-        width: Theme.portrait ? page.width : Math.max(Theme.listWidth, Theme.px(320))
+        width: Theme.portrait ? page.width : Math.min(Math.max(Theme.listWidth, Theme.px(320)), Math.round(page.width * 0.45))
         color: Theme.column
         PageHeader { id: header; width: parent.width; title: "Settings" }
-        Column {
-            id: nav
+        // Scrolls when the window is short or the Size is large.
+        Flickable {
+            id: navView
             anchors.top: header.bottom
             anchors.topMargin: Theme.px(12)
+            anchors.bottom: versionText.top
+            anchors.bottomMargin: Theme.px(8)
             x: Theme.px(12)
             width: parent.width - Theme.px(24)
-            spacing: Theme.px(12)
-            // Link a phone: Muninn's chats here, or this computer's there.
-            Rectangle {
-                width: parent.width
-                height: Theme.px(52)
-                radius: Theme.radius
-                color: linkHover.hovered ? Theme.raised : Theme.panel
-                border.color: Theme.line
-                Accessible.role: Accessible.Button
-                Accessible.name: "Link a phone"
-                Accessible.onPressAction: page.press("linked")
-                Icon { id: linkIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: "phone"; size: Theme.px(20); color: Theme.accent }
-                Column {
-                    anchors.left: linkIcon.right; anchors.leftMargin: Theme.px(10)
-                    anchors.right: linkChev.left; anchors.rightMargin: Theme.px(8)
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { width: parent.width; elide: Text.ElideRight; text: "Link a phone"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                    Text { width: parent.width; elide: Text.ElideRight; text: Linked.phone.key ? "Linked to " + Linked.phone.name : "See your phone's chats here, or this computer's on your phone"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-                }
-                Icon { id: linkChev; anchors.right: parent.right; anchors.rightMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
-                HoverHandler { id: linkHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: page.press("linked") }
-            }
-            // Your name.
-            Rectangle {
-                width: parent.width
-                height: nameCol.implicitHeight + Theme.px(20)
-                radius: Theme.radius
-                color: nameHover.hovered ? Theme.raised : Theme.panel
-                border.color: Theme.line
-                Accessible.role: Accessible.Button
-                Accessible.name: "Your name: " + Chat.username
-                Column {
-                    id: nameCol
-                    x: Theme.px(12); y: Theme.px(10); width: parent.width - Theme.px(24)
-                    spacing: Theme.px(2)
-                    Text { text: "Your name"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-                    Text { width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.Medium }
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: "What people see. It doesn't have to be your real name."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-                }
-                HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: page.press("chatName") }
-            }
-            Rectangle {
-                width: parent.width
-                height: mainCol.implicitHeight
-                radius: Theme.radius
-                color: Theme.panel
-                border.color: Theme.line
-                Column {
-                    id: mainCol
+            contentWidth: width
+            contentHeight: nav.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: nav
+                width: navView.width
+                spacing: Theme.px(12)
+                // Link a phone: Muninn's chats here, or this computer's there.
+                Rectangle {
                     width: parent.width
-                    Repeater {
-                        model: page.mainItems
-                        Rectangle {
-                            readonly property bool here: (page.section === modelData.id || (page.onCalls && modelData.id === "calls")) && !Theme.portrait
-                            readonly property bool on: page.active && !page.inSection && page.pick === index && !!Ui.main && Ui.main.padInUse
-                            width: mainCol.width
-                            height: Math.max(Theme.px(52), itemCol.implicitHeight + Theme.px(16))
-                            color: here || on ? Theme.tile : itemHover.hovered ? Theme.raised : "transparent"
-                            border.width: on ? Theme.focusWidth : 0
-                            border.color: Theme.accent
-                            Accessible.role: Accessible.PageTab
-                            Accessible.name: modelData.title
-                            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam; visible: index < page.mainItems.length - 1 }
-                            Column {
-                                id: itemCol
-                                anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
-                                anchors.right: chev.left; anchors.rightMargin: Theme.px(8)
-                                anchors.verticalCenter: parent.verticalCenter
-                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                    height: Theme.px(52)
+                    radius: Theme.radius
+                    color: linkHover.hovered ? Theme.raised : Theme.panel
+                    border.color: Theme.line
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Link a phone"
+                    Accessible.onPressAction: page.press("linked")
+                    Icon { id: linkIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: "phone"; size: Theme.px(20); color: Theme.accent }
+                    Column {
+                        anchors.left: linkIcon.right; anchors.leftMargin: Theme.px(10)
+                        anchors.right: linkChev.left; anchors.rightMargin: Theme.px(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text { width: parent.width; elide: Text.ElideRight; text: "Link a phone"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                        Text { width: parent.width; elide: Text.ElideRight; text: Linked.phone.key ? "Linked to " + Linked.phone.name : "See your phone's chats here, or this computer's on your phone"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                    }
+                    Icon { id: linkChev; anchors.right: parent.right; anchors.rightMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
+                    HoverHandler { id: linkHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: page.press("linked") }
+                }
+                // Your name.
+                Rectangle {
+                    width: parent.width
+                    height: nameCol.implicitHeight + Theme.px(20)
+                    radius: Theme.radius
+                    color: nameHover.hovered ? Theme.raised : Theme.panel
+                    border.color: Theme.line
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Your name: " + Chat.username
+                    Column {
+                        id: nameCol
+                        x: Theme.px(12); y: Theme.px(10); width: parent.width - Theme.px(24)
+                        spacing: Theme.px(2)
+                        Text { text: "Your name"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                        Text { width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.Medium }
+                        Text { width: parent.width; wrapMode: Text.WordWrap; text: "What people see. It doesn't have to be your real name."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                    }
+                    HoverHandler { id: nameHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: page.press("chatName") }
+                }
+                Rectangle {
+                    width: parent.width
+                    height: mainCol.implicitHeight
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.color: Theme.line
+                    Column {
+                        id: mainCol
+                        width: parent.width
+                        Repeater {
+                            model: page.mainItems
+                            Rectangle {
+                                id: navRow
+                                readonly property bool here: (page.section === modelData.id || (page.onCalls && modelData.id === "calls")) && !Theme.portrait
+                                readonly property bool on: page.active && !page.inSection && page.pick === index && !!Ui.main && Ui.main.padInUse
+                                width: mainCol.width
+                                onOnChanged: if (on) page.revealNav(navRow)
+                                height: Math.max(Theme.px(52), itemCol.implicitHeight + Theme.px(16))
+                                color: here || on ? Theme.tile : itemHover.hovered ? Theme.raised : "transparent"
+                                border.width: on ? Theme.focusWidth : 0
+                                border.color: Theme.accent
+                                Accessible.role: Accessible.PageTab
+                                Accessible.name: modelData.title
+                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam; visible: index < page.mainItems.length - 1 }
+                                Column {
+                                    id: itemCol
+                                    anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
+                                    anchors.right: chev.left; anchors.rightMargin: Theme.px(8)
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    Text { width: parent.width; elide: Text.ElideRight; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                                    Text { width: parent.width; elide: Text.ElideRight; text: modelData.note; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                                }
+                                Icon { id: chev; anchors.right: parent.right; anchors.rightMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
+                                HoverHandler { id: itemHover; cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: { page.pick = index; page.openMain() } }
                             }
-                            Icon { id: chev; anchors.right: parent.right; anchors.rightMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
-                            HoverHandler { id: itemHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: { page.pick = index; page.openMain() } }
                         }
                     }
                 }
             }
         }
         Text {
+            id: versionText
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Theme.px(12)
             x: Theme.px(14)
@@ -379,20 +401,22 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: Theme.px(16)
                         y: parent.stacked ? texts.y + texts.implicitHeight + Theme.px(10) : (parent.height - height) / 2
-                        width: modelData.kind === "segmented" ? segCtl.implicitWidth
+                        // Never wider than the row: on a narrow window the choices squeeze to fit.
+                        width: Math.min(parent.width - Theme.px(32),
+                               modelData.kind === "segmented" ? segCtl.implicitWidth
                              : modelData.kind === "toggle" ? toggleCtl.implicitWidth
-                             : modelData.kind === "accent" ? accentCtl.implicitWidth
-                             : modelData.kind === "size" ? sizeCtl.implicitWidth
-                             : modelData.kind === "slider" ? sliderCtl.width
-                             : modelData.kind === "button" ? buttonCtl.implicitWidth : 0
-                        height: Theme.px(36)
+                             : modelData.kind === "accent" ? accentCtl.naturalWidth
+                             : modelData.kind === "size" ? sizeCtl.naturalWidth
+                             : modelData.kind === "slider" ? Theme.px(220)
+                             : modelData.kind === "button" ? buttonCtl.implicitWidth : 0)
+                        height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0)
                         // Look › Autumn: Leaf size and How many.
                         LookSlider {
                             id: sliderCtl
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
                             visible: modelData.kind === "slider"
-                            width: Theme.px(220)
+                            width: parent.width
                             from: modelData.from || 0; to: modelData.to || 100; stepSize: modelData.step || 1
                             value: modelData.kind === "slider" ? Number(Settings[modelData.key]) : 0
                             label: modelData.title || ""
@@ -404,6 +428,7 @@ Rectangle {
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
                             visible: modelData.kind === "segmented"
+                            width: parent.width
                             options: modelData.options || []
                             value: modelData.kind === "segmented" ? (modelData.chat ? String(Chat[modelData.key]) : Settings[modelData.key]) : ""
                             onPicked: v => { if (modelData.chat) Chat[modelData.key] = Number(v); else Settings[modelData.key] = v }
@@ -423,9 +448,12 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             visible: modelData.kind === "size"
                             spacing: Theme.px(6)
-                            HButton { text: "Smaller"; onClicked: page.press("sizeDown") }
-                            HButton { text: "100%"; kind: "plain"; onClicked: page.press("sizeReset") }
-                            HButton { text: "Bigger"; onClicked: page.press("sizeUp") }
+                            readonly property real naturalWidth: smallerBtn.implicitWidth + resetBtn.implicitWidth + biggerBtn.implicitWidth + spacing * 2
+                            readonly property bool squeezed: control.width < naturalWidth - 0.5
+                            readonly property real share: (control.width - spacing * 2) / 3
+                            HButton { id: smallerBtn; width: sizeCtl.squeezed ? sizeCtl.share : implicitWidth; text: "Smaller"; onClicked: page.press("sizeDown") }
+                            HButton { id: resetBtn; width: sizeCtl.squeezed ? sizeCtl.share : implicitWidth; text: "100%"; kind: "plain"; onClicked: page.press("sizeReset") }
+                            HButton { id: biggerBtn; width: sizeCtl.squeezed ? sizeCtl.share : implicitWidth; text: "Bigger"; onClicked: page.press("sizeUp") }
                         }
                         Row {
                             id: accentCtl
@@ -433,10 +461,13 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             visible: modelData.kind === "accent"
                             spacing: Theme.px(8)
+                            // Seven named colours and Any color; smaller swatches on a narrow window.
+                            readonly property real naturalWidth: Theme.px(28) * 8 + spacing * 7
+                            readonly property int swatch: Math.max(Theme.px(20), Math.min(Theme.px(28), Math.floor((control.width - spacing * 7) / 8)))
                             Repeater {
                                 model: Theme.accentNames
                                 Rectangle {
-                                    width: Theme.px(28); height: width; radius: Theme.radius
+                                    width: accentCtl.swatch; height: width; radius: Theme.radius
                                     color: Theme.light ? Qt.darker(Theme.accents[modelData], 1.7) : Theme.accents[modelData]
                                     border.width: Settings.accent === modelData ? Theme.px(2) : 1
                                     border.color: Settings.accent === modelData ? Theme.text : Theme.lineMuted
@@ -450,7 +481,7 @@ Rectangle {
                             // Any color: a code like #6E9CC8.
                             Rectangle {
                                 readonly property bool custom: Theme.accentNames.indexOf(Settings.accent) < 0
-                                width: Theme.px(28); height: width; radius: Theme.radius
+                                width: accentCtl.swatch; height: width; radius: Theme.radius
                                 color: custom ? Theme.accent : Theme.raised
                                 border.width: custom ? Theme.px(2) : 1
                                 border.color: custom ? Theme.text : Theme.lineMuted

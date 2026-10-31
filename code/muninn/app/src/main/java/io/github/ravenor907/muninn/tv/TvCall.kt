@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
+import androidx.compose.foundation.verticalScroll
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -61,7 +62,9 @@ fun TvCallScreen(app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, 
     BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
         if (call == null) { Text("Call ended", style = tvTitle(34.sp)); return@Box }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(48.dp)) {
+        // Centred when it fits; on a 540 dp tall TV screen with a note showing it scrolls, and the focused button comes into view.
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 48.dp, vertical = 32.dp)) {
             val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
             Box(Modifier.size(170.dp).clip(CircleShape).background(if (call.peerSpeaking) Palette.gold else Palette.goldTint), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(150.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {

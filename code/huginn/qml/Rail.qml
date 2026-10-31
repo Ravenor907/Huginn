@@ -309,7 +309,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.margins: -Theme.px(3)
-                height: Theme.px(18)
+                height: Math.max(Theme.px(18), badgeText.implicitHeight + Theme.px(2))
                 width: Math.max(height, badgeText.implicitWidth + Theme.px(8))
                 radius: height / 2
                 // A group's number is @mentions of me: the warning color, like Discord's red.

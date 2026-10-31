@@ -25,7 +25,7 @@ Rectangle {
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
             color: Theme.text
-            font.pixelSize: Theme.px(26)
+            font.pixelSize: Theme.fs(26)
             font.bold: true
             text: cover.away ? (out.state === "moved" ? "Moved to " + out.to : "Moving to " + out.to)
                              : (inc.state === "done" ? "Moved here" : "Moving from " + inc.from)
@@ -35,7 +35,7 @@ Rectangle {
             visible: (cover.away && out.state === "checking") || (cover.here && inc.state !== "done")
             horizontalAlignment: Text.AlignHCenter
             color: Theme.text
-            font.pixelSize: Theme.px(40)
+            font.pixelSize: Theme.fs(40)
             text: cover.away ? out.emoji : inc.emoji
         }
         Text {
@@ -43,7 +43,7 @@ Rectangle {
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
             color: Theme.textSoft
-            font.pixelSize: Theme.px(17)
+            font.pixelSize: Theme.fs(17)
             text: cover.away
                 ? (out.state === "checking" ? "Check these are the same on both screens, then choose They match on both. Only continue if the other device is yours and in front of you. This computer is then locked out: it can't send, read or receive as you."
                    : out.state === "moving" ? (out.of > 0 ? out.sent + " of " + out.of + " parts there. " : "") + (out.note || "Keep both on the same Wi-Fi. This computer stays locked until the move is done, or an hour without the other device.")

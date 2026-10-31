@@ -147,7 +147,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             visible: Gamepad.connected && panel.usePattern
             text: "Controller: move with the D-pad, A starts on a dot, move to the next dots, A again when done. B starts over."
-            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         Text {
             visible: panel.mode === "unlock"
@@ -197,7 +197,7 @@ Item {
             anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
             anchors.verticalCenter: parent.verticalCenter
             text: pf.placeholder
-            color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
         TapHandler { onTapped: input.forceActiveFocus() }
     }

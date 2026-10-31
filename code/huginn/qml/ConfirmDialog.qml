@@ -58,35 +58,55 @@ Item {
     Rectangle {
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(32), Theme.px(440))
-        height: col.implicitHeight + Theme.px(40) + foot.height
+        // Never taller than the window: a long message scrolls above the buttons.
+        height: Math.min(parent.height - Theme.px(32), col.implicitHeight + Theme.px(40) + foot.height)
         radius: Theme.radius
         color: Theme.panel
         border.color: dlg.danger ? Theme.dangerLine : Theme.line
         clip: true
-        Column {
-            id: col
+        Flickable {
+            id: scroller
             x: Theme.px(20); y: Theme.px(20)
             width: parent.width - Theme.px(40)
-            spacing: Theme.px(8)
-            Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: dlg.title.toUpperCase()
-                color: dlg.danger ? Theme.danger : Theme.text
-                font.family: Theme.display
-                font.pixelSize: Theme.fs(18)
-                font.weight: Font.Bold
-                font.letterSpacing: Theme.px(2)
+            height: Math.max(0, parent.height - foot.height - Theme.px(40))
+            contentWidth: width
+            contentHeight: col.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: col
+                width: scroller.width
+                spacing: Theme.px(8)
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: dlg.title.toUpperCase()
+                    color: dlg.danger ? Theme.danger : Theme.text
+                    font.family: Theme.display
+                    font.pixelSize: Theme.fs(18)
+                    font.weight: Font.Bold
+                    font.letterSpacing: Theme.px(2)
+                }
+                // Wraps at spaces, and inside a long code that has none.
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: dlg.message
+                    color: Theme.textMuted
+                    font.family: Theme.body
+                    font.pixelSize: Theme.fs(14)
+                    lineHeight: 1.15
+                }
             }
-            Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: dlg.message
-                color: Theme.textMuted
-                font.family: Theme.body
-                font.pixelSize: Theme.fs(14)
-                lineHeight: 1.15
-            }
+        }
+        Rectangle {
+            visible: scroller.interactive
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+            y: scroller.y + scroller.visibleArea.yPosition * scroller.height
+            width: Theme.px(3); height: Math.max(Theme.px(16), scroller.visibleArea.heightRatio * scroller.height)
+            radius: width / 2
+            color: Theme.lineMuted
         }
         Rectangle {
             id: foot
@@ -111,7 +131,7 @@ Item {
                         visible: dlg.hold
                         anchors.left: parent.left
                         anchors.bottom: parent.bottom
-                        height: 3
+                        height: Math.max(3, Theme.px(3))
                         width: parent.width * dlg.held
                         color: dlg.danger ? Theme.danger : Theme.ground
                     }
@@ -123,6 +143,8 @@ Item {
     function handleButton(b) {
         if (b === "a") startHold()
         else if (b === "b") cancel()
+        else if ((b === "up" || b === "down") && scroller.interactive)
+            scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height, scroller.contentY + (b === "up" ? -1 : 1) * Theme.px(60)))
         return true
     }
     function handleRelease(b) { if (b === "a") stopHold() }

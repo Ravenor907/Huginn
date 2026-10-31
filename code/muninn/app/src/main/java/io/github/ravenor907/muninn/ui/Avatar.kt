@@ -26,7 +26,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import io.github.ravenor907.muninn.Muninn
 
 /**
@@ -52,7 +51,10 @@ fun Avatar(key: String, name: String, size: Dp, showDot: Boolean = false, modifi
         if (picture != null) Image(picture.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.size(size).clip(CircleShape))
         else Box(Modifier.size(size).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
-            Text(initialOf(name), style = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.4f).sp, color = fg), maxLines = 1)
+            // The initial is sized to the disc, not to the font size, so it never spills out of a small avatar.
+            val letter = with(androidx.compose.ui.platform.LocalDensity.current) { (size * 0.4f).toSp() }
+            Text(initialOf(name), style = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = letter, lineHeight = letter, color = fg),
+                maxLines = 1, softWrap = false)
         }
         if (showDot) {
             // Watched so the dot follows a change of status; the words come from statusOf.

@@ -46,73 +46,85 @@ Rectangle {
 
         PageHeader { id: head; width: parent.width; title: "Files" }
 
-        Column {
-            id: rowList
+        // Scrolls when there are more devices than fit.
+        Flickable {
+            id: rowView
             anchors.top: head.bottom
             anchors.topMargin: Theme.px(10)
             x: Theme.px(10)
             width: parent.width - Theme.px(20)
-            spacing: Theme.px(3)
+            height: Math.min(contentHeight, Math.max(0, parent.height - head.height - Theme.px(10)))
+            contentWidth: width
+            contentHeight: rowList.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: rowList
+                width: rowView.width
+                spacing: Theme.px(3)
 
-            Repeater {
-                model: page.rows
-                Item {
-                    width: rowList.width
-                    // "Nearby" label above the first device.
-                    height: (index === 2 ? label.height : 0) + tile.height
-                    Text {
-                        id: label
-                        visible: index === 2
-                        height: visible ? Theme.px(34) : 0
-                        x: Theme.px(10)
-                        verticalAlignment: Text.AlignBottom
-                        bottomPadding: Theme.px(6)
-                        text: "NEARBY"
-                        color: Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
-                    }
-                    Rectangle {
-                        id: tile
-                        readonly property bool on: page.active && index === page.current
-                        y: label.height
-                        width: parent.width
-                        height: Theme.px(56)
-                        radius: Theme.radius
-                        opacity: modelData.kind === "clear" && Transfer.sharedCount === 0 ? 0.55 : 1
-                        color: on ? Theme.tile : tileHover.hovered ? Theme.raised : "transparent"
-                        border.width: on ? Theme.focusWidth : 0
-                        border.color: Theme.accent
-                        Accessible.role: Accessible.Button
-                        Accessible.name: (modelData.kind === "device" ? "Send to " : "") + modelData.name
+                Repeater {
+                    model: page.rows
+                    Item {
+                        width: rowList.width
+                        // "Nearby" label above the first device.
+                        height: (index === 2 ? label.height : 0) + tile.height
+                        Text {
+                            id: label
+                            visible: index === 2
+                            height: visible ? Theme.px(34) : 0
+                            x: Theme.px(10)
+                            verticalAlignment: Text.AlignBottom
+                            bottomPadding: Theme.px(6)
+                            text: "NEARBY"
+                            color: Theme.textMuted
+                            font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
+                        }
                         Rectangle {
-                            id: ava
-                            anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Theme.px(34); height: width; radius: width / 2
-                            color: Theme.raised
-                            Icon {
-                                anchors.centerIn: parent
-                                size: Theme.px(18)
-                                name: modelData.kind === "pick" ? "plus" : modelData.kind === "clear" ? "back" : modelData.type === "mobile" ? "phone" : "network"
-                                color: tile.on ? Theme.accent : Theme.textMuted
+                            id: tile
+                            readonly property bool on: page.active && index === page.current
+                            y: label.height
+                            onOnChanged: if (on) { const y = tile.mapToItem(rowList, 0, 0).y; if (y < rowView.contentY) rowView.contentY = y; else if (y + tile.height > rowView.contentY + rowView.height) rowView.contentY = Math.min(rowView.contentHeight - rowView.height, y + tile.height - rowView.height) }
+                            width: parent.width
+                            height: Theme.px(56)
+                            radius: Theme.radius
+                            opacity: modelData.kind === "clear" && Transfer.sharedCount === 0 ? 0.55 : 1
+                            color: on ? Theme.tile : tileHover.hovered ? Theme.raised : "transparent"
+                            border.width: on ? Theme.focusWidth : 0
+                            border.color: Theme.accent
+                            Accessible.role: Accessible.Button
+                            Accessible.name: (modelData.kind === "device" ? "Send to " : "") + modelData.name
+                            Rectangle {
+                                id: ava
+                                anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Theme.px(34); height: width; radius: width / 2
+                                color: Theme.raised
+                                Icon {
+                                    anchors.centerIn: parent
+                                    size: Theme.px(18)
+                                    name: modelData.kind === "pick" ? "plus" : modelData.kind === "clear" ? "back" : modelData.type === "mobile" ? "phone" : "network"
+                                    color: tile.on ? Theme.accent : Theme.textMuted
+                                }
                             }
+                            Column {
+                                anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
+                                anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                                anchors.verticalCenter: parent.verticalCenter
+                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: tile.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" && Transfer.sharedCount > 0 ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                            }
+                            HoverHandler { id: tileHover }
+                            TapHandler { onTapped: { page.current = index; page.choose() } }
                         }
-                        Column {
-                            anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                            anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: tile.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                            Text { width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" && Transfer.sharedCount > 0 ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
-                        }
-                        HoverHandler { id: tileHover }
-                        TapHandler { onTapped: { page.current = index; page.choose() } }
                     }
                 }
             }
         }
         Text {
             visible: page.devices.length === 0
-            anchors.top: rowList.bottom
+            anchors.top: rowView.bottom
             anchors.topMargin: Theme.px(14)
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
@@ -157,64 +169,76 @@ Rectangle {
             }
         }
 
-        Column {
-            id: lists
+        // Scrolls when the window is short or the Size is large.
+        Flickable {
+            id: listsView
             anchors.top: mainHead.bottom
             anchors.topMargin: Theme.px(16)
             anchors.left: parent.left; anchors.leftMargin: Theme.px(24)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(24)
-            spacing: Theme.px(8)
+            anchors.bottom: backup.visible ? backup.top : parent.bottom
+            anchors.bottomMargin: Theme.px(12)
+            contentWidth: width
+            contentHeight: lists.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: lists
+                width: listsView.width
+                spacing: Theme.px(8)
 
-            SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? (Ui.main && Ui.main.padInUse ? "Pick a device and press A" : "Click a device to send") : "" }
-            Text {
-                visible: Transfer.sharedCount === 0
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Nothing picked yet. Choose Pick files to send, then pick a device. To receive, send from Muninn or LocalSend and accept on screen."
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
-            }
-            Repeater {
-                model: page.sharedNames.slice(0, 4)
-                Text { width: lists.width; elide: Text.ElideMiddle; text: modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
-            }
-            Text {
-                visible: page.sharedNames.length > 4
-                text: "and " + (page.sharedNames.length - 4) + " more"
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
-            }
+                SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? (Ui.main && Ui.main.padInUse ? "Pick a device and press A" : "Click a device to send") : "" }
+                Text {
+                    visible: Transfer.sharedCount === 0
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Nothing picked yet. Choose Pick files to send, then pick a device. To receive, send from Muninn or LocalSend and accept on screen."
+                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                }
+                Repeater {
+                    model: page.sharedNames.slice(0, 4)
+                    Text { width: lists.width; elide: Text.ElideMiddle; text: modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                }
+                Text {
+                    visible: page.sharedNames.length > 4
+                    text: "and " + (page.sharedNames.length - 4) + " more"
+                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                }
 
-            Item { width: 1; height: Theme.px(8) }
-            SectionLabel { text: "RECEIVED"; detail: "Saved in " + Transfer.saveName }
-            Repeater {
-                model: page.incoming.slice(0, 4)
-                Rectangle {
-                    width: lists.width
-                    height: Theme.px(52)
-                    radius: Theme.radius
-                    color: Theme.panel
-                    border.color: Theme.line
-                    Column {
-                        anchors.fill: parent
-                        anchors.margins: Theme.px(11)
-                        spacing: Theme.px(7)
-                        Item {
-                            width: parent.width; height: Theme.px(19)
-                            Text { width: parent.width - st.width - Theme.px(12); elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
-                            Text { id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
-                        }
-                        Rectangle {
-                            width: parent.width; height: Theme.px(4); radius: 1; color: Theme.line
-                            Rectangle { width: parent.width * modelData.fraction; height: parent.height; color: modelData.fraction >= 1 ? Theme.textFaint : Theme.accent }
+                Item { width: 1; height: Theme.px(8) }
+                SectionLabel { text: "RECEIVED"; detail: "Saved in " + Transfer.saveName }
+                Repeater {
+                    model: page.incoming.slice(0, 4)
+                    Rectangle {
+                        width: lists.width
+                        height: Theme.px(52)
+                        radius: Theme.radius
+                        color: Theme.panel
+                        border.color: Theme.line
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: Theme.px(11)
+                            spacing: Theme.px(7)
+                            Item {
+                                width: parent.width; height: Theme.px(19)
+                                Text { width: parent.width - st.width - Theme.px(12); elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
+                                Text { id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                            }
+                            Rectangle {
+                                width: parent.width; height: Theme.px(4); radius: 1; color: Theme.line
+                                Rectangle { width: parent.width * modelData.fraction; height: parent.height; color: modelData.fraction >= 1 ? Theme.textFaint : Theme.accent }
+                            }
                         }
                     }
                 }
-            }
-            Text {
-                visible: page.incoming.length === 0
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Nothing yet. Files show up here as they arrive."
-                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                Text {
+                    visible: page.incoming.length === 0
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Nothing yet. Files show up here as they arrive."
+                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                }
             }
         }
 
@@ -226,7 +250,7 @@ Rectangle {
             anchors.bottomMargin: Theme.px(18)
             anchors.left: parent.left; anchors.leftMargin: Theme.px(24)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(24)
-            height: Theme.px(176)
+            height: Math.max(Theme.px(176), directWords.implicitHeight + Theme.px(28))
             radius: Theme.radius
             color: Theme.panelLow
             border.color: Theme.line
@@ -238,7 +262,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: Direct.on ? Theme.px(148) : 0; height: width
                 radius: Theme.radius
-                color: Theme.text
+                color: "#E4E1DA"   // the light paper the code is drawn on, in every look
                 Image {
                     anchors.fill: parent
                     anchors.margins: Theme.px(10)
@@ -248,6 +272,7 @@ Rectangle {
                 }
             }
             Column {
+                id: directWords
                 anchors.left: qr.right
                 anchors.leftMargin: Theme.px(16)
                 anchors.right: parent.right
@@ -255,7 +280,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
                 Text { visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Direct connect is on. Scan this with the phone's camera to join this computer's Wi-Fi"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                Text { visible: Direct.on; width: parent.width; elide: Text.ElideRight; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                Text { visible: Direct.on; width: parent.width; wrapMode: Text.Wrap; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }

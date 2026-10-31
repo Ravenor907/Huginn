@@ -20,6 +20,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -80,10 +85,10 @@ fun Brand(onLogo: (() -> Unit)? = null, title: String = "MUNINN", trailing: @Com
     }
 }
 
-/** A 44dp icon-only button; [label] is what TalkBack reads. */
+/** A 48dp icon-only button (the smallest comfortable touch target); [label] is what TalkBack reads. */
 @Composable
 fun IconAction(icon: String, label: String, tint: Color = Palette.text, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 22.dp, onClick: () -> Unit) {
-    Box(modifier.size(44.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+    Box(modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
         contentAlignment = Alignment.Center) { MIcon(icon, tint, size) }
 }
 
@@ -117,8 +122,7 @@ fun Modifier.hcBorder(shape: androidx.compose.ui.graphics.Shape): Modifier =
 @Composable
 fun Section(text: String, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
     Row(modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text.uppercase(), style = Type.section.copy(color = Palette.accent))
-        Spacer(Modifier.weight(1f))
+        Text(text.uppercase(), style = Type.section.copy(color = Palette.accent), modifier = Modifier.weight(1f))
         trailing()
     }
 }
@@ -182,7 +186,7 @@ fun FitText(text: String, style: TextStyle, modifier: Modifier = Modifier) {
 @Composable
 fun ToggleRow(title: String, detail: String, on: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(role = Role.Switch) { onChange(!on) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = Type.big.copy(fontSize = 16.sp))
             if (detail.isNotEmpty()) Text(detail, style = Type.small)
         }
@@ -223,7 +227,7 @@ fun Line(title: String, detail: String = "", icon: String? = null, trailing: Str
             Text(title, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (detail.isNotEmpty()) Text(detail, style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (trailing.isNotEmpty()) Text(trailing, style = Type.small)
+        if (trailing.isNotEmpty()) Text(trailing, style = Type.small, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
@@ -248,19 +252,21 @@ object Ui {
     fun say(text: String, bad: Boolean = false) { toast.value = text to bad }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskDialog(a: Ask) {
     AlertDialog(
         onDismissRequest = { Ui.ask.value = null; a.onCancel() },
         containerColor = Palette.panel,
         title = { Text(a.title, style = Type.big) },
-        text = { Text(a.message, style = Type.normal) },
+        // Long messages at a large text size scroll instead of pushing the buttons off the screen.
+        text = { Text(a.message, style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = {
             if (a.hold) HoldButton(a.confirm) { Ui.ask.value = null; a.onConfirm() }
             else MButton(a.confirm, kind = if (a.danger) Kind.Danger else Kind.Accent) { Ui.ask.value = null; a.onConfirm() }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
                 a.extra?.let { MButton(it) { Ui.ask.value = null; a.onExtra() } }
             }
@@ -287,11 +293,34 @@ fun HoldButton(text: String, onDone: () -> Unit) {
             .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(); down = true; waitForUpOrCancellation(); down = false } },
         contentAlignment = Alignment.CenterStart,
     ) {
-        Box(Modifier.matchParentSizeCompat(held).background(Palette.dangerLine))
+        // The fill grows across the whole button, however tall large text makes it.
+        Box(Modifier.matchParentSize()) { Box(Modifier.fillMaxHeight().fillMaxWidth(held).background(Palette.dangerLine)) }
         Text(if (held > 0f) "Keep holding…" else "Hold: $text", modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Palette.danger)
     }
 }
 
-private fun Modifier.matchParentSizeCompat(fraction: Float) = this.fillMaxWidth(fraction).height(48.dp)
+/**
+ * A row of [count] choices that share the width equally, as many per line as fit at the current text size: all on
+ * one line usually, two or one per line at a large font size, so no label is squeezed into broken words.
+ * [minWidth] is the narrowest a choice may be at 100% text, [max] the most on one line; [item] draws choice i with the
+ * modifier it's given.
+ */
+@Composable
+fun ChoiceRow(count: Int, modifier: Modifier = Modifier, minWidth: androidx.compose.ui.unit.Dp = 72.dp, gap: androidx.compose.ui.unit.Dp = 6.dp,
+              max: Int = count, item: @Composable (Int, Modifier) -> Unit) {
+    val scale = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val perLine = (((maxWidth + gap) / (minWidth * scale + gap)).toInt()).coerceIn(1, maxOf(minOf(count, max), 1))
+        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            (0 until count).chunked(perLine).forEach { line ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    line.forEach { i -> item(i, Modifier.weight(1f)) }
+                    // A short last line keeps the same widths as the lines above it.
+                    repeat(perLine - line.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
 

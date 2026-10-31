@@ -94,7 +94,7 @@ Item {
                     width: parent.width; height: Theme.px(52)
                     placeholderText: "Question"
                     maximumLength: 200
-                    color: Theme.text; placeholderTextColor: Theme.textFaint
+                    color: Theme.text; placeholderTextColor: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(19)
                     background: Rectangle { radius: Theme.radius; color: Theme.ground; border.color: dlg.row === 0 || question.activeFocus ? Theme.accent : Theme.lineMuted; border.width: dlg.row === 0 ? Theme.focusWidth : 1 }
                     onActiveFocusChanged: if (activeFocus) dlg.row = 0
@@ -112,7 +112,7 @@ Item {
                         maximumLength: 100
                         text: dlg.answers[index]
                         onTextEdited: dlg.setAnswer(index, text)
-                        color: Theme.text; placeholderTextColor: Theme.textFaint
+                        color: Theme.text; placeholderTextColor: Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(17)
                         background: Rectangle { radius: Theme.radius; color: Theme.ground; border.color: dlg.row === index + 1 ? Theme.accent : Theme.lineMuted; border.width: dlg.row === index + 1 ? Theme.focusWidth : 1 }
                         onActiveFocusChanged: if (activeFocus) dlg.row = index + 1

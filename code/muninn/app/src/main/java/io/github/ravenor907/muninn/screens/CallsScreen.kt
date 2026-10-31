@@ -83,7 +83,9 @@ private fun HistoryRow(l: CallManager.Log, onCall: () -> Unit, onChat: (() -> Un
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onChat ?: onCall)
         .padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(44.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
-            Text(l.name.trim().firstOrNull()?.uppercase() ?: "?", style = Type.big.copy(color = Palette.goldBright))
+            // Sized to the disc, so the initial stays inside it at any font size.
+            val letter = with(androidx.compose.ui.platform.LocalDensity.current) { 18.dp.toSp() }
+            Text(l.name.trim().firstOrNull()?.uppercase() ?: "?", style = Type.big.copy(color = Palette.goldBright, fontSize = letter, lineHeight = letter), maxLines = 1)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {

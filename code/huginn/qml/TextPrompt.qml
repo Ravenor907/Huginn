@@ -77,42 +77,54 @@ Item {
         id: box
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(32), Theme.px(440))
-        height: Theme.px(36) + head.implicitHeight + body.implicitHeight + foot.height
+        // Never taller than the window: long help text scrolls above the field.
+        height: Math.min(parent.height - Theme.px(32), Theme.px(36) + head.implicitHeight + body.implicitHeight + foot.height)
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.line
         clip: true
         MouseArea { anchors.fill: parent }   // a click inside doesn't close it
 
-        Column {
-            id: head
+        Flickable {
+            id: headView
             x: Theme.px(20); y: Theme.px(20)
             width: parent.width - Theme.px(40)
-            spacing: Theme.px(8)
-            Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: prompt.title.toUpperCase()
-                color: Theme.text
-                font.family: Theme.display
-                font.pixelSize: Theme.fs(18)
-                font.weight: Font.Bold
-                font.letterSpacing: Theme.px(2)
-            }
-            Text {
-                visible: prompt.context.length > 0
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: prompt.context
-                color: Theme.textMuted
-                font.family: Theme.body
-                font.pixelSize: Theme.fs(14)
-                lineHeight: 1.15
+            height: Math.max(0, Math.min(head.implicitHeight, box.height - Theme.px(36) - body.implicitHeight - foot.height))
+            contentWidth: width
+            contentHeight: head.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: head
+                width: headView.width
+                spacing: Theme.px(8)
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: prompt.title.toUpperCase()
+                    color: Theme.text
+                    font.family: Theme.display
+                    font.pixelSize: Theme.fs(18)
+                    font.weight: Font.Bold
+                    font.letterSpacing: Theme.px(2)
+                }
+                // Wraps at spaces, and inside a long code that has none.
+                Text {
+                    visible: prompt.context.length > 0
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: prompt.context
+                    color: Theme.textMuted
+                    font.family: Theme.body
+                    font.pixelSize: Theme.fs(14)
+                    lineHeight: 1.15
+                }
             }
         }
         Column {
             id: body
-            anchors.top: head.bottom
+            anchors.top: headView.bottom
             anchors.topMargin: Theme.px(16)
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
@@ -126,7 +138,7 @@ Item {
             TextField {
                 id: field
                 width: parent.width
-                height: Theme.px(40)
+                height: Math.max(Theme.px(40), implicitHeight)
                 leftPadding: Theme.px(10)
                 color: Theme.text
                 selectionColor: Theme.accentFill
@@ -171,6 +183,9 @@ Item {
                         Accessible.checked: on
                         Text {
                             anchors.centerIn: parent
+                            width: parent.width - Theme.px(8)
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideRight
                             text: modelData.label
                             color: parent.on ? Theme.accent : Theme.textSoft
                             font.family: Theme.body; font.pixelSize: Theme.fs(13)

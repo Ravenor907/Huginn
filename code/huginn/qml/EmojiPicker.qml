@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import Huginn
 
 // A panel of emoji to put in a message or react with. [quick]: the five quick reactions on top (for
@@ -11,8 +12,9 @@ Rectangle {
     signal picked(string e)
 
     visible: false
-    width: Theme.px(360)
-    height: Math.min(Theme.px(320), grid.contentHeight + quickRow.height + Theme.px(24))
+    // Never bigger than the window it opens in.
+    width: Math.min(Theme.px(360), Window.width > 0 ? Window.width - Theme.px(16) : Theme.px(360))
+    height: Math.min(Theme.px(320), grid.contentHeight + quickRow.height + Theme.px(24), Window.height > 0 ? Window.height * 0.6 : Theme.px(320))
     radius: Theme.radius
     color: Theme.panel
     border.color: Theme.lineStrong

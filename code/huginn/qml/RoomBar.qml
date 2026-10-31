@@ -48,6 +48,8 @@ Rectangle {
         }
         Text {
             anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(10)
+            width: Math.min(implicitWidth, parent.width - Theme.px(20) - (bar.docked ? Theme.px(140) : 0))
+            elide: Text.ElideRight
             text: Rooms.sharerName + " is sharing their screen"
             color: Theme.text
             style: Text.Outline; styleColor: "#000000"

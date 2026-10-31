@@ -128,7 +128,8 @@ Item {
         visible: !card.pickingOnly
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(60), Theme.px(420))
-        height: body.implicitHeight + banner.height + Theme.px(24)
+        // Never taller than the window: what doesn't fit under the picture scrolls.
+        height: Math.min(parent.height - Theme.px(32), face.y + face.height + Theme.px(10) + body.implicitHeight + Theme.px(14))
         radius: Theme.radius
         color: Theme.panel
         border.width: 1
@@ -183,11 +184,20 @@ Item {
             onClicked: card.close()
         }
 
-        Column {
-            id: body
+        Flickable {
+            id: bodyView
             anchors.top: face.bottom; anchors.topMargin: Theme.px(10)
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(14)
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
+            contentWidth: width
+            contentHeight: body.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+        Column {
+            id: body
+            width: bodyView.width
             spacing: Theme.px(10)
 
             Column {
@@ -229,7 +239,7 @@ Item {
                     maximumLineCount: 5
                     elide: Text.ElideRight
                     text: card.note !== "" ? card.note : "None yet. Only you see it."
-                    color: card.note !== "" ? Theme.text : Theme.textFaint
+                    color: card.note !== "" ? Theme.text : Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -242,7 +252,7 @@ Item {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: card.folderNames.length ? card.folderNames.join(", ") : "In no folder"
-                    color: card.folderNames.length ? Theme.text : Theme.textFaint
+                    color: card.folderNames.length ? Theme.text : Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -269,6 +279,13 @@ Item {
                 }
             }
         }
+        }
+    }
+    // Scrolls the card so the button the controller is on is in view.
+    function reveal(item) {
+        const y = item.mapToItem(body, 0, 0).y
+        if (y < bodyView.contentY) bodyView.contentY = y
+        else if (y + item.height > bodyView.contentY + bodyView.height) bodyView.contentY = Math.min(bodyView.contentHeight - bodyView.height, y + item.height - bodyView.height)
     }
 
     component Label: Text {
@@ -280,8 +297,9 @@ Item {
         property var action: ({})
         property bool primary: false
         readonly property bool focused: !!card.actions[card.focusIndex] && card.actions[card.focusIndex].id === action.id
-        width: abRow.implicitWidth + Theme.px(24)
-        height: Theme.px(primary ? 46 : 36)
+        width: Math.min((ab.action.icon ? Theme.px(24) : 0) + abText.implicitWidth + Theme.px(24), body.width)
+        height: Math.max(Theme.px(primary ? 46 : 36), abText.implicitHeight + Theme.px(12))
+        onFocusedChanged: if (focused) Qt.callLater(card.reveal, ab)
         radius: Theme.radius
         opacity: action.on ? 1 : 0.45
         color: primary && action.on ? (abHover.hovered ? Theme.accentFill : Theme.raised) : abHover.hovered ? Theme.tile : Theme.raised
@@ -295,7 +313,7 @@ Item {
             anchors.centerIn: parent
             spacing: Theme.px(6)
             Icon { visible: !!ab.action.icon; anchors.verticalCenter: parent.verticalCenter; name: ab.action.icon || "file"; size: Theme.px(18); color: ab.primary && ab.action.on ? Theme.accent : Theme.textSoft }
-            Text { anchors.verticalCenter: parent.verticalCenter; text: ab.action.label || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(ab.primary ? 15 : 13); font.weight: Font.DemiBold }
+            Text { id: abText; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, ab.width - Theme.px(24) - (ab.action.icon ? Theme.px(24) : 0)); elide: Text.ElideRight; text: ab.action.label || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(ab.primary ? 15 : 13); font.weight: Font.DemiBold }
         }
         HoverHandler { id: abHover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: { card.focusIndex = card.actions.findIndex(a => a.id === ab.action.id); card.run(ab.action.id) } }

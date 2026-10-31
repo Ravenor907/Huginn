@@ -9,8 +9,13 @@ Rectangle {
     property real cell: 0      // a fixed width for every choice (a dialog fills its width with them)
     signal picked(string value)
 
-    implicitWidth: row.implicitWidth + 2
-    implicitHeight: Theme.px(36)
+    // The width every choice needs at its full label. Given less, the choices share it evenly and
+    // their labels are cut short.
+    readonly property real naturalWidth: options.reduce((w, o) => w + Math.max(Math.ceil(metrics.advanceWidth(o.label || "")) + Theme.px(28), cell), 0) + 2
+    readonly property bool squeezed: width < naturalWidth - 0.5
+    FontMetrics { id: metrics; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
+    implicitWidth: naturalWidth
+    implicitHeight: Math.max(Theme.px(36), Math.ceil(metrics.height) + Theme.px(12))
     radius: Theme.radius
     color: "transparent"
     border.color: Theme.lineStrong
@@ -23,12 +28,14 @@ Rectangle {
             model: seg.options
             Rectangle {
                 readonly property bool on: modelData.value === seg.value
-                width: Math.max(txt.implicitWidth + Theme.px(28), seg.cell)
+                width: seg.squeezed ? Math.floor((seg.width - 2) / Math.max(1, seg.options.length)) : Math.max(txt.implicitWidth + Theme.px(28), seg.cell)
                 height: seg.height - 2
                 color: on ? Theme.accentFill : "transparent"
                 Text {
                     id: txt
                     anchors.centerIn: parent
+                    width: Math.min(implicitWidth, parent.width - Theme.px(8))
+                    elide: Text.ElideRight
                     text: modelData.label
                     color: parent.on ? Theme.accent : Theme.textSoft
                     font.family: Theme.body

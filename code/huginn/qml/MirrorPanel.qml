@@ -73,6 +73,8 @@ Rectangle {
         delegate: Column {
             width: talk.width
             Text {
+                width: parent.width
+                elide: Text.ElideRight
                 text: (modelData.mine ? "You" : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
                 color: modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
             }

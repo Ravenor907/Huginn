@@ -184,7 +184,11 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
         }
     }
     // [fill]: the rest of the screen is ours, so the pattern sits where Settings › Lock and privacy says.
-    Column(if (fill) Modifier.fillMaxSize() else Modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+    // A password page scrolls above the keyboard, so the fields and Save stay reachable at large text sizes; the
+    // pattern page keeps its spacing so the dots sit where they're set to.
+    val scroll = androidx.compose.foundation.rememberScrollState()
+    Column(if (fill) Modifier.fillMaxSize().then(if (usePattern) Modifier else Modifier.imePadding().verticalScroll(scroll)) else Modifier,
+        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
         androidx.compose.foundation.layout.Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Pattern", Modifier.weight(1f), if (usePattern) Kind.Accent else Kind.Normal) { usePattern = true; first = null; note = "" }
             MButton("Password", Modifier.weight(1f), if (!usePattern) Kind.Accent else Kind.Normal) { usePattern = false; first = null; note = "" }

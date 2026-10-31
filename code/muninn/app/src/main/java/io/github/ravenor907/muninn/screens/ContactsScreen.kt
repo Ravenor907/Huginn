@@ -1,5 +1,7 @@
 package io.github.ravenor907.muninn.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -90,7 +92,7 @@ fun ContactsScreen(app: Muninn, back: (() -> Unit)? = null, onChats: () -> Unit 
             containerColor = Palette.panel,
             title = { Text(p.name, style = Type.big) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(p.detail, style = Type.small)
                     MButton("Message", Modifier.fillMaxWidth(), Kind.Accent, icon = "chat") { picked = null; ChatNav.open = p.key; onChats() }
                     if (p.contact && io.github.ravenor907.muninn.net.call.CallManager.canCall(p.key)) MButton("Call", Modifier.fillMaxWidth(), icon = "call") {

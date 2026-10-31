@@ -50,8 +50,9 @@ Item {
 
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
-        y: Theme.px(90)
-        width: Math.min(parent.width - Theme.px(80), Theme.px(620))
+        // Near the top, and never past the foot of the window: the hits scroll when they don't fit.
+        y: Math.max(Theme.px(16), Math.min(Theme.px(90), parent.height - height - Theme.px(16)))
+        width: Math.min(parent.width - Theme.px(32), Theme.px(620))
         height: col.implicitHeight + Theme.px(28)
         radius: Theme.radius
         color: Theme.panel
@@ -62,11 +63,11 @@ Item {
             x: Theme.px(14); y: Theme.px(14)
             width: parent.width - Theme.px(28)
             spacing: Theme.px(8)
-            Text { text: "Go to a chat or channel"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+            Text { id: askText; width: parent.width; elide: Text.ElideRight; text: "Go to a chat or channel"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             TextField {
                 id: field
                 width: parent.width
-                height: Theme.px(46)
+                height: Math.max(Theme.px(46), implicitHeight)
                 leftPadding: Theme.px(14)
                 color: Theme.text
                 placeholderText: "Who or where?"
@@ -82,10 +83,21 @@ Item {
                     else if (event.key === Qt.Key_Escape) { sw.close(); event.accepted = true }
                 }
             }
-            Repeater {
+            ListView {
+                id: hits
+                width: parent.width
+                visible: sw.shown.length > 0
+                height: Math.max(0, Math.min(contentHeight, sw.height - Theme.px(32) - Theme.px(28) - askText.height - field.height - col.spacing * 2))
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+                spacing: col.spacing
                 model: sw.shown
-                Rectangle {
-                    width: col.width
+                currentIndex: sw.row
+                highlightFollowsCurrentItem: false
+                onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+                delegate: Rectangle {
+                    width: hits.width
                     height: Theme.px(44)
                     radius: Theme.radius
                     color: index === sw.row ? Theme.tile : hitHover.hovered ? Theme.raised : "transparent"

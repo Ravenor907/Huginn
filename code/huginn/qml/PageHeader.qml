@@ -14,7 +14,8 @@ Item {
     signal back()
     default property alias trailing: right.data
 
-    implicitHeight: Theme.headerHeight
+    // Taller only when a large Text size needs it.
+    implicitHeight: Math.max(Theme.headerHeight, titleText.implicitHeight + Theme.px(16), right.implicitHeight + Theme.px(8))
 
     Rectangle {
         id: backBtn

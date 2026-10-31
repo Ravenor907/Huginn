@@ -1,5 +1,8 @@
 package io.github.ravenor907.muninn.screens
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -117,7 +120,7 @@ internal fun MessageSheet(mineReaction: String?, canReact: Boolean, actions: Lis
         onDismissRequest = onDismiss,
         containerColor = Palette.panel,
         text = {
-            Column(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 if (canReact) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     (Rich.QUICK + listOfNotNull(mineReaction?.takeIf { it !in Rich.QUICK })).forEach { e ->
@@ -169,8 +172,9 @@ internal fun ReactionChips(all: Map<String, Rich.Reaction>, me: String, alignEnd
 @Composable
 internal fun QuoteBlock(name: String, text: String, onClick: () -> Unit) {
     val shape = io.github.ravenor907.muninn.ui.Corner
-    Row(Modifier.padding(bottom = 4.dp).clip(shape).background(Palette.groundDeep).clickable(role = Role.Button, onClickLabel = "Show the message") { onClick() }) {
-        Box(Modifier.width(3.dp).height(38.dp).background(Palette.gold))
+    // The gold bar runs the full height of the quote, however tall large text makes it.
+    Row(Modifier.padding(bottom = 4.dp).height(IntrinsicSize.Min).clip(shape).background(Palette.groundDeep).clickable(role = Role.Button, onClickLabel = "Show the message") { onClick() }) {
+        Box(Modifier.width(3.dp).heightIn(min = 38.dp).fillMaxHeight().background(Palette.gold))
         Column(Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
             Text(name, style = small.copy(fontWeight = FontWeight.SemiBold, color = Palette.goldBright), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(text, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -232,6 +236,8 @@ internal fun TypingRow(name: String) {
 @Composable
 internal fun Circled(n: Int) {
     Box(Modifier.size(17.dp).clip(CircleShape).border(1.dp, Palette.gold, CircleShape), contentAlignment = Alignment.Center) {
-        Text(if (n > 99) "99" else "$n", style = small.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Palette.gold), maxLines = 1)
+        // Sized to the circle, not the font size, so the number always fits inside it.
+        val digits = with(androidx.compose.ui.platform.LocalDensity.current) { 10.dp.toSp() }
+        Text(if (n > 99) "99" else "$n", style = small.copy(fontSize = digits, lineHeight = digits, fontWeight = FontWeight.SemiBold, color = Palette.gold), maxLines = 1, softWrap = false)
     }
 }

@@ -88,8 +88,11 @@ QtObject {
     // Panel widths at 100% (the list and the member list are dragged on a wide window). Portrait:
     // the list takes the whole width beside the rail.
     readonly property int railWidth: px(72)
-    readonly property int listWidth: portrait ? Math.max(0, Ui.windowWidth - railWidth) : px(Ui.listW)
-    readonly property int memberWidth: px(Ui.memberW)
+    // On a narrow window or at a large Size they give up room, so the conversation always has some:
+    // the list takes at most 40% of the space beside the rail, the member list at most 30%.
+    readonly property int roomBesideRail: Math.max(0, Ui.windowWidth - railWidth)
+    readonly property int listWidth: portrait ? roomBesideRail : Ui.windowWidth > 0 ? Math.min(px(Ui.listW), Math.round(roomBesideRail * 0.4)) : px(Ui.listW)
+    readonly property int memberWidth: Ui.windowWidth > 0 ? Math.min(px(Ui.memberW), Math.round(roomBesideRail * 0.3)) : px(Ui.memberW)
     readonly property int headerHeight: px(48)
     // Hidden side panels (Ctrl+Shift+L and Ctrl+Shift+U). Portrait shows one column at a time.
     readonly property bool listShown: !portrait && Settings.showList
@@ -128,9 +131,11 @@ QtObject {
     // light or dark text on it, whichever reads better.
     readonly property var pictureColours: ["#C9A35E", "#3D6A9E", "#8A5A3E", "#4E8A4E", "#7A4E9E", "#8A8A8A"]
     function avatarFrom(hex) {
-        const c = Qt.color(hex)
-        const bright = c.r * 0.299 + c.g * 0.587 + c.b * 0.114 > 0.55
-        return { bg: hex, fg: bright ? "#1E1A14" : "#FFFFFF" }
+        const h = String(hex || "")
+        if (!validColor(h)) return avatarMine || { bg: raised, fg: text }
+        const r = parseInt(h.substr(1, 2), 16) / 255, g = parseInt(h.substr(3, 2), 16) / 255, b = parseInt(h.substr(5, 2), 16) / 255
+        const bright = r * 0.299 + g * 0.587 + b * 0.114 > 0.55
+        return { bg: h, fg: bright ? "#1E1A14" : "#FFFFFF" }
     }
 
 }

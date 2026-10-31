@@ -32,12 +32,14 @@ fun AutumnControls() {
 private fun LeafSlider(label: String, value: Int, onChange: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-        Text("$value%", style = Type.small)
+        Text("$value%", style = Type.small.copy(color = Palette.textSoft), maxLines = 1, modifier = Modifier.padding(start = 8.dp))
     }
     Slider(
         value = value.toFloat(), onValueChange = { onChange((it / 5f).roundToInt() * 5) }, valueRange = 25f..200f, steps = 34,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label, $value percent" },
-        colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.raised,
-            activeTickColor = Palette.accent, inactiveTickColor = Palette.lineMuted),
+        // The empty part of the track uses the track shade, which stands out from the ground in every look; the 5% tick
+        // marks take the track's own colours so the dots don't crowd it.
+        colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track,
+            activeTickColor = Palette.accent, inactiveTickColor = Palette.track),
     )
 }

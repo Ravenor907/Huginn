@@ -16,13 +16,17 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -66,6 +70,7 @@ private const val PRIVACY = "Sent only to your contacts and the groups you're in
  * everywhere it's shown. Nothing needs a new permission: the photo picker and the camera Muninn already has.
  * [onDone] closes it, saved or not.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PicturePicker(onDone: () -> Unit) {
     val context = LocalContext.current
@@ -104,12 +109,13 @@ fun PicturePicker(onDone: () -> Unit) {
             val pictures by app.profile.pictures.collectAsState()
             val myColour by app.profile.myColour.collectAsState()
             val hasPicture = pictures.containsKey("me")
-            Panel(Modifier.widthIn(max = 420.dp)) {
+            // Scrolls when it's taller than the screen (a phone on its side, or large text).
+            Panel(Modifier.widthIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 Text("Your picture", style = Type.big)
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar("me", app.identity.username, 72.dp)
-                    Text(PRIVACY, style = Type.small, modifier = Modifier.padding(start = 14.dp))
+                    Text(PRIVACY, style = Type.small, modifier = Modifier.weight(1f).padding(start = 14.dp))
                 }
                 Spacer(Modifier.height(12.dp))
                 Line(if (busy) "Opening…" else "Choose a picture", "From your photos", icon = "image") {
@@ -118,16 +124,19 @@ fun PicturePicker(onDone: () -> Unit) {
                 Line("Take a photo", "With Muninn's camera", icon = "video") { camera = true }
                 Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
                     Text("Use my initial and a colour", style = Type.normal.copy(color = Palette.text))
-                    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Wraps onto a second line when six don't fit; each is a full 48dp touch target.
+                    FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Palette.MY_COLOURS.forEach { hex ->
                             val on = !hasPicture && myColour.equals(hex, ignoreCase = true)
                             val c = Palette.parse(hex) ?: Palette.goldTint
-                            Box(Modifier.size(40.dp).clip(CircleShape).background(c)
+                            Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(c)
                                 .border(if (on) 3.dp else 1.dp, if (on) Palette.goldBright else Palette.line, CircleShape)
                                 .clickable(role = Role.RadioButton) { app.profile.setMyColour(hex); if (hasPicture) app.profile.clearMyPicture(); onDone() }
                                 .semantics { selected = on; contentDescription = "${colourName(hex)} with your initial" },
                                 contentAlignment = Alignment.Center) {
-                                Text(initialOf(app.identity.username), style = Type.big.copy(color = Palette.onDisc(c)))
+                                // Sized to the disc, so the initial stays inside it at any font size.
+                                val letter = with(androidx.compose.ui.platform.LocalDensity.current) { 18.dp.toSp() }
+                                Text(initialOf(app.identity.username), style = Type.big.copy(color = Palette.onDisc(c), fontSize = letter, lineHeight = letter), maxLines = 1, softWrap = false)
                             }
                         }
                     }
@@ -157,47 +166,52 @@ private fun MoveAndScale(src: Bitmap, onCancel: () -> Unit, onSave: (Bitmap) -> 
     var dy by remember { mutableFloatStateOf(0f) }
     val image = remember(src) { src.asImageBitmap() }
     var win by remember { mutableFloatStateOf(1f) }
-    Panel(Modifier.padding(16.dp).widthIn(max = 480.dp)) {
-        Text("Move and scale", style = Type.big)
-        Spacer(Modifier.height(10.dp))
-        BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(1f).clip(Corner).background(Color.Black)) {
-            val s = constraints.maxWidth.toFloat()
-            win = s
-            // The shorter side fills the window at 1x; zoom scales up from there.
-            val base = s / minOf(src.width, src.height)
-            fun scale() = base * zoom
-            fun clamp() {
-                val w = src.width * scale(); val h = src.height * scale()
-                val maxX = (w - s) / 2f; val maxY = (h - s) / 2f
-                dx = dx.coerceIn(-maxX, maxX); dy = dy.coerceIn(-maxY, maxY)
-            }
-            Canvas(Modifier.fillMaxSize().pointerInput(src) {
-                detectTransformGestures { _, pan, z, _ ->
-                    zoom = (zoom * z).coerceIn(1f, 5f)
-                    dx += pan.x; dy += pan.y
-                    clamp()
+    // The window is square and never taller than about half the screen, so the words and buttons below it stay in view
+    // on a phone held sideways; the rest scrolls if it still can't fit.
+    BoxWithConstraints(contentAlignment = Alignment.Center) {
+        val side = minOf(maxWidth - 60.dp, 448.dp, maxHeight * 0.55f).coerceAtLeast(160.dp)
+        Panel(Modifier.padding(16.dp).widthIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+            Text("Move and scale", style = Type.big)
+            Spacer(Modifier.height(10.dp))
+            BoxWithConstraints(Modifier.size(side).align(Alignment.CenterHorizontally).clip(Corner).background(Color.Black)) {
+                val s = constraints.maxWidth.toFloat()
+                win = s
+                // The shorter side fills the window at 1x; zoom scales up from there.
+                val base = s / minOf(src.width, src.height)
+                fun scale() = base * zoom
+                fun clamp() {
+                    val w = src.width * scale(); val h = src.height * scale()
+                    val maxX = (w - s) / 2f; val maxY = (h - s) / 2f
+                    dx = dx.coerceIn(-maxX, maxX); dy = dy.coerceIn(-maxY, maxY)
                 }
-            }.semantics { contentDescription = "Your picture. Drag to move, pinch to zoom." }) {
-                val k = scale()
-                val left = s / 2f + dx - src.width * k / 2f
-                val top = s / 2f + dy - src.height * k / 2f
-                withTransform({ translate(left, top); scale(k, k, Offset.Zero) }) { drawImage(image) }
-                // Dim everything outside the circle, and ring it in gold.
-                val hole = Path().apply {
-                    fillType = PathFillType.EvenOdd
-                    addRect(androidx.compose.ui.geometry.Rect(0f, 0f, s, s))
-                    addOval(androidx.compose.ui.geometry.Rect(0f, 0f, s, s))
+                Canvas(Modifier.fillMaxSize().pointerInput(src) {
+                    detectTransformGestures { _, pan, z, _ ->
+                        zoom = (zoom * z).coerceIn(1f, 5f)
+                        dx += pan.x; dy += pan.y
+                        clamp()
+                    }
+                }.semantics { contentDescription = "Your picture. Drag to move, pinch to zoom." }) {
+                    val k = scale()
+                    val left = s / 2f + dx - src.width * k / 2f
+                    val top = s / 2f + dy - src.height * k / 2f
+                    withTransform({ translate(left, top); scale(k, k, Offset.Zero) }) { drawImage(image) }
+                    // Dim everything outside the circle, and ring it in gold.
+                    val hole = Path().apply {
+                        fillType = PathFillType.EvenOdd
+                        addRect(androidx.compose.ui.geometry.Rect(0f, 0f, s, s))
+                        addOval(androidx.compose.ui.geometry.Rect(0f, 0f, s, s))
+                    }
+                    drawPath(hole, Color.Black, alpha = 0.55f)
+                    drawCircle(Palette.gold, radius = s / 2f - 1f, center = Offset(s / 2f, s / 2f), style = Stroke(2f * density))
                 }
-                drawPath(hole, Color.Black, alpha = 0.55f)
-                drawCircle(Palette.gold, radius = s / 2f - 1f, center = Offset(s / 2f, s / 2f), style = Stroke(2f * density))
             }
-        }
-        Text("Drag to move, pinch to zoom. $PRIVACY", style = Type.small, modifier = Modifier.padding(top = 10.dp))
-        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton("Save", Modifier.weight(1f), Kind.Accent) {
-                onSave(crop(src, zoom, dx / win, dy / win))
+            Text("Drag to move, pinch to zoom. $PRIVACY", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Save", Modifier.weight(1f), Kind.Accent) {
+                    onSave(crop(src, zoom, dx / win, dy / win))
+                }
+                MButton("Cancel", Modifier.weight(1f)) { onCancel() }
             }
-            MButton("Cancel", Modifier.weight(1f)) { onCancel() }
         }
     }
 }

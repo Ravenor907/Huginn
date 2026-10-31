@@ -20,10 +20,10 @@ Item {
 
     // The rows, in the order the controller steps through them.
     readonly property var statusRows: [
-        { id: "online", label: "Online", note: "", color: Theme.online },
-        { id: "away", label: "Away", note: "after 10 min idle", color: Theme.idle },
-        { id: "dnd", label: "Do not disturb", note: "no sounds", color: Theme.danger },
-        { id: "invisible", label: "Invisible", note: "look offline", color: Theme.textFaint }
+        { id: "online", label: "Online", note: "" },
+        { id: "away", label: "Away", note: "after 10 min idle" },
+        { id: "dnd", label: "Do not disturb", note: "no sounds" },
+        { id: "invisible", label: "Invisible", note: "look offline" }
     ]
     readonly property var actionRows: [
         { id: "edit", label: "Edit name and colour", icon: "edit" },
@@ -38,9 +38,10 @@ Item {
     ]
     readonly property var rows: view === "edit" ? editRows : [{ id: "custom", label: "Custom status" }].concat(statusRows).concat(actionRows)
 
-    function open() { view = "main"; focusIndex = 1; visible = true }
+    function open() { view = "main"; focusIndex = 1; visible = true; list.contentY = 0 }
     function close() { visible = false; if (Ui.main) Ui.main.restoreFocus() }
     function toggle() { if (visible) close(); else open() }
+    function dotColour(id) { return id === "online" ? Theme.online : id === "away" ? Theme.away : id === "dnd" ? Theme.dnd : Theme.offline }
     function statusName(s) { return s === "away" ? "Away" : s === "dnd" ? "Do not disturb" : s === "invisible" ? "Invisible" : "Online" }
 
     function run(id) {
@@ -50,10 +51,10 @@ Item {
         } else if (id === "online" || id === "away" || id === "dnd" || id === "invisible") {
             Profile.setStatus(id)
             if (Ui.main) Ui.main.autoAway = false
-        } else if (id === "edit") { view = "edit"; focusIndex = 0 }
+        } else if (id === "edit") { view = "edit"; focusIndex = 0; list.contentY = 0 }
         else if (id === "name") Ui.ask("Your chat name", "Pick a name, not your real one", Chat.username, "Save", t => Chat.username = t)
         else if (id === "colour") Profile.setMyColour(swatches[swatch])
-        else if (id === "back") { view = "main"; focusIndex = 5 }
+        else if (id === "back") { view = "main"; focusIndex = 5; Qt.callLater(showFocused) }
         else if (id === "picture") { close(); if (Ui.profile) Ui.profile.pickPicture() }
         else if (id === "code") {
             if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
@@ -62,14 +63,28 @@ Item {
             Qt.callLater(() => { const p = Ui.main.page(); if (p && p.showCode !== undefined) { Chat.newLink(); p.showCode = true } })
         } else if (id === "phone") { close(); PeopleActions.linkedDevices() }
     }
+    // Scrolls the list so the row the controller is on is in view.
+    function showFocused() {
+        const r = rows[focusIndex]
+        if (!r) return
+        let item = null
+        for (let i = 0; i < body.children.length; ++i) {
+            const c = body.children[i]
+            if (c.visible && (c.rowId === r.id || (r.id === "custom" && c === customBox))) { item = c; break }
+        }
+        if (!item) return
+        const top = item.y, bottom = item.y + item.height
+        if (top < list.contentY) list.contentY = top
+        else if (bottom > list.contentY + list.height) list.contentY = bottom - list.height
+    }
     function pickSwatch(i) { swatch = i; Profile.setMyColour(swatches[i]) }
     function handleButton(b) {
         const n = rows.length
         const r = rows[focusIndex]
-        if (b === "b") { if (view === "edit") { view = "main"; focusIndex = 5 } else close() }
+        if (b === "b") { if (view === "edit") { view = "main"; focusIndex = 5; Qt.callLater(showFocused) } else close() }
         else if (b === "a") { if (r) run(r.id) }
-        else if (b === "up") focusIndex = Math.max(0, focusIndex - 1)
-        else if (b === "down") focusIndex = Math.min(n - 1, focusIndex + 1)
+        else if (b === "up") { focusIndex = Math.max(0, focusIndex - 1); Qt.callLater(showFocused) }
+        else if (b === "down") { focusIndex = Math.min(n - 1, focusIndex + 1); Qt.callLater(showFocused) }
         else if (b === "left" || b === "right") {
             if (r && r.swatches) pickSwatch(Math.max(0, Math.min(swatches.length - 1, swatch + (b === "left" ? -1 : 1))))
             else if (b === "left") close()
@@ -82,10 +97,14 @@ Item {
 
     Rectangle {
         id: box
-        x: card.above ? card.above.x : Theme.px(8)
-        y: card.above ? card.above.y - height - Theme.px(8) : parent.height - height - Theme.px(8)
-        width: Theme.px(300)
-        height: body.implicitHeight + Theme.px(16)
+        // Always above the panel and inside the window: as tall as the space above it allows,
+        // and the rows scroll when they don't all fit.
+        readonly property real bottomEdge: card.above && card.above.visible ? card.above.y - Theme.px(8) : parent.height - Theme.px(8)
+        readonly property real fullHeight: list.y + body.implicitHeight + Theme.px(8)
+        x: Math.max(0, Math.min(card.above && card.above.visible ? card.above.x : Theme.px(8), parent.width - width))
+        y: Math.max(Theme.px(8), bottomEdge - height)
+        width: Math.min(Theme.px(300), parent.width - Theme.px(16))
+        height: Math.max(0, Math.min(fullHeight, bottomEdge - Theme.px(8)))
         radius: Theme.radius
         color: Theme.panel
         border.width: 1
@@ -99,123 +118,149 @@ Item {
         Rectangle {
             id: banner
             width: parent.width
-            height: Theme.px(56)
+            height: Theme.px(36)
             color: Qt.rgba(card.myTone.r, card.myTone.g, card.myTone.b, 0.35)
         }
         Rectangle {
             id: faceRing
-            x: Theme.px(16); y: banner.height - Theme.px(36)
-            width: Theme.px(80); height: width; radius: width / 2
+            x: Theme.px(16); y: banner.height - Theme.px(26)
+            width: Theme.px(60); height: width; radius: width / 2
             color: Theme.panel
-            Avatar { anchors.centerIn: parent; key: "me"; name: Chat.username; size: Theme.px(72); showDot: true }
+            Avatar { anchors.centerIn: parent; key: "me"; name: Chat.username; size: Theme.px(54); showDot: true; backdrop: Theme.panel }
         }
-
+        // Your name and who sees it, beside the picture.
         Column {
-            id: body
-            x: Theme.px(16); y: faceRing.y + faceRing.height + Theme.px(6)
-            width: parent.width - Theme.px(32)
-            spacing: Theme.px(4)
+            id: nameBlock
+            anchors.left: faceRing.right; anchors.leftMargin: Theme.px(10)
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
+            y: banner.height + Theme.px(4)
             Text { width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
             Text { width: parent.width; elide: Text.ElideRight; text: "Only your contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-            Item { width: 1; height: Theme.px(6) }
+        }
 
-            // Custom status: type it here, Enter keeps it (the controller's A asks for it).
-            Rectangle {
-                id: customBox
-                visible: card.view === "main"
-                readonly property bool on: card.padFocus && card.rows[card.focusIndex] && card.rows[card.focusIndex].id === "custom"
+        // The rows: they scroll when the window is short or the Size is large.
+        Flickable {
+            id: list
+            x: Theme.px(16); y: Math.max(faceRing.y + faceRing.height, nameBlock.y + nameBlock.height) + Theme.px(8)
+            width: parent.width - Theme.px(32)
+            height: Math.max(0, parent.height - y - Theme.px(8))
+            contentWidth: width
+            contentHeight: body.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: body
                 width: parent.width
-                height: Theme.px(36)
-                radius: Theme.radius
-                color: Theme.groundDeep
-                border.width: on ? Theme.focusWidth : 1
-                border.color: on || customInput.activeFocus ? Theme.accent : Theme.line
-                Accessible.role: Accessible.EditableText
-                Accessible.name: "Custom status"
-                Icon { id: customIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "thread"; size: Theme.px(14); color: Theme.textMuted }
-                TextInput {
-                    id: customInput
-                    anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
-                    anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: Profile.myCustomStatus
-                    maximumLength: 80
-                    color: Theme.text
-                    selectionColor: Theme.accentFill
-                    font.family: Theme.body; font.pixelSize: Theme.fs(14)
-                    clip: true
-                    function keep() { Profile.setCustomStatus(text.trim()); if (Ui.main) Ui.main.restoreFocus() }
-                    Keys.onReturnPressed: keep()
-                    Keys.onEnterPressed: keep()
-                    Keys.onEscapePressed: { text = Profile.myCustomStatus; if (Ui.main) Ui.main.restoreFocus() }
-                    onActiveFocusChanged: if (!activeFocus && text.trim() !== Profile.myCustomStatus) Profile.setCustomStatus(text.trim())
-                }
-                Text {
-                    visible: customInput.text.length === 0 && !customInput.activeFocus
-                    anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Set a custom status..."
-                    color: Theme.textFaint; font.family: Theme.body; font.pixelSize: Theme.fs(14)
-                }
-                HoverHandler { cursorShape: Qt.IBeamCursor }
-                TapHandler { onTapped: customInput.forceActiveFocus() }
-            }
-            Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
+                spacing: Theme.px(4)
 
-            // Online, Away, Do not disturb, Invisible.
-            Repeater {
-                model: card.view === "main" ? card.statusRows : []
-                CardRow {
-                    rowId: modelData.id
-                    label: modelData.label
-                    note: modelData.note
-                    picked: Profile.myStatus === modelData.id
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8); width: Theme.px(12); height: width; radius: Theme.px(2); color: modelData.color }
-                }
-            }
-            Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
-            Repeater {
-                model: card.view === "main" ? card.actionRows : []
-                CardRow {
-                    rowId: modelData.id
-                    label: modelData.label
-                    Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft }
-                }
-            }
-
-            // Edit name and colour.
-            Repeater {
-                model: card.view === "edit" ? card.editRows : []
-                CardRow {
-                    rowId: modelData.id
-                    label: modelData.swatches ? "" : modelData.label
-                    tall: !!modelData.swatches
-                    Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft; visible: !modelData.swatches }
-                    Row {
-                        visible: !!modelData.swatches
+                // Custom status: type it here, Enter keeps it (the controller's A asks for it).
+                Rectangle {
+                    id: customBox
+                    visible: card.view === "main"
+                    readonly property bool on: card.padFocus && card.rows[card.focusIndex] && card.rows[card.focusIndex].id === "custom"
+                    width: parent.width
+                    height: Theme.px(36)
+                    radius: Theme.radius
+                    color: Theme.groundDeep
+                    border.width: on ? Theme.focusWidth : 1
+                    border.color: on || customInput.activeFocus ? Theme.accent : Theme.line
+                    Accessible.role: Accessible.EditableText
+                    Accessible.name: "Custom status"
+                    Icon { id: customIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "thread"; size: Theme.px(14); color: Theme.textMuted }
+                    TextInput {
+                        id: customInput
+                        anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         anchors.verticalCenter: parent.verticalCenter
-                        x: Theme.px(30)
-                        spacing: Theme.px(8)
-                        Repeater {
-                            model: card.swatches
-                            Rectangle {
-                                readonly property bool mine: String(Profile.myColour).toUpperCase() === modelData
-                                width: Theme.px(26); height: width; radius: width / 2
-                                color: modelData
-                                border.width: mine ? Theme.px(2) : card.swatch === index && card.padFocus ? Theme.px(2) : 1
-                                border.color: mine ? Theme.text : card.swatch === index && card.padFocus ? Theme.accent : Theme.lineMuted
-                                Accessible.role: Accessible.RadioButton
-                                Accessible.name: "Colour " + (index + 1)
-                                Accessible.checked: mine
-                                Accessible.onPressAction: card.pickSwatch(index)
-                                Icon { visible: parent.mine; anchors.centerIn: parent; name: "check"; size: Theme.px(14); color: Theme.ground }
-                                HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                TapHandler { onTapped: card.pickSwatch(index) }
+                        text: Profile.myCustomStatus
+                        maximumLength: 80
+                        color: Theme.text
+                        selectionColor: Theme.accentFill
+                        font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                        clip: true
+                        function keep() { Profile.setCustomStatus(text.trim()); if (Ui.main) Ui.main.restoreFocus() }
+                        Keys.onReturnPressed: keep()
+                        Keys.onEnterPressed: keep()
+                        Keys.onEscapePressed: { text = Profile.myCustomStatus; if (Ui.main) Ui.main.restoreFocus() }
+                        onActiveFocusChanged: if (!activeFocus && text.trim() !== Profile.myCustomStatus) Profile.setCustomStatus(text.trim())
+                    }
+                    Text {
+                        visible: customInput.text.length === 0 && !customInput.activeFocus
+                        anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Set a custom status..."
+                        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                    }
+                    HoverHandler { cursorShape: Qt.IBeamCursor }
+                    TapHandler { onTapped: customInput.forceActiveFocus() }
+                }
+                Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
+
+                // Online, Away, Do not disturb, Invisible.
+                Repeater {
+                    model: card.view === "main" ? card.statusRows : []
+                    CardRow {
+                        rowId: modelData.id
+                        label: modelData.label
+                        note: modelData.note
+                        picked: Profile.myStatus === modelData.id
+                        Rectangle { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8); width: Theme.px(12); height: width; radius: width / 2; color: card.dotColour(modelData.id) }
+                    }
+                }
+                Rectangle { visible: card.view === "main"; width: parent.width; height: 1; color: Theme.seam }
+                Repeater {
+                    model: card.view === "main" ? card.actionRows : []
+                    CardRow {
+                        rowId: modelData.id
+                        label: modelData.label
+                        Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft }
+                    }
+                }
+
+                // Edit name and colour.
+                Repeater {
+                    model: card.view === "edit" ? card.editRows : []
+                    CardRow {
+                        rowId: modelData.id
+                        label: modelData.swatches ? "" : modelData.label
+                        tall: !!modelData.swatches
+                        Icon { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(6); name: modelData.icon; size: Theme.px(16); color: Theme.textSoft; visible: !modelData.swatches }
+                        Row {
+                            visible: !!modelData.swatches
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: Theme.px(30)
+                            spacing: Theme.px(8)
+                            Repeater {
+                                model: card.swatches
+                                Rectangle {
+                                    readonly property bool mine: String(Profile.myColour).toUpperCase() === modelData
+                                    width: Theme.px(28); height: width; radius: width / 2
+                                    color: modelData
+                                    border.width: mine ? Theme.px(2) : card.swatch === index && card.padFocus ? Theme.px(2) : 1
+                                    border.color: mine ? Theme.text : card.swatch === index && card.padFocus ? Theme.accent : Theme.lineMuted
+                                    Accessible.role: Accessible.RadioButton
+                                    Accessible.name: "Colour " + (index + 1)
+                                    Accessible.checked: mine
+                                    Accessible.onPressAction: card.pickSwatch(index)
+                                    Icon { visible: parent.mine; anchors.centerIn: parent; name: "check"; size: Theme.px(14); color: Theme.ground }
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { onTapped: card.pickSwatch(index) }
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+        // A thin bar on the right while the rows scroll.
+        Rectangle {
+            visible: list.interactive
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
+            y: list.y + list.visibleArea.yPosition * list.height
+            width: Theme.px(3); height: Math.max(Theme.px(16), list.visibleArea.heightRatio * list.height)
+            radius: width / 2
+            color: Theme.lineMuted
         }
     }
 

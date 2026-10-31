@@ -73,7 +73,7 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 bottomPadding: Theme.px(8)
                 text: "Active status is off, so nobody shows as online. Settings › Lock and privacy."
-                color: Theme.textFaint
+                color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
             Repeater {
@@ -84,6 +84,8 @@ Rectangle {
                     width: memCol.width
                     spacing: Theme.px(2)
                     Text {
+                        width: parent.width
+                        elide: Text.ElideRight
                         leftPadding: Theme.px(8)
                         topPadding: Theme.px(index === 0 ? 12 : 20)
                         bottomPadding: Theme.px(4)

@@ -1,5 +1,7 @@
 package io.github.ravenor907.muninn.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,7 +82,7 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
     AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
         title = { Text(when (inc?.state) { "hello", "receiving" -> "Moving from ${inc?.from}"; "done" -> "Moved here"; else -> "Move here" }, style = Type.big) },
         text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                 val i = inc
                 when (i?.state) {
                     "hello", "receiving" -> {
@@ -123,7 +125,7 @@ fun MoveCover(app: Muninn): Boolean {
     ask?.let { name ->
         AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
             title = { Text("Link $name?", style = Type.big) },
-            text = { Text("$name, the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.", style = Type.normal) },
+            text = { Text("$name, the device you just moved from, asks to show your chats as a linked device. Only say yes if it's in front of you.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
             confirmButton = { MButton("Link", kind = Kind.Accent) { Move.answerLink(app, true) } },
             dismissButton = { MButton("Don't link") { Move.answerLink(app, false) } })
     }
@@ -137,7 +139,7 @@ fun MoveCover(app: Muninn): Boolean {
         "checking" -> {
             AlertDialog(onDismissRequest = {}, containerColor = Palette.panel,
                 title = { Text("Moving to ${o.to}", style = Type.big) },
-                text = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                text = { Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Check these are the same on both screens, then tap They match on both:", style = Type.normal)
                     Text(o.emoji, style = Type.big, modifier = Modifier.padding(vertical = 12.dp))
                     Text(MOVE_WARNING, style = Type.normal.copy(color = Palette.danger))

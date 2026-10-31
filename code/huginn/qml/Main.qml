@@ -368,13 +368,16 @@ Window {
         radius: Theme.radius
         color: Theme.raised
         border.color: Theme.lineMuted
-        width: mirroredText.implicitWidth + Theme.px(24)
+        width: Math.min(mirroredText.implicitWidth + Theme.px(24), parent.width / 2)
         height: mirroredText.implicitHeight + Theme.px(12)
         Text {
             id: mirroredText
             anchors.centerIn: parent
+            width: Math.min(implicitWidth, parent.width - Theme.px(24))
+            elide: Text.ElideRight
             color: Theme.textSoft
-            font.pixelSize: Theme.px(14)
+            font.family: Theme.body
+            font.pixelSize: Theme.fs(14)
             text: "Mirrored to " + parent.on.map(c => c.name).join(", ")
         }
     }
@@ -425,6 +428,9 @@ Window {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(implicitWidth, app.width - Theme.px(32))
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
                 text: "UPDATING HUGINN TO " + Updater.latest.toUpperCase()
                 color: Theme.text
                 font.family: Theme.display
@@ -434,6 +440,9 @@ Window {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(implicitWidth, app.width - Theme.px(32))
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
                 text: Updater.status
                 color: Theme.textMuted
                 font.family: Theme.body

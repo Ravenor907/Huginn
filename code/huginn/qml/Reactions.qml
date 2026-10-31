@@ -14,7 +14,7 @@ Flow {
     Repeater {
         model: row.list
         Rectangle {
-            height: Theme.px(26)
+            height: Math.max(Theme.px(28), chip.implicitHeight + Theme.px(6))
             width: chip.implicitWidth + Theme.px(16)
             radius: height / 2
             color: modelData.mine ? Theme.accentFill : chipHover.hovered ? Theme.raised : Theme.tile
@@ -35,7 +35,7 @@ Flow {
     }
     Rectangle {
         visible: row.add
-        height: Theme.px(26); width: Theme.px(34)
+        height: Theme.px(28); width: Theme.px(36)
         radius: height / 2
         color: addHover.hovered ? Theme.raised : Theme.tile
         Accessible.role: Accessible.Button

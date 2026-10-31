@@ -128,7 +128,7 @@ Item {
                                             id: cap
                                             anchors.right: parent.right
                                             anchors.verticalCenter: parent.verticalCenter
-                                            width: capText.implicitWidth + Theme.px(14); height: Theme.px(24)
+                                            width: capText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(24), capText.implicitHeight + Theme.px(6))
                                             radius: Theme.radius
                                             color: Theme.raised
                                             border.color: Theme.lineStrong

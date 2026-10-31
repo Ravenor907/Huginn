@@ -222,7 +222,7 @@ Rectangle {
             Rectangle {
                 visible: !page.locked
                 anchors.verticalCenter: parent.verticalCenter
-                height: Theme.px(26)
+                height: Math.max(Theme.px(28), newFolderLabel.implicitHeight + Theme.px(6))
                 width: newFolderLabel.implicitWidth + Theme.px(18)
                 radius: Theme.radius
                 color: newFolderHover.hovered ? Theme.raised : Theme.tile
@@ -546,14 +546,14 @@ Rectangle {
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Theme.px(8); height: width; radius: width / 2
-                    color: page.openRoute === "" || page.openRoute === "none" ? Theme.textFaint : Theme.hc ? Theme.text : "#7FB08A"
+                    color: page.openRoute === "" || page.openRoute === "none" ? Theme.textFaint : Theme.hc ? Theme.text : Theme.online
                 }
                 // Active status (cap m1): their app is open right now.
                 Text {
                     visible: page.theyActive
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Active"
-                    color: Theme.hc ? Theme.text : "#7FB08A"
+                    color: Theme.hc ? Theme.text : Theme.online
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
                 Text {
@@ -670,7 +670,7 @@ Rectangle {
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
                         Rectangle {
                             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                            width: newText.implicitWidth + Theme.px(14); height: Theme.px(20); radius: Theme.radius; color: Theme.danger
+                            width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
                             Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
                         }
                     }
@@ -719,6 +719,8 @@ Rectangle {
                             spacing: Theme.px(8)
                             Text {
                                 id: who
+                                width: Math.min(implicitWidth, Math.round(col.width * 0.6))
+                                elide: Text.ElideRight
                                 text: page.senderName(modelData)
                                 color: Theme.avatar(page.senderName(modelData), modelData.mine).fg
                                 font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.Medium
@@ -739,7 +741,7 @@ Rectangle {
                         }
                         Image {
                             visible: !!modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album
-                            width: Theme.px(280); height: Theme.px(170)
+                            width: Math.min(Theme.px(280), col.width); height: Math.round(width * 170 / 280)
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
                             source: visible ? Chat.photoUrl(modelData.photo) : ""
@@ -765,7 +767,7 @@ Rectangle {
                                   + (msg.grouped && (modelData.isEdited || page.stateLabel(modelData) !== "") ? "  " : "")
                             font.italic: !!modelData.unsent
                             lineHeight: 1.2
-                            color: modelData.unsent ? Theme.textFaint : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
+                            color: modelData.unsent ? Theme.textMuted : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
                         }
                         // A grouped message keeps its state (edited, sent, read) small under it.
                         Text {
@@ -896,7 +898,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go of Y to send · B to cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -905,6 +907,8 @@ Rectangle {
                 visible: page.theyType
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(22)
                 anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(2)
+                width: Math.min(implicitWidth, parent.width - Theme.px(44))
+                elide: Text.ElideRight
                 text: page.openName + " is typing…"
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.italic: true
             }
@@ -1076,7 +1080,8 @@ Rectangle {
                 }
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, Theme.px(260)); height: width; color: Theme.text
+                    // The same light paper the code is drawn on, in every look, so it always scans.
+                    width: Math.min(parent.width, Theme.px(260), Math.max(Theme.px(120), Math.round(page.height * 0.4))); height: width; color: "#E4E1DA"
                     Image { anchors.fill: parent; anchors.margins: Theme.px(12); smooth: false; source: page.showCode ? "image://qr/" + encodeURIComponent(Chat.myLink) : "" }
                 }
                 Row {

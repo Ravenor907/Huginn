@@ -13,8 +13,10 @@ Rectangle {
     property bool cardOpen: false          // your card is up (Main.qml), so the name stays lit
     signal meClicked()
     // What the small panel says under your name.
+    // Locked only when there is a vault and it is locked: without a passphrase there's no key to hold.
+    readonly property bool vaultLocked: Vault.exists && Vault.screenLocked
     readonly property string statusText: {
-        if (Vault.screenLocked) return "Locked"
+        if (vaultLocked) return "Locked"
         if (Settings.pushToTalk && inVoice) return "Push to talk: " + TalkKey.keyName
         if (Profile.myCustomStatus !== "") return Profile.myCustomStatus
         return statusName(Profile.myStatus)
@@ -36,7 +38,6 @@ Rectangle {
     // Clicks here never reach the page underneath.
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
-    function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
 
     Column {
         id: voice
@@ -82,7 +83,8 @@ Rectangle {
         }
 
         // Who you're talking with.
-        Row {
+        Flow {
+            width: parent.width
             spacing: Theme.px(6)
             visible: panel.people.length > 0
             Repeater {
@@ -103,17 +105,13 @@ Rectangle {
                         opacity: who.p.speaking ? 1 : 0
                         Behavior on opacity { NumberAnimation { duration: Theme.motion ? 120 : 0 } }
                     }
-                    Rectangle {
+                    Avatar {
                         anchors.centerIn: parent
-                        width: Theme.px(28); height: width; radius: width / 2
-                        color: Theme.avatar(who.p.name, !!who.p.me).bg
+                        size: Theme.px(28)
+                        key: panel.tour ? "" : who.p.me ? "me" : (who.p.key || "")
+                        name: who.p.name || ""
+                        backdrop: Theme.raised
                         opacity: who.p.state === "live" ? (who.p.muted ? 0.55 : 1) : 0.4
-                        Text {
-                            anchors.centerIn: parent
-                            text: panel.initial(who.p.name)
-                            color: Theme.avatar(who.p.name, !!who.p.me).fg
-                            font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
-                        }
                     }
                     HoverHandler { cursorShape: who.p.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
                     TapHandler { onTapped: if (!who.p.me && !panel.tour) Ui.showProfile(who.p.key, who.p.name, {}) }
@@ -132,12 +130,13 @@ Rectangle {
         Rectangle {
             visible: Settings.pushToTalk
             width: parent.width
-            height: Theme.px(24)
+            height: Math.max(Theme.px(24), pttText.implicitHeight + Theme.px(6))
             radius: Theme.radius
             color: !panel.tour && Rooms.talking ? Theme.accentFill : "transparent"
             border.width: 1
             border.color: !panel.tour && Rooms.talking ? Theme.accent : Theme.line
             Text {
+                id: pttText
                 anchors.centerIn: parent
                 width: parent.width - Theme.px(12)
                 horizontalAlignment: Text.AlignHCenter
@@ -172,13 +171,13 @@ Rectangle {
         id: me
         anchors.bottom: parent.bottom
         width: parent.width
-        height: Theme.px(52)
+        height: Math.max(Theme.px(52), meWords.implicitHeight + Theme.px(16))
         Rectangle {
             id: meTile
             anchors.left: parent.left; anchors.leftMargin: Theme.px(4)
             anchors.right: meButtons.left; anchors.rightMargin: Theme.px(4)
             anchors.verticalCenter: parent.verticalCenter
-            height: Theme.px(44)
+            height: parent.height - Theme.px(8)
             radius: Theme.radius
             color: panel.cardOpen || meHover.hovered ? Theme.tile : "transparent"
             Accessible.role: Accessible.Button
@@ -191,9 +190,10 @@ Rectangle {
                 key: "me"
                 name: Chat.username
                 size: Theme.px(32)
-                showDot: !Vault.screenLocked
+                showDot: !panel.vaultLocked
             }
             Column {
+                id: meWords
                 anchors.left: meFace.right; anchors.leftMargin: Theme.px(8)
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
                 anchors.verticalCenter: parent.verticalCenter

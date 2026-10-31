@@ -14,8 +14,9 @@ Rectangle {
     anchors.horizontalCenter: parent.horizontalCenter
     y: Theme.px(84)
     z: 50
-    width: Math.min(msg.implicitWidth + Theme.px(48), parent.width - Theme.px(80))
-    height: Theme.px(52)
+    // As wide as the words, up to the window; longer ones wrap onto a few lines.
+    width: Math.min(msg.implicitWidth + Theme.px(48), parent.width - Theme.px(32))
+    height: Math.max(Theme.px(52), msg.height + Theme.px(24))
     radius: Theme.radius
     color: Theme.panel
     border.color: bad ? Theme.dangerLine : Theme.accent
@@ -25,7 +26,10 @@ Rectangle {
     Text {
         id: msg
         anchors.centerIn: parent
-        width: Math.min(implicitWidth, toast.parent.width - Theme.px(120))
+        width: Math.max(0, toast.width - Theme.px(48))
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.Wrap
+        maximumLineCount: 4
         elide: Text.ElideRight
         color: toast.bad ? Theme.danger : Theme.text
         font.family: Theme.body
